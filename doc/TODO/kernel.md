@@ -312,40 +312,22 @@ code-generation problem.
 
 ## Kernel: pack the hottest syscall-path text onto shared pages
 
-Low priority — syscall performance is already good; this is a future
-refinement, not a fix.
+The mechanism landed in `ed1c6e2`: per-function sections, a hot text
+region and a hot data region linked first and pinned at boot, and each
+tenant placed so it does not straddle a cache line.  What is open is
+which routines belong in it.
 
-Kernel text is mapped through the main TLB: 32 sets of 2 ways, set =
-the low 5 bits of the VPN, victim way chosen from a `CPU_CYCLES` bit.
-A miss runs the software handler (about 59 instructions to `eret`)
-and counts as benchmark instructions.  The trap entry already lives on
-the pinned vector page, but everything after it is wherever the link
-order put it.  `clock_gettime(CLOCK_MONOTONIC)` alone touches seven
-text pages spread across the image — `trap` and `timer_get_timecount`
-near `0x80014000`, `syscall` and `copyout` in
-`0x80015000`–`0x80017000`, `nanouptime`/`binuptime` and
-`sys___clock_gettime50` in `0x801a6000`–`0x801ac000`,
-`clock_gettime1` at `0x801e3000`, `memcpy` at `0x802d0000` — plus
-data pages (`cpu_info_store`, `sysent`,
-`emul_netbsd`, `timehands`).  Any set holding three per-call pages
-misses on every call, and which sets fill up moves with unrelated
-layout changes.  The IRTranslator probability change showed this:
-`clock_gettime` retired more instructions per call on hardware while
-every function on its path came out the same length or shorter,
-consistent with a TLB set filling up differently.
+The current set was picked from a profile that `1966179` then moved,
+since several tenants were chosen for rwlock paths whose cost that
+commit removed.  Two strategies are still unseparated: take the
+highest refills-per-byte wherever it lives (67 tenants drawn from 41
+pages, each only partly evacuated) or take whole groups so a few pages
+go cold entirely (19 tenants, 5 pages, 79-100% each).  The first
+predicts 2.6x the benefit under a linear model that eviction does not
+obey, so only a measured sweep separates them.
 
-The idea: place the common syscall path (`trap`, `syscall`, `userret`,
-`copyin`/`copyout`, `memcpy`) and the hottest handlers
-(`clock_gettime`, `getpid`, `read`/`write`, the timecounter read)
-contiguously, so the per-call path fits in one or two pages; likewise
-their hot data.  The kernel builds without `-ffunction-sections` and
-links with `kern.ldscript`, so this needs per-function sections plus
-an ordering — a symbol ordering file for lld, or a `.text.hot` input
-section the script places first.
-
-Measuring it needs a TLB miss count, which nothing exposes today (see
-"Kernel: count TLB refills"), and a before/after on the pbench
-syscall rows.
+Both are bounded by "Kernel: count TLB refills", "What pinning can
+reach", so this is worth one sweep rather than a campaign.
 
 ## Kernel: count TLB refills
 
@@ -732,14 +714,21 @@ its own assembly-time size guard, and the suite test's pattern — a
 handler writing the same word, an exact count, coverage asserted per
 landing point — carries over to each new sequence shape.
 
-Inlining is also why `__HAVE_ATOMIC_AS_MEMBAR` was declined.  The flag
-asserts that the port's atomics carry barrier semantics, which holds
-today only because they are out-of-line calls and therefore compiler
-barriers — the hardware fences are already no-ops
-(`membar_ops_nop.c`), so the flag would remove nothing but that.  Inline
-fast paths remove the compiler barrier, and a DMA engine would remove
-the uniprocessor argument for no-op fences altogether.  Measured worth
-at the time: 35 membar calls down to 7 across eight hot files.
+`__HAVE_ATOMIC_AS_MEMBAR` is defined as of `1966179`, which turns the
+coupling above into a precondition on this work rather than an
+argument against the flag.  The flag holds because the port's atomics
+are out-of-line calls and so are compiler barriers; an inline fast
+path removes that barrier, so any fast path added here has to carry
+the ordering itself.  The precondition is recorded at the definition
+in `machine/types.h`.
+
+The flag had been declined on a static count — 35 membar calls down to
+7 across eight hot files — which looked at the wrong thing.  Each call
+is a branch to a bare return, but the calls also held a page in the
+TLB that the hot paths otherwise never enter.  Removing them took 88%
+of 4.4M dynamic calls, 4.5% of TLB refills and 1.75% of instructions
+on a shell workload, nearly all of it refill-handler time rather than
+the calls themselves.
 
 ## Kernel: per-CPU data layout and cache-line tuning
 

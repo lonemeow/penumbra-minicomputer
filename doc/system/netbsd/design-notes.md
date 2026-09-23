@@ -195,6 +195,18 @@ silently stop being covered.  Regions are *not* padded to a page --
 whatever follows shares the page and gets pinned along with them,
 which is free coverage, while padding would only displace it.
 
+Routines reach a region individually rather than by object, because
+the C routines worth pinning sit in objects many times the size of a
+page.  A section carries the name of the symbol that defines it, never
+an alias, and a pattern matching nothing is silent, so a tenant named
+wrongly simply does not arrive.
+
+A tenant wider than a cache line starts on one.  A routine entered
+mid-line spans a line it has no use for, and the sizes involved drift
+with unrelated changes, so this cannot be left to luck; a routine that
+fits inside a single line follows unaligned instead, riding in the
+tail an aligned neighbour leaves and costing no line of its own.
+
 ### Trap page: code variants, not parameters
 
 The TLB miss handler carries the set count, way count and page size as
@@ -238,11 +250,13 @@ to the set it used to occupy: pinning one page whose own cost was
 
 ### What none of this reaches
 
-A fifth to a quarter of kernel refills, depending on the workload,
-fall on heap pages, whose addresses come from the allocator and are
-not the same twice.  No link-time arrangement reaches them; only
-sampling at run time would, and that costs instructions on the refill
-path itself.
+A third to a half of kernel refills, depending on the workload, fall
+on heap and other runtime KVA, whose addresses come from the allocator
+and are not the same twice.  Static kernel data accounts for about a
+tenth, which is the whole reach of a pinned data page.
+
+No link-time arrangement reaches the rest; only sampling at run time
+would, and that costs instructions on the refill path itself.
 
 ## ASID Management
 
