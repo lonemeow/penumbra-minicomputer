@@ -72,11 +72,11 @@ _start:
     LLI  R4, #0               ; chain done; leave the window closed
     WRSYS R4, #4, #0
 
-    ; ── CAP: version 1, 64-byte buffer, LS + FS ──────────────
+    ; ── CAP: version 1, 64-byte buffer, LS + FS, capture ─────
     LLI  R10, #1              ; stage: CAP
     LI   R12, #USB_BASE
     LDW  R2, [R12 + #CAP]
-    LI   R3, #0x00034001
+    LI   R3, #0x00074001
     CMP  R2, R3
     BNE  fail
 
