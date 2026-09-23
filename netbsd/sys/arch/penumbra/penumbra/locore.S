@@ -627,7 +627,12 @@ _start_bias:
 	 * The .balign 4096 also satisfies the original cache-line
 	 * alignment requirement (handler prologue covers one L1 line)
 	 * and the step-7 copy destination's multiple-of-16 constraint.
+	 *
+	 * Its own section, linked after all live text: this is never
+	 * executed where it is linked, so its size must not move the
+	 * code that is.
 	 */
+	.pushsection .text.trappage,"ax",@progbits
 	.balign	4096
 	.globl	_real_handlers_page_start
 _real_handlers_page_start:
@@ -1337,6 +1342,7 @@ _real_handlers_end:
 	.balign	4096
 	.globl	_real_handlers_page_end
 _real_handlers_page_end:
+	.popsection
 
 
 /* ═══════════════════════════════════════════════════════════════

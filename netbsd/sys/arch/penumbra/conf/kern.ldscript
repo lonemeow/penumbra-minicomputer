@@ -18,6 +18,15 @@ SECTIONS
     *(.text.*)
     *(.gnu.warning)
   } =0
+
+  /*
+   * Copied to the vector page at boot, never executed here.  After
+   * live text so its size cannot move it; page-aligned because the
+   * kernel-text copy is mapped read-only by the page.
+   */
+  . = ALIGN(0x1000);
+  .text.trappage : { *(.text.trappage) }
+
   _etext = .;
   PROVIDE (etext = .);
 
