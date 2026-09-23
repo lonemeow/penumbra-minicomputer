@@ -66,6 +66,15 @@ struct kmutex {
 #define	__HAVE_SIMPLE_MUTEXES		1
 
 /*
+ * mutex_enter() and mutex_exit() come from lock_stubs.S, which handles
+ * the uncontended adaptive case inline and branches to the C vector
+ * routine for everything else.  __HAVE_SPIN_MUTEX_STUBS is unset
+ * because no stub covers the spin variants, so kern_mutex.c aliases
+ * mutex_spin_enter()/mutex_spin_exit() to the vector routines.
+ */
+#define	__HAVE_MUTEX_STUBS		1
+
+/*
  * The spin-mutex lock byte is only ever reached with the mutex's IPL
  * already raised, because MUTEX_SPIN_SPLRAISE() runs before the try.
  * On a uniprocessor that leaves nothing able to touch the byte between

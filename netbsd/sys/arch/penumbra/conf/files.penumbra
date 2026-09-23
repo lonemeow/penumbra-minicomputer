@@ -25,6 +25,7 @@ file	arch/penumbra/penumbra/softint_machdep.c
 file	arch/penumbra/penumbra/syscall.c
 file	arch/penumbra/penumbra/pmap.c
 file	arch/penumbra/penumbra/copy.S
+file	arch/penumbra/penumbra/lock_stubs.S
 file	arch/penumbra/penumbra/cache_perfctrs.c
 file	arch/penumbra/penumbra/cpu_perfctrs.c
 

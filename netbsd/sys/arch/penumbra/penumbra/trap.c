@@ -82,28 +82,50 @@ extern struct evcnt timer_evcnt;	/* machdep.c — tick count */
  * delivered on the way out of any trap type, not just a hard interrupt.
  */
 extern char _atomic_cas_32_ras_start[], _atomic_cas_32_ras_end[];
+#ifndef LOCKDEBUG
+extern char _mutex_enter_ras_start[], _mutex_enter_ras_end[];
+extern char _mutex_exit_ras_start[], _mutex_exit_ras_end[];
+#endif
 
 static struct evcnt kernel_ras_evcnt = EVCNT_INITIALIZER(EVCNT_TYPE_MISC,
     NULL, "kernel ras", "restart");
 EVCNT_ATTACH_STATIC(kernel_ras_evcnt);
 
+/*
+ * Rewind a trapframe whose PC names the interior of a restartable
+ * sequence.  Every region is open at both ends, matching ras_lookup():
+ * a PC on the store restarts because the store has not executed, and a
+ * PC equal to the end marker is excluded because the sequence is over.
+ *
+ * This runs on every supervisor trap, so the cost that matters is the
+ * one paid by an ordinary kernel PC that is in no region at all.
+ *
+ * Each region is named once.  The rewind target is derived from the
+ * same token as the bounds it was tested against, so a region cannot be
+ * tested against one sequence and rewound into another.
+ */
+#define	RAS_RESTART(tf, name)						\
+do {									\
+	if (__predict_false((tf)->tf_epc > (vaddr_t)name##_ras_start &&	\
+	    (tf)->tf_epc < (vaddr_t)name##_ras_end)) {			\
+		(tf)->tf_epc = (vaddr_t)name##_ras_start;		\
+		kernel_ras_evcnt.ev_count++;				\
+		return;							\
+	}								\
+} while (/* CONSTCOND */ 0)
+
 static void
 kernel_ras_restart(struct trapframe *tf)
 {
-	const vaddr_t start = (vaddr_t)_atomic_cas_32_ras_start;
-	const vaddr_t end = (vaddr_t)_atomic_cas_32_ras_end;
 
-	/*
-	 * Open at both ends, matching ras_lookup().  Test the low bound
-	 * first: the region links near the top of a .text almost all of
-	 * which is below it, so that is the compare that rejects an
-	 * ordinary kernel PC without materialising the second bound.
-	 */
-	if (__predict_false(tf->tf_epc > start && tf->tf_epc < end)) {
-		tf->tf_epc = start;
-		kernel_ras_evcnt.ev_count++;
-	}
+	RAS_RESTART(tf, _atomic_cas_32);
+#ifndef LOCKDEBUG
+	RAS_RESTART(tf, _mutex_enter);
+	RAS_RESTART(tf, _mutex_exit);
+#endif
 }
+
+#undef RAS_RESTART
 
 static void
 user_trap_signal(int signo, int code, vaddr_t addr, int trap)
