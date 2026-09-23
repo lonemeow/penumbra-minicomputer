@@ -303,7 +303,7 @@ Maps the system bus (Penumbra Bus
 [sync form](../hardware/bus-protocol.md#sync-bus-mapping):
 `i_re`/`i_we`/`o_busy`) onto the controller's `req`/`rsp` interface.
 Single-word transactions on the bus side, same back-side contract as
-`simple_mem`/`fpga_ram`/`boot_rom` — drop-in replacement at the SDRAM
+`simple_mem`/`boot_rom` — drop-in replacement at the SDRAM
 region.
 
 Internally pipelined for cache fills:

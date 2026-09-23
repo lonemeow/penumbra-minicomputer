@@ -1,7 +1,7 @@
 // SDRAM bus adapter — speculative-prefetch version (Stage B).
 //
 // Translates the project's standard synchronous device-bus interface
-// (i_re/i_we/o_busy/o_rdata, used by simple_mem, fpga_ram, boot_rom)
+// (i_re/i_we/o_busy/o_rdata, used by simple_mem, boot_rom)
 // into the controller's req_valid/req_ready/rsp_valid handshake.
 // Drop-in replacement for `simple_mem` at the SDRAM region.
 //

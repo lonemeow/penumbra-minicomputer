@@ -36,7 +36,7 @@ hw/
 │   ├── io/        # Real UART, real SPI, SDRAM v2 controller/adapter/PHY/CDC,
 │   │              #   usb/ (SIE cells + MAC + host controller), video/
 │   ├── sim/       # machine_sim + machine_penumbra2_sim, sim devices, memory models
-│   └── fpga/      # FPGA helpers (fpga_ram, lint stubs); board tops under <board>/
+│   └── fpga/      # FPGA helpers (ECP5 PLL package, lint stubs); board tops under <board>/
 ├── microcode/   # microcode.uasm (single source — assemble via uasm.py)
 ├── rom/         # Boot ROM (C + asm) and its standalone Makefile
 ├── sim/         # tb_cpu_prog (program runner), sim_console + per-core shims, per-module tbs
@@ -255,8 +255,6 @@ the shared module.
   IF2 tag-compare/way-mux path and the L1↔L2 layer in front of nextpnr
   (`make timing BOARD=ulx3s CORE=penumbra2 VARIANT=probe`), not a
   usable machine.
-- `fpga_ram.sv` — BRAM-friendly memory (4 byte-wide banks with
-  `ram_style` attribute).
 
 ## Boot ROM (`rom/`)
 

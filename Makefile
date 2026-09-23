@@ -1000,7 +1000,7 @@ SRC_MACHINE_penumbra2 = hw/rtl/machine/machine_penumbra2.sv \
 # file, so sibling tops never leak into each other's builds. The PLL
 # config package comes first (both ULX3S tops import it to derive the
 # EHXPLLL dividers from their clock targets).
-SRC_BOARD_ulx3s = $(FPGA_RTL)/ecp5_pll_pkg.sv $(FPGA_RTL)/fpga_ram.sv
+SRC_BOARD_ulx3s = $(FPGA_RTL)/ecp5_pll_pkg.sv
 LPF_ulx3s       = hw/constraints/ulx3s_v20.lpf
 
 # The registry: every valid (board, core[, variant]) top, its composed

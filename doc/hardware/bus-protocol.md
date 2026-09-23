@@ -111,8 +111,8 @@ apply:
   access size — the slave is not required to repack data based on
   `addr[1:0]`.
 
-This is the contract that `simple_mem`, `fpga_ram`, the boot ROM and
-the SDRAM stack implement. It is also the contract any general-
+This is the contract that `simple_mem`, the boot ROM and the SDRAM
+stack implement. It is also the contract any general-
 purpose memory-like slave should implement.
 
 ### Device-specific restrictions

@@ -1,6 +1,6 @@
 // Sim-only SDRAM subsystem: sdram_stack + sim PHY + chip model.
 //
-// Bus interface mirrors simple_mem / fpga_ram so machine_sim can swap
+// Bus interface mirrors simple_mem so machine_sim can swap
 // in this stack at the RAM region without other plumbing changes.
 // Internally instantiates the full v2 SDRAM stack for end-to-end
 // verification of the controller against the behavioral model.

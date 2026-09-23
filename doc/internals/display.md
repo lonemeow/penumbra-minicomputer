@@ -125,8 +125,8 @@ palette, whose entries are wider than a block's widest port. Both are
 dual-clock BRAMs of the same shape as the cell RAM: CPU-side ports
 behind the `FB` / `FB_PALETTE` apertures, pixel-side read ports in the
 scan-out. The pixel aperture is the one with sub-word writes — the bus
-byte enables wire through to per-byte BRAM write enables (the
-`fpga_ram` bank structure), which is what lets the OS map it straight
+byte enables wire through to per-byte BRAM write enables, which is
+what lets the OS map it straight
 into a rendering process. With BRAM backing, storage independent of
 the cell RAM is the
 natural structure — sharing would be contrived — so on this device
