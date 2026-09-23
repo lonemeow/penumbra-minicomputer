@@ -526,3 +526,58 @@ Valid values: `0, 45, 90, 135, 180, 225, 270, 315`. See `doc/internals/sdram-con
 ### Serial console
 
 After flashing: `/dev/ttyUSB0` at **115200 8N1**. The boot ROM accepts `boot sd:0,0` to load `PENBOOT.ELF` from FAT32.
+
+---
+
+## 10. Vivado (Xilinx boards)
+
+Xilinx 7-series boards build with Vivado in batch mode, from a Docker
+image you build locally. AMD publishes no Vivado image and its EULA
+forbids redistributing one, so the image is built from your own AMD
+login and never pushed. AMD's installer only ever runs inside a
+container, in batch mode; nothing from it runs on the host.
+
+The pinned release is in `hw/tools/vivado/image.env`. It is 2025.2,
+the last release whose free edition needs no license file: from
+2026.1, Vivado refuses to start without one, even on the free tier.
+
+### Building the image
+
+1. Download the **Linux Self Extracting Web Installer** (`.bin`, a few
+   hundred MB) for the pinned release from AMD's downloads page, and
+   put it in `~/xilinx/<release>/` (`VIVADO_DIR=` picks another
+   directory). Keep it on the Linux filesystem, not under `/mnt/c`.
+2. Generate a login token. It asks for your AMD account credentials
+   and lasts a week; only building the image needs it.
+
+   ```sh
+   make vivado-authenticate
+   ```
+
+3. Build the image. It downloads only the Artix-7 device support, and
+   its last step takes a trivial design for the Nexys Video's part to
+   a bitstream, so a broken toolchain fails here rather than in the
+   first real build.
+
+   ```sh
+   make vivado-image 2>&1 | tee build/vivado-image.log
+   ```
+
+The result is `penumbra-vivado:<release>`, about 51 GB installed. It is
+the only copy of the working toolchain, and a rebuild needs AMD to
+still serve the release, so back it up with `docker save` once built.
+Rebuilding it needs a fresh token (`make vivado-authenticate`).
+
+`VIVADO_DIR` holds the web installer, its unpacked copy and the
+installer's HOME, where the token lives; none of it belongs in the
+repository.
+
+### Running Vivado
+
+`hw/tools/vivado/bin/vivado` runs Vivado from the image, the same way
+the OSS CAD Suite wrappers do: as your UID, with the current directory
+mounted, no network, and a scratch HOME under `build/vivado-home`.
+
+Xilinx boards are programmed with `openFPGALoader`, which comes from
+the OSS CAD Suite image (`hw/tools/oss-cad-suite/bin/openFPGALoader`),
+not from Vivado.

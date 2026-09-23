@@ -13,6 +13,8 @@
 #   make fpga BOARD=<b> CORE=<gen> — synthesize + PnR + bitstream
 #                              (TOP=<module> is the low-level escape hatch)
 #   make flash [same vars]   — fpga + flash to the board via USB
+#   make vivado-image        — build the local Vivado image (needs a token)
+#   make vivado-authenticate — refresh the AMD web installer's login token
 #   make clean               — remove build artifacts
 
 # ── Configuration ──────────────────────────────────────────────
@@ -988,6 +990,67 @@ endif
 # ── FPGA build (OSS CAD Suite via Docker wrappers) ────────────
 FPGA_TOOLS = hw/tools/oss-cad-suite/bin
 FPGA_RTL   = hw/rtl/fpga
+
+# ── Vivado image (Xilinx 7-series boards) ──────────────────────
+# AMD publishes no Vivado image and its EULA forbids redistributing one,
+# so this builds one locally with your own AMD login, and it is never
+# pushed. The image is the archive of the working toolchain (`docker
+# save` backs it up): rebuilding it needs AMD to still serve the pinned
+# release. AMD's installer only ever runs in the Dockerfile's `base`
+# stage, never on the host.
+VIVADO_TOOLS = hw/tools/vivado
+include $(VIVADO_TOOLS)/image.env
+
+# VIVADO_DIR keeps everything per-release outside the repo: the web
+# installer .bin as downloaded, its unpacked copy, and the HOME where
+# the installer keeps its login token.
+VIVADO_DIR        ?= $(HOME)/xilinx/$(VIVADO_VERSION)
+VIVADO_BASE_IMAGE  = penumbra-vivado-base:$(VIVADO_VERSION)
+VIVADO_WEB_BIN     = $(wildcard $(VIVADO_DIR)/FPGAs_AdaptiveSoCs_Unified_*_$(VIVADO_VERSION)_*_Lin64.bin)
+VIVADO_TOKEN       = $(VIVADO_DIR)/home/.Xilinx/wi_authentication_key
+VIVADO_SETUP_RUN   = docker run --rm -u $(shell id -u):$(shell id -g) \
+                     -e HOME=/x/home -v $(VIVADO_DIR):/x -w /x
+
+.PHONY: vivado-base-image vivado-authenticate vivado-image
+vivado-base-image:
+	docker build --quiet --target base -t $(VIVADO_BASE_IMAGE) $(VIVADO_TOOLS) >/dev/null
+
+# Unpacked once per release directory, so the archive's own (older)
+# mtimes never make it look stale against the .bin. Unpacked beside the
+# target and renamed, so an interrupted run leaves nothing half-done.
+$(VIVADO_DIR)/webinstaller/xsetup: | vivado-base-image
+	@test $(words $(VIVADO_WEB_BIN)) = 1 || { \
+		echo "$(VIVADO_DIR) must hold exactly one Vivado $(VIVADO_VERSION) Linux web installer .bin" >&2; \
+		exit 1; }
+	rm -rf $(VIVADO_DIR)/webinstaller $(VIVADO_DIR)/webinstaller.tmp
+	$(VIVADO_SETUP_RUN) --network none $(VIVADO_BASE_IMAGE) \
+		sh /x/$(notdir $(VIVADO_WEB_BIN)) --keep --noexec --target /x/webinstaller.tmp >/dev/null
+	mv $(VIVADO_DIR)/webinstaller.tmp $(VIVADO_DIR)/webinstaller
+
+# The token the web installer's downloads need, valid for a week, so
+# only an image rebuild ever needs a fresh one. It asks for your AMD
+# account credentials, so it needs a terminal. The installer leaves the
+# token read-only; make it writable so a refresh can replace it.
+vivado-authenticate: vivado-base-image $(VIVADO_DIR)/webinstaller/xsetup
+	@mkdir -p $(VIVADO_DIR)/home
+	@chmod -f u+w $(VIVADO_TOKEN) || true
+	$(VIVADO_SETUP_RUN) -it $(VIVADO_BASE_IMAGE) /x/webinstaller/xsetup -b AuthTokenGen
+
+# The install downloads only the Artix-7 modules install_config.txt
+# selects. Its last step takes a trivial design for our part to a
+# bitstream, so a wrong release, a missing device family or a license
+# prompt fails the image build rather than the first real one. zstd
+# because the install layer is tens of GB, which single-threaded gzip
+# compresses slowly.
+vivado-image: $(VIVADO_DIR)/webinstaller/xsetup
+	@test -f $(VIVADO_TOKEN) || { \
+		echo "no AMD login token in $(VIVADO_DIR); run make vivado-authenticate" >&2; \
+		exit 1; }
+	docker build --build-context installer=$(VIVADO_DIR)/webinstaller \
+		--secret id=amd_token,src=$(VIVADO_TOKEN) \
+		--build-arg VIVADO_VERSION=$(VIVADO_VERSION) \
+		--output type=image,name=$(VIVADO_IMAGE),compression=zstd \
+		$(VIVADO_TOOLS)
 
 # ── FPGA build matrix (doc/internals/build-system.md) ──────────
 # Porcelain: make fpga BOARD=<board> CORE=<generation> [VARIANT=<v>]

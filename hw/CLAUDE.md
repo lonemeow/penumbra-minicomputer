@@ -406,11 +406,25 @@ Ubuntu 22.04 + OSS CAD Suite release.
 
 Wrapper symlinks in `tools/oss-cad-suite/bin/` (all resolve to
 `docker-wrapper.sh` — multi-call pattern): `yosys`, `nextpnr-ecp5`,
-`ecppack`, `fujprog`, `iverilog`, `vvp`.  The last two serve the
-gate-level harness in `sim/gate/`, which needs an event simulator
-rather than Verilator. Container runs as host UID to avoid root-owned
-output. `fujprog` requires USB passthrough (`--privileged`,
-`/dev/bus/usb`).
+`ecppack`, `fujprog`, `openFPGALoader`, `iverilog`, `vvp`.  The
+`iverilog`/`vvp` pair serves the gate-level harness in `sim/gate/`,
+which needs an event simulator rather than Verilator. Container runs
+as host UID to avoid root-owned output. The programmers (`fujprog`
+for the ULX3S, `openFPGALoader` for Xilinx boards) require USB
+passthrough (`--privileged`, `/dev/bus/usb`).
+
+Vivado (Xilinx 7-series boards) lives in `tools/vivado/`, the same
+multi-call shape (`bin/vivado`) over a locally built image
+(`make vivado-image`). AMD's EULA forbids redistributing it, so the
+image is never pushed; it is itself the toolchain's archive, since a
+rebuild downloads from AMD again. `image.env` pins the release and tag
+for both the Makefile and the wrapper; `smoke.tcl` runs as the image
+build's last step. AMD's installer only ever runs in the Dockerfile's
+`base` stage, never on the host. Its per-release files (web installer,
+login token) live in `VIVADO_DIR`, outside the repo, and
+`make vivado-authenticate` refreshes the week-long token a rebuild
+needs. The wrapper runs with no network and gives Vivado a scratch
+`HOME` under `build/vivado-home`.
 
 Build flow and `make fpga`/`make flash`/`make timing` commands are
 documented in the root `CLAUDE.md`.
