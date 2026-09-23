@@ -14,6 +14,23 @@ SECTIONS
   .text :
   {
     _ftext = . ;
+
+    /*
+     * Hot routines, first so their addresses are KERNEL_TEXT_BASE plus
+     * a fixed offset: nothing precedes them, so no later code change
+     * moves them across a page boundary into another TLB set.
+     */
+    _hot_text_start = . ;
+    *memcpy.o(.text)
+    *memset.o(.text)
+    *memcmp.o(.text)
+    *strlen.o(.text)
+    *strcmp.o(.text)
+    *strcpy.o(.text)
+    *atomic_cas.o(.text)
+    *lock_stubs.o(.text)
+    _hot_text_end = . ;
+
     *(.text)
     *(.text.*)
     *(.gnu.warning)
