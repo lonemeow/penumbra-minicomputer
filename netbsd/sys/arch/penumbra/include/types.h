@@ -67,9 +67,10 @@ typedef struct label_t {
  * between locations.  Device ordering is a separate matter and stays
  * with bus_dmamap_sync().
  *
- * This also assumes atomic_*() stay out-of-line calls, which is what
- * makes them compiler barriers.  An inlined fast path would have to
- * carry the ordering itself.
+ * MI code places each barrier against an atomic, so the atomic is
+ * where the compiler must not reorder across.  It has to stay a
+ * compiler barrier to serve that: an out-of-line call, as here, or
+ * inline asm with a memory clobber.
  */
 #define __HAVE_ATOMIC_AS_MEMBAR
 

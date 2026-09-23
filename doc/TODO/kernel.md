@@ -714,21 +714,28 @@ its own assembly-time size guard, and the suite test's pattern — a
 handler writing the same word, an exact count, coverage asserted per
 landing point — carries over to each new sequence shape.
 
-`__HAVE_ATOMIC_AS_MEMBAR` is defined as of `1966179`, which turns the
-coupling above into a precondition on this work rather than an
-argument against the flag.  The flag holds because the port's atomics
-are out-of-line calls and so are compiler barriers; an inline fast
-path removes that barrier, so any fast path added here has to carry
-the ordering itself.  The precondition is recorded at the definition
-in `machine/types.h`.
+`__HAVE_ATOMIC_AS_MEMBAR` is defined as of `1966179`.  It had been
+declined here on the reading that the flag would take away the
+compiler barrier an out-of-line `membar_*()` call supplies.  That is
+not what it takes away.  MI code places each barrier against an
+atomic, and the atomic is itself an out-of-line call, so the ordering
+the compiler must not break is already fenced where it matters.
+`kern_rwlock.c` has the shape: the release barrier sits ahead of a
+`rw_cas()` loop and the acquire barrier behind a `rw_cas()`, both
+reaching `atomic_cas_ulong_ni` by `bl`.
 
-The flag had been declined on a static count — 35 membar calls down to
-7 across eight hot files — which looked at the wrong thing.  Each call
-is a branch to a bare return, but the calls also held a page in the
-TLB that the hot paths otherwise never enter.  Removing them took 88%
-of 4.4M dynamic calls, 4.5% of TLB refills and 1.75% of instructions
-on a shell workload, nearly all of it refill-handler time rather than
-the calls themselves.
+The valuation was wrong as well, counting call sites — 35 down to 7
+across eight hot files — rather than what they cost.  Each call is a
+branch to a bare return, but they also held a page in the TLB that the
+hot paths never otherwise enter: removing them took 88% of 4.4M
+dynamic calls, 4.5% of TLB refills and 1.75% of instructions on a
+shell workload, nearly all of it refill-handler time.
+
+What the flag does require is that the atomic stay a compiler barrier
+— an out-of-line call, or inline asm with a memory clobber.  Assembly
+stubs reached by `bl` keep that; inlining a read-modify-write into C
+would not.  The condition is recorded at the definition in
+`machine/types.h`.
 
 ## Kernel: per-CPU data layout and cache-line tuning
 
