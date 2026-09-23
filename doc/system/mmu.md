@@ -35,6 +35,10 @@ TLB hardware structure (2-way SA main + fully-associative pinned) and
 | Sysreg device ID | 0 |
 | Flat/bypass mode | `M=0` (reset default): identity map, uncached, no checks |
 
+The page size and the two TLB geometries above are what
+[`MMU_CONFIG`](#mmu_config-layout) reports; software reads them from
+there rather than assuming them.
+
 ---
 
 ## MMU Control Registers
@@ -49,7 +53,8 @@ Accessed via `WRSYS`/`RDSYS` with device ID 0.
 | 3 | `TLB_VPN` | R/W | TLB entry upper word: VPN + ASID (staged on write) |
 | 4 | `TLB_PTE` | R/W | TLB entry lower word: PPN + flags. **Write commits entry.** |
 | 5 | `TLB_INDEX` | R/W | TLB slot selector; **bit 6 selects pinned TLB** |
-| 6–15 | — | — | Reserved |
+| 6–14 | — | — | Reserved |
+| 15 | `MMU_CONFIG` | R | Version and translation geometry |
 
 ### MMUCR Layout
 
@@ -75,6 +80,68 @@ Accessed via `WRSYS`/`RDSYS` with device ID 0.
 - **TYPE** (bits 3:0): `0001` = TLB miss, `0010` = protection violation.
 - **R/W/X** (bits 8/9/10): Access type that faulted (one-hot).
 - **USR** (bit 11): 1 = fault occurred in user mode.
+
+### MMU_CONFIG Layout
+
+Reports the translation geometry software would otherwise have to
+assume: how many pinned slots it may spend, how many main-TLB slots it
+must walk to enumerate resident entries, the page size its page tables
+describe, and the width of the ASID it allocates.
+
+```
+ 31 30 29    25 24      20 19    15 14    10 9       4 3    0
+┌─────┬────────┬──────────┬────────┬────────┬─────────┬──────┐
+│rsvd │  ASID  │PAGE_LOG2 │  WAYS  │SETS_L2 │ PINNED  │ VER  │
+└─────┴────────┴──────────┴────────┴────────┴─────────┴──────┘
+```
+
+- **VER** (bits 3:0): Geometry version. Numbering starts at 1, so an
+  implemented register never reads as zero.
+- **PINNED** (bits 9:4): Number of pinned TLB slots. A count, not an
+  exponent — the pinned TLB is fully associative and need not be a
+  power of two.
+- **SETS_L2** (bits 14:10): Base-2 logarithm of the main TLB's set
+  count. The set index is taken from the VPN, so the count is always a
+  power of two.
+- **WAYS** (bits 19:15): Main TLB associativity, as a count.
+- **PAGE_LOG2** (bits 24:20): Base-2 logarithm of the page size in
+  bytes.
+- **ASID** (bits 29:25): Width in bits of the ASID field in `MMUCR`
+  and `TLB_VPN`.
+
+`VER` scopes the whole translation interface, not just the fields
+above it. `TLB_INDEX` and `TLB_VPN` are read under the same version,
+so a geometry a version cannot name is a geometry it cannot report:
+in version 1 `TLB_INDEX` reaches 32 sets, 2 ways and 8 pinned slots,
+and `TLB_VPN` carries a 20-bit VPN and an 8-bit ASID, which bounds
+every field to those values. Describing a larger machine takes a
+version that widens those registers as well — `TLB_INDEX` has bits
+31:7 spare and `TLB_VPN` bits 31:28. The fields are sized ahead of
+that headroom so the same encoding survives it.
+
+**A read of zero reports the configuration below.** Reserved MMU
+registers read as zero, so an implementation that omits this register
+describes itself correctly by doing nothing, and software needs no
+separate presence test — it substitutes these values whenever the
+register reads zero.
+
+| Field | Value | Meaning |
+|-------|------:|---------|
+| `VER` | 1 | — |
+| `PINNED` | 8 | 8 pinned slots |
+| `SETS_L2` | 5 | 32 sets |
+| `WAYS` | 2 | 2-way set associative |
+| `PAGE_LOG2` | 12 | 4 KB pages |
+| `ASID` | 8 | 8-bit ASID |
+
+An implementation whose geometry matches that table may report either
+zero or the equivalent packed value `0x10C11481`; software treats them
+as the same.
+
+Five pinned slots are the floor for a two-level walk that keeps the
+handler, both page-table roots and a scratch window resident — see
+[Pinned-Slot Assignment](#pinned-slot-assignment). An implementation
+reporting fewer cannot run that translation scheme.
 
 ---
 

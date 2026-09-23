@@ -64,10 +64,13 @@ varies by integration (board name, PLL frequency, board feature word).
 | 3     | `TLB_VPN`     | R/W | Staged TLB upper word (VPN + ASID)                   |
 | 4     | `TLB_PTE`     | R/W | TLB lower word (PPN + flags); **write commits entry**|
 | 5     | `TLB_INDEX`   | R/W | Selects TLB slot; **bit 6 = pinned TLB**             |
-| 6–15  | —             | —   | Reserved (reads as 0)                                |
+| 6–14  | —             | —   | Reserved (reads as 0)                                |
+| 15    | `MMU_CONFIG`  | R   | Version and translation geometry                     |
 
 See [mmu.md](./mmu.md) for the programming model (load/invalidate
-protocols, boot sequence, Enable MMU safely).
+protocols, boot sequence, Enable MMU safely), and
+[MMU_CONFIG Layout](./mmu.md#mmu_config-layout) for the geometry
+fields and the configuration a read of zero reports.
 
 ### MMUCR (reg 0)
 
