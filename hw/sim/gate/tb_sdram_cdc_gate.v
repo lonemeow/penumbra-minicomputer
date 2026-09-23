@@ -26,6 +26,18 @@
 `timescale 1ns/1ps
 
 module tb_sdram_cdc_gate;
+    // Matches the width the DUT was elaborated at.  Synthesis bakes the
+    // parameter into the netlist, so this cannot set the DUT's width --
+    // it declares what the netlist was built with, and the build passes
+    // the same value to both.  A mismatch fails at elaboration on the
+    // port widths rather than running against a silently wrong model.
+    //
+    // The pointer handshake under test is width-independent, so a wide
+    // run re-tests the same hazard over the routing a wide payload
+    // actually needs.
+    parameter integer RSP_BITS = 32;
+    localparam integer RSP_WORDS = RSP_BITS / 32;
+
     integer seed = 1, seed0 = 1;
     integer cycles = 200000;
 
@@ -42,12 +54,12 @@ module tb_sdram_cdc_gate;
     reg  [31:0] sys_req_addr = 0, sys_req_wdata = 0;
     reg  [3:0]  sys_req_byte_en = 0;
     wire        sys_req_ready, sys_rsp_valid, sys_done;
-    wire [31:0] sys_rsp_data;
+    wire [RSP_BITS-1:0] sys_rsp_data;
     wire        sd_req_valid, sd_req_we, sd_rsp_ready;
     wire [31:0] sd_req_addr, sd_req_wdata;
     wire [3:0]  sd_req_byte_en;
     reg         sd_req_ready = 0, sd_rsp_valid = 0, sd_done = 0;
-    reg  [31:0] sd_rsp_data = 0;
+    reg  [RSP_BITS-1:0] sd_rsp_data = 0;
 
     sdram_cdc dut (
         .i_sys_clk(sys_clk), .i_sys_rst(sys_rst),
@@ -64,9 +76,11 @@ module tb_sdram_cdc_gate;
         .o_sd_rsp_ready(sd_rsp_ready), .i_sd_done(sd_done)
     );
 
-    function [31:0] rd_data;   // what the controller model returns for a read
+    function [RSP_BITS-1:0] rd_data;   // what the controller model returns for a read
         input [31:0] a;
-        rd_data = a ^ 32'h5A5A_A5A5;
+        integer w;
+        for (w = 0; w < RSP_WORDS; w = w + 1)
+            rd_data[w*32 +: 32] = (a + w) ^ 32'h5A5A_A5A5;
     endfunction
 
     // ── Ledger ──────────────────────────────────────────────────
@@ -245,8 +259,8 @@ module tb_sdram_cdc_gate;
         running = 1;
         repeat (cycles) @(posedge sys_clk);
         running = 0;
-        $display("seed %0d%s: %0d requests, %0d completed, %0d errors | wptr sync: %0d bad of %0d captures | rptr sync: %0d bad of %0d captures",
-                 seed0, $test$plusargs("zero") ? " (zero delay)" : "",
+        $display("rsp=%0d seed %0d%s: %0d requests, %0d completed, %0d errors | wptr sync: %0d bad of %0d captures | rptr sync: %0d bad of %0d captures",
+                 RSP_BITS, seed0, $test$plusargs("zero") ? " (zero delay)" : "",
                  next_push, next_done, errors, viol_w, caps_w, viol_r, caps_r);
         check_results;
         $finish;

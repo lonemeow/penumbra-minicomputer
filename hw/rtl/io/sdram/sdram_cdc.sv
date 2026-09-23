@@ -69,7 +69,14 @@
 // ABC from sharing LUT4s across the controller/CDC boundary. See
 // the rationale comment in sdram_ctrl.sv.
 (* keep_hierarchy = "yes" *)
-module sdram_cdc (
+module sdram_cdc #(
+    // Width of the response payload a slot carries back.  The bridge
+    // is agnostic to what those bits mean: it moves them under the
+    // same pointer handshake whatever the width, so a controller that
+    // answers with more than one word needs no change here.  Only the
+    // per-slot storage and the two response ports scale with it.
+    parameter int RSP_BITS = 32
+) (
     // ── Sys-domain (adapter side) ────────────────────────────
     input  logic        i_sys_clk,
     input  logic        i_sys_rst,
@@ -84,7 +91,7 @@ module sdram_cdc (
 
     // Response to adapter
     output logic        o_sys_rsp_valid,    // one-cycle pulse (reads)
-    output logic [31:0] o_sys_rsp_data,
+    output logic [RSP_BITS-1:0] o_sys_rsp_data,
     input  logic        i_sys_rsp_ready,    // unused; adapter is always ready
     output logic        o_sys_done,         // one-cycle pulse
 
@@ -102,7 +109,7 @@ module sdram_cdc (
 
     // Response from controller
     input  logic        i_sd_rsp_valid,
-    input  logic [31:0] i_sd_rsp_data,
+    input  logic [RSP_BITS-1:0] i_sd_rsp_data,
     output logic        o_sd_rsp_ready,     // tied high; controller ignores
     input  logic        i_sd_done
 );
@@ -139,7 +146,7 @@ module sdram_cdc (
     sd_state_t sd_state;
 
     // Per-slot response data — written by SD, read by sys
-    logic [31:0] rsp_data [0:1];
+    logic [RSP_BITS-1:0] rsp_data [0:1];
 
     // ─────────────────────────────────────────────────────────
     // Gray pointers — registered in the sending domain

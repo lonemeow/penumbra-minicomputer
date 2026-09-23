@@ -166,7 +166,8 @@ Open work lives in `doc/TODO/`, one file per area; the table in
   `sdram_cdc` with a routing delay on every cell input (Icarus, via the
   FPGA container). Guards clock-domain crossings against combinational
   glitch hazards, which a zero-delay simulator cannot represent at all.
-  Harness in `hw/sim/gate/`; `GATE_SEEDS`/`GATE_CYCLES` size the run.
+  Harness in `hw/sim/gate/`; `GATE_SEEDS`/`GATE_CYCLES` size the run
+  and `GATE_WIDTHS` lists the response payload widths to cover.
 - `make test-all` — `make test` then `make test-modules`, `test-rom`
   and `test-gate`.
 - `make test-compiler` — `llvm-test-suite` C tests on ISS in `+hosted`

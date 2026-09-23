@@ -452,9 +452,14 @@ test-modules-variant:
 # plus a zero-delay control that must stay clean -- a violation there
 # means the harness is measuring itself rather than the design.  A deep
 # sweep is GATE_SEEDS=8 GATE_CYCLES=200000.
+#
+# GATE_WIDTHS lists the response payload widths to cover.  The pointer
+# handshake is width-independent, but the routing a wide payload needs
+# is not, so every width the design ships belongs in the list.
 GATE_DIR     = $(BUILD_DIR)/gate
 GATE_SEEDS  ?= 2
 GATE_CYCLES ?= 20000
+GATE_WIDTHS ?= 32
 GATE_CELLS   = hw/sim/gate/ecp5_cell_delays.v
 GATE_TB      = hw/sim/gate/tb_sdram_cdc_gate.v
 
@@ -462,19 +467,28 @@ $(GATE_DIR)/cdc_sv2v.v: hw/rtl/io/sdram/sdram_cdc.sv
 	@mkdir -p $(GATE_DIR)
 	$(FPGA_TOOLS)/sv2v $< -w $@
 
-$(GATE_DIR)/cdc_gate.v: $(GATE_DIR)/cdc_sv2v.v
-	$(FPGA_TOOLS)/yosys -p "read_verilog $<; synth_ecp5 -top sdram_cdc; write_verilog -noattr $@"
+# Make treats a pattern rule's output as an intermediate and deletes it
+# once the goal is built, which would resynthesize on every run and
+# leave no netlist to inspect after a failure.
+.SECONDARY: $(GATE_WIDTHS:%=$(GATE_DIR)/cdc_gate_%.v) \
+            $(GATE_WIDTHS:%=$(GATE_DIR)/sim_%.vvp)
 
-$(GATE_DIR)/sim.vvp: $(GATE_DIR)/cdc_gate.v $(GATE_CELLS) $(GATE_TB)
+$(GATE_DIR)/cdc_gate_%.v: $(GATE_DIR)/cdc_sv2v.v
+	$(FPGA_TOOLS)/yosys -p "read_verilog $<; chparam -set RSP_BITS $* sdram_cdc; synth_ecp5 -top sdram_cdc; write_verilog -noattr $@"
+
+$(GATE_DIR)/sim_%.vvp: $(GATE_DIR)/cdc_gate_%.v $(GATE_CELLS) $(GATE_TB)
 	$(FPGA_TOOLS)/iverilog -g2012 -s tb_sdram_cdc_gate -s ecp5_delay_cfg \
-		-o $@ $(GATE_CELLS) $(GATE_DIR)/cdc_gate.v $(GATE_TB)
+		-Ptb_sdram_cdc_gate.RSP_BITS=$* \
+		-o $@ $(GATE_CELLS) $(GATE_DIR)/cdc_gate_$*.v $(GATE_TB)
 
 .PHONY: test-gate
-test-gate: $(GATE_DIR)/sim.vvp
+test-gate: $(GATE_WIDTHS:%=$(GATE_DIR)/sim_%.vvp)
 	@fail=0; \
-	for s in $$(seq 1 $(GATE_SEEDS)) zero; do \
-		if [ "$$s" = zero ]; then a="+zero"; else a="+seed=$$s"; fi; \
-		$(FPGA_TOOLS)/vvp $< $$a +cycles=$(GATE_CYCLES) || fail=1; \
+	for w in $(GATE_WIDTHS); do \
+		for s in $$(seq 1 $(GATE_SEEDS)) zero; do \
+			if [ "$$s" = zero ]; then a="+zero"; else a="+seed=$$s"; fi; \
+			$(FPGA_TOOLS)/vvp $(GATE_DIR)/sim_$$w.vvp $$a +cycles=$(GATE_CYCLES) || fail=1; \
+		done; \
 	done; \
 	if [ $$fail -ne 0 ]; then echo "  *** gate-level CDC test FAILED ***"; exit 1; fi
 
