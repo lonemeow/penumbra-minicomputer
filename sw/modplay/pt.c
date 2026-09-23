@@ -153,6 +153,16 @@ volume_slide(struct pt_chan *c)
 	c->out_volume = c->volume;
 }
 
+/* ECx: cut the note on tick x of its row. */
+static void
+note_cut(struct pt_chan *c, int tick)
+{
+	if ((c->param & 0xF) == tick) {
+		c->volume = 0;
+		c->out_volume = 0;
+	}
+}
+
 /* The effects that act once, on a row's first tick. */
 static void
 row_effect(struct replay *r, struct pt_chan *c)
@@ -195,6 +205,9 @@ row_effect(struct replay *r, struct pt_chan *c)
 			break;
 		case 0xB:
 			c->volume = clamp(c->volume - y, 0, 64);
+			break;
+		case 0xC:
+			note_cut(c, 0);
 			break;
 		case 0x6:
 			/*
@@ -295,6 +308,9 @@ tick_effect(struct replay *r, struct pt_chan *c, struct replay_voice *v)
 			 * divides, so a count of 0 restarts nothing. */
 			if (y != 0 && r->tick % y == 0)
 				v->trigger = true;
+			break;
+		case 0xC:
+			note_cut(c, r->tick);
 			break;
 		case 0xD:
 			if (c->delay != 0 && c->delay == r->tick) {
@@ -457,7 +473,7 @@ pt_unsupported(const struct song *s)
 		NULL, "E1 fine porta up", "E2 fine porta down",
 		"E3 glissando", "E4 vibrato waveform", "E5 finetune",
 		NULL, "E7 tremolo waveform", "E8", NULL,
-		NULL, NULL, "EC note cut", NULL, NULL, "EF invert loop",
+		NULL, NULL, NULL, NULL, NULL, "EF invert loop",
 	};
 	static char list[512];
 	uint32_t seen = 0;

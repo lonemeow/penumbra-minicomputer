@@ -7,9 +7,9 @@
  * file, so each case states the pattern data it depends on: a cue that
  * comes round on itself, one that spans several orders and comes round
  * to the middle of itself, the two ways a retrigger falls within a row,
- * and a pattern loop.  It goes through song_parse() all the same, so the
- * layout the parser expects is part of what is checked, and so are the
- * signatures it takes.
+ * a pattern loop, and a note cut.  It goes through song_parse() all the
+ * same, so the layout the parser expects is part of what is checked, and
+ * so are the signatures it takes.
  */
 
 #include <stdio.h>
@@ -122,6 +122,39 @@ build_loop(struct song *m)
 	return song_parse(m, image, sizeof(image));
 }
 
+/*
+ * A third, for the note cut: EC2 on a note, then a row that starts
+ * nothing, then a fresh note to bring the volume back, EC0 on another,
+ * and an EC7 that the row's six ticks never reach.
+ */
+#define	CUT_ROW		0
+#define	CUT_AFTER_ROW	1
+#define	CUT_RESTART_ROW	2
+#define	CUT_AT_0_ROW	3
+#define	CUT_LATE_ROW	4
+
+static const char *
+build_cut(struct song *m)
+{
+	uint8_t *smp = &image[OFF_SAMPLES];
+
+	memset(image, 0, sizeof(image));
+	memcpy(image, "note cut", 8);
+	smp[23] = SAMPLE_BYTES / 2;
+	smp[25] = 64;
+
+	image[OFF_LENGTH] = 1;
+	image[OFF_ORDERS] = 0;
+	memcpy(&image[OFF_SIGNATURE], "M.K.", 4);
+
+	put_note(0, CUT_ROW, 0, 428, 1, 0xE, 0xC2);
+	put_note(0, CUT_RESTART_ROW, 0, 428, 1, 0x0, 0x00);
+	put_note(0, CUT_AT_0_ROW, 0, 428, 1, 0xE, 0xC0);
+	put_note(0, CUT_LATE_ROW, 0, 428, 1, 0xE, 0xC7);
+
+	return song_parse(m, image, sizeof(image));
+}
+
 /* Times a row is entered in one pass through the song. */
 static int
 row_plays(const struct song *m, int order, int row)
@@ -170,6 +203,22 @@ triggers(const struct song *m, int order, int row)
 		if (t.row == row && t.voice[0].trigger)
 			mask |= 1U << t.tick;
 	}
+	return mask;
+}
+
+/* The ticks within a row of the first order that channel 0 plays at
+ * volume 0, as a bitmap. */
+static unsigned
+silent_ticks(const struct song *m, int row)
+{
+	struct replay r;
+	struct replay_tick t;
+	unsigned mask = 0;
+
+	replay_init(&r, m, 0, false);
+	while (replay_next(&r, &t))
+		if (t.order == 0 && t.row == row && t.voice[0].volume == 0)
+			mask |= 1U << t.tick;
 	return mask;
 }
 
@@ -246,6 +295,27 @@ main(void)
 	    (LOOP_PASSES - 1) * (LOOP_END_ROW - LOOP_START_ROW + 1)) *
 	    TEST_SPEED * TEST_TICK_US,
 	    "... and lasts its rows plus the section's repeats");
+
+	song_free(&m);
+
+	if ((error = build_cut(&m)) != NULL) {
+		printf("FAIL the note cut module does not parse: %s\n", error);
+		return 1;
+	}
+
+	check(song_unsupported(&m) == NULL,
+	    "EC is not reported as an effect the replayer ignores");
+	check(silent_ticks(&m, CUT_ROW) ==
+	    (((1U << TEST_SPEED) - 1) & ~((1U << 2) - 1)),
+	    "EC2 plays its note for two ticks and cuts it on tick 2");
+	check(silent_ticks(&m, CUT_AFTER_ROW) == (1U << TEST_SPEED) - 1,
+	    "the cut is the channel's volume, so the row after stays silent");
+	check(silent_ticks(&m, CUT_RESTART_ROW) == 0,
+	    "a sample number brings the volume back");
+	check(silent_ticks(&m, CUT_AT_0_ROW) == (1U << TEST_SPEED) - 1,
+	    "EC0 cuts its note on the tick it starts");
+	check(silent_ticks(&m, CUT_LATE_ROW) == 0,
+	    "a cut past the row's last tick never falls");
 
 	song_free(&m);
 
