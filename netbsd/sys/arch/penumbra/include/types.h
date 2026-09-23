@@ -56,6 +56,19 @@ typedef struct label_t {
 
 #define __HAVE___LWP_SETTCB
 #define __HAVE___LWP_GETTCB_FAST
+
+/*
+ * atomic_*() carry the ordering membar_*() would request, so MI code
+ * drops those calls; one in-order core has no reordering to prevent.
+ *
+ * A second core keeps this true only if its stores become visible in
+ * program order, or atomic_cas() carries the ordering itself.  Cache
+ * coherence does not supply it: it orders writes to one location, not
+ * between locations.  Device ordering is a separate matter and stays
+ * with bus_dmamap_sync().
+ */
+#define __HAVE_ATOMIC_AS_MEMBAR
+
 #define __HAVE_COMMON___TLS_GET_ADDR
 #define __HAVE_CPU_COUNTER
 #define __HAVE_CPU_LWP_SETPRIVATE
