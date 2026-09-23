@@ -52,8 +52,12 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <sys/ksyms.h>
 #endif
 
-/* Single CPU info structure (uniprocessor) */
-struct cpu_info cpu_info_store = {
+/*
+ * Single CPU info structure (uniprocessor).  Every exception entry
+ * reads it, so it sits in the hot data region the pinned slots draw
+ * from (kern.ldscript).
+ */
+struct cpu_info cpu_info_store __section(".data.hot0") = {
 	.ci_curlwp = &lwp0,
 };
 

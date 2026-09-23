@@ -15,11 +15,9 @@
  * Physical pages with no kernel VA are accessed via a scratch
  * window (pinned TLB slot 3 at SCRATCH_VA).
  *
- * Pinned TLB allocation:
- *   Slot 0: Vector page (VECTOR_VA 0xFFFFB000) — handler code, scratch
- *   Slot 1: Current L1 table (VA 0xFFFFE000) — updated on ctx switch
- *   Slot 2: L2 window (VA 0xFFFFD000) — handler's transient L2
- *   Slot 3: Scratch window (VA 0xFFFFC000) — C code page access
+ * Pinned TLB slots are assigned in <machine/sysreg.h>: the structural
+ * ones translation cannot proceed without, then whatever the MMU
+ * leaves over, which pmap_pin_hot_regions() spends on hot pages.
  */
 
 #include <sys/cdefs.h>
@@ -366,6 +364,8 @@ pmap_map_kernel_tail(void)
  * kernel image VA range because MMIO PAs are high and would
  * need separate L2 tables).
  */
+static void pmap_pin_hot_regions(void);
+
 void
 pmap_bootstrap(void)
 {
@@ -421,6 +421,8 @@ pmap_bootstrap(void)
 	    (vaddr_t)_real_handlers_page_start,
 	    (vaddr_t)_real_handlers_page_end,
 	    VM_PROT_READ);
+
+	pmap_pin_hot_regions();
 }
 
 /*
@@ -1023,11 +1025,9 @@ pmap_copy(pmap_t dst, pmap_t src, vaddr_t dstaddr, vsize_t len, vaddr_t srcaddr)
  * PT_USER_L1_VA).
  */
 static inline void
-pmap_pin_user_l1(paddr_t l1_pa)
+pmap_pin_slot(uint32_t idx, vaddr_t va, pt_entry_t pte)
 {
-	uint32_t idx = PTLB_USER_L1;
-	uint32_t vpn = (PT_USER_L1_VA >> PGSHIFT) << TLB_VPN_SHIFT;
-	uint32_t pte = (l1_pa & PTE_PPN_MASK) | PTE_KERNEL;
+	uint32_t vpn = (va >> PGSHIFT) << TLB_VPN_SHIFT;
 
 	__asm__ volatile(
 		"WRSYS %0, %1, %2" : : "r"(idx),
@@ -1038,6 +1038,68 @@ pmap_pin_user_l1(paddr_t l1_pa)
 	__asm__ volatile(
 		"WRSYS %0, %1, %2" : : "r"(pte),
 		    "n"(SYSDEV_MMU), "n"(MMU_TLB_PTE) : "memory");
+}
+
+static inline void
+pmap_pin_user_l1(paddr_t l1_pa)
+{
+
+	pmap_pin_slot(PTLB_USER_L1, PT_USER_L1_VA,
+	    (l1_pa & PTE_PPN_MASK) | PTE_KERNEL);
+}
+
+extern char _hot_text0_start[], _hot_text0_end[];
+extern char _hot_data0_start[], _hot_data0_end[];
+
+/*
+ * Regions worth a pinned slot, most valuable first.  Each is one page
+ * (kern.ldscript asserts it) linked at a fixed offset from the image
+ * base, so the addresses hold across relinks.  How far down this list
+ * we get depends on how many slots the MMU leaves spare, which is why
+ * the order is by value rather than by section.
+ */
+static const struct pmap_hot_region {
+	const char	*start;
+	const char	*end;
+} pmap_hot_regions[] = {
+	{ _hot_text0_start, _hot_text0_end },
+	{ _hot_data0_start, _hot_data0_end },
+};
+
+/*
+ * Pin what fits.  The slot count is a property of the MMU, so it is
+ * read rather than assumed; locore.S has already refused any
+ * configuration not named here.
+ */
+static void
+pmap_pin_hot_regions(void)
+{
+	uint32_t cfg;
+	u_int spare, slot, i;
+
+	__asm__ volatile("RDSYS %0, %1, %2" : "=r"(cfg)
+	    : "n"(SYSDEV_MMU), "n"(MMU_CONFIG));
+
+	switch (cfg) {
+	case 0:				/* reports the baseline geometry */
+	case MMUCFG_V1_8P_32X2:
+		spare = PTLB_NSLOTS - PTLB_NSTRUCTURAL;
+		break;
+	default:
+		return;
+	}
+
+	slot = PTLB_NSTRUCTURAL;
+	for (i = 0; i < __arraycount(pmap_hot_regions) && spare > 0; i++) {
+		vaddr_t va = trunc_page((vaddr_t)pmap_hot_regions[i].start);
+
+		if (pmap_hot_regions[i].end == pmap_hot_regions[i].start)
+			continue;	/* region is empty */
+		pmap_pin_slot(TLB_INDEX_PINNED | slot, va,
+		    ((va + phys_bias) & PTE_PPN_MASK) | PTE_KERNEL);
+		slot++;
+		spare--;
+	}
 }
 
 /*

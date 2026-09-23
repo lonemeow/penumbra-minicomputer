@@ -1,6 +1,8 @@
 /* $NetBSD$ */
 
 /* Linker script for NetBSD/penumbra kernels */
+#include "assym.h"
+
 OUTPUT_FORMAT("elf32-penumbra")
 OUTPUT_ARCH(penumbra)
 ENTRY(_start)
@@ -16,11 +18,13 @@ SECTIONS
     _ftext = . ;
 
     /*
-     * Hot routines, first so their addresses are KERNEL_TEXT_BASE plus
+     * Hot regions, first so their addresses are KERNEL_TEXT_BASE plus
      * a fixed offset: nothing precedes them, so no later code change
-     * moves them across a page boundary into another TLB set.
+     * moves them across a page boundary into another TLB set.  A slot
+     * pins the whole page, so whatever follows a region rides along;
+     * padding to a page boundary would only displace it.
      */
-    _hot_text_start = . ;
+    _hot_text0_start = . ;
     *memcpy.o(.text)
     *memset.o(.text)
     *memcmp.o(.text)
@@ -29,7 +33,7 @@ SECTIONS
     *strcpy.o(.text)
     *atomic_cas.o(.text)
     *lock_stubs.o(.text)
-    _hot_text_end = . ;
+    _hot_text0_end = . ;
 
     *(.text)
     *(.text.*)
@@ -53,6 +57,12 @@ SECTIONS
   .data :
   {
     _fdata = . ;
+
+    /* Hot data, first in .data for the same reason. */
+    _hot_data0_start = . ;
+    *(.data.hot0)
+    _hot_data0_end = . ;
+
     *(.data)
     CONSTRUCTORS
     . = ALIGN(32);
@@ -81,4 +91,15 @@ SECTIONS
    */
   ASSERT(_real_handlers_end - _real_miss_handler <= 4096 - 128,
          "TLB miss handler too large for vector page")
+
+  /*
+   * A pinned slot holds one page, so a region spilling past one stops
+   * being covered by the slot it was given.  That is silent at run
+   * time, so fail here instead.  How many regions get pinned depends
+   * on the MMU and is decided at boot, not here.
+   */
+  ASSERT(_hot_text0_end - _hot_text0_start <= PAGE_SIZE,
+         "hot text region 0 exceeds one page")
+  ASSERT(_hot_data0_end - _hot_data0_start <= PAGE_SIZE,
+         "hot data region 0 exceeds one page")
 }
