@@ -21,13 +21,14 @@
  *                mmap region above 64 MB (for large programs)
  *   0x7FFF_FFFF  end of user VA
  *
- * Top six pages are reserved for the TLB miss handler:
+ * Top seven pages are reserved for translation itself:
  *   0xFFFF_F000  unmapped guard (catches (void *)-1 derefs)
  *   0xFFFF_E000  PT_KERN_L1_VA  (pinned slot 1 — permanent kernel L1)
  *   0xFFFF_D000  PT_L2WIN_VA    (pinned slot 2 — transient L2 mapping)
  *   0xFFFF_C000  SCRATCH_VA     (pinned slot 3 — pmap C code page access)
  *   0xFFFF_B000  VECTOR_VA      (pinned slot 0 — handler code + scratch)
  *   0xFFFF_A000  PT_USER_L1_VA  (pinned slot 4 — current user L1)
+ *   0xFFFF_9000  SCRATCH2_VA    (pinned slot 5 — second page window)
  *
  * Page tables are always 2-level: L1 (1024 entries, 4 KB)
  * → L2 tables (1024 entries each, 4 KB, covering 4 MB per table).
@@ -48,7 +49,8 @@
 #define VM_MAX_ADDRESS		((vaddr_t) 0xFFFFFFFF)
 #define VM_MAXUSER_ADDRESS	((vaddr_t) 0x80000000)
 
-/* Kernel virtual address range — top 6 pages reserved:
+/* Kernel virtual address range — top 7 pages reserved:
+ *   0xFFFF9000  SCRATCH2_VA   (pinned slot 5)
  *   0xFFFFA000  PT_USER_L1_VA (pinned slot 4)
  *   0xFFFFB000  VECTOR_VA     (pinned slot 0)
  *   0xFFFFC000  SCRATCH_VA    (pinned slot 3)
@@ -57,7 +59,7 @@
  *   0xFFFFF000  unmapped guard
  */
 #define VM_MIN_KERNEL_ADDRESS	((vaddr_t) 0x80000000)
-#define VM_MAX_KERNEL_ADDRESS	((vaddr_t) 0xFFFFA000)
+#define VM_MAX_KERNEL_ADDRESS	((vaddr_t) 0xFFFF9000)
 
 /*
  * Kernel VA reserved for physio's transient user-buffer mappings

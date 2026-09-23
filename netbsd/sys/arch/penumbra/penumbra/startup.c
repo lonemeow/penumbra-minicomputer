@@ -325,7 +325,8 @@ penumbra_init(void)
 	{
 		struct btinfo_console *bc = lookup_bootinfo(BTINFO_CONSOLE);
 		paddr_t uart_pa = (bc != NULL) ? bc->addr : UART_PA;
-		pmap_scratch_map(trunc_page(uart_pa), PTE_KERNEL_NC);
+		pmap_scratch_map(PMAP_SCRATCH0, trunc_page(uart_pa),
+		    PTE_KERNEL_NC);
 		uart_base = (volatile uint32_t *)
 		    (SCRATCH_VA + (uart_pa & PAGE_MASK));
 	}

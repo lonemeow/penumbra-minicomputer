@@ -89,13 +89,15 @@
 #define PTLB_L2WIN	(TLB_INDEX_PINNED | 2)	/* L2 window (TLB handler) */
 #define PTLB_SCRATCH	(TLB_INDEX_PINNED | 3)	/* scratch window (C code) */
 #define PTLB_USER_L1	(TLB_INDEX_PINNED | 4)	/* current user L1 (or V=0) */
+#define PTLB_SCRATCH2	(TLB_INDEX_PINNED | 5)	/* second scratch window */
 
 /*
- * Slots below this are structural: translation cannot proceed without
- * them.  Anything the MMU provides beyond them is free to spend on
- * pages the kernel touches constantly.
+ * Slots below this are structural: translation, or an operation the
+ * kernel cannot express without them, depends on each.  Anything the
+ * MMU provides beyond them is free to spend on pages the kernel
+ * touches constantly.
  */
-#define PTLB_NSTRUCTURAL 5
+#define PTLB_NSTRUCTURAL 6
 
 /* TLB_VPN word: (VPN << 8) | ASID */
 #define TLB_VPN_SHIFT	8

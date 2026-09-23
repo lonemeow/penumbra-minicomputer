@@ -12,8 +12,8 @@
  *   L2:  1024 entries × 4 bytes = 4 KB (covers 4 MB each)
  *
  * No direct-map.  All mappings are explicit page table entries.
- * Physical pages with no kernel VA are accessed via a scratch
- * window (pinned TLB slot 3 at SCRATCH_VA).
+ * Physical pages with no kernel VA are reached through the scratch
+ * windows.
  *
  * Pinned TLB slots are assigned in <machine/sysreg.h>: the structural
  * ones translation cannot proceed without, then whatever the MMU
@@ -143,29 +143,18 @@ pmap_tlb_invalidate(struct pmap *pm, vaddr_t va)
 }
 
 
-/* ── Scratch window ───────────────────────────────────────────
+/* ── Scratch windows ──────────────────────────────────────────
  *
- * Temporarily map a physical page at SCRATCH_VA via pinned TLB
- * slot 3.  Used to access pages that have no kernel VA mapping:
- * freshly stolen pages, new L2 tables, pmap_zero_page, etc.
+ * Temporarily map a physical page to reach pages with no kernel VA:
+ * freshly stolen pages, new L2 tables, page zero and copy.  There are
+ * two, so a copy can hold source and destination at once.
  *
- * pmap_scratch_map() is in locore.S (needs WRSYS).
- *
- * IMPORTANT: The scratch window is a single shared resource.
- * All code that uses pmap_scratch_map() / pmap_l2_map() must
- * hold splhigh() to prevent interrupt handlers from re-entering
- * pmap and clobbering the mapping.  The TLB miss handler is safe
- * (uses a separate L2 window in pinned slot 2), but any interrupt
- * that triggers pmap operations would corrupt the scratch mapping.
- * Early boot code (before interrupts are possible) is exempt.
+ * IMPORTANT: the windows are shared resources.  All code using them,
+ * pmap_l2_map() included, must hold splhigh() so an interrupt handler
+ * cannot re-enter pmap and clobber a mapping.  The TLB miss handler is
+ * safe — it has its own L2 window in PTLB_L2WIN.  Early boot code,
+ * before interrupts are possible, is exempt.
  */
-
-void *
-pmap_scratch_va(void)
-{
-	return (void *)SCRATCH_VA;
-}
-
 
 /* ── Dynamic L2 allocation ───────────────────────────────────
  *
@@ -233,8 +222,7 @@ pmap_alloc_l2(pt_entry_t *l1, unsigned int l1_idx)
 static pt_entry_t *
 pmap_l2_map(paddr_t l2_pa)
 {
-	pmap_scratch_map(l2_pa, PTE_KERNEL);
-	return (pt_entry_t *)SCRATCH_VA;
+	return pmap_scratch_map(PMAP_SCRATCH0, l2_pa, PTE_KERNEL);
 }
 
 /*
@@ -543,7 +531,7 @@ pmap_steal_memory(vsize_t size, vaddr_t *vstartp, vaddr_t *vendp)
 		/* Zero the stolen pages via scratch window */
 		pa_cur = pa;
 		for (i = 0; i < npgs; i++, pa_cur += PAGE_SIZE) {
-			pmap_scratch_map(pa_cur, PTE_KERNEL);
+			pmap_scratch_map(PMAP_SCRATCH0, pa_cur, PTE_KERNEL);
 			memset((void *)SCRATCH_VA, 0, PAGE_SIZE);
 		}
 
@@ -568,7 +556,7 @@ pmap_steal_page(void)
 		paddr_t pa = ptoa(uvm_physseg_get_avail_start(bank));
 		uvm_physseg_unplug(atop(pa), 1);
 		/* Zero the stolen page */
-		pmap_scratch_map(pa, PTE_KERNEL);
+		pmap_scratch_map(PMAP_SCRATCH0, pa, PTE_KERNEL);
 		memset((void *)SCRATCH_VA, 0, PAGE_SIZE);
 		return pa;
 	}
@@ -1025,22 +1013,6 @@ pmap_copy(pmap_t dst, pmap_t src, vaddr_t dstaddr, vsize_t len, vaddr_t srcaddr)
  * PT_USER_L1_VA).
  */
 static inline void
-pmap_pin_slot(uint32_t idx, vaddr_t va, pt_entry_t pte)
-{
-	uint32_t vpn = (va >> PGSHIFT) << TLB_VPN_SHIFT;
-
-	__asm__ volatile(
-		"WRSYS %0, %1, %2" : : "r"(idx),
-		    "n"(SYSDEV_MMU), "n"(MMU_TLB_INDEX));
-	__asm__ volatile(
-		"WRSYS %0, %1, %2" : : "r"(vpn),
-		    "n"(SYSDEV_MMU), "n"(MMU_TLB_VPN));
-	__asm__ volatile(
-		"WRSYS %0, %1, %2" : : "r"(pte),
-		    "n"(SYSDEV_MMU), "n"(MMU_TLB_PTE) : "memory");
-}
-
-static inline void
 pmap_pin_user_l1(paddr_t l1_pa)
 {
 
@@ -1150,24 +1122,19 @@ void
 pmap_zero_page(paddr_t pa)
 {
 	int s = splhigh();
-	pmap_scratch_map(pa, PTE_KERNEL);
-	memset((void *)SCRATCH_VA, 0, PAGE_SIZE);
+	memset(pmap_scratch_map(PMAP_SCRATCH0, pa, PTE_KERNEL), 0, PAGE_SIZE);
 	splx(s);
 }
 
 void
 pmap_copy_page(paddr_t src, paddr_t dst)
 {
-	static char buf[PAGE_SIZE] __aligned(4);
-
 	int s = splhigh();
-	/* Read source via scratch window into a temp buffer */
-	pmap_scratch_map(src, PTE_KERNEL);
-	memcpy(buf, (const void *)SCRATCH_VA, PAGE_SIZE);
 
-	/* Write temp buffer to destination via scratch window */
-	pmap_scratch_map(dst, PTE_KERNEL);
-	memcpy((void *)SCRATCH_VA, buf, PAGE_SIZE);
+	const void *s_va = pmap_scratch_map(PMAP_SCRATCH0, src, PTE_KERNEL);
+	void *d_va = pmap_scratch_map(PMAP_SCRATCH1, dst, PTE_KERNEL);
+
+	memcpy(d_va, s_va, PAGE_SIZE);
 	splx(s);
 }
 

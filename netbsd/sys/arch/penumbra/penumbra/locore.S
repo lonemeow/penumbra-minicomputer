@@ -1522,36 +1522,6 @@ tlb_invalidate_addr:
 
 
 /*
- * pmap_scratch_map(paddr_t pa, pt_entry_t flags)
- *
- * Map a physical page at SCRATCH_VA (0xFFFFC000) via pinned slot 3.
- * Used by C code to access pages that have no kernel VA yet.
- *
- * R1 = physical address (page-aligned)
- * R2 = PTE flags (e.g., PTE_KERNEL or PTE_KERNEL_NC)
- */
-	.globl	pmap_scratch_map
-	.type	pmap_scratch_map, @function
-pmap_scratch_map:
-	/* TLB_INDEX = pinned slot 3 */
-	lli	r3, #PTLB_SCRATCH
-	wrsys	r3, #SYSDEV_MMU, #MMU_TLB_INDEX
-
-	/* TLB_VPN for SCRATCH_VA = 0xFFFFC000
-	 * VPN = 0xFFFFC → (0xFFFFC << 8) = 0x0FFFFC00
-	 */
-	lli	r3, #0xFC00
-	lui	r3, #0x0FFF		/* R3 = 0x0FFFFC00 */
-	wrsys	r3, #SYSDEV_MMU, #MMU_TLB_VPN
-
-	/* TLB_PTE = PA | flags */
-	or	r1, r2			/* R1 = PA | flags */
-	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_PTE
-
-	ret
-
-
-/*
  * cpu_switchto(oldlwp, newlwp, returning)
  *
  * Switch context from oldlwp (R1) to newlwp (R2).

@@ -31,6 +31,7 @@ Penumbra-specific -- no `<mips/*.h>` includes.
                          kernel data / bss / page tables
                          MMIO devices (pmap_map_device)
                          virtual_avail -> kernel VM pool (UVM)
+0xFFFF_9000  SCRATCH2_VA   pinned slot 5: second page window
 0xFFFF_A000  PT_USER_L1_VA pinned slot 4: current user L1
 0xFFFF_B000  VECTOR_VA    pinned slot 0: vector page
 0xFFFF_C000  SCRATCH_VA   pinned slot 3: scratch window

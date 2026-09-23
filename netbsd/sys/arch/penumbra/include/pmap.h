@@ -86,6 +86,7 @@
 #define SCRATCH_VA	0xFFFFC000	/* pinned slot 3: C scratch window */
 #define VECTOR_VA	0xFFFFB000	/* pinned slot 0: vector/handler page */
 #define PT_USER_L1_VA	0xFFFFA000	/* pinned slot 4: current user L1 */
+#define SCRATCH2_VA	0xFFFF9000	/* pinned slot 5: second scratch window */
 
 /*
  * Number of pre-allocated L2 tables in BSS (locore.S).
@@ -189,17 +190,41 @@ extern struct pmap kernel_pmap_store;
 /* UVM calls pmap_steal_memory() for early page allocation */
 #define PMAP_STEAL_MEMORY
 
+/* Load a pinned TLB slot with a mapping. */
+static __inline void
+pmap_pin_slot(uint32_t idx, vaddr_t va, pt_entry_t pte)
+{
+	uint32_t vpn = (va >> PAGE_SHIFT) << TLB_VPN_SHIFT;
+
+	__asm__ volatile("WRSYS %0, %1, %2" : : "r"(idx),
+	    "n"(SYSDEV_MMU), "n"(MMU_TLB_INDEX));
+	__asm__ volatile("WRSYS %0, %1, %2" : : "r"(vpn),
+	    "n"(SYSDEV_MMU), "n"(MMU_TLB_VPN));
+	__asm__ volatile("WRSYS %0, %1, %2" : : "r"(pte),
+	    "n"(SYSDEV_MMU), "n"(MMU_TLB_PTE) : "memory");
+}
+
 /*
- * Scratch window: temporarily map a physical page at SCRATCH_VA
- * via pinned TLB slot 3.  Used by pmap_steal_memory (to write to
- * freshly allocated pages that have no VA yet), pmap_zero_page,
- * pmap_copy_page, and L2 table allocation.
+ * Scratch windows: map a physical page into a pinned slot and return
+ * the VA it landed at, to reach pages with no kernel VA of their own.
+ * Two exist so a page copy can hold source and destination at once.
+ * A mapping persists until that window is remapped.
  *
- * Uniprocessor, interrupts disabled during early boot — no
- * concurrency issues.  The mapping persists until overwritten.
+ * Inline because every caller names its window as a constant, which
+ * folds the selection away and leaves the three register writes.
  */
-void		pmap_scratch_map(paddr_t pa, pt_entry_t flags);
-void		*pmap_scratch_va(void);
+#define	PMAP_SCRATCH0	0
+#define	PMAP_SCRATCH1	1
+
+static __inline void *
+pmap_scratch_map(u_int win, paddr_t pa, pt_entry_t flags)
+{
+	vaddr_t va = (win == PMAP_SCRATCH0) ? SCRATCH_VA : SCRATCH2_VA;
+	uint32_t slot = (win == PMAP_SCRATCH0) ? PTLB_SCRATCH : PTLB_SCRATCH2;
+
+	pmap_pin_slot(slot, va, (pa & PTE_PPN_MASK) | flags);
+	return (void *)va;
+}
 
 /* phys_bias: set by locore.S, used only during bootstrap */
 extern int32_t phys_bias;
