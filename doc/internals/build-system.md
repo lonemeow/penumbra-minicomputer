@@ -278,7 +278,18 @@ synthesize a boot ROM with no contents.
 The board is `BOARD`, or under the `TOP=` escape hatch the `<board>_`
 prefix of the top's name. A name with no known board prefix is one of
 the bare `fpga/*.sv` tests, which are all ECP5. Per-board facts sit
-beside the family: `LPF_<board>` for ecp5, and `XDC_<board>`,
+beside the family: `LPF_<board>` for ecp5, and `XDC_MASTER_<board>`,
 `PART_<board>` and `OFL_BOARD_<board>` (openFPGALoader's board name) for
 xc7. Seed pinning and seed sweeps are nextpnr features, so they apply to
 ecp5 boards only.
+
+Constraints differ by family because the tools treat unused ones
+differently. nextpnr ignores LPF entries for pins a design lacks, so an
+ecp5 board has one board file shared by every top. Vivado raises a
+critical warning for each constraint naming a missing port, so an xc7
+top has its own XDC (`XDC_<top>`) holding only its pins. Those lines
+are copied, uncommented and otherwise unchanged, from the board's
+master XDC, which is vendored verbatim under `hw/third_party/` and
+never edited; `hw/tools/xdc_check.py` holds every pin and board-clock
+line of a top's XDC to the master before each build, so a mistyped
+pin or I/O standard stops the build before Vivado runs.

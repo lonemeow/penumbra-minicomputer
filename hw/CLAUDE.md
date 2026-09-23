@@ -40,10 +40,12 @@ hw/
 │   │              #   (+ sdram_line/, the whole-line adapter variant),
 │   │              #   usb/ (SIE cells + MAC + host controller), video/
 │   ├── sim/       # machine_sim + machine_penumbra2_sim, sim devices, memory models
-│   └── fpga/      # FPGA helpers (ECP5 PLL package, lint stubs); board tops under <board>/
+│   └── fpga/      # FPGA helpers (ECP5 PLL package, lint stubs); board tops under <board>/,
+│                  #   Xilinx 7-series helpers under xc7/ (MMCM package, lint stubs)
 ├── microcode/   # microcode.uasm (single source — assemble via uasm.py)
 ├── rom/         # Boot ROM (C + asm) and its standalone Makefile
 ├── sim/         # tb_cpu_prog (program runner), sim_console + per-core shims, per-module tbs
+├── third_party/ # vendored files under their own licenses (Digilent board XDCs)
 └── tools/       # uasm.py (microcode), oss-cad-suite wrappers
 ```
 

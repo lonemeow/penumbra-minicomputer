@@ -65,7 +65,7 @@ TB   ?= tb_$(MOD)
 # Shared packages — always included. --top-module tells Verilator which
 # module is the DUT (otherwise it picks the first file = a package).
 # Add new packages here as the design grows.
-PKG_SV = hw/rtl/common/penumbra_pkg.sv hw/rtl/penumbra2/penumbra2_pkg.sv hw/rtl/penumbra3/penumbra3_pkg.sv hw/rtl/io/sdram/sdram_pkg.sv hw/rtl/io/video/video_pkg.sv hw/rtl/io/usb/usb_pkg.sv hw/rtl/fpga/ecp5_pll_pkg.sv
+PKG_SV = hw/rtl/common/penumbra_pkg.sv hw/rtl/penumbra2/penumbra2_pkg.sv hw/rtl/penumbra3/penumbra3_pkg.sv hw/rtl/io/sdram/sdram_pkg.sv hw/rtl/io/video/video_pkg.sv hw/rtl/io/usb/usb_pkg.sv hw/rtl/fpga/ecp5_pll_pkg.sv hw/rtl/fpga/xc7/xc7_mmcm_pkg.sv
 
 # Resolving a module by name (module sims, test-modules) must not pick up a
 # variant fork, which redefines a base module under the same name in its own
@@ -288,6 +288,7 @@ MODULE_TESTS = \
     txn_arbiter \
     fill_sequencer \
     ecp5_pll_test \
+    xc7_mmcm_test \
     unified_mem \
     uart \
     busctl \
@@ -1179,9 +1180,14 @@ FAMILY_nexysvideo = xc7
 PART_nexysvideo      = xc7a200tsbg484-1
 OFL_BOARD_nexysvideo = nexysVideo
 
-# An xc7 board's constraints: the pin and bank facts the xc7 flow reads
-# (the counterpart of LPF_<board>).
-XDC = $(XDC_$(FPGA_BOARD))
+# An xc7 board's master XDC holds the vendor's pin constraints, all
+# commented out. Vivado flags a constraint on a port the top lacks, so
+# each top has its own XDC_<top> with the master lines it uses,
+# uncommented, plus its design constraints; hw/tools/xdc_check.py
+# checks those lines against the master on every xc7 build.
+XDC_MASTER_nexysvideo = hw/third_party/digilent-xdc/Nexys-Video-Master.xdc
+XDC_MASTER = $(XDC_MASTER_$(FPGA_BOARD))
+XDC = $(if $(XDC_$(TOP)),$(XDC_$(TOP)),$(XDC_$(TOP_MODULE)))
 
 # The registry: every valid (board, core[, variant]) top, its composed
 # source set, and which hex images it embeds. Adding a combination
@@ -1475,8 +1481,9 @@ FPGA_SYNTH_OUT_ecp5 = $(BUILD_DIR)/$(TOP).json
 FPGA_SYNTH_CMD_ecp5 = $(FPGA_TOOLS)/yosys -p "read_verilog $(BUILD_DIR)/$(TOP)_sv2v.v; synth_ecp5 -top $(TOP_MODULE) -json $@"
 
 FPGA_SYNTH_OUT_xc7  = $(BUILD_DIR)/$(TOP).bit
-FPGA_SYNTH_DEPS_xc7 = $(XDC) $(VIVADO_TOOLS)/build.tcl
-FPGA_SYNTH_CMD_xc7  = $(VIVADO_TOOLS)/bin/vivado -mode batch -nojournal \
+FPGA_SYNTH_DEPS_xc7 = $(XDC) $(XDC_MASTER) hw/tools/xdc_check.py $(VIVADO_TOOLS)/build.tcl
+FPGA_SYNTH_CMD_xc7  = python3 hw/tools/xdc_check.py $(XDC_MASTER) $(XDC) && \
+                      $(VIVADO_TOOLS)/bin/vivado -mode batch -nojournal \
                       -log $(BUILD_DIR)/$(TOP)_vivado.log \
                       -source $(VIVADO_TOOLS)/build.tcl \
                       -tclargs $(TOP_MODULE) $(PART_$(FPGA_BOARD)) $(BUILD_DIR)/$(TOP) \

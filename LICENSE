@@ -62,3 +62,7 @@ their own respective licenses.
    3-Clause licensed and is the recommended, freely redistributable data
    set. The Doom shareware and retail WADs published by Id Software remain
    under their own, non-BSD terms and are not redistributable here.
+
+6. Digilent board constraint files (hw/third_party/digilent-xdc/)
+   Copyright (c) 2017 Digilent. Licensed under the MIT License.
+   See hw/third_party/digilent-xdc/License.txt for the full text.
