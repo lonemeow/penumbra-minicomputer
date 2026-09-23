@@ -46,13 +46,20 @@ part of the sysreg contract.
 - Subtotal: ~20 ICs.
 
 ### Pinned TLB
-- Storage: 4 × 8 bytes = 32 bytes in latches or small SRAM.
-- VPN comparison: three 74HC688 per entry × 4 entries = 12 ICs.
-- ASID/G logic: ~4 ICs.
-- Priority mux: ~2 ICs.
-- Subtotal: ~20 ICs.
+- Storage: 8 × 8 bytes = 64 bytes in latches or small SRAM.
+- VPN comparison: three 74HC688 per entry × 8 entries = 24 ICs.
+- ASID/G logic: ~8 ICs.
+- Priority mux: ~3 ICs.
+- Subtotal: ~35 ICs.
 
-**Total: ~40 ICs for the complete TLB subsystem.**
+**Total: ~55 ICs for the complete TLB subsystem.**
+
+The pinned TLB dominates that total because it is fully associative:
+every entry needs its own comparator set, so its cost scales with the
+entry count while the main TLB's does not. Eight entries is not a
+tuning choice — a two-level walk needs five resident mappings before
+any are left for software to spend, as
+[mmu.md](../system/mmu.md#pinned-slot-assignment) sets out.
 
 ## VIPT L1 Cache — Architectural Constraint
 
