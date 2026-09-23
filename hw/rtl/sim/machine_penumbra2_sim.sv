@@ -86,7 +86,7 @@ module machine_penumbra2_sim
 
     logic [31:0] bus_addr, bus_wdata, bus_rdata;
     logic [3:0]  bus_byte_en;
-    logic        bus_re, bus_we, bus_busy, bus_fault;
+    logic        bus_re, bus_we, bus_ack, bus_fault;
 
     // Per-slave read data / busy and address selects. The RAM region is backed
     // by the full v2 SDRAM stack (sdram_sim) and the ROM region by boot_rom, so
@@ -94,7 +94,6 @@ module machine_penumbra2_sim
     logic [31:0] ram_rdata, rom_rdata, uart_rdata;
     logic        ram_busy, rom_busy, uart_busy, uart_irq;
     logic        ram_sel, rom_sel, uart_sel;
-    logic        ram_sel_r, rom_sel_r, uart_sel_r;
     logic        irq_combined;
 
     // Bus-controller outputs (autoconfig cfg-enable / reset) from the machine.
@@ -107,7 +106,7 @@ module machine_penumbra2_sim
     /* verilator lint_off UNUSEDSIGNAL */
     logic [3:0]  spi_dev_byte_en;
     /* verilator lint_on UNUSEDSIGNAL */
-    logic        ac_spi_busy, ac_spi_sel, acfg_sel_r, spi_irq;
+    logic        ac_spi_busy, ac_spi_sel, spi_irq;
     logic        spi_dev_we, spi_dev_re, spi_dev_busy;
 
     machine_penumbra2 #(
@@ -125,7 +124,7 @@ module machine_penumbra2_sim
         .o_bus_addr(bus_addr), .o_bus_wdata(bus_wdata),
         .o_bus_byte_en(bus_byte_en),
         .o_bus_re(bus_re), .o_bus_we(bus_we),
-        .i_bus_rdata(bus_rdata), .i_bus_busy(bus_busy),
+        .i_bus_rdata(bus_rdata), .i_bus_ack(bus_ack),
         .i_bus_fault(bus_fault),
         .o_bus_rst(bus_rst), .o_bus_cfg_en(bus_cfg_en),
         .o_commit_idx(o_commit_idx), .o_commit_data(o_commit_data),
@@ -159,36 +158,55 @@ module machine_penumbra2_sim
     bus_devsel #(.BASE(UART_BASE), .SIZE(32'(UART_PAGE_SIZE)))
         u_uart_sel (.i_addr(bus_addr), .o_sel(uart_sel));
 
-    // Registered selects align the read-data mux with the slaves' registered
-    // read latency; busy and fault stay combinational (current cycle). A held
-    // SDRAM transaction keeps its select asserted through the busy-drop cycle,
-    // so the one registered mux serves both the fixed-latency ROM/UART and the
-    // variable-latency SDRAM.
-    always_ff @(posedge i_clk) begin
-        ram_sel_r  <= ram_sel;
-        rom_sel_r  <= rom_sel;
-        uart_sel_r <= uart_sel;
-        acfg_sel_r <= ac_spi_sel;
-    end
-
     assign irq_combined = i_irq | uart_irq | spi_irq;
 
-    // Bus response OR-combine.  The read-data mux uses the registered
-    // selects so it lands on the cycle the slave's registered read is valid,
-    // while busy uses the combinational ones so the core stalls the same
-    // cycle the slave needs time.
-    always_comb begin
-        if (ram_sel_r)       bus_rdata = ram_rdata;
-        else if (rom_sel_r)  bus_rdata = rom_rdata;
-        else if (uart_sel_r) bus_rdata = uart_rdata;
-        else if (acfg_sel_r) bus_rdata = acfg_rdata;
-        else                 bus_rdata = 32'b0;
-    end
-    assign bus_busy  = (ram_sel    ? ram_busy    : 1'b0)
-                     | (rom_sel    ? rom_busy    : 1'b0)
-                     | (uart_sel   ? uart_busy   : 1'b0)
-                     | (ac_spi_sel ? ac_spi_busy : 1'b0);
-    assign bus_fault = (bus_re | bus_we) & !(ram_sel | rom_sel | uart_sel | ac_spi_sel);
+    // ── Bus response fabric ─────────────────────────────────
+    // One slot per slave: its select (its own decode), its ack and
+    // its read data. The slaves report completion as a busy-drop, so
+    // each ack is the slave's held strobe on a busy-low cycle.
+    localparam int SLV_RAM  = 0;
+    localparam int SLV_ROM  = 1;
+    localparam int SLV_UART = 2;
+    localparam int SLV_SPI  = 3;
+    localparam int NUM_SLV  = 4;
+
+    logic                     bus_strobe;
+    logic [NUM_SLV-1:0]       slv_sel;
+    logic [NUM_SLV-1:0]       slv_ack;
+    logic [NUM_SLV-1:0][31:0] slv_rdata;
+
+    assign bus_strobe = bus_re | bus_we;
+
+    assign slv_sel[SLV_RAM]    = ram_sel;
+    assign slv_ack[SLV_RAM]    = bus_strobe & ram_sel & ~ram_busy;
+    assign slv_rdata[SLV_RAM]  = ram_rdata;
+
+    assign slv_sel[SLV_ROM]    = rom_sel;
+    assign slv_ack[SLV_ROM]    = bus_strobe & rom_sel & ~rom_busy;
+    assign slv_rdata[SLV_ROM]  = rom_rdata;
+
+    assign slv_sel[SLV_UART]   = uart_sel;
+    assign slv_ack[SLV_UART]   = bus_strobe & uart_sel & ~uart_busy;
+    assign slv_rdata[SLV_UART] = uart_rdata;
+
+    assign slv_sel[SLV_SPI]    = ac_spi_sel;
+    assign slv_ack[SLV_SPI]    = bus_strobe & ac_spi_sel & ~ac_spi_busy;
+    assign slv_rdata[SLV_SPI]  = acfg_rdata;
+
+    bus_response_fabric #(
+        .NUM_SLAVES (NUM_SLV)
+    ) u_bus_fabric (
+        .i_clk   (i_clk),
+        .i_rst   (i_rst),
+        .i_re    (bus_re),
+        .i_we    (bus_we),
+        .i_sel   (slv_sel),
+        .i_ack   (slv_ack),
+        .i_rdata (slv_rdata),
+        .o_ack   (bus_ack),
+        .o_rdata (bus_rdata),
+        .o_fault (bus_fault)
+    );
 
     // ── RAM: full v2 SDRAM stack (adapter + CDC + controller + sim PHY +
     // behavioral W9825 chip). Drop-in bus shape; needs the faster i_sdram_clk.

@@ -59,8 +59,8 @@ module penumbra3_bus_master #(
     output logic                          o_bus_re,
     output logic                          o_bus_we,
     input  logic [31:0]                   i_bus_rdata,
-    input  logic                          i_bus_busy,
-    input  logic                          i_bus_fault     // coincident with the busy drop
+    input  logic                          i_bus_ack,
+    input  logic                          i_bus_fault     // valid with i_bus_ack
 );
 
     localparam int IDX_BITS = $clog2(LINE_WORDS);
@@ -81,14 +81,14 @@ module penumbra3_bus_master #(
     logic [3:0]                  byte_en_q;
     logic                        fault_q;
 
-    // A beat completes on the cycle the bus drops busy (read data valid /
+    // A beat completes on the cycle the bus acks (read data valid /
     // write committed). last_beat is the final word: the whole line for a
     // burst, word 0 for a single beat.
     logic [IDX_BITS-1:0] last_idx;
     logic                beat_done;
     logic                last_beat;
     assign last_idx  = is_line_q ? IDX_BITS'(LINE_WORDS - 1) : '0;
-    assign beat_done = (state_q == M_READ || state_q == M_WRITE) && !i_bus_busy;
+    assign beat_done = (state_q == M_READ || state_q == M_WRITE) && i_bus_ack;
     assign last_beat = (word_idx_q == last_idx);
 
     // ── Next-state ───────────────────────────────────────────────
@@ -105,8 +105,8 @@ module penumbra3_bus_master #(
 
     // ── Bus master outputs ───────────────────────────────────────
     // re/we are a pure function of the burst state, so they hold across
-    // the whole transfer and never gap on busy. A line burst writes full
-    // words; a single beat carries its byte mask.
+    // the whole transfer and never gap between beats. A line burst writes
+    // full words; a single beat carries its byte mask.
     always_comb begin
         o_bus_addr    = base_addr_q + (32'(word_idx_q) << WORD_LSB);
         o_bus_wdata   = line_buf_q[word_idx_q];
@@ -148,12 +148,5 @@ module penumbra3_bus_master #(
             end
         end
     end
-
-    // The bus contract presents a fault only as busy drops, and fault_q is
-    // captured on that edge -- a fault raised while still busy would be
-    // missed. Catch a producer that violates the contract.
-    assert property (@(posedge i_clk) disable iff (i_rst)
-        (state_q == M_READ || state_q == M_WRITE) |-> !(i_bus_busy && i_bus_fault))
-        else $error("penumbra3_bus_master: bus fault asserted while busy");
 
 endmodule

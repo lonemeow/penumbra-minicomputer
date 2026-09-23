@@ -22,8 +22,8 @@
 //     BRAMs (undefined at power-on on real HW); the cache stays
 //     in pass-through mode until `ready` asserts
 //
-// The "memory" mock is the same shape as `tb_cpu_bus_arbiter.cpp`
-// uses: latency-counted busy + last-rdata-presented.
+// The "memory" mock is a registered bus slave: it latches a request at
+// a clock edge and acks it `latency` cycles later with its read data.
 
 #include <cstdio>
 #include <cstdint>
@@ -40,7 +40,7 @@ static void reset(Vl2_cache* d) {
     d->i_rst = 1;
     d->i_addr = 0; d->i_wdata = 0; d->i_byte_en = 0;
     d->i_re = 0; d->i_we = 0; d->i_cacheable = 0;
-    d->i_mem_rdata = 0; d->i_mem_busy = 0;
+    d->i_mem_rdata = 0; d->i_mem_ack = 0;
     d->i_sys_reg = 0; d->i_sys_wdata = 0; d->i_sys_we = 0;
     tick(d); tick(d);
     d->i_rst = 0;
@@ -70,65 +70,79 @@ static void check_bool(const char* name, bool got, bool exp) {
     }
 }
 
-// Memory mock: serves one outstanding read at a time with a
-// configurable latency, returning a function of the address.
+// Memory mock: a registered bus slave. It samples the request the L2
+// presents at a rising edge and acks it `latency` cycles after the
+// minimum one wait, with its read data. The strobe it sees in its own
+// ack cycle belongs to the access being completed.
 struct MemMock {
-    int      busy_remaining = 0;
+    int      wait_remaining = 0;
     uint32_t pending_rdata  = 0;
     bool     have_request   = false;
     bool     req_was_write  = false;
+    bool     acking         = false;
     uint32_t served_count   = 0;
     int      violations     = 0;
 
-    void clock_edge(Vl2_cache* d, int latency,
-                    uint32_t (*rdata_fn)(uint32_t)) {
-        // Contract enforcement: once we've latched a request, the
-        // master must keep re/we asserted until busy drops.  See
-        // doc/hardware/bus-protocol.md "Sync-Bus Mapping".
-        if (have_request && busy_remaining > 0) {
+    // Before the rising edge: the request presented this cycle.
+    void sample(Vl2_cache* d, int latency,
+                uint32_t (*rdata_fn)(uint32_t)) {
+        bool strobe = d->o_mem_re || d->o_mem_we;
+        if (have_request) {
+            // Contract enforcement: the master holds re/we until the
+            // ack.  See doc/hardware/bus-protocol.md "Sync-Bus Mapping".
             bool live = req_was_write ? (bool)d->o_mem_we
                                       : (bool)d->o_mem_re;
             if (!live) {
                 fprintf(stderr,
                         "MemMock: contract violation — master dropped %s "
-                        "mid-access (busy_remaining=%d)\n",
-                        req_was_write ? "o_mem_we" : "o_mem_re",
-                        busy_remaining);
+                        "before the ack\n",
+                        req_was_write ? "o_mem_we" : "o_mem_re");
                 violations++;
                 errors++;
             }
-        }
-        if (!have_request && (d->o_mem_re || d->o_mem_we)) {
+        } else if (strobe && !acking) {
             have_request   = true;
             req_was_write  = d->o_mem_we;
-            busy_remaining = latency;
+            wait_remaining = latency;
             pending_rdata  = rdata_fn(d->o_mem_addr);
         }
+    }
+
+    // After the rising edge: this cycle's response.
+    void drive(Vl2_cache* d) {
+        acking = false;
         if (have_request) {
-            if (busy_remaining > 0) {
-                d->i_mem_busy  = 1;
-                d->i_mem_rdata = 0xDEAD'BEEFu;
-                busy_remaining--;
-            }
-            if (busy_remaining == 0) {
-                d->i_mem_busy  = 0;
-                d->i_mem_rdata = pending_rdata;
-                have_request   = false;
+            if (wait_remaining > 0) {
+                wait_remaining--;
+            } else {
+                acking       = true;
+                have_request = false;
                 served_count++;
             }
-        } else {
-            d->i_mem_busy  = 0;
-            d->i_mem_rdata = 0;
         }
+        d->i_mem_ack   = acking;
+        d->i_mem_rdata = acking ? pending_rdata : 0xDEAD'BEEFu;
     }
 };
 
 static void tick_with_mem(Vl2_cache* d, MemMock& mem, int lat,
                           uint32_t (*rdata_fn)(uint32_t)) {
     d->i_clk = 0; d->eval();
+    mem.sample(d, lat, rdata_fn);
     d->i_clk = 1; d->eval();
-    mem.clock_edge(d, lat, rdata_fn);
+    mem.drive(d);
     d->eval();
+}
+
+// The master holds its strobes through the completion cycle — the L2
+// latches a cached write on that cycle's edge — and releases them on
+// the next.
+static void release_after_completion(Vl2_cache* d, MemMock& mem,
+                                     uint32_t (*rdata_fn)(uint32_t)) {
+    tick_with_mem(d, mem, 0, rdata_fn);
+    d->i_re = 0;
+    d->i_we = 0;
+    tick_with_mem(d, mem, 0, rdata_fn);
 }
 
 // Default rdata function: data = ~addr (cheap, distinct per word).
@@ -189,15 +203,15 @@ static void test_passthrough_when_disabled(Vl2_cache* d) {
     d->eval();
     check_bool("disabled.o_mem_re_immediate", d->o_mem_re, true);
     // Drive forward until the mock has served at least one transaction.
-    // (Mock-side i_mem_busy is registered, so the L2's o_busy lags the
-    // arrival by 1 tick on the pass-through path; we drive transactions
-    // to completion rather than chasing the busy edge directly.)
+    // (The mock is registered, so its ack lands at least one tick after
+    // the request; we drive transactions to completion rather than
+    // chasing the ack edge directly.)
     uint32_t before = mem.served_count;
     int safety = 0;
     while (mem.served_count == before && safety++ < 20)
         tick_with_mem(d, mem, 2, rdata_addr_complement);
     check("disabled.rdata", d->o_rdata, rdata_addr_complement(0x1000));
-    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    release_after_completion(d, mem, rdata_addr_complement);
 }
 
 static void test_cached_read_miss_then_hit(Vl2_cache* d) {
@@ -219,7 +233,7 @@ static void test_cached_read_miss_then_hit(Vl2_cache* d) {
     uint32_t miss_mem_accesses = mem.served_count;
     check("miss.served_4_words", miss_mem_accesses, 4u);
 
-    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    release_after_completion(d, mem, rdata_addr_complement);
 
     // ── Second access to same line: should hit, no memory traffic ──
     d->i_addr = 0x4004;          // word 1 of same line
@@ -232,7 +246,7 @@ static void test_cached_read_miss_then_hit(Vl2_cache* d) {
           rdata_addr_complement(0x4004));
     check("hit.no_extra_memory_traffic",
           mem.served_count, miss_mem_accesses);
-    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    release_after_completion(d, mem, rdata_addr_complement);
 }
 
 static uint32_t rdata_zero(uint32_t a) { (void)a; return 0; }
@@ -253,7 +267,7 @@ static void test_write_updates_line(Vl2_cache* d) {
     int safety = 0;
     while (d->o_busy && safety++ < 100)
         tick_with_mem(d, mem, 2, rdata_addr_complement);
-    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    release_after_completion(d, mem, rdata_addr_complement);
     uint32_t mem_after_install = mem.served_count;
 
     // Write to a word inside the cached line.  Under WT-WnA the
@@ -270,7 +284,7 @@ static void test_write_updates_line(Vl2_cache* d) {
     safety = 0;
     while (mem.served_count == served_before_write && safety++ < 20)
         tick_with_mem(d, mem, 2, rdata_zero);
-    d->i_we = 0; tick_with_mem(d, mem, 0, rdata_zero);
+    release_after_completion(d, mem, rdata_zero);
     check("write.one_memory_access", mem.served_count,
           mem_after_install + 1);
 
@@ -285,7 +299,7 @@ static void test_write_updates_line(Vl2_cache* d) {
     check("write.line_still_cached_no_refill", mem.served_count,
           mem_after_install + 1);
     check("write.read_returns_new_value", d->o_rdata, 0xCAFEBABEu);
-    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    release_after_completion(d, mem, rdata_addr_complement);
 
     // Read an unwritten word in the same line.  Still a hit,
     // returns the original fill data.
@@ -299,7 +313,7 @@ static void test_write_updates_line(Vl2_cache* d) {
           d->o_rdata, rdata_addr_complement(0x5008));
     check("write.still_no_refill", mem.served_count,
           mem_after_install + 1);
-    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    release_after_completion(d, mem, rdata_addr_complement);
 
     // Partial-byte write: only one byte enable.  The other bytes
     // of the word must keep their old values.
@@ -313,7 +327,7 @@ static void test_write_updates_line(Vl2_cache* d) {
     safety = 0;
     while (mem.served_count == served_before_partial && safety++ < 20)
         tick_with_mem(d, mem, 2, rdata_zero);
-    d->i_we = 0; tick_with_mem(d, mem, 0, rdata_zero);
+    release_after_completion(d, mem, rdata_zero);
 
     d->i_addr = 0x5008;
     d->i_re   = 1;
@@ -324,7 +338,7 @@ static void test_write_updates_line(Vl2_cache* d) {
     uint32_t orig    = rdata_addr_complement(0x5008);
     uint32_t expect  = (orig & 0xFFFFFF00u) | (0xDEAD'BEEFu & 0xFFu);
     check("write.byte_en_partial_update", d->o_rdata, expect);
-    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    release_after_completion(d, mem, rdata_addr_complement);
 }
 
 static void test_inval_all(Vl2_cache* d) {
@@ -341,7 +355,7 @@ static void test_inval_all(Vl2_cache* d) {
     int safety = 0;
     while (d->o_busy && safety++ < 100)
         tick_with_mem(d, mem, 2, rdata_addr_complement);
-    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    release_after_completion(d, mem, rdata_addr_complement);
     uint32_t mem_after_install = mem.served_count;
 
     // Trigger INVAL_ALL.  wrsys leaves inval_all_req=1 registered;
@@ -367,7 +381,7 @@ static void test_inval_all(Vl2_cache* d) {
         tick_with_mem(d, mem, 2, rdata_addr_complement);
     check("inval_all.refill_happened", mem.served_count,
           mem_after_install + 4);
-    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    release_after_completion(d, mem, rdata_addr_complement);
 }
 
 static void test_inval_all_implicit_fence(Vl2_cache* d) {
@@ -412,7 +426,7 @@ static void test_inval_all_implicit_fence(Vl2_cache* d) {
                (rdsys(d, 6) & 1) == 0, true);
     check("fence.access_returned_correct_data", d->o_rdata,
           rdata_addr_complement(0x8000));
-    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    release_after_completion(d, mem, rdata_addr_complement);
 }
 
 static void test_uncached_skips_cache(Vl2_cache* d) {
@@ -438,13 +452,13 @@ static void test_uncached_skips_cache(Vl2_cache* d) {
     // A second uncached access to the same addr must still hit
     // memory (no cache install for uncached accesses).
     uint32_t served_before = mem.served_count;
-    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    release_after_completion(d, mem, rdata_addr_complement);
     d->i_re = 1; d->eval();
     safety = 0;
     while (mem.served_count == served_before && safety++ < 20)
         tick_with_mem(d, mem, 2, rdata_addr_complement);
     check("uncached.no_caching", mem.served_count, served_before + 1);
-    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    release_after_completion(d, mem, rdata_addr_complement);
 }
 
 static void test_perfctrs(Vl2_cache* d) {
@@ -469,7 +483,7 @@ static void test_perfctrs(Vl2_cache* d) {
     int safety = 0;
     while (d->o_busy && safety++ < 100)
         tick_with_mem(d, mem, 2, rdata_addr_complement);
-    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    release_after_completion(d, mem, rdata_addr_complement);
     check("perf.miss_counted_once",      rdsys(d, 11), 1u);
     check("perf.no_phantom_hit_on_reserve", rdsys(d, 10), 0u);
 
@@ -483,7 +497,7 @@ static void test_perfctrs(Vl2_cache* d) {
     safety = 0;
     while (d->o_busy && safety++ < 20)
         tick_with_mem(d, mem, 2, rdata_addr_complement);
-    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    release_after_completion(d, mem, rdata_addr_complement);
     check("perf.hit_after_fill_counted",   rdsys(d, 10), 1u);
     check("perf.miss_still_one",           rdsys(d, 11), 1u);
 
@@ -494,7 +508,7 @@ static void test_perfctrs(Vl2_cache* d) {
     safety = 0;
     while (d->o_busy && safety++ < 20)
         tick_with_mem(d, mem, 2, rdata_addr_complement);
-    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    release_after_completion(d, mem, rdata_addr_complement);
     check("perf.second_hit_counted",       rdsys(d, 10), 2u);
 
     // Cached write that hits → write_hit counted; the L2 policy
@@ -510,7 +524,7 @@ static void test_perfctrs(Vl2_cache* d) {
     safety = 0;
     while (mem.served_count == served_before && safety++ < 20)
         tick_with_mem(d, mem, 2, rdata_zero);
-    d->i_we = 0; tick_with_mem(d, mem, 0, rdata_zero);
+    release_after_completion(d, mem, rdata_zero);
     check("perf.write_hit_counted",        rdsys(d, 12), 1u);
     check("perf.write_miss_still_zero",    rdsys(d, 13), 0u);
 
@@ -525,7 +539,7 @@ static void test_perfctrs(Vl2_cache* d) {
     safety = 0;
     while (mem.served_count == served_before && safety++ < 20)
         tick_with_mem(d, mem, 2, rdata_zero);
-    d->i_we = 0; tick_with_mem(d, mem, 0, rdata_zero);
+    release_after_completion(d, mem, rdata_zero);
     check("perf.write_miss_counted",       rdsys(d, 13), 1u);
 
     // Uncacheable read pass-through → no counter movement.
@@ -539,7 +553,7 @@ static void test_perfctrs(Vl2_cache* d) {
     safety = 0;
     while (mem.served_count == served_before && safety++ < 20)
         tick_with_mem(d, mem, 2, rdata_addr_complement);
-    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    release_after_completion(d, mem, rdata_addr_complement);
     check("perf.uncached_read_no_event_hits",   rdsys(d, 10), rh_before);
     check("perf.uncached_read_no_event_misses", rdsys(d, 11), rm_before);
 
@@ -554,7 +568,7 @@ static void test_perfctrs(Vl2_cache* d) {
     safety = 0;
     while (mem.served_count == served_before && safety++ < 20)
         tick_with_mem(d, mem, 2, rdata_zero);
-    d->i_we = 0; tick_with_mem(d, mem, 0, rdata_zero);
+    release_after_completion(d, mem, rdata_zero);
     check("perf.uncached_write_no_event_hits",   rdsys(d, 12), wh_before);
     check("perf.uncached_write_no_event_misses", rdsys(d, 13), wm_before);
 
@@ -572,7 +586,7 @@ static void test_perfctrs(Vl2_cache* d) {
     safety = 0;
     while (d->o_busy && safety++ < 100)
         tick_with_mem(d, mem, 2, rdata_addr_complement);
-    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    release_after_completion(d, mem, rdata_addr_complement);
     check("perf.write_did_not_evict_l2_line",
           rdsys(d, 11), rm_before2);
     check("perf.subsequent_read_hits_under_wtwna",
@@ -617,7 +631,7 @@ static void test_multi_set_independence(Vl2_cache* d) {
         int safety = 0;
         while (d->o_busy && safety++ < 100)
             tick_with_mem(d, mem, 2, rdata_addr_complement);
-        d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+        release_after_completion(d, mem, rdata_addr_complement);
 
         d->i_addr      = cases[i].addr;
         d->i_wdata     = cases[i].value;
@@ -628,7 +642,7 @@ static void test_multi_set_independence(Vl2_cache* d) {
         safety = 0;
         while (mem.served_count == before && safety++ < 20)
             tick_with_mem(d, mem, 2, rdata_zero);
-        d->i_we = 0; tick_with_mem(d, mem, 0, rdata_zero);
+        release_after_completion(d, mem, rdata_zero);
     }
 
     // Read every line back; each must return exactly the value we
@@ -645,7 +659,7 @@ static void test_multi_set_independence(Vl2_cache* d) {
         snprintf(name, sizeof(name),
                  "multi_set.value_at_0x%04X", cases[i].addr);
         check(name, d->o_rdata, cases[i].value);
-        d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+        release_after_completion(d, mem, rdata_addr_complement);
     }
 }
 
@@ -667,7 +681,7 @@ static void test_byte_en_accumulation(Vl2_cache* d) {
         int safety = 0;
         while (mem.served_count == before && safety++ < 20)
             tick_with_mem(d, mem, 2, rdata_zero);
-        d->i_we = 0; tick_with_mem(d, mem, 0, rdata_zero);
+        release_after_completion(d, mem, rdata_zero);
     };
     auto do_read = [&](uint32_t addr) -> uint32_t {
         d->i_addr = addr;
@@ -678,7 +692,7 @@ static void test_byte_en_accumulation(Vl2_cache* d) {
         while (d->o_busy && safety++ < 100)
             tick_with_mem(d, mem, 2, rdata_addr_complement);
         uint32_t val = d->o_rdata;
-        d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+        release_after_completion(d, mem, rdata_addr_complement);
         return val;
     };
 
@@ -734,14 +748,14 @@ static void test_perfctrs_inval_all(Vl2_cache* d) {
     int safety = 0;
     while (d->o_busy && safety++ < 100)
         tick_with_mem(d, mem, 2, rdata_addr_complement);
-    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    release_after_completion(d, mem, rdata_addr_complement);
 
     // Add a hit on the same line so read_hits is also non-zero.
     d->i_addr = 0x4004; d->i_re = 1; d->eval();
     safety = 0;
     while (d->o_busy && safety++ < 20)
         tick_with_mem(d, mem, 2, rdata_addr_complement);
-    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    release_after_completion(d, mem, rdata_addr_complement);
 
     uint32_t rh_before = rdsys(d, 10);
     uint32_t rm_before = rdsys(d, 11);
@@ -780,7 +794,7 @@ static void test_perfctrs_during_post_reset_walk(Vl2_cache* d) {
     d->i_rst = 1;
     d->i_addr = 0; d->i_wdata = 0; d->i_byte_en = 0;
     d->i_re = 0; d->i_we = 0; d->i_cacheable = 0;
-    d->i_mem_rdata = 0; d->i_mem_busy = 0;
+    d->i_mem_rdata = 0; d->i_mem_ack = 0;
     d->i_sys_reg = 0; d->i_sys_wdata = 0; d->i_sys_we = 0;
     tick(d); tick(d);
     d->i_rst = 0;
@@ -815,7 +829,7 @@ static void test_perfctrs_during_post_reset_walk(Vl2_cache* d) {
                d->o_busy == 0u, true);
     check_bool("post_reset.walker_still_busy_after_passthrough",
                (rdsys(d, 6) & 1) == 1u, true);
-    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    release_after_completion(d, mem, rdata_addr_complement);
 
     // Counters must still be zero — the access went through
     // pass-through, not the cache pipeline.
@@ -839,7 +853,7 @@ static void test_perfctrs_during_post_reset_walk(Vl2_cache* d) {
     safety = 0;
     while (d->o_busy && safety++ < 100)
         tick_with_mem(d, mem, 2, rdata_addr_complement);
-    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    release_after_completion(d, mem, rdata_addr_complement);
 
     check("post_reset.first_post_walk_access_is_miss",
           rdsys(d, 11), 1u);
@@ -884,7 +898,7 @@ static void test_back_to_back_read_throughput(Vl2_cache* d) {
     int safety = 0;
     while (d->o_busy && safety++ < 100)
         tick_with_mem(d, mem, 2, rdata_addr_complement);
-    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    release_after_completion(d, mem, rdata_addr_complement);
     uint32_t served_after_prime = mem.served_count;
 
     // Stream the 4 words.  On every cycle o_busy is low, record the
@@ -907,7 +921,7 @@ static void test_back_to_back_read_throughput(Vl2_cache* d) {
         tick_with_mem(d, mem, 0, rdata_addr_complement);
         t++;
     }
-    d->i_re = 0; tick_with_mem(d, mem, 0, rdata_addr_complement);
+    release_after_completion(d, mem, rdata_addr_complement);
 
     check_bool("throughput.all_four_served", word == NWORDS, true);
 

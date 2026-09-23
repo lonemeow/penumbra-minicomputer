@@ -97,8 +97,8 @@ module l2_cache
     output logic        o_mem_we,
     output logic        o_mem_re,
     input  logic [31:0] i_mem_rdata,
-    input  logic        i_mem_busy,
-    input  logic        i_mem_fault,    // bus-side access fault, coincident with i_mem_busy drop
+    input  logic        i_mem_ack,
+    input  logic        i_mem_fault,    // bus-side access fault, valid with i_mem_ack
 
     // ── Sysreg device 9 ────────────────────────────────────
     input  logic [3:0]  i_sys_reg,
@@ -451,11 +451,6 @@ module l2_cache
     // Fill state.  fill_word_idx is the line-word currently being
     // fetched; fill_in_flight tracks whether a request has been
     // driven to the downstream bus and is awaiting its response.
-    // The split is needed because the downstream bus uses the
-    // busy-based handshake (no req_accepted pulse like the upstream
-    // arbiter), so we can't gate increment on a single edge — we
-    // need to distinguish "have I issued this word yet" from "have
-    // I captured its response."
     logic [31:0]            fill_base_addr;
     logic [TAG_BITS-1:0]    fill_tag;
     logic [SET_BITS-1:0]    fill_set;
@@ -477,7 +472,7 @@ module l2_cache
     // the cycle that commits the tag and the valid bit.
     logic                   fill_beat;
     logic                   fill_install;
-    assign fill_beat    = (state == S_FILL) && fill_in_flight && !i_mem_busy;
+    assign fill_beat    = (state == S_FILL) && fill_in_flight && i_mem_ack;
     assign fill_install = fill_beat && (fill_word_idx == LAST_FILL_WORD);
 
     // Deferred PLRU touch: a read hit captures its set + way here and the
@@ -487,7 +482,7 @@ module l2_cache
     //
     // Read hits are the only producer, which is what keeps the plru array's
     // per-set clock-enable a decode of registered signals — no combinational
-    // hit verdict and no downstream i_mem_busy reaches it. A freshly filled
+    // hit verdict and no downstream i_mem_ack reaches it. A freshly filled
     // line gets its touch from the re-serve hit that follows the install.
     logic                   plru_touch;
     logic [SET_BITS-1:0]    plru_touch_set;
@@ -557,6 +552,13 @@ module l2_cache
         endcase
     end
 
+    // A bus access this cache presented is still waiting for its ack.
+    // Stage 0 must not latch a new cached request while one is: a
+    // cached write is forwarded to the bus the cycle it arrives, and
+    // re-latching it every cycle memory spends on it would replay it.
+    logic bus_pending;
+    assign bus_pending = (o_mem_we || o_mem_re) && !i_mem_ack;
+
     // ══════════════════════════════════════════════════════════
     // Output rdata
     //
@@ -601,8 +603,8 @@ module l2_cache
     // Output busy
     //
     // S_IDLE:
-    //   - Uncached/pass-through: mirror i_mem_busy
-    //   - Cached write: mirror i_mem_busy (memory drives completion)
+    //   - Uncached/pass-through: busy until the bus acks
+    //   - Cached write: busy until the bus acks (memory drives completion)
     //   - Cached read stage 0 (s1_valid=0, request live): busy=1
     //     while we launch the BRAM read
     //   - Cached read stage 1 (s1_valid=1): hit → 0, miss → 1 (will
@@ -616,9 +618,9 @@ module l2_cache
         case (state)
             S_IDLE: begin
                 if (!l2_active(i_cacheable) && (i_re || i_we)) begin
-                    o_busy = i_mem_busy;
+                    o_busy = !i_mem_ack;
                 end else if (l2_active(i_cacheable) && i_we) begin
-                    o_busy = i_mem_busy;
+                    o_busy = !i_mem_ack;
                 end else if (l2_active(i_cacheable) && i_re) begin
                     // Cached read: busy until the hit resolves. The resolve
                     // signals (rsv_*) are the live stage-1 verdict at
@@ -635,7 +637,7 @@ module l2_cache
             S_INVAL_ALL: begin
                 // Two regimes:
                 //   - !ready: post-reset auto-INVAL.  Pass-through
-                //     mirrors i_mem_busy so boot ROM and uncached
+                //     waits on the bus ack so boot ROM and uncached
                 //     MMIO work during the ~NUM_SETS-cycle walk.
                 //   - ready: software-initiated INVAL via WRSYS.
                 //     Stall *every* memory access (cached and
@@ -646,7 +648,7 @@ module l2_cache
                 //     the very next memory op auto-waits.
                 if (!ready) begin
                     if (!l2_active(i_cacheable) && (i_re || i_we))
-                        o_busy = i_mem_busy;
+                        o_busy = !i_mem_ack;
                     else
                         o_busy = 1'b0;
                 end else begin
@@ -666,7 +668,7 @@ module l2_cache
     // A bus-side fault rides the front-side completion only on the
     // pass-through path: an uncached/disabled access or a cached
     // write-through forwards the beat to the bus, so its fault forwards
-    // the same cycle (o_busy == i_mem_busy there).  A cached read hit
+    // the same cycle (o_busy == !i_mem_ack there).  A cached read hit
     // completes locally with no bus access, so it can never fault.  A
     // fault on L2's own line fill from the bus (S_FILL) is a separate
     // abort case — not yet handled (see the assertion below) — so the
@@ -749,7 +751,7 @@ module l2_cache
                     // pulse. Every plru write lands here, so the array's
                     // clock-enable is a set decode of registered signals —
                     // neither the combinational hit path nor the downstream
-                    // bus's i_mem_busy reaches it. That is the cut which keeps
+                    // bus's i_mem_ack reaches it. That is the cut which keeps
                     // the NUM_SETS-wide flop array off both critical paths.
                     plru_touch <= 1'b0;
                     if (plru_touch)
@@ -757,17 +759,15 @@ module l2_cache
                             plru_update(plru[plru_touch_set], plru_touch_way);
 
                     // ── Stage 0: latch a new cached request ──
-                    // Only if not already holding stage 1, and the
-                    // memory port is idle (so we don't re-latch the
-                    // same in-flight cached write across multiple
-                    // cycles while memory chews on it).
+                    // Only if not already holding stage 1, and no
+                    // bus access of ours is pending (see bus_pending).
                     // At HIT_LATENCY=3 also gate on !s1_valid_q: don't re-latch
                     // the still-held request while its stage-2 verdict is being
                     // presented (that would issue a phantom second access of
                     // the same line). At 2 there is no stage-2 hold, so
                     // s1_valid alone suffices (and II stays 2).
                     if (!s1_valid && (HIT_LATENCY < 3 || !s1_valid_q)
-                        && !i_mem_busy
+                        && !bus_pending
                         && l2_active(i_cacheable) && (i_re || i_we)) begin
                         s1_valid     <= 1'b1;
                         s1_addr      <= i_addr;
@@ -833,7 +833,7 @@ module l2_cache
                     //     word's addr.  Slave captures this cycle
                     //     (it sees re=1 while idle); set
                     //     in_flight=1 to remember.
-                    //   - in_flight && !i_mem_busy: response just
+                    //   - in_flight && i_mem_ack: response just
                     //     arrived.  Capture into BRAM, advance
                     //     word_idx (or install on last word).
                     if (!fill_in_flight
@@ -855,7 +855,7 @@ module l2_cache
                             // Nothing touches plru here.  That re-serve
                             // hits on the way just installed, so it
                             // carries the touch for this line — and it
-                            // carries it off i_mem_busy, which gates
+                            // carries it off i_mem_ack, which gates
                             // this branch and would otherwise put the
                             // whole downstream device decode in front
                             // of the plru array's per-set clock-enable.

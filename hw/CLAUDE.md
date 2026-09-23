@@ -172,6 +172,9 @@ exposed external bus.
   CFG_EN toggle, dynamic base-address decode.
 - `bus_devsel.sv` — combinational address comparator (BASE/SIZE
   parameterized).
+- `bus_response_fabric.sv` — the system bus's response half, one
+  instance per machine top: OR of the slaves' acks, read data gated by
+  each slave's own ack, and the no-device responder (ack + bus fault).
 - `boot_rom.sv` — ROM (64 KB default), `$readmemh` from `program.hex`
   (boot ROM owns that root-level name; sims override per program via
   the `+rom_hex=<path>` plusarg, which the Makefile points at

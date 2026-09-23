@@ -365,12 +365,12 @@ module ulx3s_penumbra2_top (
     //
     // machine_penumbra2 exposes a single post-L2 master port. The board
     // attaches the SDRAM, boot ROM, UART, and the autoconfig SD device on
-    // this bus, then drives the read response (rdata/busy/fault) back in.
+    // this bus, then drives the response (rdata/ack/fault) back in.
     // ══════════════════════════════════════════════════════════
     logic [31:0] mem_addr, mem_wdata, mem_rdata;
     logic [3:0]  mem_byte_en;
     logic        mem_we, mem_re;
-    logic        mem_busy;
+    logic        mem_ack;
     logic        bus_fault;
 
     // ── IRQ aggregation ─────────────────────────────────────
@@ -404,7 +404,7 @@ module ulx3s_penumbra2_top (
         .o_bus_re      (mem_re),
         .o_bus_we      (mem_we),
         .i_bus_rdata   (mem_rdata),
-        .i_bus_busy    (mem_busy),
+        .i_bus_ack     (mem_ack),
         .i_bus_fault   (bus_fault),
 
         .o_bus_rst     (busctl_bus_rst),
@@ -444,13 +444,12 @@ module ulx3s_penumbra2_top (
     localparam int ROM_WORDS   = 16384;               // 64 KB boot ROM
 
     // ── SDRAM (system RAM) ──────────────────────────────────
-    logic        ram_sel, ram_sel_r;
+    logic        ram_sel;
     logic [31:0] ram_rdata_raw;
     logic        ram_busy_raw;
 
     bus_devsel #(.BASE(RAM_BASE), .SIZE(SDRAM_BYTES))
         u_ram_sel (.i_addr(mem_addr), .o_sel(ram_sel));
-    always_ff @(posedge clk) ram_sel_r <= ram_sel;
 
     // ── SDRAM: stack (adapter → CDC → controller) → ECP5 PHY → pins ─
     // The stack's bus side runs on the system clock and its controller
@@ -522,13 +521,12 @@ module ulx3s_penumbra2_top (
     );
 
     // ── Boot ROM ────────────────────────────────────────────
-    logic        rom_sel, rom_sel_r;
+    logic        rom_sel;
     logic [31:0] rom_rdata_raw;
     logic        rom_busy_raw;
 
     bus_devsel #(.BASE(ROM_BASE), .SIZE(32'(ROM_WORDS * 4)))
         u_rom_sel (.i_addr(mem_addr), .o_sel(rom_sel));
-    always_ff @(posedge clk) rom_sel_r <= rom_sel;
 
     boot_rom #(.ROM_WORDS(ROM_WORDS)) u_rom (
         .i_clk     (clk),
@@ -540,13 +538,12 @@ module ulx3s_penumbra2_top (
     );
 
     // ── UART ────────────────────────────────────────────────
-    logic        uart_sel, uart_sel_r;
+    logic        uart_sel;
     logic [31:0] uart_rdata_raw;
     logic        uart_busy_raw;
 
     bus_devsel #(.BASE(UART_BASE), .SIZE(32'd4096))
         u_uart_sel (.i_addr(mem_addr), .o_sel(uart_sel));
-    always_ff @(posedge clk) uart_sel_r <= uart_sel;
 
     uart #(
         .CLK_FREQ  (CLK_FREQ)
@@ -942,83 +939,67 @@ module ulx3s_penumbra2_top (
         );
     end
 
-    // Autoconfig combined bus signals
-    //
-    // The cluster presents one slave to the bus combine below: an
-    // OR fabric over the per-device responses, read data selected by
-    // the registered select (landing with each device's registered
-    // read) and busy/sel by the combinational one (stalling in the
-    // request cycle). Three devices now share it — SPI/SD, USB, and
-    // the display.
-    logic [31:0] acfg_rdata;
-    logic        acfg_busy;
-    logic        acfg_sel;
-    logic        acfg_sel_r;
-    logic        ac_spi_sel_r, ac_usb_sel_r, ac_disp_sel_r, ac_audio_sel_r;
+    // ── Bus response fabric ─────────────────────────────────
+    // One slot per slave: its select (its own decode), its ack and
+    // its read data. The slaves report completion as a busy-drop, so
+    // each ack is the slave's held strobe on a busy-low cycle.
+    localparam int SLV_RAM   = 0;
+    localparam int SLV_ROM   = 1;
+    localparam int SLV_UART  = 2;
+    localparam int SLV_SPI   = 3;
+    localparam int SLV_USB   = 4;
+    localparam int SLV_DISP  = 5;
+    localparam int SLV_AUDIO = 6;
+    localparam int NUM_SLV   = 7;
 
-    assign acfg_rdata = (ac_spi_sel_r   ? ac_spi_rdata   : 32'b0) |
-                        (ac_usb_sel_r   ? ac_usb_rdata   : 32'b0) |
-                        (ac_disp_sel_r  ? ac_disp_rdata  : 32'b0) |
-                        (ac_audio_sel_r ? ac_audio_rdata : 32'b0);
-    assign acfg_busy  = ac_spi_busy | ac_usb_busy | ac_disp_busy | ac_audio_busy;
-    assign acfg_sel   = ac_spi_sel | ac_usb_sel | ac_disp_sel | ac_audio_sel;
-    always_ff @(posedge clk) begin
-        ac_spi_sel_r  <= ac_spi_sel;
-        ac_usb_sel_r  <= ac_usb_sel;
-        ac_disp_sel_r  <= ac_disp_sel;
-        ac_audio_sel_r <= ac_audio_sel;
-        acfg_sel_r     <= acfg_sel;
-    end
+    logic                     mem_strobe;
+    logic [NUM_SLV-1:0]       slv_sel;
+    logic [NUM_SLV-1:0]       slv_ack;
+    logic [NUM_SLV-1:0][31:0] slv_rdata;
 
-    // Autoconfig bases are assigned at run time from each device's declared
-    // DEV_SIZE, so disjoint windows are a software-held property, not a
-    // structural one — a mis-sized window aliases two devices onto one
-    // address and this OR fabric merges their read data silently.
-    /* verilator lint_off UNUSEDSIGNAL */
-    logic [3:0] ac_sel_onehot;
-    assign ac_sel_onehot = {ac_spi_sel, ac_usb_sel, ac_disp_sel, ac_audio_sel};
-    /* verilator lint_on UNUSEDSIGNAL */
-    // synthesis translate_off
-    always_ff @(posedge clk)
-        if (!rst && (mem_re || mem_we))
-            assert ($onehot0(ac_sel_onehot))
-                else $error("ulx3s_penumbra2_top: overlapping autoconfig device decode");
-    // synthesis translate_on
+    assign mem_strobe = mem_re | mem_we;
 
-    // ── Bus response combine ────────────────────────────────
-    // The read mux uses the registered selects, so it lands the cycle each
-    // slave's registered read is valid; busy and fault use the combinational
-    // selects, so the core stalls — or faults on a no-device access — in the
-    // same cycle the request is issued. An OR fabric with one slave per
-    // address (the $onehot0 assertion below guards that mutual exclusion).
+    assign slv_sel[SLV_RAM]     = ram_sel;
+    assign slv_ack[SLV_RAM]     = mem_strobe & ram_sel & ~ram_busy_raw;
+    assign slv_rdata[SLV_RAM]   = ram_rdata_raw;
 
-    always_comb begin
-        if (ram_sel_r)       mem_rdata = ram_rdata_raw;
-        else if (rom_sel_r)  mem_rdata = rom_rdata_raw;
-        else if (uart_sel_r) mem_rdata = uart_rdata_raw;
-        else if (acfg_sel_r) mem_rdata = acfg_rdata;
-        else                 mem_rdata = 32'b0;
-    end
-    assign mem_busy = (ram_sel  ? ram_busy_raw  : 1'b0) |
-                      (rom_sel  ? rom_busy_raw  : 1'b0) |
-                      (uart_sel ? uart_busy_raw : 1'b0) |
-                      acfg_busy;
-    assign bus_fault = (mem_re | mem_we) & ~(ram_sel | rom_sel | uart_sel | acfg_sel);
+    assign slv_sel[SLV_ROM]     = rom_sel;
+    assign slv_ack[SLV_ROM]     = mem_strobe & rom_sel & ~rom_busy_raw;
+    assign slv_rdata[SLV_ROM]   = rom_rdata_raw;
 
-    // ══════════════════════════════════════════════════════════
-    // Assertion — exactly one device (at most) claims any address.
-    // ══════════════════════════════════════════════════════════
-    // One-cold-or-less: a faulting access selects nothing; a real access
-    // selects exactly one device. Overlapping decodes are a wiring bug.
-    /* verilator lint_off UNUSEDSIGNAL */
-    logic [3:0] sel_onehot;
-    assign sel_onehot = {ram_sel, rom_sel, uart_sel, acfg_sel};
-    /* verilator lint_on UNUSEDSIGNAL */
-    // synthesis translate_off
-    always_ff @(posedge clk)
-        if (!rst && (mem_re || mem_we))
-            assert ($onehot0(sel_onehot))
-                else $error("ulx3s_penumbra2_top: overlapping device decode");
-    // synthesis translate_on
+    assign slv_sel[SLV_UART]    = uart_sel;
+    assign slv_ack[SLV_UART]    = mem_strobe & uart_sel & ~uart_busy_raw;
+    assign slv_rdata[SLV_UART]  = uart_rdata_raw;
+
+    assign slv_sel[SLV_SPI]     = ac_spi_sel;
+    assign slv_ack[SLV_SPI]     = mem_strobe & ac_spi_sel & ~ac_spi_busy;
+    assign slv_rdata[SLV_SPI]   = ac_spi_rdata;
+
+    assign slv_sel[SLV_USB]     = ac_usb_sel;
+    assign slv_ack[SLV_USB]     = mem_strobe & ac_usb_sel & ~ac_usb_busy;
+    assign slv_rdata[SLV_USB]   = ac_usb_rdata;
+
+    assign slv_sel[SLV_DISP]    = ac_disp_sel;
+    assign slv_ack[SLV_DISP]    = mem_strobe & ac_disp_sel & ~ac_disp_busy;
+    assign slv_rdata[SLV_DISP]  = ac_disp_rdata;
+
+    assign slv_sel[SLV_AUDIO]   = ac_audio_sel;
+    assign slv_ack[SLV_AUDIO]   = mem_strobe & ac_audio_sel & ~ac_audio_busy;
+    assign slv_rdata[SLV_AUDIO] = ac_audio_rdata;
+
+    bus_response_fabric #(
+        .NUM_SLAVES (NUM_SLV)
+    ) u_bus_fabric (
+        .i_clk   (clk),
+        .i_rst   (rst),
+        .i_re    (mem_re),
+        .i_we    (mem_we),
+        .i_sel   (slv_sel),
+        .i_ack   (slv_ack),
+        .i_rdata (slv_rdata),
+        .o_ack   (mem_ack),
+        .o_rdata (mem_rdata),
+        .o_fault (bus_fault)
+    );
 
 endmodule

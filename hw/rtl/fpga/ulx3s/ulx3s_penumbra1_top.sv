@@ -413,7 +413,7 @@ module ulx3s_penumbra1_top (
     logic [3:0]  mem_byte_en;
     logic        mem_we, mem_re;
     logic [31:0] mem_rdata;
-    logic        mem_busy;
+    logic        mem_ack;
     logic        bus_fault;
 
     // ── CPU ↔ sysreg bus ────────────────────────────────────
@@ -515,7 +515,7 @@ module ulx3s_penumbra1_top (
         .o_mem_we       (mem_we),
         .o_mem_re       (mem_re),
         .i_mem_rdata    (mem_rdata),
-        .i_mem_busy     (mem_busy),
+        .i_mem_ack      (mem_ack),
         .i_mem_fault    (1'b0),
         .i_sys_reg      (sys_reg),
         .i_sys_wdata    (sys_wdata),
@@ -532,13 +532,12 @@ module ulx3s_penumbra1_top (
     localparam int ROM_WORDS   = 16384;               // 64 KB boot ROM
 
     // ── SDRAM (system RAM) ──────────────────────────────────
-    logic        ram_sel, ram_sel_r;
+    logic        ram_sel;
     logic [31:0] ram_rdata_raw;
     logic        ram_busy_raw;
 
     bus_devsel #(.BASE(RAM_BASE), .SIZE(SDRAM_BYTES))
         u_ram_sel (.i_addr(mem_addr), .o_sel(ram_sel));
-    always_ff @(posedge clk) ram_sel_r <= ram_sel;
 
     // ── SDRAM: stack (adapter → CDC → controller) → ECP5 PHY → pins ─
     // The stack's bus side runs on the system clock and its controller
@@ -610,13 +609,12 @@ module ulx3s_penumbra1_top (
     );
 
     // ── Boot ROM ────────────────────────────────────────────
-    logic        rom_sel, rom_sel_r;
+    logic        rom_sel;
     logic [31:0] rom_rdata_raw;
     logic        rom_busy_raw;
 
     bus_devsel #(.BASE(ROM_BASE), .SIZE(32'(ROM_WORDS * 4)))
         u_rom_sel (.i_addr(mem_addr), .o_sel(rom_sel));
-    always_ff @(posedge clk) rom_sel_r <= rom_sel;
 
     boot_rom #(.ROM_WORDS(ROM_WORDS)) u_rom (
         .i_clk     (clk),
@@ -628,13 +626,12 @@ module ulx3s_penumbra1_top (
     );
 
     // ── UART ────────────────────────────────────────────────
-    logic        uart_sel, uart_sel_r;
+    logic        uart_sel;
     logic [31:0] uart_rdata_raw;
     logic        uart_busy_raw;
 
     bus_devsel #(.BASE(UART_BASE), .SIZE(32'd4096))
         u_uart_sel (.i_addr(mem_addr), .o_sel(uart_sel));
-    always_ff @(posedge clk) uart_sel_r <= uart_sel;
 
     uart #(
         .CLK_FREQ  (CLK_FREQ)
@@ -953,8 +950,6 @@ module ulx3s_penumbra1_top (
         );
     end
 
-    // Autoconfig combined bus signals
-    logic [31:0] acfg_rdata;
     // ── Audio ───────────────────────────────────────────────
     // Clocked from the USB tier's 60 MHz on the output side: the sample
     // rate must not follow a system clock that is retuned per timing
@@ -1043,36 +1038,68 @@ module ulx3s_penumbra1_top (
         .o_right   (audio_r)
     );
 
-    logic        acfg_busy;
-    logic        acfg_sel;
-    logic        acfg_sel_r;
-    logic        ac_spi_sel_r, ac_usb_sel_r, ac_disp_sel_r, ac_audio_sel_r;
-    assign acfg_rdata = (ac_spi_sel_r   ? ac_spi_rdata   : 32'b0) |
-                        (ac_usb_sel_r   ? ac_usb_rdata   : 32'b0) |
-                        (ac_disp_sel_r  ? ac_disp_rdata  : 32'b0) |
-                        (ac_audio_sel_r ? ac_audio_rdata : 32'b0);
-    assign acfg_busy  = ac_spi_busy | ac_usb_busy | ac_disp_busy | ac_audio_busy;
-    assign acfg_sel   = ac_spi_sel | ac_usb_sel | ac_disp_sel | ac_audio_sel;
-    always_ff @(posedge clk) begin
-        ac_spi_sel_r  <= ac_spi_sel;
-        ac_usb_sel_r  <= ac_usb_sel;
-        ac_disp_sel_r  <= ac_disp_sel;
-        ac_audio_sel_r <= ac_audio_sel;
-        acfg_sel_r     <= acfg_sel;
-    end
+    // ── Bus response fabric ─────────────────────────────────
+    // One slot per slave: its select (its own decode), its ack and
+    // its read data. The slaves report completion as a busy-drop, so
+    // each ack is the slave's held strobe on a busy-low cycle.
+    localparam int SLV_RAM   = 0;
+    localparam int SLV_ROM   = 1;
+    localparam int SLV_UART  = 2;
+    localparam int SLV_SPI   = 3;
+    localparam int SLV_USB   = 4;
+    localparam int SLV_DISP  = 5;
+    localparam int SLV_AUDIO = 6;
+    localparam int NUM_SLV   = 7;
 
-    // ── Bus response OR-combine ─────────────────────────────
-    assign mem_rdata = (ram_sel_r  ? ram_rdata_raw  : 32'b0) |
-                       (rom_sel_r  ? rom_rdata_raw  : 32'b0) |
-                       (uart_sel_r ? uart_rdata_raw : 32'b0) |
-                       (acfg_sel_r ? acfg_rdata     : 32'b0);
+    logic                     mem_strobe;
+    logic [NUM_SLV-1:0]       slv_sel;
+    logic [NUM_SLV-1:0]       slv_ack;
+    logic [NUM_SLV-1:0][31:0] slv_rdata;
 
-    assign mem_busy = (ram_sel  ? ram_busy_raw  : 1'b0) |
-                      (rom_sel  ? rom_busy_raw  : 1'b0) |
-                      (uart_sel ? uart_busy_raw : 1'b0) |
-                      acfg_busy;
+    assign mem_strobe = mem_re | mem_we;
 
-    assign bus_fault = (mem_re | mem_we) & ~(ram_sel | rom_sel | uart_sel | acfg_sel);
+    assign slv_sel[SLV_RAM]     = ram_sel;
+    assign slv_ack[SLV_RAM]     = mem_strobe & ram_sel & ~ram_busy_raw;
+    assign slv_rdata[SLV_RAM]   = ram_rdata_raw;
+
+    assign slv_sel[SLV_ROM]     = rom_sel;
+    assign slv_ack[SLV_ROM]     = mem_strobe & rom_sel & ~rom_busy_raw;
+    assign slv_rdata[SLV_ROM]   = rom_rdata_raw;
+
+    assign slv_sel[SLV_UART]    = uart_sel;
+    assign slv_ack[SLV_UART]    = mem_strobe & uart_sel & ~uart_busy_raw;
+    assign slv_rdata[SLV_UART]  = uart_rdata_raw;
+
+    assign slv_sel[SLV_SPI]     = ac_spi_sel;
+    assign slv_ack[SLV_SPI]     = mem_strobe & ac_spi_sel & ~ac_spi_busy;
+    assign slv_rdata[SLV_SPI]   = ac_spi_rdata;
+
+    assign slv_sel[SLV_USB]     = ac_usb_sel;
+    assign slv_ack[SLV_USB]     = mem_strobe & ac_usb_sel & ~ac_usb_busy;
+    assign slv_rdata[SLV_USB]   = ac_usb_rdata;
+
+    assign slv_sel[SLV_DISP]    = ac_disp_sel;
+    assign slv_ack[SLV_DISP]    = mem_strobe & ac_disp_sel & ~ac_disp_busy;
+    assign slv_rdata[SLV_DISP]  = ac_disp_rdata;
+
+    assign slv_sel[SLV_AUDIO]   = ac_audio_sel;
+    assign slv_ack[SLV_AUDIO]   = mem_strobe & ac_audio_sel & ~ac_audio_busy;
+    assign slv_rdata[SLV_AUDIO] = ac_audio_rdata;
+
+    bus_response_fabric #(
+        .NUM_SLAVES (NUM_SLV)
+    ) u_bus_fabric (
+        .i_clk   (clk),
+        .i_rst   (rst),
+        .i_re    (mem_re),
+        .i_we    (mem_we),
+        .i_sel   (slv_sel),
+        .i_ack   (slv_ack),
+        .i_rdata (slv_rdata),
+        .o_ack   (mem_ack),
+        .o_rdata (mem_rdata),
+        .o_fault (bus_fault)
+    );
 
     // ══════════════════════════════════════════════════════════
     // Sysreg devices

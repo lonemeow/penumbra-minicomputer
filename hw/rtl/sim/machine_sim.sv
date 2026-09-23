@@ -99,7 +99,7 @@ module machine_sim
     logic [3:0]  mem_byte_en;
     logic        mem_we, mem_re;
     logic [31:0] mem_rdata;
-    logic        mem_busy;
+    logic        mem_ack;
     logic        bus_fault;
 
     // ── CPU ↔ sysreg bus ────────────────────────────────────
@@ -217,7 +217,7 @@ module machine_sim
         .o_mem_we       (mem_we),
         .o_mem_re       (mem_re),
         .i_mem_rdata    (mem_rdata),
-        .i_mem_busy     (mem_busy),
+        .i_mem_ack      (mem_ack),
         .i_mem_fault    (1'b0),
         .i_sys_reg      (sys_reg),
         .i_sys_wdata    (sys_wdata),
@@ -230,16 +230,12 @@ module machine_sim
     //
     // Each device decodes its own address range from the shared
     // bus signals (mem_addr, mem_wdata, mem_byte_en, mem_we,
-    // mem_re) and responds only when selected. Devices that are
-    // not selected output zero on rdata and deassert busy.
+    // mem_re) and responds only when selected.
     //
-    // Responses are OR-combined: the FPGA equivalent of
-    // tri-state or open-collector on a discrete backplane bus.
-    // Only the addressed device drives non-zero data.
-    //
-    // Unmapped addresses: no device claims them, so the OR
-    // yields rdata=0 and busy=0. The bus_fault signal detects
-    // this condition for future exception handling.
+    // bus_response_fabric merges the responses: the FPGA
+    // equivalent of a wired-OR acknowledge line and tri-stated
+    // data lines on a discrete backplane. An address no device
+    // claims is acknowledged by the fabric with bus_fault.
     // ══════════════════════════════════════════════════════════
 
     // ── Device parameters ──────────────────────────────────
@@ -249,13 +245,11 @@ module machine_sim
 
     // ── RAM ─────────────────────────────────────────────────
     logic        ram_sel;
-    logic        ram_sel_r;
     logic [31:0] ram_rdata_raw;
     logic        ram_busy_raw;
 
     bus_devsel #(.BASE(RAM_BASE), .SIZE(32'(RAM_WORDS * 4)))
         u_ram_sel (.i_addr(mem_addr), .o_sel(ram_sel));
-    always_ff @(posedge i_clk) ram_sel_r <= ram_sel;
 
     // Full v2 SDRAM stack (adapter + controller + sim PHY +
     // behavioral chip).  Drop-in for simple_mem.  See
@@ -275,13 +269,11 @@ module machine_sim
 
     // ── Boot ROM ────────────────────────────────────────────
     logic        rom_sel;
-    logic        rom_sel_r;
     logic [31:0] rom_rdata_raw;
     logic        rom_busy_raw;
 
     bus_devsel #(.BASE(ROM_BASE), .SIZE(32'(ROM_WORDS * 4)))
         u_rom_sel (.i_addr(mem_addr), .o_sel(rom_sel));
-    always_ff @(posedge i_clk) rom_sel_r <= rom_sel;
 
     boot_rom #(.ROM_WORDS(ROM_WORDS)) u_rom (
         .i_clk     (i_clk),
@@ -294,13 +286,11 @@ module machine_sim
 
     // ── UART ────────────────────────────────────────────────
     logic        uart_sel;
-    logic        uart_sel_r;
     logic [31:0] uart_rdata_raw;
     logic        uart_busy_raw;
 
     bus_devsel #(.BASE(UART_BASE), .SIZE(32'(UART_PAGE_SIZE)))
         u_uart_sel (.i_addr(mem_addr), .o_sel(uart_sel));
-    always_ff @(posedge i_clk) uart_sel_r <= uart_sel;
 
     sim_uart u_uart (
         .i_clk       (i_clk),
@@ -517,46 +507,58 @@ module machine_sim
     logic unused_ac_usb_cfg_out;
     assign unused_ac_usb_cfg_out = ac_usb_cfg_out;
 
-    // Autoconfig device bus signals (OR'd into bus response)
-    logic [31:0] acfg_rdata;
-    logic        acfg_busy;
-    logic        acfg_sel;
-    logic        acfg_sel_r;
-    logic        ac_spi_sel_r, ac_usb_sel_r;
-    assign acfg_rdata = (ac_spi_sel_r ? ac_spi_rdata : 32'b0) |
-                        (ac_usb_sel_r ? ac_usb_rdata : 32'b0);
-    assign acfg_busy  = ac_spi_busy | ac_usb_busy;
-    assign acfg_sel   = ac_spi_sel | ac_usb_sel;
-    always_ff @(posedge i_clk) begin
-        acfg_sel_r   <= acfg_sel;
-        ac_spi_sel_r <= ac_spi_sel;
-        ac_usb_sel_r <= ac_usb_sel;
-    end
+    // ── Bus response fabric ─────────────────────────────────
+    // One slot per slave: its select (its own decode), its ack and
+    // its read data. The slaves report completion as a busy-drop, so
+    // each ack is the slave's held strobe on a busy-low cycle.
+    localparam int SLV_RAM  = 0;
+    localparam int SLV_ROM  = 1;
+    localparam int SLV_UART = 2;
+    localparam int SLV_SPI  = 3;
+    localparam int SLV_USB  = 4;
+    localparam int NUM_SLV  = 5;
 
-    // ── Bus response OR-combine ─────────────────────────────
-    // Read data: masked by registered select (one-cycle delay
-    // aligns with synchronous slave read latency). Only the
-    // selected device contributes; all others masked to zero.
-    //
-    // Discrete equivalent: tri-state buffers on each device's
-    // data output, active-low OE driven by the device's select.
-    assign mem_rdata = (ram_sel_r  ? ram_rdata_raw  : 32'b0) |
-                       (rom_sel_r  ? rom_rdata_raw  : 32'b0) |
-                       (uart_sel_r ? uart_rdata_raw : 32'b0) |
-                       (acfg_sel_r ? acfg_rdata     : 32'b0);
+    logic                     mem_strobe;
+    logic [NUM_SLV-1:0]       slv_sel;
+    logic [NUM_SLV-1:0]       slv_ack;
+    logic [NUM_SLV-1:0][31:0] slv_rdata;
 
-    // Busy: combinational (current cycle) so the CPU stalls
-    // immediately when the addressed device needs time.
-    assign mem_busy = (ram_sel  ? ram_busy_raw  : 1'b0) |
-                      (rom_sel  ? rom_busy_raw  : 1'b0) |
-                      (uart_sel ? uart_busy_raw : 1'b0) |
-                      acfg_busy;
+    assign mem_strobe = mem_re | mem_we;
 
-    // ── Bus fault detection ─────────────────────────────────
-    // Active request with no device claiming the address.
-    // Real hardware: detected via timeout (no ACK within deadline).
-    // Simulation: combinational — wired to cpu_core as exception.
-    assign bus_fault = (mem_re | mem_we) & ~(ram_sel | rom_sel | uart_sel | acfg_sel);
+    assign slv_sel[SLV_RAM]    = ram_sel;
+    assign slv_ack[SLV_RAM]    = mem_strobe & ram_sel & ~ram_busy_raw;
+    assign slv_rdata[SLV_RAM]  = ram_rdata_raw;
+
+    assign slv_sel[SLV_ROM]    = rom_sel;
+    assign slv_ack[SLV_ROM]    = mem_strobe & rom_sel & ~rom_busy_raw;
+    assign slv_rdata[SLV_ROM]  = rom_rdata_raw;
+
+    assign slv_sel[SLV_UART]   = uart_sel;
+    assign slv_ack[SLV_UART]   = mem_strobe & uart_sel & ~uart_busy_raw;
+    assign slv_rdata[SLV_UART] = uart_rdata_raw;
+
+    assign slv_sel[SLV_SPI]    = ac_spi_sel;
+    assign slv_ack[SLV_SPI]    = mem_strobe & ac_spi_sel & ~ac_spi_busy;
+    assign slv_rdata[SLV_SPI]  = ac_spi_rdata;
+
+    assign slv_sel[SLV_USB]    = ac_usb_sel;
+    assign slv_ack[SLV_USB]    = mem_strobe & ac_usb_sel & ~ac_usb_busy;
+    assign slv_rdata[SLV_USB]  = ac_usb_rdata;
+
+    bus_response_fabric #(
+        .NUM_SLAVES (NUM_SLV)
+    ) u_bus_fabric (
+        .i_clk   (i_clk),
+        .i_rst   (i_rst),
+        .i_re    (mem_re),
+        .i_we    (mem_we),
+        .i_sel   (slv_sel),
+        .i_ack   (slv_ack),
+        .i_rdata (slv_rdata),
+        .o_ack   (mem_ack),
+        .o_rdata (mem_rdata),
+        .o_fault (bus_fault)
+    );
 
     // ══════════════════════════════════════════════════════════
     // Sysreg devices (external, dev_id >= 1)

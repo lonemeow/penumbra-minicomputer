@@ -34,6 +34,11 @@ module penumbra3_bus_master_test #(
     logic        bus_we;
     logic [31:0] bus_rdata;
     logic        bus_busy;
+    logic        bus_ack;
+
+    // sdram_sim reports completion as a busy-drop; its ack is the
+    // held strobe on a busy-low cycle.
+    assign bus_ack = (bus_re | bus_we) & ~bus_busy;
 
     penumbra3_bus_master #(
         .LINE_BYTES (LINE_BYTES),
@@ -57,7 +62,7 @@ module penumbra3_bus_master_test #(
         .o_bus_re      (bus_re),
         .o_bus_we      (bus_we),
         .i_bus_rdata   (bus_rdata),
-        .i_bus_busy    (bus_busy),
+        .i_bus_ack     (bus_ack),
         .i_bus_fault   (1'b0)
     );
 

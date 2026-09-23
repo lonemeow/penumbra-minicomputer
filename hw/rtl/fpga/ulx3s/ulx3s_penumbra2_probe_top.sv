@@ -74,9 +74,10 @@ module ulx3s_penumbra2_probe_top (
     logic [OPC_W-1:0]    retire_op_class;
     logic                prog_end;
 
-    logic [31:0] bus_addr, bus_wdata, bus_rdata;
+    logic [31:0] bus_addr, bus_wdata, bus_rdata, mem_rdata;
     logic [3:0]  bus_byte_en;
-    logic        bus_re, bus_we, bus_busy, mem_claimed;
+    logic        bus_re, bus_we, bus_ack, bus_fault;
+    logic        mem_busy, mem_claimed, mem_ack;
 
     machine_penumbra2 u_machine (
         .i_clk             (clk_25mhz),
@@ -89,10 +90,10 @@ module ulx3s_penumbra2_probe_top (
         .o_bus_re          (bus_re),
         .o_bus_we          (bus_we),
         .i_bus_rdata       (bus_rdata),
-        .i_bus_busy        (bus_busy),
+        .i_bus_ack         (bus_ack),
         // No-device fault = the memory declined to claim the address (its own
         // decode). Keeps the fault path live through synthesis for timing.
-        .i_bus_fault       ((bus_re | bus_we) & ~mem_claimed),
+        .i_bus_fault       (bus_fault),
         .o_commit_idx      (commit_idx),
         .o_commit_data     (commit_data),
         .o_commit_we       (commit_we),
@@ -109,9 +110,28 @@ module ulx3s_penumbra2_probe_top (
         .i_byte_en (bus_byte_en),
         .i_re      (bus_re),
         .i_we      (bus_we),
-        .o_rdata   (bus_rdata),
-        .o_busy    (bus_busy),
+        .o_rdata   (mem_rdata),
+        .o_busy    (mem_busy),
         .o_claimed (mem_claimed)
+    );
+
+    // The memory reports completion as a busy-drop; its ack is its held
+    // strobe on a busy-low cycle.
+    assign mem_ack = (bus_re | bus_we) & mem_claimed & ~mem_busy;
+
+    bus_response_fabric #(
+        .NUM_SLAVES (1)
+    ) u_bus_fabric (
+        .i_clk   (clk_25mhz),
+        .i_rst   (rst),
+        .i_re    (bus_re),
+        .i_we    (bus_we),
+        .i_sel   (mem_claimed),
+        .i_ack   (mem_ack),
+        .i_rdata (mem_rdata),
+        .o_ack   (bus_ack),
+        .o_rdata (bus_rdata),
+        .o_fault (bus_fault)
     );
 
     // ── Keep-alive: fold the machine's outputs onto the LEDs ─────

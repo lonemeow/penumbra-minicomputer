@@ -37,7 +37,7 @@
 //
 // A bus fault (no device at the address, or a slave rejecting an access)
 // returns inward as a completion companion: i_bus_fault rides the external
-// busy-drop, L2/sequencer/arbiter/L1 each carry it alongside the completion
+// ack, L2/sequencer/arbiter/L1 each carry it alongside the completion
 // they already forward (a faulting line beat aborts the fill), and it enters
 // the core as a fetch- or data-side fault, vectoring to VEC_BUS_FAULT with
 // the faulting vaddr in FAULT_ADDR. Deferred: a fault on L2's own line fill
@@ -81,8 +81,8 @@ module machine_penumbra2
     output logic                  o_bus_re,
     output logic                  o_bus_we,
     input  logic [31:0]           i_bus_rdata,
-    input  logic                  i_bus_busy,
-    input  logic                  i_bus_fault,   // no-device / slave access fault, at the busy-drop
+    input  logic                  i_bus_ack,
+    input  logic                  i_bus_fault,   // no-device / slave access fault, valid with i_bus_ack
 
     // ── Bus autoconfig control (to the wrapper's autoconfig chain) ─
     output logic                  o_bus_rst,     // software-timed bus reset (BUSCTL.RST)
@@ -378,7 +378,7 @@ module machine_penumbra2
         .o_mem_addr(o_bus_addr), .o_mem_wdata(o_bus_wdata),
         .o_mem_byte_en(o_bus_byte_en),
         .o_mem_we(o_bus_we), .o_mem_re(o_bus_re),
-        .i_mem_rdata(i_bus_rdata), .i_mem_busy(i_bus_busy),
+        .i_mem_rdata(i_bus_rdata), .i_mem_ack(i_bus_ack),
         .i_mem_fault(i_bus_fault),
         .i_sys_reg(sys_reg_sel), .i_sys_wdata(sys_wdata),
         .i_sys_we(l2_sys_we), .o_sys_rdata(l2_sys_rdata)

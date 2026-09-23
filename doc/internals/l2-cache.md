@@ -147,7 +147,7 @@ in ─────┤ i_paddr, i_wdata, i_byte_en   │
         │ o_mem_addr, o_mem_wdata,      │
         │ o_mem_byte_en, o_mem_we,      │
         │ o_mem_re                      ├──── out
-        │ i_mem_rdata, i_mem_busy       │
+        │ i_mem_rdata, i_mem_ack        │
         │                               │
         │ i_sys_reg, i_sys_wdata,       │
         │ i_sys_we, o_sys_rdata         │
@@ -183,8 +183,9 @@ L2 inherits the L1 cache contract from [`cpu-bus.md`](cpu-bus.md):
   completes (line allocated, optionally writeback completed for
   evicted dirty victim).  On the cycle `o_busy` drops, `o_rdata`
   carries the requested word.
-- **Pass-through (uncacheable):** `o_busy` mirrors downstream
-  `i_mem_busy`.  L2 introduces no extra cycle vs. the no-L2 build.
+- **Pass-through (uncacheable):** `o_busy` holds until the bus's
+  `i_mem_ack` (`o_busy = ~i_mem_ack` while forwarding).  L2
+  introduces no extra cycle vs. the no-L2 build.
 
 ## Internal Organisation
 
@@ -431,7 +432,7 @@ WRSYS r1, SYSDEV_L2_CACHE, CTRL  ; r1.bit[0] = 1
 
 Why this works:
 
-- The disabled path mirrors `i_mem_busy` straight through and feeds
+- The disabled path completes on the bus's `i_mem_ack` and feeds
   back-side reads/writes directly onto the shared bus, so latency and
   bus visibility match the pre-L2 wiring exactly.
 - `o_mem_cacheable` flows into `l2_cache` regardless of enable state;
