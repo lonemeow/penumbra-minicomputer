@@ -8,10 +8,10 @@
 //
 // DATA is word-strided at the bus but byte-wide at the buffer, so a
 // DATA access runs a short byte sequence against the CDC's CPU port
-// under bus stall: four writes for a stored word, four pipelined reads
-// for a loaded one. Ordinary registers answer with the 1-cycle
-// registered read every bus device presents (the access_pending busy
-// idiom); the sequencer just stretches the same stall.
+// before the access is acknowledged: four writes for a stored word, four
+// pipelined reads for a loaded one. Ordinary registers resolve in the
+// access's first cycle and answer in the next, as a simple bus device
+// does; the sequencer just answers later.
 //
 // The transaction request fields (TOKEN, LENGTH) are register outputs
 // held stable from the START pulse until DONE — the stability the CDC's
@@ -36,7 +36,7 @@ module usbhc_regs
     input  logic        i_we,
     input  logic        i_re,
     output logic [31:0] o_rdata,
-    output logic        o_busy,
+    output logic        o_ack,
     output logic        o_irq,
     // PHY capability ceiling {hs, fs, ls} — constant, folded into CAP;
     // the hs bit has no CAP field in the FS/LS minimum
@@ -129,15 +129,17 @@ module usbhc_regs
 
     assign o_irq = |(irq_status_q & irq_enable_q);
 
-    // ── DATA byte sequencer + the stalled-access state ───────────────
+    // ── DATA byte sequencer + the access handshake ───────────────────
     //
-    // IDLE accepts one bus access. A plain register answers on the next
-    // cycle (S_REG). A DATA write streams the four lanes into the buffer
+    // IDLE accepts one bus access. A plain register resolves in that
+    // cycle — a read captures its image, a write applies — and answers
+    // in the next. A DATA write streams the four lanes into the buffer
     // (S_WR); a DATA read pipelines four buffer reads (S_RD) — the byte
-    // for the address presented in cycle n arrives in n+1 — then answers.
-    // S_HOLD parks until the master releases the strobe, so a held
-    // request is served exactly once.
-    typedef enum logic [2:0] { S_IDLE, S_REG, S_WR, S_RD, S_HOLD } state_e;
+    // for the address presented in cycle n arrives in n+1 — then
+    // answers. S_ACK is the one-cycle acknowledge; the strobe seen there
+    // still belongs to the access being answered, and a strobe held into
+    // the following IDLE is the master's next access.
+    typedef enum logic [1:0] { S_IDLE, S_WR, S_RD, S_ACK } state_e;
     state_e state_q, state_d;
 
     logic [2:0] seq_q, seq_d;         // byte lane / pipeline step
@@ -146,10 +148,9 @@ module usbhc_regs
     logic access_start;
     assign access_start = (state_q == S_IDLE) && (i_re || i_we);
 
-    assign o_busy = (i_re || i_we) && (state_q != S_HOLD) &&
-                    !(i_we && state_q == S_IDLE && !is_data);
+    assign o_ack = (state_q == S_ACK);
 
-    // Plain-register writes complete in the accept cycle itself.
+    // Plain-register writes apply in the accept cycle itself.
     logic reg_write;
     assign reg_write = access_start && i_we && !is_data;
 
@@ -217,7 +218,7 @@ module usbhc_regs
                         seq_d       = 3'd1;
                     end else begin
                         rdata_d = reg_rdata;
-                        state_d = S_REG;
+                        state_d = S_ACK;
                     end
                 end else if (i_we) begin
                     if (is_data) begin
@@ -227,14 +228,13 @@ module usbhc_regs
                         seq_d        = 3'd1;
                         state_d      = S_WR;
                     end else begin
-                        // Plain-register write: applied below, no stall.
+                        // Plain-register write: applied below.
                         if (reg_off == USBHC_REG_XFER_CTRL && i_wdata[16])
                             o_start = 1'b1;
-                        state_d = S_HOLD;
+                        state_d = S_ACK;
                     end
                 end
             end
-            S_REG: state_d = S_HOLD;
             S_WR: begin
                 o_cbuf_we    = 1'b1;
                 o_cbuf_wdata = (seq_q[1:0] == 2'd1) ? i_wdata[15:8]
@@ -242,7 +242,7 @@ module usbhc_regs
                                                     : i_wdata[31:24];
                 seq_d = seq_q + 3'd1;
                 if (seq_q == 3'd3)
-                    state_d = S_HOLD;
+                    state_d = S_ACK;
             end
             S_RD: begin
                 // The byte for the address presented in cycle n arrives
@@ -254,14 +254,11 @@ module usbhc_regs
                     3'd3: rdata_d[23:16] = i_cbuf_rdata;
                     default: begin
                         rdata_d[31:24] = i_cbuf_rdata;
-                        state_d = S_HOLD;
+                        state_d = S_ACK;
                     end
                 endcase
             end
-            S_HOLD: begin
-                if (!i_re && !i_we)
-                    state_d = S_IDLE;
-            end
+            S_ACK:   state_d = S_IDLE;
             default: state_d = S_IDLE;
         endcase
     end

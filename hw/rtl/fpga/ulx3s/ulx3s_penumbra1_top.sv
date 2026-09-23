@@ -748,11 +748,7 @@ module ulx3s_penumbra1_top (
     /* verilator lint_on UNUSEDSIGNAL */
     logic        usb_dev_we, usb_dev_re;
     logic [31:0] usb_dev_rdata;
-    logic        usb_dev_busy;
     logic        usb_dev_ack;
-    // The host controller reports completion as a busy-drop; its ack is
-    // its held strobe on a busy-low cycle.
-    assign usb_dev_ack = (usb_dev_re | usb_dev_we) & ~usb_dev_busy;
 
     logic [31:0] ac_usb_rdata;
     logic        ac_usb_ack, ac_usb_sel;
@@ -816,7 +812,7 @@ module ulx3s_penumbra1_top (
         .i_we         (usb_dev_we),
         .i_re         (usb_dev_re),
         .o_rdata      (usb_dev_rdata),
-        .o_busy       (usb_dev_busy),
+        .o_ack        (usb_dev_ack),
         .o_irq        (usb_irq),
         .i_usb_clk    (clk_60mhz),
         .i_usb_rst    (rst_60mhz),

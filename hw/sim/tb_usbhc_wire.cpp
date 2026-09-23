@@ -163,16 +163,18 @@ static void cpu_cycles(int n) {
 
 // ── Bus master ───────────────────────────────────────────────────────────
 
+// The master holds its strobe until the ack and through the ack cycle;
+// a strobe still held after it would start a new access.
 static uint32_t bus_read(uint32_t off) {
     dut->i_addr = off;
     dut->i_re = 1;
     int guard = 0;
     do {
         cpu_cycle();
-    } while (dut->o_busy && ++guard < 64);
+    } while (!dut->o_ack && ++guard < 64);
     uint32_t v = dut->o_rdata;
+    cpu_cycle();                    // ack cycle, strobe held
     dut->i_re = 0;
-    cpu_cycle();
     return v;
 }
 
@@ -183,9 +185,9 @@ static void bus_write(uint32_t off, uint32_t val) {
     int guard = 0;
     do {
         cpu_cycle();
-    } while (dut->o_busy && ++guard < 64);
+    } while (!dut->o_ack && ++guard < 64);
+    cpu_cycle();                    // ack cycle, strobe held
     dut->i_we = 0;
-    cpu_cycle();
 }
 
 static bool wait_irq(uint32_t bit, int cap_cycles) {

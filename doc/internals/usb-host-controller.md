@@ -223,7 +223,7 @@ needs no seam change — it is a `CAP`-discoverable register property.
 | `i_clk`, `i_rst`                | in        | System clock / reset — bus interface and registers |
 | `i_addr`, `i_wdata`, `i_we`, `i_re` | in    | Device bus request (word-strided)                  |
 | `o_rdata`                        | out       | Device bus read data                               |
-| `o_busy`                         | out       | One-cycle registered-read stall                   |
+| `o_ack`                          | out       | Access complete (DATA after its byte sequence)    |
 | `o_irq`                          | out       | Interrupt (XFER_DONE / PORT_CHANGE / SOF)         |
 | `i_usb_clk`                      | in        | 60 MHz engine clock (PLL CLKOS3 ÷10)              |
 | `i_dp`, `i_dn`                   | in        | D+/D- differential receive                        |

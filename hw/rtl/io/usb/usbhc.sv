@@ -32,7 +32,7 @@ module usbhc #(
     input  logic        i_we,
     input  logic        i_re,
     output logic [31:0] o_rdata,
-    output logic        o_busy,
+    output logic        o_ack,
     output logic        o_irq,
     // ── USB clock domain ─────────────────────────────────────────────
     input  logic        i_usb_clk,
@@ -113,7 +113,7 @@ module usbhc #(
         .i_we           (i_we),
         .i_re           (i_re),
         .o_rdata        (o_rdata),
-        .o_busy         (o_busy),
+        .o_ack          (o_ack),
         .o_irq          (o_irq),
         .i_caps         (i_caps),
         .o_cbuf_addr    (cbuf_addr),

@@ -130,16 +130,18 @@ static void cpu_cycles(int n) {
 
 // ── Bus master (the software's view) ─────────────────────────────────────
 
+// The master holds its strobe until the ack and through the ack cycle;
+// a strobe still held after it would start a new access.
 static uint32_t bus_read(uint32_t off) {
     dut->i_addr = off;
     dut->i_re = 1;
     int guard = 0;
     do {
         cpu_cycle();
-    } while (dut->o_busy && ++guard < 64);
+    } while (!dut->o_ack && ++guard < 64);
     uint32_t v = dut->o_rdata;
+    cpu_cycle();                    // ack cycle, strobe held
     dut->i_re = 0;
-    cpu_cycle();
     return v;
 }
 
@@ -150,9 +152,9 @@ static void bus_write(uint32_t off, uint32_t val) {
     int guard = 0;
     do {
         cpu_cycle();
-    } while (dut->o_busy && ++guard < 64);
+    } while (!dut->o_ack && ++guard < 64);
+    cpu_cycle();                    // ack cycle, strobe held
     dut->i_we = 0;
-    cpu_cycle();
 }
 
 // Polls IRQ_STATUS for a source bit, W1C-clearing it when seen.
@@ -224,6 +226,28 @@ int main() {
     bus_write(R_IRQ_ENABLE, IRQ_XFER | IRQ_PORT);
     expect("irq_enable readback", bus_read(R_IRQ_ENABLE) ==
            (IRQ_XFER | IRQ_PORT));
+
+    // ── Back-to-back accesses under a held strobe ────────────────────
+    // A streaming master keeps re high and presents its next address the
+    // cycle after each ack. Each access must be served on its own — never
+    // answered at once from the one before it.
+    {
+        dut->i_addr = R_CAP;
+        dut->i_re = 1;
+        int guard = 0;
+        do { cpu_cycle(); } while (!dut->o_ack && ++guard < 64);
+        uint32_t first = dut->o_rdata;
+        cpu_cycle();                          // ack cycle, strobe held
+        dut->i_addr = R_IRQ_ENABLE;           // re never drops
+        expect("held strobe: next access not answered at once", !dut->o_ack);
+        guard = 0;
+        do { cpu_cycle(); } while (!dut->o_ack && ++guard < 64);
+        uint32_t second = dut->o_rdata;
+        cpu_cycle();
+        dut->i_re = 0;
+        expect("held strobe: first read", first == cap);
+        expect("held strobe: second read", second == (IRQ_XFER | IRQ_PORT));
+    }
 
     // ── DATA window round trip (the byte sequencer, both ways) ───────
     for (int w = 0; w < 16; w++)
