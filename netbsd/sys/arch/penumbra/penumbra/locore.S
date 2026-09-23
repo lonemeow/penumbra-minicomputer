@@ -289,6 +289,30 @@ _start_bias:
 .Lpte_done:
 
 /* ═══════════════════════════════════════════════════════════════
+ * Step 6b: Select the trap page for this MMU
+ *
+ * Each supported geometry has its own trap page image; R8/R9 name the
+ * one to install.  An unrecognised MMU has no image here, and a
+ * handler built for another geometry would fault forever or address
+ * half the TLB, so boot stops instead.
+ *
+ * Still in bypass mode: the console UART is reachable at its
+ * architectural address with no mapping.
+ * ═══════════════════════════════════════════════════════════════ */
+
+	rdsys	r1, #SYSDEV_MMU, #MMU_CONFIG
+	cmp	r1, r0
+	beq	.Lmmucfg_v1_8p_32x2	/* zero reports the baseline */
+	li	r2, #MMUCFG_V1_8P_32X2
+	cmp	r1, r2
+	beq	.Lmmucfg_v1_8p_32x2
+	b	.Lmmucfg_unsupported
+
+.Lmmucfg_v1_8p_32x2:
+	la	r8, _real_miss_handler
+	la	r9, _real_handlers_end
+
+/* ═══════════════════════════════════════════════════════════════
  * Step 7: Copy real TLB miss handler to vector page
  *
  * The real handler walks L1 → L2 via pinned TLB slots.
@@ -301,13 +325,13 @@ _start_bias:
  *               Accessed via PC-relative — no VA 0 dependency
  * ═══════════════════════════════════════════════════════════════ */
 
-	la	r1, _real_miss_handler
+	mov	r1, r8
 	add	r1, r6			/* physical source address */
 	lli	r2, #0x80		/* destination in vector page —
 					 * MUST be a multiple of the L1 cache
 					 * line size (16) to preserve the
 					 * handler's .balign 16 at runtime */
-	la	r3, _real_handlers_end
+	mov	r3, r9
 	add	r3, r6			/* physical end of handler code */
 .Lcopy_handler:
 	ldw	r4, [r1]
@@ -348,8 +372,9 @@ _start_bias:
 	/* Helper: R3 = base = VECTOR_VA + 0x80 */
 	lli	r3, #0xB080
 	lui	r3, #0xFFFF
-	/* R5 = link-time base of handler code */
-	la	r5, _real_miss_handler
+	/* R5 = link-time base of the installed image; the stub labels
+	 * below are offsets within it, so a second image brings its own. */
+	mov	r5, r8
 
 	/* Macro-like pattern: compute VA of each stub and store.
 	 * VA = R3 + (stub_label - _real_miss_handler)
@@ -586,6 +611,56 @@ _start_bias:
 	mov	sp, r1
 	bl	penumbra_main
 	break				/* NOTREACHED */
+
+/* ═══════════════════════════════════════════════════════════════
+ * No trap page for the reported MMU — report and stop.
+ *
+ * Spins rather than BREAKs: the exception vectors are installed in
+ * step 8, which has not run.
+ * ═══════════════════════════════════════════════════════════════ */
+.Lmmucfg_unsupported:
+	mov	r10, r1			/* the value reported */
+	li	r3, #0xFF000000		/* console UART (doc/system/bus.md) */
+	la	r4, .Lmmucfg_msg
+	add	r4, r6			/* physical address of the string */
+.Lmmucfg_str:
+	ldb	r2, [r4]
+	cmp	r2, 0
+	beq	.Lmmucfg_hex
+	bl	.Lmmucfg_putc
+	add	r4, #1
+	b	.Lmmucfg_str
+.Lmmucfg_hex:
+	lli	r11, #8			/* 8 nibbles, most significant first */
+.Lmmucfg_digit:
+	mov	r2, r10
+	shr	r2, #28
+	cmp	r2, #10
+	blo	.Lmmucfg_dec
+	add	r2, #('a' - '0' - 10)
+.Lmmucfg_dec:
+	add	r2, #'0'
+	bl	.Lmmucfg_putc
+	shl	r10, #4
+	sub	r11, #1
+	bne	.Lmmucfg_digit
+	lli	r2, #13
+	bl	.Lmmucfg_putc
+	lli	r2, #10
+	bl	.Lmmucfg_putc
+.Lmmucfg_stop:
+	b	.Lmmucfg_stop
+
+.Lmmucfg_putc:
+	ldw	r1, [r3 + #0x14]	/* UART LSR */
+	test	r1, #0x20		/* TX holding empty? */
+	beq	.Lmmucfg_putc
+	stw	r2, [r3 + #0x00]	/* UART THR */
+	ret
+
+.Lmmucfg_msg:
+	.asciz	"\r\npenumbra: MMU config not supported: 0x"
+	.balign	4, 0			/* zero fill: not an instruction gap */
 
 
 /* ═══════════════════════════════════════════════════════════════

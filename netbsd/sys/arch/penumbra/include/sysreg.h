@@ -39,6 +39,23 @@
 #define MMU_TLB_VPN		3	/* Staged TLB upper word (VPN + ASID) */
 #define MMU_TLB_PTE		4	/* TLB lower word; write commits entry */
 #define MMU_TLB_INDEX		5	/* Selects TLB slot; bit 6 = pinned */
+#define MMU_CONFIG		15	/* Version and translation geometry */
+
+/* MMU_CONFIG fields (version 1) */
+#define MMUCFG_VER_MASK		0x0000000F
+#define MMUCFG_PINNED_SHIFT	4
+#define MMUCFG_SETS_LOG2_SHIFT	10
+#define MMUCFG_WAYS_SHIFT	15
+#define MMUCFG_PAGE_LOG2_SHIFT	20
+#define MMUCFG_ASID_BITS_SHIFT	25
+
+/*
+ * Geometries with a hand-written trap page.  The miss handler carries
+ * the set count, way count and page size as instruction immediates, so
+ * each one needs its own image; a machine reporting anything else has
+ * no handler here.  A read of zero reports MMUCFG_V1_8P_32X2.
+ */
+#define MMUCFG_V1_8P_32X2	0x10C11481 /* 8 pinned, 32x2, 4 KB, 8-bit ASID */
 
 /* MMUCR fields */
 #define MMUCR_M			0x0001	/* MMU enable */
