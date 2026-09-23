@@ -422,7 +422,12 @@ static struct {
 } dbg;
 
 // MMU sysreg addresses
-enum { MMU_CR=0, MMU_FADDR=1, MMU_FSTAT=2, MMU_TLB_VPN=3, MMU_TLB_PTE=4, MMU_TLB_IDX=5 };
+enum { MMU_CR=0, MMU_FADDR=1, MMU_FSTAT=2, MMU_TLB_VPN=3, MMU_TLB_PTE=4, MMU_TLB_IDX=5,
+       MMU_CFG=15 };
+
+// MMU_CONFIG as this model is built: v1, 8 pinned slots, 32 sets x 2 ways,
+// 4 KB pages, 8-bit ASID.  Software selects its TLB miss handler from this.
+static constexpr uint32_t MMU_CONFIG_VALUE = 0x10C11481u;
 
 // TLB PTE flag masks (from flag byte in PTE word bits [7:0])
 static constexpr uint32_t TLB_V = 1u << 0;   // Valid
@@ -1017,7 +1022,7 @@ static struct {
     uint32_t pte[64];   // {PPN[19:0], SW[3:0], flags[7:0]}
 } tlb;
 
-// --- Pinned TLB (4 entries, fully associative) ---
+// --- Pinned TLB (8 entries, fully associative) ---
 static constexpr int PTLB_ENTRIES = 8;
 static struct {
     uint32_t vpn[PTLB_ENTRIES];
@@ -1822,6 +1827,7 @@ static uint32_t sysreg_read(int dev, int reg) {
     switch (dev) {
     case SYSDEV_MMU:
         switch (reg) {
+            case MMU_CFG: return MMU_CONFIG_VALUE;
             case MMU_CR: return mmu.cr;
             case MMU_FADDR: return mmu.fault_addr;
             case MMU_FSTAT: return mmu.fault_status;
