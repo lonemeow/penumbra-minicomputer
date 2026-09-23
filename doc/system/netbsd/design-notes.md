@@ -149,6 +149,101 @@ directly: `pmap_enter`, `pmap_create`/`pmap_destroy`,
 `pmap_activate`, `pmap_protect`/`pmap_remove`/`pmap_remove_all`,
 `pmap_page_protect`, PV lists, ASID management, etc.
 
+## TLB Locality
+
+The TLB reaches 64 entries times 4 KB, so a kernel that touches more
+than 256 KB of pages refills constantly.  On a shell and filesystem
+workload the refill handler is 39% of every instruction executed --
+72.9M refills at 53 instructions each -- which makes where code and
+data *land* a first-order concern rather than a tuning detail.
+
+### The layout lottery
+
+A page's TLB set is bits 16:12 of its address, so a function's set is
+decided by where the linker put it.  Two hot functions 128 KB apart
+share a set; with two ways, a third one evicts the others on every
+visit.  Nothing in the build controls this, so an unrelated change
+that shifts code re-rolls it.
+
+Measured: adding 160 bytes to the kernel moved `memcpy` from
+`0x802aaf60` to `0x802ab000`, a different page and a different set.
+Its old page took 5,421 refills, its new one 385,858, and the two
+benchmarks whose hot code shared that set slowed 16% and 22%.  The
+change that caused it had nothing to do with `memcpy`.
+
+This is why a change is judged on *both* the work it does and the
+refill count, never on one total: the two move independently, and a
+build can lose more to a re-roll than the change itself saved.
+
+### Hot regions at fixed addresses
+
+The linker script gathers the hottest routines into `_hot_text0` and
+the hottest data into `_hot_data0`, placed first in `.text` and
+`.data`.  First matters: nothing precedes them, so no later code
+change can move them.  Their addresses are `KERNEL_TEXT_BASE` plus a
+fixed offset, known while writing the code rather than discovered
+after linking.
+
+The ELF entry point moves after the text region as a result, which is
+sound because the bootloader jumps to `e_entry` rather than to the
+load address.  Boot code being first is a convention from machines
+where those coincided.
+
+Each region is asserted at link time to fit one page, because a page
+is what a pinned slot covers; a region that outgrows one would
+silently stop being covered.  Regions are *not* padded to a page --
+whatever follows shares the page and gets pinned along with them,
+which is free coverage, while padding would only displace it.
+
+### Trap page: code variants, not parameters
+
+The TLB miss handler carries the set count, way count and page size as
+instruction immediates.  Making them parameters would cost a load per
+constant on the most frequently executed path in the kernel: at five
+extra instructions per refill that is 3.7% of all instructions
+executed, an order of magnitude more than lowering every avoidable
+call in the kernel would save.
+
+So each supported geometry gets its own hand-written trap page image,
+and boot copies the one that matches.  `locore.S` reads `MMU_CONFIG`
+before installing the handler, selects the image, and refuses anything
+it has no image for -- printing to the console UART, which is directly
+addressable because the MMU is not yet enabled, and spinning rather
+than executing `BREAK`, because the exception vectors are not
+installed at that point.
+
+The images are linked after all live text.  They are never executed
+where they are linked, so their size must not decide where live code
+lands.
+
+### Structural and spare pinned slots
+
+Some pinned slots are structural: translation, or an operation the
+kernel cannot otherwise express, depends on each.  The vector page,
+both page-table roots, the L2 window and two page windows are
+structural; the second page window earns its slot by letting
+`pmap_copy_page` map source and destination at once, which removes a
+4 KB bounce buffer and halves the bytes moved per copy.
+
+Whatever the MMU provides beyond those is spent on hot pages, in a
+priority order fixed at compile time and walked at boot until the
+slots run out.  The count comes from `MMU_CONFIG`, so the same kernel
+pins fewer regions on a smaller MMU and more on a larger one without
+recompiling.
+
+A slot is worth more than the page it holds.  The pinned TLB is a
+separate structure, so covering a page there also hands its way back
+to the set it used to occupy: pinning one page whose own cost was
+13,891 refills dropped its set's total from 45,960 to 14,370.
+
+### What none of this reaches
+
+A fifth to a quarter of kernel refills, depending on the workload,
+fall on heap pages, whose addresses come from the allocator and are
+not the same twice.  No link-time arrangement reaches them; only
+sampling at run time would, and that costs instructions on the refill
+path itself.
+
 ## ASID Management
 
 Generational allocator: each pmap has an ASID (1--255) tagged
