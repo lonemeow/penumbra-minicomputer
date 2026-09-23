@@ -163,16 +163,16 @@ complete normally.  It has two sources:
   bus the address layout is discovered at boot (autoconfig assigns
   device ranges), so no master- or fabric-side decoder can hold a
   static map of "what is where": the no-device fault is a bus-protocol
-  property — a watchdog / no-acknowledge timeout in the async form.
+  property — a watchdog / no-acknowledge timeout, in both forms.
   No slave acknowledges, so the bus completes the access itself: it
   acknowledges on the slaves' behalf with `bus_fault=1` alongside.
   This is what makes RAM sizing and optional-device probing work:
   software touches an address and catches the fault when nothing
-  answers.  In the sync form, "unclaimed" is the OR-complement of the
-  slaves' own selects, answered by the fabric's
-  [no-device responder](#the-response-fabric); a slave's select is its
-  *own* decode (RAM sized to its DRAM, a device its register window),
-  never a separate map the master keeps.
+  answers.  The sync form runs the watchdog in its
+  [response fabric](#the-response-fabric), so no part of the bus needs
+  to know which devices exist; a slave's select is its *own* decode
+  (RAM sized to its DRAM, a device its register window), never a
+  separate map the master keeps.
 
 - **A slave rejecting an access it does claim** (optional, per the
   device restrictions above).  The responding slave asserts
@@ -253,11 +253,10 @@ The master is unaffected by the depth: its contract is unchanged —
 `bus_fault` rides the completion at the `ack` — so a fault from two
 buses down is sampled the same way a top-level watchdog fault is.
 
-Where a segment's *set* of devices is fixed — an on-chip sync fabric —
-the no-claim fault collapses from a watchdog to the OR-complement of the
-slaves' selects, answered by the fabric's own no-device responder; any
-slave that can reject an access it claims (a nested bridge, a device
-guarding its registers) raises `bus_fault` with its own `ack`.
+An on-chip sync fabric runs the same watchdog, so its no-device fault
+needs no knowledge of which devices it hosts; any slave that can reject
+an access it claims (a nested bridge, a device guarding its registers)
+raises `bus_fault` with its own `ack`.
 [The response fabric](#the-response-fabric) gives the sync form of
 both.
 
@@ -319,7 +318,8 @@ presentation and `ack`.
    the access being completed — the master has not yet seen the `ack`.
 6. **Every claimed access is acknowledged,** including a write the
    slave ignores (a read-only register, a ROM).  A slave that claims an
-   access and never acknowledges it hangs the master.
+   access and never acknowledges it leaves it to the watchdog, which
+   faults it exactly as if no device were there.
 
 As in the async form, a slave that does nothing holds the master
 rather than completing its access.  Stale read data takes an `ack`
@@ -371,15 +371,17 @@ keep every response path starting at a flop:
 - **`rdata` is gated per slave by that slave's own `ack`**, then OR'd.
   A slave's `rdata` need be valid only in its `ack` cycle, and nothing
   selects read data by the live address.
-- **A no-device responder answers unclaimed accesses.** It is a slave
-  like any other, whose select is the OR-complement of every other
-  select — the one reason each slave's select is visible to the
-  fabric: it acknowledges with `bus_fault` one cycle after
-  presentation, from a flop.
+- **A watchdog answers what nothing else does.** An access no slave
+  acknowledges within the fabric's deadline is acknowledged by the
+  fabric itself, with `bus_fault`, from a flop.  The deadline sits well
+  above the slowest legitimate access on the segment, so it fires only
+  when no device answers — absent or stuck — and the fabric needs no
+  knowledge of which slaves exist.  A slave that answers in the very
+  cycle the watchdog fires wins: its access completes without a fault.
 
 ```
-ack       = ack_nodev | (OR of slaves' ack)
-bus_fault = ack_nodev | (OR of slaves' bus_fault)
+ack       = timeout | (OR of slaves' ack)
+bus_fault = (timeout & ~(OR of slaves' ack)) | (OR of slaves' bus_fault)
 rdata     = OR over slaves of (ack_i ? rdata_i : 0)
 ```
 

@@ -12,9 +12,9 @@
 // protocol fault (no slave acknowledges; a watchdog/timeout in the async form).
 // So this slave decodes only the addresses it actually backs, from its own
 // size (REGION_WORDS — the same parameter that sizes the storage): it responds
-// and asserts o_claimed for an in-region access, and is silent otherwise. The
-// fabric faults an access no slave claims; this device just declines to
-// claim what it does not back. (The storage is region-compressed —
+// and asserts o_claimed for an in-region access, and is silent otherwise. An
+// access no slave answers is faulted by the fabric's watchdog; this device
+// just declines to claim what it does not back. (The storage is region-compressed —
 // two REGION_WORDS arrays — so the backed extent equals REGION_WORDS per
 // region, with nothing aliased in: an out-of-region address is unclaimed, not
 // wrapped.)
@@ -90,7 +90,7 @@ module unified_bus_mem
     assign idx    = {i_addr[31], offset[IDX_W+1:2]};
 
     // ── Bus handshake: only a claimed access is answered ──
-    // An unclaimed one is left for the fabric's no-device responder.
+    // An unclaimed one gets no answer here; the fabric's watchdog faults it.
     logic bus_read, bus_write;
 
     bus_device_simple u_bus (

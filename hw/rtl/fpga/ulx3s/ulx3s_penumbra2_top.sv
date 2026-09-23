@@ -11,7 +11,7 @@
 // internally, so the board attaches only the memory/peripheral devices on
 // the external Penumbra Bus and routes the autoconfig chain off the
 // machine's BUSCTL outputs (o_bus_rst / o_bus_cfg_en). Device-side address
-// decode, the read-data OR-combine, and the no-device bus fault are
+// decode and the response fabric, with its no-device watchdog, are
 // assembled here — the same bus shape machine_penumbra2_sim presents, so
 // what simulates is what synthesizes.
 //

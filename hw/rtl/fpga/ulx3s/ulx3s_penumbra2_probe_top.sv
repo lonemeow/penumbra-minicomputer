@@ -91,8 +91,8 @@ module ulx3s_penumbra2_probe_top (
         .o_bus_we          (bus_we),
         .i_bus_rdata       (bus_rdata),
         .i_bus_ack         (bus_ack),
-        // No-device fault = the memory declined to claim the address (its own
-        // decode). Keeps the fault path live through synthesis for timing.
+        // No-device fault: the fabric's watchdog faults an access the memory
+        // does not claim. Keeps the fault path live through synthesis.
         .i_bus_fault       (bus_fault),
         .o_commit_idx      (commit_idx),
         .o_commit_data     (commit_data),

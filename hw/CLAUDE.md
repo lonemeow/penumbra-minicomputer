@@ -179,7 +179,8 @@ exposed external bus.
   key side effects on, and the registered `o_ack`.
 - `bus_response_fabric.sv` — the system bus's response half, one
   instance per machine top: OR of the slaves' acks, read data gated by
-  each slave's own ack, and the no-device responder (ack + bus fault).
+  each slave's own ack, and the watchdog that faults an access nothing
+  answers (`TIMEOUT_CYCLES`).
 - `boot_rom.sv` — ROM (64 KB default), `$readmemh` from `program.hex`
   (boot ROM owns that root-level name; sims override per program via
   the `+rom_hex=<path>` plusarg, which the Makefile points at

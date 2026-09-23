@@ -234,8 +234,8 @@ module machine_sim
     //
     // bus_response_fabric merges the responses: the FPGA
     // equivalent of a wired-OR acknowledge line and tri-stated
-    // data lines on a discrete backplane. An address no device
-    // claims is acknowledged by the fabric with bus_fault.
+    // data lines on a discrete backplane. An access nothing
+    // acknowledges is faulted by the fabric's watchdog.
     // ══════════════════════════════════════════════════════════
 
     // ── Device parameters ──────────────────────────────────

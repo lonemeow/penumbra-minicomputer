@@ -27,11 +27,28 @@ and its read data — indexed by the `SLV_*` localparams declared beside
 the instance.  The cell implements the protocol's
 [fabric rules](../hardware/bus-protocol.md#the-response-fabric): the
 merged ack is a plain OR of the slaves' acks, read data is gated by
-each slave's own ack, and a no-device responder acknowledges an access
-no select claims, with `bus_fault`.  It also asserts that at most one
-select claims any access — structural for fixed decodes, and a
-software-held property for autoconfigured ones, whose bases are
-assigned at run time.
+each slave's own ack, and a watchdog acknowledges, with `bus_fault`,
+any access nothing answers within `TIMEOUT_CYCLES` (256 by default).
+The deadline clears the slowest legitimate access with wide margin —
+an SDRAM access landing on a refresh and a row conflict takes a few
+tens of cycles, and a classic peripheral behind an async bus about
+1 µs — so it fires only when no device answers, absent or stuck.
+
+The fabric needs no knowledge of which devices exist.  The selects
+reach it only for a simulation assertion that at most one of them
+claims any access — structural for fixed decodes, and a software-held
+property for autoconfigured ones, whose bases are assigned at run
+time.
+
+## Extending the bus off-chip
+
+A board that carries the bus onto its headers adds a sync→async edge
+bridge as one more slot.  Its select is the complement of the on-chip
+selects, so it forwards exactly what nothing on-chip claims, and the
+last on-chip autoconfig device's `cfg_out` continues through it, so
+devices on the headers enumerate after the on-chip ones.  The fabric's
+watchdog covers the external bus as well; the board sets
+`TIMEOUT_CYCLES` to cover its slowest external device.
 
 ## Device handshakes
 

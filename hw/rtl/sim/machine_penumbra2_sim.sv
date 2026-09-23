@@ -148,7 +148,8 @@ module machine_penumbra2_sim
     // RAM_BASE, the boot ROM at ROM_BASE, the UART's 4 KB page at UART_BASE,
     // and the autoconfig device (config space while cfg-enabled, then its
     // assigned base). No fabric-side map — what is mapped is discovered at
-    // boot, so a no-device access is the absence of any claim (bus-protocol.md).
+    // boot, so a no-device access is one nothing acknowledges, and the
+    // fabric's watchdog faults it (bus-protocol.md).
     localparam int UART_PAGE_SIZE = 4096;
 
     bus_devsel #(.BASE(RAM_BASE),  .SIZE(32'(RAM_WORDS * 4)))
