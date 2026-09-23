@@ -705,9 +705,11 @@ _start_bias:
 	 *
 	 * Its own section, linked after all live text: this is never
 	 * executed where it is linked, so its size must not move the
-	 * code that is.
+	 * code that is.  The name stays outside the .text. namespace
+	 * because the linker script's .text wildcard would otherwise
+	 * claim it and place it among live code.
 	 */
-	.pushsection .text.trappage,"ax",@progbits
+	.pushsection .trappage,"ax",@progbits
 	.balign	4096
 	.globl	_real_handlers_page_start
 _real_handlers_page_start:

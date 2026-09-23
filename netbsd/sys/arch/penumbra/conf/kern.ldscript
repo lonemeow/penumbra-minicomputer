@@ -18,21 +18,41 @@ SECTIONS
     _ftext = . ;
 
     /*
-     * Hot regions, first so their addresses are KERNEL_TEXT_BASE plus
-     * a fixed offset: nothing precedes them, so no later code change
-     * moves them across a page boundary into another TLB set.  A slot
-     * pins the whole page, so whatever follows a region rides along;
-     * padding to a page boundary would only displace it.
+     * First in .text so no later code change moves a region across a
+     * page boundary into another TLB set.  Deliberately not padded to
+     * a page: the slot pins all of it, so whatever follows rides along.
+     * ALIGN keeps a routine off a line it has no use for; object sizes
+     * drift, so that cannot be left to luck.
      */
     _hot_text0_start = . ;
-    *memcpy.o(.text)
-    *memset.o(.text)
-    *memcmp.o(.text)
-    *strlen.o(.text)
-    *strcmp.o(.text)
-    *strcpy.o(.text)
-    *atomic_cas.o(.text)
-    *lock_stubs.o(.text)
+
+    /* Assembly objects carry a single .text, so pull them whole. */
+    . = ALIGN(COHERENCY_UNIT); *memcpy.o(.text)
+    . = ALIGN(COHERENCY_UNIT); *memset.o(.text)
+    . = ALIGN(COHERENCY_UNIT); *memcmp.o(.text)
+    . = ALIGN(COHERENCY_UNIT); *strlen.o(.text)
+    . = ALIGN(COHERENCY_UNIT); *strcmp.o(.text)
+    . = ALIGN(COHERENCY_UNIT); *strcpy.o(.text)
+    . = ALIGN(COHERENCY_UNIT); *atomic_cas.o(.text)
+    . = ALIGN(COHERENCY_UNIT); *lock_stubs.o(.text)
+
+    /*
+     * Named one at a time: these objects hold far more than the page.
+     * A section takes its defining symbol's name, never an alias, and
+     * a pattern matching nothing fails silently.  A routine that fits
+     * inside one line may follow unaligned, filling a tail.
+     */
+    . = ALIGN(COHERENCY_UNIT); *(.text.splx)
+    . = ALIGN(COHERENCY_UNIT); *(.text.spl0)
+    . = ALIGN(COHERENCY_UNIT); *(.text.splvm)
+    . = ALIGN(COHERENCY_UNIT); *(.text.splhigh)
+    . = ALIGN(COHERENCY_UNIT); *(.text.splsoftserial)
+    . = ALIGN(COHERENCY_UNIT); *(.text.rw_vector_enter)
+    . = ALIGN(COHERENCY_UNIT); *(.text.rw_vector_tryenter)
+    . = ALIGN(COHERENCY_UNIT); *(.text.rw_vector_exit)
+    . = ALIGN(COHERENCY_UNIT); *(.text.getticks)
+    . = ALIGN(COHERENCY_UNIT); *(.text._membar_sync)
+
     _hot_text0_end = . ;
 
     *(.text)
@@ -41,12 +61,12 @@ SECTIONS
   } =0
 
   /*
-   * Copied to the vector page at boot, never executed here.  After
-   * live text so its size cannot move it; page-aligned because the
-   * kernel-text copy is mapped read-only by the page.
+   * Copied to the vector page at boot, never executed here, so its
+   * size must not displace live code.  The name stays outside .text.*
+   * or the wildcard above claims it first.
    */
   . = ALIGN(0x1000);
-  .text.trappage : { *(.text.trappage) }
+  .trappage : { *(.trappage) }
 
   _etext = .;
   PROVIDE (etext = .);
@@ -91,6 +111,14 @@ SECTIONS
    */
   ASSERT(_real_handlers_end - _real_miss_handler <= 4096 - 128,
          "TLB miss handler too large for vector page")
+
+  /* A wildcard claiming the section first goes wrong silently. */
+  ASSERT(_etext - _real_handlers_page_start <= 2 * PAGE_SIZE,
+         "trap page must be linked after all live text")
+
+  /* For nm: what is left of each pinned page. */
+  _hot_text0_free = PAGE_SIZE - (_hot_text0_end - _hot_text0_start);
+  _hot_data0_free = PAGE_SIZE - (_hot_data0_end - _hot_data0_start);
 
   /*
    * A pinned slot holds one page, so a region spilling past one stops
