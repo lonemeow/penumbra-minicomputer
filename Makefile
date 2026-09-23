@@ -33,10 +33,21 @@ DOCKER_RUN   = docker run --rm -u $(shell id -u):$(shell id -g) -v $(CURDIR):/wo
 # build when iterating on testbenches.
 OPT_BUILD ?= -O2
 
-VERILATOR_FLAGS = --cc --exe --build -Wall --assert \
-                  $(if $(VCD),--trace) \
-                  -CFLAGS "-std=c++17 $(OPT_BUILD)" \
-                  $(if $(CORE_SUB),-Ihw/rtl/$(CORE) )-Ihw/rtl/common -Ihw/rtl/penumbra1 -Ihw/rtl/penumbra2 -Ihw/rtl/penumbra3 -Ihw/rtl/machine -Ihw/rtl/bus -Ihw/rtl/io -Ihw/rtl/io/audio -Ihw/rtl/io/sdram -Ihw/rtl/io/video -Ihw/rtl/io/usb -Ihw/rtl/soc -Ihw/rtl/sim
+VERILATOR_BASE_FLAGS = --cc --exe --build -Wall --assert \
+                       $(if $(VCD),--trace) \
+                       -CFLAGS "-std=c++17 $(OPT_BUILD)"
+VERILATOR_INCLUDES   = -Ihw/rtl/common -Ihw/rtl/penumbra1 -Ihw/rtl/penumbra2 -Ihw/rtl/penumbra3 -Ihw/rtl/machine -Ihw/rtl/bus -Ihw/rtl/io -Ihw/rtl/io/audio -Ihw/rtl/io/sdram -Ihw/rtl/io/video -Ihw/rtl/io/usb -Ihw/rtl/soc -Ihw/rtl/sim
+
+# A core build (program runners, interactive sim) puts its variant's
+# directory first, so the variant's forks shadow the base modules they
+# replace.
+VERILATOR_FLAGS = $(VERILATOR_BASE_FLAGS) $(if $(CORE_SUB),-Ihw/rtl/$(CORE) )$(VERILATOR_INCLUDES)
+
+# A module test builds its module against the base files whatever CORE
+# the session selects: a variant fork on the include path would shadow
+# the submodules a base module instantiates. A variant's own module
+# tests name its directory first themselves (test-modules-variant).
+VERILATOR_MODULE_FLAGS = $(VERILATOR_BASE_FLAGS) $(VERILATOR_INCLUDES)
 
 BUILD_DIR   = build
 WAVE_DIR    = waves
@@ -56,7 +67,8 @@ PKG_SV = hw/rtl/common/penumbra_pkg.sv hw/rtl/penumbra2/penumbra2_pkg.sv hw/rtl/
 # Resolving a module by name (module sims, test-modules) must not pick up a
 # variant fork, which redefines a base module under the same name in its own
 # directory (e.g. penumbra2_5/). Module tests target the base modules; the
-# variant forks are exercised through the full-machine sim (CORE=penumbra2_5).
+# variant forks are exercised through the full-machine sim (CORE=penumbra2_5)
+# and their own module tests (test-modules-variant).
 MOD_FIND_PRUNE = -not -path '*/penumbra2_5/*'
 
 # ── Assembler tools ──────────────────────────────────────────
@@ -78,7 +90,7 @@ ifndef MOD
 	$(error Set MOD=<module_name>, e.g. make sim MOD=alu)
 endif
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
-	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) \
+	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_MODULE_FLAGS) \
 		--top-module $(MOD) \
 		--Mdir $(BUILD_DIR)/$(MOD).verilator \
 		-o ../V$(MOD) \
@@ -395,7 +407,7 @@ test-modules: test-modules-variant font8x16.hex splash_cells.hex
 		mod=$${entry%%:*}; \
 		tb=$${entry#*:}; \
 		[ "$$tb" = "$$entry" ] && tb=tb_$$mod; \
-		if $(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) \
+		if $(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_MODULE_FLAGS) \
 			--top-module $$mod \
 			--Mdir $(BUILD_DIR)/$$mod.verilator \
 			-o ../V$$mod \
@@ -424,7 +436,7 @@ test-modules-variant:
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
 	@for e in $(VARIANT_MODULE_TESTS); do \
 		m=$${e%%:*}; r=$${e#*:}; tb=$${r%%:*}; s=$${r#*:}; \
-		$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) -Ihw/rtl/penumbra2_5 --top-module $$m --Mdir $(BUILD_DIR)/$$tb.verilator -o ../V$$tb $(PKG_SV) $$s hw/sim/$$tb.cpp >/dev/null 2>&1 || { printf "  \033[31mBUILD FAIL\033[0m  %s\n" "$$tb"; exit 1; }; \
+		$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_BASE_FLAGS) -Ihw/rtl/penumbra2_5 $(VERILATOR_INCLUDES) --top-module $$m --Mdir $(BUILD_DIR)/$$tb.verilator -o ../V$$tb $(PKG_SV) $$s hw/sim/$$tb.cpp >/dev/null 2>&1 || { printf "  \033[31mBUILD FAIL\033[0m  %s\n" "$$tb"; exit 1; }; \
 		$(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/V$$tb $(DOCKER_IMAGE) || exit 1; \
 	done
 
