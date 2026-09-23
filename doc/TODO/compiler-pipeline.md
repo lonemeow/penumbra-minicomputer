@@ -337,7 +337,7 @@ wrapper `return bar(args)` — emits a full `BL`/`JALR`, a frame, and a
 `jmp lr` return hop.  Every major GISel target lowers tail calls;
 Penumbra is missing the wiring, not the capability.
 
-### Static opportunity (measured 2026-06-22)
+### Static opportunity (measured 2026-09-22)
 
 Method: static scan of `llvm-objdump -d` over the real built binaries.
 A *tail-position call* is a `bl`/`jalr` whose only successors before the
@@ -348,17 +348,21 @@ callee-saved targets (excluding a `ldw r1,[sp]`, which would mean a
 reloaded local rather than the call result) moved every count by <2%, so
 the heuristic is tight.
 
-| binary | total calls | tail-position | % | free-frame wrappers |
-|--------|------------:|--------------:|--:|--------------------:|
-| kernel (MINIMAL) | 37,267 | 2,027 (1,869 `bl` + 158 `jalr`) | 5.4% | 531 (28% of direct) |
-| libc.so.12       | 20,113 |   937 (875 + 62)                | 4.6% | 476 (54% of direct) |
-| bin/sh           |  2,986 |   105                           | 3.5% |  23 |
-| bin/cat          |     62 |     2                           |   —  |   2 |
+| binary | total calls | tail-position | % | free-frame wrappers | no stack args |
+|--------|------------:|--------------:|--:|--------------------:|--------------:|
+| kernel (GENERIC.DEBUG) | 46,163 | 2,307 (2,107 `bl` + 200 `jalr`) | 5.0% | 687 | 1,897 |
+| libc.so.12 | 20,366 | 888 (844 + 44) | 4.4% | 411 | 688 |
+| doom | 6,458 | 350 (329 + 21) | 5.4% | 122 | 327 |
 
 So ~4–5% of all call sites already compile to a tail-position call.  The
 "free-frame wrapper" column is the subset whose stack frame exists
-*solely* to save `lr` across the call; libc's forwarders (`__foo`→`foo`
-weak aliases) make it over half of libc's tail sites.
+*solely* to save `lr` across the call; the last column is the subset a
+first cut could take, having no outgoing stack arguments.
+
+The `jalr` tail sites are device-driver method dispatch (`scsipi_*`,
+`usbd_*`, `com_*`, `umass_*`) rather than VFS — `VOP_*` accounts for
+28 of the kernel's 200, and those are not tail-callable at all (see
+[Implementation](#implementation--a-small-first-cut-exists)).
 
 ### Per-site savings — two tiers
 
@@ -372,35 +376,48 @@ weak aliases) make it over half of libc's tail sites.
   (see the "Dhrystone hot-path code shape" entry in workloads.md),
   that is real on a hot wrapper, not cosmetic.
 
-### Expected leverage — footprint + call-overhead, not spill
+### Measured leverage — small, and concentrated in the kernel
 
-Workload-shaped, unlike the broad spill win the Localizer captured:
+Static sites weighted by `+pcprof` execution counts: a Doom timedemo,
+and a shell/VFS workload for the kernel and libc.  Saving is one
+instruction per plain tail-position execution, and five plus a
+write-through `stw lr` per *pure forwarder* — a function whose only
+call is the tail one and whose frame saves nothing but `lr`.
+
+| image | instructions | tail-position executions | instructions saved |
+|-------|-------------:|-------------------------:|-------------------:|
+| doom | 383,495,873 | 83,901 | 0.022% |
+| kernel | 4,827,652,868 | 14,442,516 | 0.649% |
+| libc.so.12 | 513,100,394 | 111,417 | 0.025% |
 
 - **Dhrystone / compute kernels: ≈0.**  Their hot loops carry no tail
   calls — the same structural reason shrink-wrapping measured flat.  Do
   not expect DMIPS to move.
-- **Wrapper-heavy paths: modest but real.**  Kernel syscall dispatch,
-  VFS/VOP indirect dispatch (the 158 `jalr`-tail sites are `VOP_*`-
-  shaped), libc forwarders, and process startup (ties into the "fork()
-  is unreasonably slow" entry).  Estimate: low single-digit % on
-  call-overhead-bound benches (pbench syscall rows), not a
-  Localizer-sized number.
-- **Recursive tree walks.**  Doom's `R_RenderBSPNode` pays its full
-  7-register frame on every leaf visit, which only masks the child
-  index and calls `R_Subsector`.  With tail calls and shrink-wrapping
-  a leaf is `test; bne; mask; b R_Subsector` — about 90 cycles less
-  per subsector on penumbra1, 50 on penumbra2_5.  SQLite's
-  `sqlite3BtreeNext` keeps a frame only to save `lr` around a
-  tail-position `bl`.
+- **Doom cannot repay this at any implementation quality.**  Its
+  entire call-and-return budget is 1.27% of its instructions
+  (2,445,538 calls, 2,410,205 returns), and tail-position calls are
+  3.43% of those calls.
+- **The kernel is where the win is, and it concentrates.**
+  `turnstile_exit` alone is 3.0M of the 4.6M pure-forwarder executions
+  and `kpreempt_disabled` another 1.1M — two functions are 90% of the
+  free-frame win.  Both are NetBSD base, so the compiler is the only
+  lever that reaches them.
+- **libc is structurally a dead end.**  Its hot syscall stubs are
+  already frameless (`lli r11,N; syscall; bcs __cerror; jmp lr`), and
+  the wrappers that do carry a frame are the 64-bit-offset ones
+  (`pread`, `pwrite`, `truncate`), which pass stack arguments and so
+  fall outside the first cut.  What remains is jemalloc bookkeeping at
+  ~1k executions each.
 - **Code size: ~−2K kernel instructions at the −1/site floor,
   ~−15–18 KB once free-wrapper frame removal counts** — helps the 1 KB
   direct-mapped gen1 I$ only where the wrapper text is hot.
 
-A hard percentage needs a **dynamic** call-site histogram: run a
-wrapper-heavy workload (kernel pbench syscalls / fork+exec) under the ISS
-with call tracing and weight these static sites by execution frequency.
-Dhrystone provably cannot resolve this — measure on the syscall/startup
-benches.
+Recursive tree walks are *not* a source of this: `R_RenderBSPNode`'s
+7-register frame cannot be removed by tail calls or shrink-wrapping,
+because tail-recursion elimination has already turned its right-child
+recursion into a loop, hoisting the `viewx`/`viewy` pointers into
+callee-saved registers that are live across three calls inside it.
+The frame the recursion used to pay is now the loop's.
 
 ### Implementation — a small first cut exists
 
@@ -420,6 +437,13 @@ version; a useful first cut is small:
 - **The medium tail**: outgoing stack args overlapping the incoming arg
   area (ordering-sensitive copy), `sret`, varargs, and the
   eligibility-predicate corners.  A minority of the opportunity.
+
+The no-stack-args predicate is a correctness condition, not only an
+ABI convenience.  `VOP_*` builds its argument struct in its own frame
+and passes `sp`, so tearing the frame down before branching would hand
+the callee freed stack; a caller that passes the address of anything
+in its own frame is disqualified the same way.  Excluding them costs
+1.5M of the kernel's 14.4M dynamic tail-position executions.
 
 RISC-V's `lowerTailCall` + `PseudoTAIL`/indirect-tail pseudo is the
 matching template; AArch64's `isEligibleForTailCallOptimization` is the

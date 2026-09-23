@@ -56,11 +56,14 @@ audio-mixing review), and the 64-bit select of zero only concerns the
 
 What follows, by value:
 1. **Tail calls** ("tail-call optimization — measured opportunity") —
-   4–5% of calls already sit in tail position.  About 90 cycles a
-   subsector in Doom's `R_RenderBSPNode` on penumbra1, the kernel's
-   syscall and `VOP_*` dispatch, libc's forwarders and SQLite's
-   `sqlite3BtreeNext`; 15–18 KB of kernel text once wrappers lose their
-   frames.  A first cut without outgoing stack arguments is small.
+   4–5% of calls already sit in tail position, but weighted by
+   execution that is 0.649% of kernel instructions and 0.022% of
+   Doom's.  Nine tenths of the kernel's free-frame win is
+   `turnstile_exit` and `kpreempt_disabled`, both NetBSD base and so
+   reachable only from the compiler; `VOP_*` dispatch is disqualified
+   outright, passing the address of its own frame.  15–18 KB of kernel
+   text once wrappers lose their frames.  A first cut without outgoing
+   stack arguments is small.
 2. **Dead flag definitions after C++ selection** — lets libc's PIC
    anchors leave their loops, in every shared library and PIE program,
    and `MUL` join the select-of-identity rule; the least work of the
