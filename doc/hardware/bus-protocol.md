@@ -310,9 +310,10 @@ presentation and `ack`.
    presentation cycle.  Every access therefore takes at least one wait
    cycle, and no path runs from a master's request to its own
    completion within a cycle.
-4. **Completion.** In the `ack` cycle `rdata` carries the read data, a
-   write has taken effect, and `bus_fault` is valid.  None of the three
-   is defined in any other cycle.
+4. **Completion.** In the `ack` cycle `rdata` carries the read data
+   and `bus_fault` is valid; neither is defined in any other cycle.  A
+   write is committed no later than the end of its `ack` cycle, so
+   every later access sees it.
 5. **Next access.** A strobe still held in the cycle after `ack` is a
    new access.  A strobe in the `ack` cycle itself still belongs to
    the access being completed — the master has not yet seen the `ack`.
