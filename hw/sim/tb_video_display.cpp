@@ -66,26 +66,29 @@ static void tick_cpu() {
     dut->i_clk = 1; dut->eval();
 }
 
+// A simple bus device: no ack in the presentation cycle, the ack in the
+// next, and the master holds its strobe through that ack cycle.
 static uint32_t bus_read(uint32_t off) {
     dut->i_addr = off; dut->i_re = 1; dut->eval();
-    CHECK(dut->o_busy, "read 0x%03x: busy not asserted on launch", off);
+    CHECK(!dut->o_ack, "read 0x%03x: ack in the presentation cycle", off);
     tick_cpu();
     dut->eval();
-    CHECK(!dut->o_busy, "read 0x%03x: busy still high on the data cycle", off);
+    CHECK(dut->o_ack, "read 0x%03x: no ack on the data cycle", off);
     uint32_t v = dut->o_rdata;
+    tick_cpu();                     // ack cycle, strobe held
     dut->i_re = 0;
-    tick_cpu();
     return v;
 }
 
 static void bus_write(uint32_t off, uint32_t val, int byte_en = 0xF) {
     dut->i_addr = off; dut->i_wdata = val;
     dut->i_byte_en = byte_en; dut->i_we = 1; dut->eval();
-    CHECK(!dut->o_busy, "write 0x%03x: writes must not stall", off);
+    CHECK(!dut->o_ack, "write 0x%03x: ack in the presentation cycle", off);
     tick_cpu();
+    CHECK(dut->o_ack, "write 0x%03x: no ack the cycle after", off);
+    tick_cpu();                     // ack cycle, strobe held
     dut->i_we = 0;
     dut->i_byte_en = 0xF;
-    tick_cpu();
 }
 
 // ── TMDS receiver (as in the chain testbenches) ────────────────────

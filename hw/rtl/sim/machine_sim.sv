@@ -324,10 +324,10 @@ module machine_sim
     logic [3:0]  spi_dev_byte_en;
     logic        spi_dev_we, spi_dev_re;
     logic [31:0] spi_dev_rdata;
-    logic        spi_dev_busy;
+    logic        spi_dev_ack;
 
     logic [31:0] ac_spi_rdata;
-    logic        ac_spi_busy, ac_spi_sel;
+    logic        ac_spi_ack, ac_spi_sel;
     logic        ac_spi_cfg_out;
 
     autoconfig_dev #(
@@ -349,7 +349,7 @@ module machine_sim
         .i_we        (mem_we),
         .i_re        (mem_re),
         .o_rdata     (ac_spi_rdata),
-        .o_busy      (ac_spi_busy),
+        .o_ack       (ac_spi_ack),
         .o_sel       (ac_spi_sel),
         .o_dev_addr  (spi_dev_addr),
         .o_dev_wdata (spi_dev_wdata),
@@ -357,7 +357,7 @@ module machine_sim
         .o_dev_we    (spi_dev_we),
         .o_dev_re    (spi_dev_re),
         .i_dev_rdata (spi_dev_rdata),
-        .i_dev_busy  (spi_dev_busy)
+        .i_dev_ack   (spi_dev_ack)
     );
 
     /* verilator lint_off PINCONNECTEMPTY */
@@ -369,7 +369,7 @@ module machine_sim
         .i_we        (spi_dev_we),
         .i_re        (spi_dev_re),
         .o_rdata     (spi_dev_rdata),
-        .o_busy      (spi_dev_busy),
+        .o_ack       (spi_dev_ack),
         .o_cmd_valid (o_spi_cmd_valid),
         .o_cmd_data  (o_spi_cmd_data),
         .i_resp_valid(i_spi_resp_valid),
@@ -386,9 +386,13 @@ module machine_sim
     logic        usb_dev_we, usb_dev_re;
     logic [31:0] usb_dev_rdata;
     logic        usb_dev_busy;
+    logic        usb_dev_ack;
+    // The host controller reports completion as a busy-drop; its ack is
+    // its held strobe on a busy-low cycle.
+    assign usb_dev_ack = (usb_dev_re | usb_dev_we) & ~usb_dev_busy;
 
     logic [31:0] ac_usb_rdata;
-    logic        ac_usb_busy, ac_usb_sel;
+    logic        ac_usb_ack, ac_usb_sel;
     logic        ac_usb_cfg_out;
     logic        usb_irq;
 
@@ -411,7 +415,7 @@ module machine_sim
         .i_we        (mem_we),
         .i_re        (mem_re),
         .o_rdata     (ac_usb_rdata),
-        .o_busy      (ac_usb_busy),
+        .o_ack       (ac_usb_ack),
         .o_sel       (ac_usb_sel),
         .o_dev_addr  (usb_dev_addr),
         .o_dev_wdata (usb_dev_wdata),
@@ -419,7 +423,7 @@ module machine_sim
         .o_dev_we    (usb_dev_we),
         .o_dev_re    (usb_dev_re),
         .i_dev_rdata (usb_dev_rdata),
-        .i_dev_busy  (usb_dev_busy)
+        .i_dev_ack   (usb_dev_ack)
     );
 
     // Word-strided device: byte enables carry no information here.
@@ -510,9 +514,8 @@ module machine_sim
 
     // ── Bus response fabric ─────────────────────────────────
     // One slot per slave: its select (its own decode), its ack and
-    // its read data. RAM and the autoconfig devices report completion
-    // as a busy-drop, so their acks are the slave's held strobe on a
-    // busy-low cycle.
+    // its read data. RAM reports completion as a busy-drop, so its
+    // ack is its held strobe on a busy-low cycle.
     localparam int SLV_RAM  = 0;
     localparam int SLV_ROM  = 1;
     localparam int SLV_UART = 2;
@@ -540,11 +543,11 @@ module machine_sim
     assign slv_rdata[SLV_UART] = uart_rdata_raw;
 
     assign slv_sel[SLV_SPI]    = ac_spi_sel;
-    assign slv_ack[SLV_SPI]    = mem_strobe & ac_spi_sel & ~ac_spi_busy;
+    assign slv_ack[SLV_SPI]    = ac_spi_ack;
     assign slv_rdata[SLV_SPI]  = ac_spi_rdata;
 
     assign slv_sel[SLV_USB]    = ac_usb_sel;
-    assign slv_ack[SLV_USB]    = mem_strobe & ac_usb_sel & ~ac_usb_busy;
+    assign slv_ack[SLV_USB]    = ac_usb_ack;
     assign slv_rdata[SLV_USB]  = ac_usb_rdata;
 
     bus_response_fabric #(

@@ -54,10 +54,10 @@ module autoconfig_dev
     input  logic        i_we,
     input  logic        i_re,
 
-    // ── Bus response (directly to OR-combine) ──────────────
-    output logic [31:0] o_rdata,
-    output logic        o_busy,
-    output logic        o_sel,         // Device selected this cycle (for bus fault)
+    // ── Bus response (to the response fabric) ──────────────
+    output logic [31:0] o_rdata,       // valid in the ack cycle
+    output logic        o_ack,
+    output logic        o_sel,         // this wrapper claims the address
 
     // ── Inner device bus interface ─────────────────────────
     output logic [31:0] o_dev_addr,
@@ -66,7 +66,7 @@ module autoconfig_dev
     output logic        o_dev_we,
     output logic        o_dev_re,
     input  logic [31:0] i_dev_rdata,
-    input  logic        i_dev_busy
+    input  logic        i_dev_ack
 );
 
     // ── Config space address decode ────────────────────────
@@ -82,12 +82,16 @@ module autoconfig_dev
     logic        configured;
     logic [31:0] base_addr;
 
+    // The CFG_BASE write (offset 0x1C) commits in its ack cycle, not
+    // its first: configuring moves this device's decode off the config
+    // window, so it must not happen until the access has completed.
+    logic cfg_ack;
+
     always_ff @(posedge i_clk) begin
         if (i_rst || i_bus_rst) begin
             configured <= 1'b0;
             base_addr  <= 32'b0;
-        end else if (cfg_active && i_we && i_addr[4:2] == 3'b111) begin
-            // Write to CFG_BASE (offset 0x1C) → latch and enable
+        end else if (cfg_ack && i_we && i_addr[4:2] == 3'b111) begin
             base_addr  <= i_wdata;
             configured <= 1'b1;
         end
@@ -130,46 +134,32 @@ module autoconfig_dev
     assign dev_sel = configured
                    & ((i_addr & ~(DEV_SIZE - 1)) == base_addr);
 
-    // ── Read data output ───────────────────────────────────
-    // Track whether previous cycle was a config read or device read.
-    // Parent module gates our o_rdata with _sel_r to prevent
-    // stale data leaking through the bus OR-combine.
-    logic was_cfg;
-    always_ff @(posedge i_clk) begin
-        if (i_rst || i_bus_rst)
-            was_cfg <= 1'b0;
-        else
-            was_cfg <= cfg_active;
-    end
+    // ── Config space: a simple device ──────────────────────
+    // Config registers are constants and CFG_BASE commits on the ack
+    // (above), so no side effect keys on the first-cycle pulses.
+    bus_device_simple u_cfg_bus (
+        .i_clk   (i_clk),
+        .i_rst   (i_rst),
+        .i_re    (i_re && cfg_active),
+        .i_we    (i_we && cfg_active),
+        /* verilator lint_off PINCONNECTEMPTY */
+        .o_read  (),
+        .o_write (),
+        /* verilator lint_on PINCONNECTEMPTY */
+        .o_ack   (cfg_ack)
+    );
 
-    // Config data: registered for 1-cycle read latency.
-    logic [31:0] cfg_rdata_r;
+    logic [31:0] cfg_rdata_q;
     always_ff @(posedge i_clk)
-        cfg_rdata_r <= cfg_rdata;
+        cfg_rdata_q <= cfg_rdata;
 
-    // Mux between config data (registered here) and inner device
-    // data (registered inside the inner device).
-    assign o_rdata = was_cfg ? cfg_rdata_r : i_dev_rdata;
+    // ── Response ───────────────────────────────────────────
+    // Each side acknowledges only its own accesses, so whichever acked
+    // owns the read data.
+    assign o_rdata = cfg_ack ? cfg_rdata_q : i_dev_rdata;
+    assign o_ack   = cfg_ack | i_dev_ack;
 
-    // ── Busy ───────────────────────────────────────────────
-    // Config reads assert busy for 1 cycle so the registered
-    // select in the bus OR-combine has time to propagate
-    // before the CPU samples mem_rdata. Config writes must NOT
-    // stall: the CFG_BASE write latches `configured` on its
-    // first edge, which deselects the config space — a stalled
-    // write's held strobe would then sit on the bus unclaimed
-    // and raise a spurious bus fault on its completion cycle.
-    logic cfg_was_active;
-    always_ff @(posedge i_clk) begin
-        if (i_rst)
-            cfg_was_active <= 1'b0;
-        else
-            cfg_was_active <= cfg_active && i_re;
-    end
-    wire cfg_busy = cfg_active && i_re && !cfg_was_active;
-    assign o_busy = cfg_busy | (dev_sel ? i_dev_busy : 1'b0);
-
-    // ── Selection (for bus fault detection) ─────────────────
+    // ── Selection ──────────────────────────────────────────
     assign o_sel = cfg_active | dev_sel;
 
     // ── Inner device bus forwarding ────────────────────────

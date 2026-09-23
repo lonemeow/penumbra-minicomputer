@@ -17,8 +17,8 @@
 // quasi-static state through 2-FF synchronizers; the cell array
 // crosses inside the chain's dual-clock BRAM.
 //
-// Reads present the 1-cycle registered response every bus device
-// does (the access_pending busy idiom); writes complete unstalled.
+// A simple bus device: reads present a registered response and writes
+// commit in the access's first cycle, acknowledged the cycle after.
 // Unimplemented register slots (modes) read 0 and ignore writes.
 
 // keep_hierarchy: hold the display subsystem together through
@@ -49,7 +49,7 @@ module video_display #(
     input  logic        i_we,
     input  logic        i_re,
     output logic [31:0] o_rdata,
-    output logic        o_busy,
+    output logic        o_ack,
 
     // ── Video clock domains ─────────────────────────────────────
     input  logic        i_pclk,   // pixel clock
@@ -110,13 +110,31 @@ module video_display #(
     logic regs_sel;
     assign regs_sel = !cells_sel && !fbpal_sel && !fb_sel;
 
+    // ── Bus handshake: a simple device ──────────────────────────
+    // Every write commits on bus_write, once per access, never on the
+    // held strobe. Reads have no side effects, so they need only the
+    // ack: the RAMs read every cycle and the selects below register it.
+    logic bus_write;
+
+    bus_device_simple u_bus (
+        .i_clk   (i_clk),
+        .i_rst   (i_rst),
+        .i_re    (i_re),
+        .i_we    (i_we),
+        /* verilator lint_off PINCONNECTEMPTY */
+        .o_read  (),
+        /* verilator lint_on PINCONNECTEMPTY */
+        .o_write (bus_write),
+        .o_ack   (o_ack)
+    );
+
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             ctrl_enable_q    <= 1'b0;   // black until software draws
             ctrl_cursor_en_q <= 1'b0;
             ctrl_fb_sel_q    <= 1'b0;   // the character console powers up
             cursor_q         <= '0;
-        end else if (i_we && regs_sel) begin
+        end else if (bus_write && regs_sel) begin
             case (i_addr[5:2])
                 4'd2: {ctrl_fb_sel_q, ctrl_cursor_en_q, ctrl_enable_q} <=
                           {i_wdata[4], i_wdata[1:0]};
@@ -140,11 +158,9 @@ module video_display #(
         endcase
     end
 
-    // ── Registered read + busy (the access_pending idiom) ───────
+    // ── Registered read ─────────────────────────────────────────
     // The cell RAM registers its own read; the register file mirrors
-    // it here, so every read is 1-cycle and busy drops as the data
-    // becomes valid.
-    logic        pending_q;
+    // it here, so every read is valid in the ack cycle.
     logic        cells_sel_q, fbpal_sel_q, fb_sel_q;
     logic [31:0] reg_rdata_q;
     logic [15:0] cell_rdata;
@@ -152,17 +168,11 @@ module video_display #(
     logic [23:0] fbpal_rdata;
 
     always_ff @(posedge i_clk) begin
-        if (i_rst)
-            pending_q <= 1'b0;
-        else
-            pending_q <= i_re && !pending_q;
         cells_sel_q <= cells_sel;
         fbpal_sel_q <= fbpal_sel;
         fb_sel_q    <= fb_sel;
         reg_rdata_q <= reg_rdata;
     end
-
-    assign o_busy = i_re && !pending_q;
 
     always_comb begin
         if (fb_sel_q)         o_rdata = fb_rdata;
@@ -203,16 +213,16 @@ module video_display #(
         .CELLS_HEX    (CELLS_HEX)
     ) u_chain (
         .i_clk        (i_clk),
-        .i_cell_we    (i_we && cells_sel),
+        .i_cell_we    (bus_write && cells_sel),
         .i_cell_addr  (cell_idx),
         .i_cell_wdata (i_wdata[15:0]),
         .o_cell_rdata (cell_rdata),
-        .i_fb_we      (i_we && fb_sel),
+        .i_fb_we      (bus_write && fb_sel),
         .i_fb_byte_en (i_byte_en),
         .i_fb_addr    (i_addr[16:2]),
         .i_fb_wdata   (i_wdata),
         .o_fb_rdata   (fb_rdata),
-        .i_pal_we     (i_we && fbpal_sel),
+        .i_pal_we     (bus_write && fbpal_sel),
         .i_pal_addr   (i_addr[9:2]),
         .i_pal_wdata  (i_wdata[23:0]),
         .o_pal_rdata  (fbpal_rdata),

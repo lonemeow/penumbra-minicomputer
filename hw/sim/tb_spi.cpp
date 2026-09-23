@@ -86,21 +86,35 @@ enum {
     XFER_START = (1 << 16)
 };
 
+// The SPI controller is a simple bus device: it resolves an access in
+// its first cycle and acknowledges it in the next, and the master holds
+// its strobe through that ack cycle.
+static void expect_ack(const char* what) {
+    tests++;
+    if (!dut->o_ack) {
+        errors++;
+        printf("  FAIL: no ack in the cycle after a %s\n", what);
+    }
+}
+
 static void reg_write(uint32_t offset, uint32_t data) {
     dut->i_addr = offset;
     dut->i_wdata = data;
     dut->i_we = 1;
-    tick();
+    tick();                         // first cycle: commit
+    expect_ack("write");
+    tick();                         // ack cycle, strobe held
     dut->i_we = 0;
 }
 
 static uint32_t reg_read(uint32_t offset) {
     dut->i_addr = offset;
     dut->i_re = 1;
-    tick();  // Rising edge: o_rdata latched from rdata_next
-    uint32_t val = dut->o_rdata;  // Valid now (i_re was 1)
+    tick();                         // first cycle: capture + DATA pop
+    expect_ack("read");
+    uint32_t val = dut->o_rdata;
+    tick();                         // ack cycle, strobe held
     dut->i_re = 0;
-    tick();  // Cleanup: o_rdata clears, access_pending resets
     return val;
 }
 

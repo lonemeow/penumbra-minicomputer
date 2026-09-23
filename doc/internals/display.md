@@ -69,7 +69,7 @@ flowchart LR
 | `i_clk`, `i_rst`                | in        | System clock / reset — bus interface and registers   |
 | `i_addr`, `i_wdata`, `i_we`, `i_re` | in    | Device bus request (word-strided)                    |
 | `o_rdata`                        | out       | Device bus read data                                 |
-| `o_busy`                         | out       | One-cycle registered-read stall                      |
+| `o_ack`                          | out       | Access complete; the cycle after it is presented     |
 | `i_pixel_clk`                    | in        | Pixel clock for the active mode                      |
 | `i_serial_clk`                   | in        | 5× pixel clock for the TMDS serializers             |
 | `o_gpdi_dp[3:0]`, `o_gpdi_dn[3:0]` | out    | GPDI pairs: `[2:0]` R/G/B data, `[3]` clock          |

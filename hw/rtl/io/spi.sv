@@ -55,8 +55,8 @@ module spi
     input  logic [31:0] i_wdata,    // Write data
     input  logic        i_we,       // Write enable
     input  logic        i_re,       // Read enable
-    output logic [31:0] o_rdata,    // Read data (1-cycle latency)
-    output logic        o_busy,     // Access in progress
+    output logic [31:0] o_rdata,    // Read data, valid in the ack cycle
+    output logic        o_ack,
 
     // ── Physical SPI pins ──────────────────────────────────
     output logic        o_sclk,     // SPI clock
@@ -176,21 +176,33 @@ module spi
     // XFER_DONE — latched, write-1-to-clear
     logic xfer_done;
 
+    // ── Bus handshake: a simple device ──────────────────────
+    // Every access resolves in its first cycle (bus_read / bus_write)
+    // and is acknowledged the next. Every side effect keys on these,
+    // never on the held strobes.
+    logic bus_read, bus_write;
+
+    bus_device_simple u_bus (
+        .i_clk   (i_clk),
+        .i_rst   (i_rst),
+        .i_re    (i_re),
+        .i_we    (i_we),
+        .o_read  (bus_read),
+        .o_write (bus_write),
+        .o_ack   (o_ack)
+    );
+
     // ── Register write decode ───────────────────────────────
     logic wr_control, wr_data, wr_xfer_count, wr_irq_status, wr_irq_enable;
-    assign wr_control    = i_we && (reg_sel == REG_CONTROL);
-    assign wr_data       = i_we && (reg_sel == REG_DATA);
-    assign wr_xfer_count = i_we && (reg_sel == REG_XFER_COUNT);
-    assign wr_irq_status = i_we && (reg_sel == REG_IRQ_STATUS);
-    assign wr_irq_enable = i_we && (reg_sel == REG_IRQ_ENABLE);
+    assign wr_control    = bus_write && (reg_sel == REG_CONTROL);
+    assign wr_data       = bus_write && (reg_sel == REG_DATA);
+    assign wr_xfer_count = bus_write && (reg_sel == REG_XFER_COUNT);
+    assign wr_irq_status = bus_write && (reg_sel == REG_IRQ_STATUS);
+    assign wr_irq_enable = bus_write && (reg_sel == REG_IRQ_ENABLE);
 
     // ── Read-side DATA pop (first cycle only) ───────────────
-    logic read_first;
-    logic access_pending;
-    assign read_first = i_re && !access_pending;
-
     logic rd_data;
-    assign rd_data = read_first && (reg_sel == REG_DATA);
+    assign rd_data = bus_read && (reg_sel == REG_DATA);
 
     // ── Single-byte legacy rx_data register ─────────────────
     logic [7:0] rx_data;   // Holds last received byte in non-FIFO mode
@@ -422,23 +434,8 @@ module spi
         endcase
     end
 
-    always_ff @(posedge i_clk) begin
-        if (i_re)
+    always_ff @(posedge i_clk)
+        if (bus_read)
             o_rdata <= rdata_next;
-        else
-            o_rdata <= 32'b0;
-    end
-
-    // ── Read busy — 1-cycle latency (access_pending pattern) ─
-    always_ff @(posedge i_clk) begin
-        if (i_rst)
-            access_pending <= 1'b0;
-        else if (i_re && !access_pending)
-            access_pending <= 1'b1;
-        else
-            access_pending <= 1'b0;
-    end
-
-    assign o_busy = i_re && !access_pending;
 
 endmodule

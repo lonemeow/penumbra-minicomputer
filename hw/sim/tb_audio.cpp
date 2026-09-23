@@ -55,24 +55,31 @@ void step() {
 }
 void steps(int n) { for (int i = 0; i < n; i++) step(); }
 
+// The device is a simple bus device: it resolves an access in its first
+// cycle and acknowledges it in the next, and the master holds its strobe
+// through that ack cycle. A register edge arrives every other step.
+void expect_ack(const char* what) {
+    if (!dut->o_ack) {
+        fail++;
+        printf("FAIL: no ack in the cycle after a %s\n", what);
+    }
+}
+
 void wr(uint32_t addr, uint32_t data) {
-    // Hold across a register edge, which arrives every other step.
     dut->i_addr = addr; dut->i_wdata = data; dut->i_we = 1;
-    steps(2);
+    steps(2);                       // first cycle: commit
+    expect_ack("write");
+    steps(2);                       // ack cycle, strobe held
     dut->i_we = 0;
     steps(2);
 }
 
 uint32_t rd(uint32_t addr) {
-    // A read answers from a register a cycle after it is presented, so
-    // hold the strobe until the device drops busy and sample then —
-    // what the bus master does, and what sampling combinationally in
-    // the presentation cycle hid.
     dut->i_addr = addr; dut->i_re = 1;
-    do {
-        steps(2);
-    } while (dut->o_busy);
+    steps(2);                       // first cycle: capture
+    expect_ack("read");
     uint32_t v = dut->o_rdata;
+    steps(2);                       // ack cycle, strobe held
     dut->i_re = 0;
     steps(2);
     return v;

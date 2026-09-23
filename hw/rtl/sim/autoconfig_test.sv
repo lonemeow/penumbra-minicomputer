@@ -25,7 +25,7 @@ module autoconfig_test
 
     // ── Responses (directly from autoconfig wrappers) ──────
     output logic [31:0] o_rdata,
-    output logic        o_busy,
+    output logic        o_ack,
     output logic        o_sel,
 
     // ── For testbench observation ──────────────────────────
@@ -39,8 +39,9 @@ module autoconfig_test
     logic        dev0_we, dev0_re;
     logic [31:0] dev0_rdata;
     logic        dev0_busy;
+    logic        dev0_ack;
     logic [31:0] ac0_rdata;
-    logic        ac0_busy, ac0_sel;
+    logic        ac0_ack, ac0_sel;
 
     autoconfig_dev #(
         .DEV_CLASS (ACFG_CLASS_SPI),
@@ -61,7 +62,7 @@ module autoconfig_test
         .i_we        (i_we),
         .i_re        (i_re),
         .o_rdata     (ac0_rdata),
-        .o_busy      (ac0_busy),
+        .o_ack       (ac0_ack),
         .o_sel       (ac0_sel),
         .o_dev_addr  (dev0_addr),
         .o_dev_wdata (dev0_wdata),
@@ -69,7 +70,7 @@ module autoconfig_test
         .o_dev_we    (dev0_we),
         .o_dev_re    (dev0_re),
         .i_dev_rdata (dev0_rdata),
-        .i_dev_busy  (dev0_busy)
+        .i_dev_ack   (dev0_ack)
     );
 
     simple_mem #(.MEM_WORDS(16)) u_mem0 (
@@ -90,8 +91,9 @@ module autoconfig_test
     logic        dev1_we, dev1_re;
     logic [31:0] dev1_rdata;
     logic        dev1_busy;
+    logic        dev1_ack;
     logic [31:0] ac1_rdata;
-    logic        ac1_busy, ac1_sel;
+    logic        ac1_ack, ac1_sel;
 
     autoconfig_dev #(
         .DEV_CLASS (ACFG_CLASS_MEMORY),
@@ -112,7 +114,7 @@ module autoconfig_test
         .i_we        (i_we),
         .i_re        (i_re),
         .o_rdata     (ac1_rdata),
-        .o_busy      (ac1_busy),
+        .o_ack       (ac1_ack),
         .o_sel       (ac1_sel),
         .o_dev_addr  (dev1_addr),
         .o_dev_wdata (dev1_wdata),
@@ -120,7 +122,7 @@ module autoconfig_test
         .o_dev_we    (dev1_we),
         .o_dev_re    (dev1_re),
         .i_dev_rdata (dev1_rdata),
-        .i_dev_busy  (dev1_busy)
+        .i_dev_ack   (dev1_ack)
     );
 
     simple_mem #(.MEM_WORDS(16)) u_mem1 (
@@ -135,16 +137,15 @@ module autoconfig_test
         .o_busy    (dev1_busy)
     );
 
-    // ── OR-combine responses (with _sel_r gating) ──────────
-    logic ac0_sel_r, ac1_sel_r;
-    always_ff @(posedge i_clk) begin
-        ac0_sel_r <= ac0_sel;
-        ac1_sel_r <= ac1_sel;
-    end
+    // simple_mem reports completion as a busy-drop; its ack is its held
+    // strobe on a busy-low cycle.
+    assign dev0_ack = (dev0_re | dev0_we) & ~dev0_busy;
+    assign dev1_ack = (dev1_re | dev1_we) & ~dev1_busy;
 
-    assign o_rdata = (ac0_sel_r ? ac0_rdata : 32'b0) |
-                     (ac1_sel_r ? ac1_rdata : 32'b0);
-    assign o_busy  = ac0_busy  | ac1_busy;
-    assign o_sel   = ac0_sel   | ac1_sel;
+    // ── Merge the responses: read data gated by each wrapper's ack ──
+    assign o_rdata = (ac0_ack ? ac0_rdata : 32'b0) |
+                     (ac1_ack ? ac1_rdata : 32'b0);
+    assign o_ack   = ac0_ack | ac1_ack;
+    assign o_sel   = ac0_sel | ac1_sel;
 
 endmodule

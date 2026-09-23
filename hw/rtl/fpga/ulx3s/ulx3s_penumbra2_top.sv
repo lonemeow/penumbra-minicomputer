@@ -575,10 +575,10 @@ module ulx3s_penumbra2_top (
     /* verilator lint_on UNUSEDSIGNAL */
     logic        spi_dev_we, spi_dev_re;
     logic [31:0] spi_dev_rdata;
-    logic        spi_dev_busy;
+    logic        spi_dev_ack;
 
     logic [31:0] ac_spi_rdata;
-    logic        ac_spi_busy, ac_spi_sel;
+    logic        ac_spi_ack, ac_spi_sel;
     // cfg_out is the daisy-chain to the next autoconfig device (USB).
     logic        ac_spi_cfg_out;
 
@@ -600,7 +600,7 @@ module ulx3s_penumbra2_top (
         .i_we        (mem_we),
         .i_re        (mem_re),
         .o_rdata     (ac_spi_rdata),
-        .o_busy      (ac_spi_busy),
+        .o_ack       (ac_spi_ack),
         .o_sel       (ac_spi_sel),
         .o_dev_addr  (spi_dev_addr),
         .o_dev_wdata (spi_dev_wdata),
@@ -608,7 +608,7 @@ module ulx3s_penumbra2_top (
         .o_dev_we    (spi_dev_we),
         .o_dev_re    (spi_dev_re),
         .i_dev_rdata (spi_dev_rdata),
-        .i_dev_busy  (spi_dev_busy)
+        .i_dev_ack   (spi_dev_ack)
     );
 
     logic spi_cs0;
@@ -624,7 +624,7 @@ module ulx3s_penumbra2_top (
         .i_we    (spi_dev_we),
         .i_re    (spi_dev_re),
         .o_rdata (spi_dev_rdata),
-        .o_busy  (spi_dev_busy),
+        .o_ack   (spi_dev_ack),
         .o_sclk  (sd_clk),
         .o_mosi  (sd_cmd),
         .i_miso  (sd_d[0]),
@@ -649,9 +649,13 @@ module ulx3s_penumbra2_top (
     logic        usb_dev_we, usb_dev_re;
     logic [31:0] usb_dev_rdata;
     logic        usb_dev_busy;
+    logic        usb_dev_ack;
+    // The host controller reports completion as a busy-drop; its ack is
+    // its held strobe on a busy-low cycle.
+    assign usb_dev_ack = (usb_dev_re | usb_dev_we) & ~usb_dev_busy;
 
     logic [31:0] ac_usb_rdata;
-    logic        ac_usb_busy, ac_usb_sel;
+    logic        ac_usb_ack, ac_usb_sel;
     // cfg_out is the daisy-chain to the next autoconfig device (display).
     logic        ac_usb_cfg_out;
     logic        usb_irq;
@@ -674,7 +678,7 @@ module ulx3s_penumbra2_top (
         .i_we        (mem_we),
         .i_re        (mem_re),
         .o_rdata     (ac_usb_rdata),
-        .o_busy      (ac_usb_busy),
+        .o_ack       (ac_usb_ack),
         .o_sel       (ac_usb_sel),
         .o_dev_addr  (usb_dev_addr),
         .o_dev_wdata (usb_dev_wdata),
@@ -682,7 +686,7 @@ module ulx3s_penumbra2_top (
         .o_dev_we    (usb_dev_we),
         .o_dev_re    (usb_dev_re),
         .i_dev_rdata (usb_dev_rdata),
-        .i_dev_busy  (usb_dev_busy)
+        .i_dev_ack   (usb_dev_ack)
     );
 
     // The MAC-PHY seam between the controller and the board PHY.
@@ -783,10 +787,10 @@ module ulx3s_penumbra2_top (
     logic [3:0]  disp_dev_byte_en;
     logic        disp_dev_we, disp_dev_re;
     logic [31:0] disp_dev_rdata;
-    logic        disp_dev_busy;
+    logic        disp_dev_ack;
 
     logic [31:0] ac_disp_rdata;
-    logic        ac_disp_busy, ac_disp_sel;
+    logic        ac_disp_ack, ac_disp_sel;
     // cfg_out is the daisy-chain to the next autoconfig device (audio).
     logic        ac_disp_cfg_out;
 
@@ -809,7 +813,7 @@ module ulx3s_penumbra2_top (
         .i_we        (mem_we),
         .i_re        (mem_re),
         .o_rdata     (ac_disp_rdata),
-        .o_busy      (ac_disp_busy),
+        .o_ack       (ac_disp_ack),
         .o_sel       (ac_disp_sel),
         .o_dev_addr  (disp_dev_addr),
         .o_dev_wdata (disp_dev_wdata),
@@ -817,7 +821,7 @@ module ulx3s_penumbra2_top (
         .o_dev_we    (disp_dev_we),
         .o_dev_re    (disp_dev_re),
         .i_dev_rdata (disp_dev_rdata),
-        .i_dev_busy  (disp_dev_busy)
+        .i_dev_ack   (disp_dev_ack)
     );
 
     // ── Audio ───────────────────────────────────────────────
@@ -826,9 +830,9 @@ module ulx3s_penumbra2_top (
     // closure, and that output already carries an exactly-divisible
     // chain this device needs no second PLL to reach.
     logic [31:0] audio_dev_addr, audio_dev_wdata, audio_dev_rdata;
-    logic        audio_dev_we, audio_dev_re, audio_dev_busy;
+    logic        audio_dev_we, audio_dev_re, audio_dev_ack;
     logic [31:0] ac_audio_rdata;
-    logic        ac_audio_busy, ac_audio_sel;
+    logic        ac_audio_ack, ac_audio_sel;
     // Last device in the chain: the dangling cfg_out is the
     // "no more devices" end the ROM's autoconfig loop probes.
     /* verilator lint_off UNUSEDSIGNAL */
@@ -854,7 +858,7 @@ module ulx3s_penumbra2_top (
         .i_we        (mem_we),
         .i_re        (mem_re),
         .o_rdata     (ac_audio_rdata),
-        .o_busy      (ac_audio_busy),
+        .o_ack       (ac_audio_ack),
         .o_sel       (ac_audio_sel),
         .o_dev_addr  (audio_dev_addr),
         .o_dev_wdata (audio_dev_wdata),
@@ -862,7 +866,7 @@ module ulx3s_penumbra2_top (
         .o_dev_we    (audio_dev_we),
         .o_dev_re    (audio_dev_re),
         .i_dev_rdata (audio_dev_rdata),
-        .i_dev_busy  (audio_dev_busy)
+        .i_dev_ack   (audio_dev_ack)
     );
 
     logic signed [15:0] audio_frame_l, audio_frame_r;
@@ -883,7 +887,7 @@ module ulx3s_penumbra2_top (
         .i_we       (audio_dev_we),
         .i_re       (audio_dev_re),
         .o_rdata    (audio_dev_rdata),
-        .o_busy     (audio_dev_busy),
+        .o_ack      (audio_dev_ack),
         .o_irq      (audio_irq),
         .i_aclk     (clk_60mhz),
         .i_arst     (rst_60mhz),
@@ -919,7 +923,7 @@ module ulx3s_penumbra2_top (
         .i_we      (disp_dev_we),
         .i_re      (disp_dev_re),
         .o_rdata   (disp_dev_rdata),
-        .o_busy    (disp_dev_busy),
+        .o_ack     (disp_dev_ack),
         .i_pclk    (clk_video_pixel),
         .i_sclk    (clk_video_serial),
         .i_vrst    (rst_video_q),
@@ -942,9 +946,8 @@ module ulx3s_penumbra2_top (
 
     // ── Bus response fabric ─────────────────────────────────
     // One slot per slave: its select (its own decode), its ack and
-    // its read data. RAM and the autoconfig devices report completion
-    // as a busy-drop, so their acks are the slave's held strobe on a
-    // busy-low cycle.
+    // its read data. RAM reports completion as a busy-drop, so its
+    // ack is its held strobe on a busy-low cycle.
     localparam int SLV_RAM   = 0;
     localparam int SLV_ROM   = 1;
     localparam int SLV_UART  = 2;
@@ -974,19 +977,19 @@ module ulx3s_penumbra2_top (
     assign slv_rdata[SLV_UART]  = uart_rdata_raw;
 
     assign slv_sel[SLV_SPI]     = ac_spi_sel;
-    assign slv_ack[SLV_SPI]     = mem_strobe & ac_spi_sel & ~ac_spi_busy;
+    assign slv_ack[SLV_SPI]     = ac_spi_ack;
     assign slv_rdata[SLV_SPI]   = ac_spi_rdata;
 
     assign slv_sel[SLV_USB]     = ac_usb_sel;
-    assign slv_ack[SLV_USB]     = mem_strobe & ac_usb_sel & ~ac_usb_busy;
+    assign slv_ack[SLV_USB]     = ac_usb_ack;
     assign slv_rdata[SLV_USB]   = ac_usb_rdata;
 
     assign slv_sel[SLV_DISP]    = ac_disp_sel;
-    assign slv_ack[SLV_DISP]    = mem_strobe & ac_disp_sel & ~ac_disp_busy;
+    assign slv_ack[SLV_DISP]    = ac_disp_ack;
     assign slv_rdata[SLV_DISP]  = ac_disp_rdata;
 
     assign slv_sel[SLV_AUDIO]   = ac_audio_sel;
-    assign slv_ack[SLV_AUDIO]   = mem_strobe & ac_audio_sel & ~ac_audio_busy;
+    assign slv_ack[SLV_AUDIO]   = ac_audio_ack;
     assign slv_rdata[SLV_AUDIO] = ac_audio_rdata;
 
     bus_response_fabric #(

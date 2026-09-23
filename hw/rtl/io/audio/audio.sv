@@ -48,7 +48,7 @@ module audio
     input  logic        i_we,
     input  logic        i_re,
     output logic [31:0] o_rdata,
-    output logic        o_busy,
+    output logic        o_ack,
     output logic        o_irq,
 
     // ── Output domain ────────────────────────────────────────
@@ -82,6 +82,22 @@ module audio
     assign reg_sel  = i_addr[4:2];
     assign sel_chan = (blk >= 6'd8) && (blk < 6'(8 + CHANNELS));
     assign chan_idx = CH_W'(blk - 6'd8);
+
+    // ── Bus handshake: a simple device ───────────────────────
+    // Every access resolves in its first cycle (bus_read / bus_write)
+    // and is acknowledged the next. Every side effect — a queue push
+    // above all — keys on these, never on the held strobes.
+    logic bus_read, bus_write;
+
+    bus_device_simple u_bus (
+        .i_clk   (i_clk),
+        .i_rst   (i_rst),
+        .i_re    (i_re),
+        .i_we    (i_we),
+        .o_read  (bus_read),
+        .o_write (bus_write),
+        .o_ack   (o_ack)
+    );
 
     // ── Register state ───────────────────────────────────────
     logic                enable_q;
@@ -210,7 +226,7 @@ module audio
     always_comb begin
         push  = '0;
         flush = '0;
-        if (sel_chan && i_we) begin
+        if (sel_chan && bus_write) begin
             if (reg_sel == 3'd6) push[chan_idx]  = 1'b1;   // FIFO
             if (reg_sel == 3'd0 && i_wdata[8])
                 flush[chan_idx] = 1'b1;                    // CTRL.FLUSH
@@ -243,7 +259,7 @@ module audio
                     underrun_q[c] <= 1'b1;
             end
 
-            if (i_we && !sel_chan) begin
+            if (bus_write && !sel_chan) begin
                 case (reg_sel)
                     3'd2: enable_q     <= i_wdata[0];
                     3'd3: chan_en_q    <= i_wdata[CHANNELS-1:0];
@@ -256,7 +272,7 @@ module audio
                     default: ;
                 endcase
             end
-            if (i_we && sel_chan) begin
+            if (bus_write && sel_chan) begin
                 case (reg_sel)
                     3'd1: inc_q[chan_idx] <= i_wdata;
                     3'd2: vol_q[chan_idx] <= i_wdata;
@@ -297,23 +313,12 @@ module audio
         end
     end
 
-    // A read answers from a register one cycle after it is presented,
-    // and holds the bus for that cycle. The device-select feeding the
-    // top-level read combine is registered to match, so combinational
-    // data would be sampled a cycle after it had already gone. Writes
-    // are not stalled: filling a queue is the one hot path here.
-    logic read_pending_q;
-
+    // A read answers from a register, presented in the ack cycle.
     always_ff @(posedge i_clk) begin
-        if (i_rst) begin
-            o_rdata        <= 32'd0;
-            read_pending_q <= 1'b0;
-        end else begin
-            o_rdata        <= i_re ? rdata_next : 32'd0;
-            read_pending_q <= i_re & ~read_pending_q;
-        end
+        if (i_rst)
+            o_rdata <= 32'd0;
+        else if (bus_read)
+            o_rdata <= rdata_next;
     end
-
-    assign o_busy = i_re & ~read_pending_q;
 
 endmodule

@@ -20,7 +20,7 @@ module spi_test
     input  logic        i_we,
     input  logic        i_re,
     output logic [31:0] o_rdata,
-    output logic        o_busy,
+    output logic        o_ack,
 
     output logic        o_sclk,
     output logic        o_mosi,
@@ -43,7 +43,7 @@ module spi_test
         .i_we    (i_we),
         .i_re    (i_re),
         .o_rdata (o_rdata),
-        .o_busy  (o_busy),
+        .o_ack   (o_ack),
         .o_sclk  (o_sclk),
         .o_mosi  (o_mosi),
         .i_miso  (i_miso),

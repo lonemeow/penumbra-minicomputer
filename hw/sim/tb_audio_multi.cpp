@@ -61,8 +61,19 @@ void step() {
 }
 void steps(int n) { for (int i = 0; i < n; i++) step(); }
 
+// A simple bus device: the master holds its strobe through the ack
+// cycle, which follows the first. A register edge is every other step.
+void expect_ack(const char* what) {
+    if (!dut->o_ack) {
+        fail++;
+        printf("FAIL: no ack in the cycle after a %s\n", what);
+    }
+}
+
 void wr(uint32_t addr, uint32_t data) {
     dut->i_addr = addr; dut->i_wdata = data; dut->i_we = 1;
+    steps(2);
+    expect_ack("write");
     steps(2);
     dut->i_we = 0;
     steps(2);
@@ -70,8 +81,10 @@ void wr(uint32_t addr, uint32_t data) {
 
 uint32_t rd(uint32_t addr) {
     dut->i_addr = addr; dut->i_re = 1;
-    do { steps(2); } while (dut->o_busy);
+    steps(2);
+    expect_ack("read");
     uint32_t v = dut->o_rdata;
+    steps(2);
     dut->i_re = 0;
     steps(2);
     return v;

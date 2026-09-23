@@ -28,28 +28,36 @@ static void reset(Vautoconfig_test* d) {
     d->i_rst = 0;
 }
 
-// Read a word from the bus. Holds i_re while busy (like the real CPU's
-// STALL-based load), then reads o_rdata on the cycle after busy clears.
+// The master holds its strobe until the access is acknowledged and
+// through the ack cycle — the edge a CFG_BASE write commits on.
+static void await_ack(Vautoconfig_test* d, const char* what) {
+    tick(d);                        // an ack never comes in the presentation cycle
+    for (int n = 0; !d->o_ack && n < 20; n++) tick(d);
+    tests++;
+    if (!d->o_ack) {
+        errors++;
+        printf("  FAIL: %s never acknowledged\n", what);
+    }
+}
+
 static uint32_t bus_read(Vautoconfig_test* d, uint32_t addr) {
     d->i_addr = addr;
     d->i_re = 1;
-    tick(d);
-    // Keep re asserted while busy (models CPU STALL)
-    while (d->o_busy) tick(d);
-    d->i_re = 0;
+    await_ack(d, "read");
     uint32_t val = d->o_rdata;
+    tick(d);  // ack cycle, strobe held
+    d->i_re = 0;
     tick(d);  // drain
     return val;
 }
 
-// Write a word to the bus.
 static void bus_write(Vautoconfig_test* d, uint32_t addr, uint32_t data) {
     d->i_addr = addr;
     d->i_wdata = data;
     d->i_we = 1;
     d->i_byte_en = 0xF;
-    tick(d);
-    while (d->o_busy) tick(d);
+    await_ack(d, "write");
+    tick(d);  // ack cycle, strobe held
     d->i_we = 0;
     tick(d);  // drain
 }

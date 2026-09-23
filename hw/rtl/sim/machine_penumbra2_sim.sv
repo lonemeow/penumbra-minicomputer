@@ -106,8 +106,8 @@ module machine_penumbra2_sim
     /* verilator lint_off UNUSEDSIGNAL */
     logic [3:0]  spi_dev_byte_en;
     /* verilator lint_on UNUSEDSIGNAL */
-    logic        ac_spi_busy, ac_spi_sel, spi_irq;
-    logic        spi_dev_we, spi_dev_re, spi_dev_busy;
+    logic        ac_spi_ack, ac_spi_sel, spi_irq;
+    logic        spi_dev_we, spi_dev_re, spi_dev_ack;
 
     machine_penumbra2 #(
         .RESET_PC(RESET_PC),
@@ -163,9 +163,8 @@ module machine_penumbra2_sim
 
     // ── Bus response fabric ─────────────────────────────────
     // One slot per slave: its select (its own decode), its ack and
-    // its read data. RAM and the autoconfig device report completion
-    // as a busy-drop, so their acks are the slave's held strobe on a
-    // busy-low cycle.
+    // its read data. RAM reports completion as a busy-drop, so its
+    // ack is its held strobe on a busy-low cycle.
     localparam int SLV_RAM  = 0;
     localparam int SLV_ROM  = 1;
     localparam int SLV_UART = 2;
@@ -192,7 +191,7 @@ module machine_penumbra2_sim
     assign slv_rdata[SLV_UART] = uart_rdata;
 
     assign slv_sel[SLV_SPI]    = ac_spi_sel;
-    assign slv_ack[SLV_SPI]    = bus_strobe & ac_spi_sel & ~ac_spi_busy;
+    assign slv_ack[SLV_SPI]    = ac_spi_ack;
     assign slv_rdata[SLV_SPI]  = acfg_rdata;
 
     bus_response_fabric #(
@@ -255,18 +254,18 @@ module machine_penumbra2_sim
         .o_cfg_out(),
         .i_addr(bus_addr), .i_wdata(bus_wdata), .i_byte_en(bus_byte_en),
         .i_we(bus_we), .i_re(bus_re),
-        .o_rdata(acfg_rdata), .o_busy(ac_spi_busy), .o_sel(ac_spi_sel),
+        .o_rdata(acfg_rdata), .o_ack(ac_spi_ack), .o_sel(ac_spi_sel),
         .o_dev_addr(spi_dev_addr), .o_dev_wdata(spi_dev_wdata),
         .o_dev_byte_en(spi_dev_byte_en),
         .o_dev_we(spi_dev_we), .o_dev_re(spi_dev_re),
-        .i_dev_rdata(spi_dev_rdata), .i_dev_busy(spi_dev_busy)
+        .i_dev_rdata(spi_dev_rdata), .i_dev_ack(spi_dev_ack)
     );
 
     sim_spi u_spi (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_addr(spi_dev_addr), .i_wdata(spi_dev_wdata),
         .i_we(spi_dev_we), .i_re(spi_dev_re),
-        .o_rdata(spi_dev_rdata), .o_busy(spi_dev_busy),
+        .o_rdata(spi_dev_rdata), .o_ack(spi_dev_ack),
         .o_cmd_valid(o_spi_cmd_valid), .o_cmd_data(o_spi_cmd_data),
         .i_resp_valid(i_spi_resp_valid), .i_resp_data(i_spi_resp_data),
         .o_cs0(o_spi_cs0), .o_cs1(), .o_irq(spi_irq)
