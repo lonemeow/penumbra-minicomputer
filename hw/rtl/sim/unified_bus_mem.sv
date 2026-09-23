@@ -13,18 +13,16 @@
 // So this slave decodes only the addresses it actually backs, from its own
 // size (REGION_WORDS — the same parameter that sizes the storage): it responds
 // and asserts o_claimed for an in-region access, and is silent otherwise. The
-// fabric raises bus_fault when no slave claims an access; this device just
-// declines to claim what it does not back. (The storage is region-compressed —
+// fabric faults an access no slave claims; this device just declines to
+// claim what it does not back. (The storage is region-compressed —
 // two REGION_WORDS arrays — so the backed extent equals REGION_WORDS per
 // region, with nothing aliased in: an out-of-region address is unclaimed, not
 // wrapped.)
 //
-// Bus contract (the registered-read device rule, hw/CLAUDE.md): a claimed read
-// asserts o_busy for one cycle while the registered read settles, then presents
-// the data on the busy-drop cycle and holds it (the access_pending pattern).
-// Writes are byte-enabled, complete in the cycle they are presented (o_busy
-// stays low), and are dropped — and flagged in sim — when aimed at the ROM
-// region.
+// Bus contract: a simple device (bus_device_simple). A claimed access
+// resolves in its first cycle — a read captures its word, a byte-enabled
+// write commits — and is acknowledged in the next. A write aimed at the ROM
+// region is claimed and acknowledged but not stored.
 
 // verilator lint_off UNUSEDSIGNAL
 
@@ -43,7 +41,7 @@ module unified_bus_mem
     input  logic        i_re,
     input  logic        i_we,
     output logic [31:0] o_rdata,
-    output logic        o_busy,
+    output logic        o_ack,
     output logic        o_claimed   // this slave backs i_addr (combinational decode)
 );
 
@@ -91,25 +89,28 @@ module unified_bus_mem
     assign offset = i_addr - (i_addr[31] ? ROM_BASE : RAM_BASE);
     assign idx    = {i_addr[31], offset[IDX_W+1:2]};
 
-    // ── Read: registered, 1-cycle busy (access_pending pattern) ──
-    // Only a claimed read responds; an unclaimed read leaves o_busy low and
-    // the fabric's no-slave fault completes it.
-    logic access_pending;
-    assign o_busy = i_re && o_claimed && !access_pending;
+    // ── Bus handshake: only a claimed access is answered ──
+    // An unclaimed one is left for the fabric's no-device responder.
+    logic bus_read, bus_write;
 
-    always_ff @(posedge i_clk) begin
-        if (i_rst) begin
-            access_pending <= 1'b0;
-        end else begin
-            access_pending <= o_busy;      // the launched read completes next cycle
-            if (o_busy)
-                o_rdata <= mem[idx];
-        end
-    end
+    bus_device_simple u_bus (
+        .i_clk   (i_clk),
+        .i_rst   (i_rst),
+        .i_re    (i_re && o_claimed),
+        .i_we    (i_we && o_claimed),
+        .o_read  (bus_read),
+        .o_write (bus_write),
+        .o_ack   (o_ack)
+    );
 
-    // ── Write: byte-enabled, single-cycle, claimed RAM region only ───────
+    // ── Read: captured in the first cycle, presented in the ack cycle ──
+    always_ff @(posedge i_clk)
+        if (bus_read)
+            o_rdata <= mem[idx];
+
+    // ── Write: byte-enabled, claimed RAM region only ───────
     always_ff @(posedge i_clk) begin
-        if (i_we && ram_hit) begin
+        if (bus_write && ram_hit) begin
             if (i_byte_en[0]) mem[idx][ 7: 0] <= i_wdata[ 7: 0];
             if (i_byte_en[1]) mem[idx][15: 8] <= i_wdata[15: 8];
             if (i_byte_en[2]) mem[idx][23:16] <= i_wdata[23:16];

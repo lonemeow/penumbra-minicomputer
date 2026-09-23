@@ -41,8 +41,8 @@ module sim_uart
     input  logic [31:0] i_wdata,    // Write data (uses [7:0])
     input  logic        i_we,       // Write enable
     input  logic        i_re,       // Read enable
-    output logic [31:0] o_rdata,    // Read data (1-cycle latency)
-    output logic        o_busy,     // Access in progress (for STALL)
+    output logic [31:0] o_rdata,    // Read data, valid in the ack cycle
+    output logic        o_ack,
 
     // ── TX output (directly accessible by testbench) ────────
     output logic        o_tx_valid, // Pulses for 1 cycle on THR write
@@ -77,24 +77,21 @@ module sim_uart
     assign dlab = lcr[7];
 
     // ══════════════════════════════════════════════════════════
-    // Bus protocol — 1-cycle read latency
+    // Bus protocol — a simple device: every access resolves in its
+    // first cycle (bus_read / bus_write), acknowledged the next.
+    // Every side effect keys on these, never on the held strobes.
     // ══════════════════════════════════════════════════════════
-    logic access_pending;
+    logic bus_read, bus_write;
 
-    always_ff @(posedge i_clk) begin
-        if (i_rst)
-            access_pending <= 1'b0;
-        else if (i_re && !access_pending)
-            access_pending <= 1'b1;
-        else
-            access_pending <= 1'b0;
-    end
-
-    assign o_busy = i_re && !access_pending;
-
-    // Side-effect pulse: fires only on the first cycle of a read
-    logic read_first;
-    assign read_first = i_re && !access_pending;
+    bus_device_simple u_bus (
+        .i_clk   (i_clk),
+        .i_rst   (i_rst),
+        .i_re    (i_re),
+        .i_we    (i_we),
+        .o_read  (bus_read),
+        .o_write (bus_write),
+        .o_ack   (o_ack)
+    );
 
     // ══════════════════════════════════════════════════════════
     // TX busy counter — simulates baud-rate delay
@@ -163,9 +160,9 @@ module sim_uart
         endcase
     end
 
-    // Registered read data (1-cycle latency)
+    // Registered read data, presented in the ack cycle
     always_ff @(posedge i_clk) begin
-        if (i_re)
+        if (bus_read)
             o_rdata <= {24'b0, rdata_byte};
     end
 
@@ -176,7 +173,7 @@ module sim_uart
     // the counter reaches 1 (byte "transmitted"). THRE/TEMT in
     // LSR reflect tx_ready (counter == 0).
     logic thr_write;
-    assign thr_write = i_we && !dlab && (reg_sel == 3'd0);
+    assign thr_write = bus_write && !dlab && (reg_sel == 3'd0);
 
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
@@ -203,7 +200,7 @@ module sim_uart
     // UART accepts when holding register is empty.
     // Reading RBR (DLAB=0, reg 0) clears rx_ready.
     logic rbr_read;
-    assign rbr_read = read_first && !dlab && (reg_sel == 3'd0);
+    assign rbr_read = bus_read && !dlab && (reg_sel == 3'd0);
     assign o_rx_ack = i_rx_valid && !rx_ready;
 
     always_ff @(posedge i_clk) begin
@@ -230,7 +227,7 @@ module sim_uart
     assign tx_complete = (tx_busy == 16'd1);  // Will be 0 next cycle
 
     logic iir_read_thre;
-    assign iir_read_thre = read_first && (reg_sel == 3'd2) && !irq_rx && irq_tx;
+    assign iir_read_thre = bus_read && (reg_sel == 3'd2) && !irq_rx && irq_tx;
 
     always_ff @(posedge i_clk) begin
         if (i_rst)
@@ -254,7 +251,7 @@ module sim_uart
             scr <= 8'b0;
             dll <= 8'b0;
             dlm <= 8'b0;
-        end else if (i_we) begin
+        end else if (bus_write) begin
             case (reg_sel)
                 3'd0: if (dlab) dll <= i_wdata[7:0];
                       // THR write handled in TX logic

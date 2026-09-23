@@ -77,7 +77,7 @@ module ulx3s_penumbra2_probe_top (
     logic [31:0] bus_addr, bus_wdata, bus_rdata, mem_rdata;
     logic [3:0]  bus_byte_en;
     logic        bus_re, bus_we, bus_ack, bus_fault;
-    logic        mem_busy, mem_claimed, mem_ack;
+    logic        mem_claimed, mem_ack;
 
     machine_penumbra2 u_machine (
         .i_clk             (clk_25mhz),
@@ -111,13 +111,9 @@ module ulx3s_penumbra2_probe_top (
         .i_re      (bus_re),
         .i_we      (bus_we),
         .o_rdata   (mem_rdata),
-        .o_busy    (mem_busy),
+        .o_ack     (mem_ack),
         .o_claimed (mem_claimed)
     );
-
-    // The memory reports completion as a busy-drop; its ack is its held
-    // strobe on a busy-low cycle.
-    assign mem_ack = (bus_re | bus_we) & mem_claimed & ~mem_busy;
 
     bus_response_fabric #(
         .NUM_SLAVES (1)

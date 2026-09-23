@@ -344,7 +344,8 @@ so a slave never keys a side effect on the bare strobe:
   effect in the `ack` cycle, so the claim moves only once the access
   has completed.
 
-The minimal slave, one wait cycle on every access, needs one flop:
+A *simple device* — one that resolves every access in one cycle —
+needs one flop:
 
 ```systemverilog
 // Pulses the cycle after each access is presented; the strobe seen
@@ -355,7 +356,7 @@ always_ff @(posedge i_clk)
 ```
 
 `strobe & ~ack_q` is then the access's first cycle and `strobe & ack_q`
-its `ack` cycle.  A slave that needs more cycles replaces the flop with
+its `ack` cycle.  A slave whose latency varies replaces the flop with
 its own sequencer, under the same rules.
 
 ### The response fabric

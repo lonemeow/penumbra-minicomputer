@@ -80,7 +80,7 @@ module uart
     input  logic        i_we,
     input  logic        i_re,
     output logic [31:0] o_rdata,
-    output logic        o_busy,
+    output logic        o_ack,
 
     // ── Serial pins ─────────────────────────────────────────
     output logic        o_tx,
@@ -98,6 +98,10 @@ module uart
     // ── Register select from word-aligned address ───────────
     logic [2:0] reg_sel;
     assign reg_sel = i_addr[4:2];
+
+    // One pulse per access, in its first cycle (bus_device_simple below):
+    // every side effect keys on these, never on the held strobes.
+    logic bus_read, bus_write;
 
     // ══════════════════════════════════════════════════════════
     // Internal registers
@@ -132,7 +136,7 @@ module uart
 
     assign fcr_fifo_enable = fcr[0];
     assign fcr_trigger     = fcr[7:6];
-    assign fcr_write       = i_we && (reg_sel == 3'd2);
+    assign fcr_write       = bus_write && (reg_sel == 3'd2);
 
     // The FIFO reset bits self-clear: pulse the flush signal during
     // the FCR write cycle, never stored back into fcr[1] / fcr[2].
@@ -277,23 +281,18 @@ module uart
     end
 
     // ══════════════════════════════════════════════════════════
-    // Bus protocol — 1-cycle read latency (same as sim_uart)
+    // Bus protocol — a simple device: every access resolves in its
+    // first cycle (bus_read / bus_write), acknowledged the next
     // ══════════════════════════════════════════════════════════
-    logic access_pending;
-
-    always_ff @(posedge i_clk) begin
-        if (i_rst)
-            access_pending <= 1'b0;
-        else if (i_re && !access_pending)
-            access_pending <= 1'b1;
-        else
-            access_pending <= 1'b0;
-    end
-
-    assign o_busy = i_re && !access_pending;
-
-    logic read_first;
-    assign read_first = i_re && !access_pending;
+    bus_device_simple u_bus (
+        .i_clk   (i_clk),
+        .i_rst   (i_rst),
+        .i_re    (i_re),
+        .i_we    (i_we),
+        .o_read  (bus_read),
+        .o_write (bus_write),
+        .o_ack   (o_ack)
+    );
 
     // ══════════════════════════════════════════════════════════
     // TX shift register
@@ -305,7 +304,7 @@ module uart
 
     // THR write detection
     logic thr_write;
-    assign thr_write = i_we && !dlab && (reg_sel == 3'd0);
+    assign thr_write = bus_write && !dlab && (reg_sel == 3'd0);
 
     // FIFO mode: THR writes push into tx_fifo (when not full).  Bypass
     // mode: THR write loads the shift register directly when idle.
@@ -375,12 +374,12 @@ module uart
 
     // RBR read detection (clears rx_ready)
     logic rbr_read;
-    assign rbr_read = read_first && !dlab && (reg_sel == 3'd0);
+    assign rbr_read = bus_read && !dlab && (reg_sel == 3'd0);
 
     // LSR read detection (clears the sticky rx_break / LSR.BI bit
     // per the standard 16450 "read-to-clear" convention).
     logic lsr_read;
-    assign lsr_read = read_first && (reg_sel == 3'd5);
+    assign lsr_read = bus_read && (reg_sel == 3'd5);
 
     logic [3:0]  rx_sample_cnt;
     logic [2:0]  rx_bit_idx;
@@ -592,7 +591,7 @@ module uart
     assign thre_rise = thre_bit && !thre_state_q;
 
     logic iir_read_thre;
-    assign iir_read_thre = read_first && (reg_sel == 3'd2)
+    assign iir_read_thre = bus_read && (reg_sel == 3'd2)
                            && !irq_rx && !irq_timeout && irq_tx;
 
     always_ff @(posedge i_clk) begin
@@ -628,7 +627,7 @@ module uart
     end
 
     always_ff @(posedge i_clk) begin
-        if (i_re)
+        if (bus_read)
             o_rdata <= {24'b0, rdata_byte};
     end
 
@@ -644,7 +643,7 @@ module uart
             fcr <= 8'd0;
             dll <= DEFAULT_DIVISOR[7:0];
             dlm <= DEFAULT_DIVISOR[15:8];
-        end else if (i_we) begin
+        end else if (bus_write) begin
             case (reg_sel)
                 3'd0: if (dlab) dll <= i_wdata[7:0];
                       // THR write handled in TX logic

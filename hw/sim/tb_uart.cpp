@@ -35,18 +35,26 @@ static void reset(Vuart* d) {
 }
 
 /*
- * Read one of the 8 UART registers.  The bus has a registered
- * read path: i_re=1 + access_pending=0 latches o_rdata on the
- * first posedge; on the next cycle the FSM clears access_pending.
- * read_reg() returns after both edges so o_rdata is settled.
+ * The UART is a simple bus device: it resolves an access in its first
+ * cycle and acknowledges it in the next, and the master holds its
+ * strobe through that ack cycle.
  */
+static void expect_ack(Vuart* d, const char* what) {
+    tests++;
+    if (!d->o_ack) {
+        errors++;
+        printf("  FAIL: no ack in the cycle after a %s\n", what);
+    }
+}
+
 static uint8_t read_reg(Vuart* d, int reg) {
     d->i_addr = (uint32_t)reg << 2;
     d->i_re = 1;
-    tick(d);                       /* latches read, processes read-clear */
+    tick(d);                       /* first cycle: capture + read-clear */
+    expect_ack(d, "read");
     uint8_t v = (uint8_t)d->o_rdata;
+    tick(d);                       /* ack cycle, strobe held */
     d->i_re = 0;
-    tick(d);                       /* clears access_pending */
     return v;
 }
 
@@ -54,7 +62,9 @@ static void write_reg(Vuart* d, int reg, uint8_t val) {
     d->i_addr  = (uint32_t)reg << 2;
     d->i_wdata = val;
     d->i_we    = 1;
-    tick(d);
+    tick(d);                       /* first cycle: commit */
+    expect_ack(d, "write");
+    tick(d);                       /* ack cycle, strobe held */
     d->i_we    = 0;
     d->i_wdata = 0;
 }

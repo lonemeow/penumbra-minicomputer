@@ -1023,6 +1023,7 @@ FPGA_SRC_ulx3s_penumbra1_top = $(SRC_COMMON) $(SRC_CORE_penumbra1) \
 FPGA_SRC_ulx3s_penumbra2_probe_top = $(SRC_COMMON) $(SRC_CORE) \
                                      $(SRC_MACHINE_penumbra2) \
                                      hw/rtl/soc/bus_response_fabric.sv \
+                                     hw/rtl/soc/bus_device_simple.sv \
                                      hw/rtl/sim/unified_bus_mem.sv \
                                      $(FPGA_RTL)/ulx3s/ulx3s_penumbra2_probe_top.sv
 

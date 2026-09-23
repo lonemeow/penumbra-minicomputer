@@ -523,7 +523,7 @@ module ulx3s_penumbra2_top (
     // ── Boot ROM ────────────────────────────────────────────
     logic        rom_sel;
     logic [31:0] rom_rdata_raw;
-    logic        rom_busy_raw;
+    logic        rom_ack;
 
     bus_devsel #(.BASE(ROM_BASE), .SIZE(32'(ROM_WORDS * 4)))
         u_rom_sel (.i_addr(mem_addr), .o_sel(rom_sel));
@@ -533,14 +533,15 @@ module ulx3s_penumbra2_top (
         .i_rst     (rst),
         .i_addr    (mem_addr),
         .i_re      (mem_re & rom_sel),
+        .i_we      (mem_we & rom_sel),
         .o_rdata   (rom_rdata_raw),
-        .o_busy    (rom_busy_raw)
+        .o_ack     (rom_ack)
     );
 
     // ── UART ────────────────────────────────────────────────
     logic        uart_sel;
     logic [31:0] uart_rdata_raw;
-    logic        uart_busy_raw;
+    logic        uart_ack;
 
     bus_devsel #(.BASE(UART_BASE), .SIZE(32'd4096))
         u_uart_sel (.i_addr(mem_addr), .o_sel(uart_sel));
@@ -555,7 +556,7 @@ module ulx3s_penumbra2_top (
         .i_we    (mem_we & uart_sel),
         .i_re    (mem_re & uart_sel),
         .o_rdata (uart_rdata_raw),
-        .o_busy  (uart_busy_raw),
+        .o_ack   (uart_ack),
         .o_tx    (ftdi_rxd),
         .i_rx    (ftdi_txd),
         .o_irq   (uart_irq)
@@ -941,8 +942,9 @@ module ulx3s_penumbra2_top (
 
     // ── Bus response fabric ─────────────────────────────────
     // One slot per slave: its select (its own decode), its ack and
-    // its read data. The slaves report completion as a busy-drop, so
-    // each ack is the slave's held strobe on a busy-low cycle.
+    // its read data. RAM and the autoconfig devices report completion
+    // as a busy-drop, so their acks are the slave's held strobe on a
+    // busy-low cycle.
     localparam int SLV_RAM   = 0;
     localparam int SLV_ROM   = 1;
     localparam int SLV_UART  = 2;
@@ -964,11 +966,11 @@ module ulx3s_penumbra2_top (
     assign slv_rdata[SLV_RAM]   = ram_rdata_raw;
 
     assign slv_sel[SLV_ROM]     = rom_sel;
-    assign slv_ack[SLV_ROM]     = mem_strobe & rom_sel & ~rom_busy_raw;
+    assign slv_ack[SLV_ROM]     = rom_ack;
     assign slv_rdata[SLV_ROM]   = rom_rdata_raw;
 
     assign slv_sel[SLV_UART]    = uart_sel;
-    assign slv_ack[SLV_UART]    = mem_strobe & uart_sel & ~uart_busy_raw;
+    assign slv_ack[SLV_UART]    = uart_ack;
     assign slv_rdata[SLV_UART]  = uart_rdata_raw;
 
     assign slv_sel[SLV_SPI]     = ac_spi_sel;

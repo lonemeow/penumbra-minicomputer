@@ -16,6 +16,8 @@ project-wide conventions and pointers to architectural specs.
   `doc/internals/cpu-bus.md`
 - Bus protocol (signal-level handshake, sync/async forms):
   `doc/hardware/bus-protocol.md`
+- System bus implementation (decode placement, response fabric, device
+  handshake cells): `doc/internals/system-bus.md`
 - ISA-visible behavior (exception priorities, vector numbers, SR bits):
   `doc/system/architecture.md`
 - Sysreg device map: `doc/system/sysregs.md`
@@ -172,6 +174,9 @@ exposed external bus.
   CFG_EN toggle, dynamic base-address decode.
 - `bus_devsel.sv` — combinational address comparator (BASE/SIZE
   parameterized).
+- `bus_device_simple.sv` — the handshake of a simple bus device (every
+  access resolves in one cycle): one-cycle `o_read`/`o_write` pulses to
+  key side effects on, and the registered `o_ack`.
 - `bus_response_fabric.sv` — the system bus's response half, one
   instance per machine top: OR of the slaves' acks, read data gated by
   each slave's own ack, and the no-device responder (ack + bus fault).
@@ -215,7 +220,7 @@ exposed external bus.
 - `machine_penumbra2_sim.sv` — `machine_penumbra2` + `unified_bus_mem`:
   the gen2 program-runner wrapper (`make test CORE=penumbra2`).
 - `unified_bus_mem.sv` — bus-shaped unified ROM/RAM device (region-
-  compressed map, registered read with 1-cycle busy, `+rom_hex=`).
+  compressed map, simple bus device, `+rom_hex=`).
 - `unified_mem.sv` — dual-port flat stand-in for core-level bring-up
   (registered read, no busy; the machine made it spare).
 - `machine_sim.sv` — `cpu_core` + `boot_rom` + `simple_mem` +
@@ -320,17 +325,18 @@ method in that doc's "Measuring" section rather than re-deriving from
 the RTL; if a change can't be measured yet, mark the figure as inferred
 there.
 
-### Device `o_busy` contract (registered-read devices)
-The CPU's STALL sequencer exits and latches `mem_rdata` on the cycle
-when `o_busy` drops. **Any device with registered read output
-(1+ cycle latency) must assert `o_busy` for at least one cycle on
-reads** — otherwise data is not valid when busy clears, and the CPU
-latches stale/zero.
+### Device bus contract (`o_ack`)
+A bus device completes each access with a registered one-cycle
+`o_ack`, never in the cycle the access is presented
+(`doc/hardware/bus-protocol.md`, "Slave obligations"). **The master
+holds its strobe through the ack cycle, so a device never keys a side
+effect on the bare `i_re`/`i_we`** — a held write would commit twice,
+a held FIFO read would pop twice.
 
-Use the `access_pending` pattern from `sim_uart.sv`:
-`o_busy = i_re && !access_pending`. A device that reports
-`o_busy = 0` immediately while having registered read data caused a
-real bug in `sim_spi.sv`.
+A device that resolves every access in one cycle instantiates
+`soc/bus_device_simple.sv` and keys every side effect on its
+`o_read`/`o_write` pulses (see `uart.sv`). A device whose latency
+varies (the SDRAM adapter) raises its own ack under the same rules.
 
 ### Memory bus
 - STALL-based load/store: same microcode regardless of memory

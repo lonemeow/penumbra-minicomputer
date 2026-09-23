@@ -1,8 +1,8 @@
 // Penumbra Boot ROM — read-only memory for simulation
 //
 // Parameterizable size, word-addressed. Loads program.hex at init.
-// Synchronous read with 1-cycle latency (same protocol as simple_mem).
-// Read-only: writes are silently ignored.
+// A simple bus device: synchronous read, acknowledged one cycle after
+// presentation. Read-only: writes are acknowledged and ignored.
 //
 // In the real SoC this would be replaced by actual ROM/flash
 // containing the bootloader.
@@ -19,8 +19,9 @@ module boot_rom
     input  logic        i_rst,
     input  logic [31:0] i_addr,     // Byte address (lower bits used)
     input  logic        i_re,       // Read enable
-    output logic [31:0] o_rdata,    // Read data (1-cycle latency)
-    output logic        o_busy      // Access in progress (for STALL)
+    input  logic        i_we,       // Write enable (acknowledged, ignored)
+    output logic [31:0] o_rdata,    // Read data, valid in the ack cycle
+    output logic        o_ack
 );
 
     localparam ADDR_BITS = $clog2(ROM_WORDS);
@@ -57,19 +58,20 @@ module boot_rom
     end
     assign o_rdata = rdata_reg;
 
-    // ── Busy signal (same protocol as simple_mem) ──────────
-    logic access_pending;
-
-    always_ff @(posedge i_clk) begin
-        if (i_rst)
-            access_pending <= 1'b0;
-        else if (i_re && !access_pending)
-            access_pending <= 1'b1;
-        else
-            access_pending <= 1'b0;
-    end
-
-    assign o_busy = i_re && !access_pending;
+    // ── Bus handshake ──────────────────────────────────────
+    // The ROM reads every cycle and ignores writes, so it needs only
+    // the ack.
+    bus_device_simple u_bus (
+        .i_clk   (i_clk),
+        .i_rst   (i_rst),
+        .i_re    (i_re),
+        .i_we    (i_we),
+        /* verilator lint_off PINCONNECTEMPTY */
+        .o_read  (),
+        .o_write (),
+        /* verilator lint_on PINCONNECTEMPTY */
+        .o_ack   (o_ack)
+    );
 
 endmodule
 

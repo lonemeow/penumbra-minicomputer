@@ -92,7 +92,7 @@ module machine_penumbra2_sim
     // by the full v2 SDRAM stack (sdram_sim) and the ROM region by boot_rom, so
     // — unlike the old single compressed memory — each owns its own decode.
     logic [31:0] ram_rdata, rom_rdata, uart_rdata;
-    logic        ram_busy, rom_busy, uart_busy, uart_irq;
+    logic        ram_busy, rom_ack, uart_ack, uart_irq;
     logic        ram_sel, rom_sel, uart_sel;
     logic        irq_combined;
 
@@ -162,8 +162,9 @@ module machine_penumbra2_sim
 
     // ── Bus response fabric ─────────────────────────────────
     // One slot per slave: its select (its own decode), its ack and
-    // its read data. The slaves report completion as a busy-drop, so
-    // each ack is the slave's held strobe on a busy-low cycle.
+    // its read data. RAM and the autoconfig device report completion
+    // as a busy-drop, so their acks are the slave's held strobe on a
+    // busy-low cycle.
     localparam int SLV_RAM  = 0;
     localparam int SLV_ROM  = 1;
     localparam int SLV_UART = 2;
@@ -182,11 +183,11 @@ module machine_penumbra2_sim
     assign slv_rdata[SLV_RAM]  = ram_rdata;
 
     assign slv_sel[SLV_ROM]    = rom_sel;
-    assign slv_ack[SLV_ROM]    = bus_strobe & rom_sel & ~rom_busy;
+    assign slv_ack[SLV_ROM]    = rom_ack;
     assign slv_rdata[SLV_ROM]  = rom_rdata;
 
     assign slv_sel[SLV_UART]   = uart_sel;
-    assign slv_ack[SLV_UART]   = bus_strobe & uart_sel & ~uart_busy;
+    assign slv_ack[SLV_UART]   = uart_ack;
     assign slv_rdata[SLV_UART] = uart_rdata;
 
     assign slv_sel[SLV_SPI]    = ac_spi_sel;
@@ -220,8 +221,8 @@ module machine_penumbra2_sim
     // ── Boot ROM: holds the +rom_hex program at ROM_BASE (0xFFFF_0000).
     boot_rom #(.ROM_WORDS(ROM_WORDS)) u_rom (
         .i_clk(i_clk), .i_rst(i_rst),
-        .i_addr(bus_addr), .i_re(bus_re & rom_sel),
-        .o_rdata(rom_rdata), .o_busy(rom_busy)
+        .i_addr(bus_addr), .i_re(bus_re & rom_sel), .i_we(bus_we & rom_sel),
+        .o_rdata(rom_rdata), .o_ack(rom_ack)
     );
 
     // Sim UART (NS16450, no FIFO). Its TX/RX byte stream is brought to the top.
@@ -229,7 +230,7 @@ module machine_penumbra2_sim
         .i_clk(i_clk), .i_rst(i_rst),
         .i_addr(bus_addr), .i_wdata(bus_wdata),
         .i_we(bus_we & uart_sel), .i_re(bus_re & uart_sel),
-        .o_rdata(uart_rdata), .o_busy(uart_busy),
+        .o_rdata(uart_rdata), .o_ack(uart_ack),
         .o_tx_valid(o_uart_tx_valid), .o_tx_data(o_uart_tx_data),
         .i_rx_valid(i_uart_rx_valid), .i_rx_data(i_uart_rx_data),
         .o_rx_ack(o_uart_rx_ack),
