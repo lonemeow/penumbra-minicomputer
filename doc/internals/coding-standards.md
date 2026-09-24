@@ -78,6 +78,44 @@ Prefix all module ports to distinguish them from internal signals:
   Vivado alike; its header documents the interface. Assertions about
   behavior during simulation (`assert property`, asserts in `always`
   blocks) stay assertions: they are simulation-only by intent.
+- **Memories map the same way under yosys and Vivado.** Every memory
+  (an unpacked array indexed by a variable) declares its storage with
+  an attribute both tools read: `(* ram_style = "block" *)`,
+  `"distributed"` (LUT RAM) or `"registers"`, and
+  `(* rom_style = "block" *)` for a ROM. yosys fails a build whose
+  attribute it cannot honor; Vivado only warns and falls back to other
+  storage, so the xc7 signoff gates (`hw/tools/vivado/gates.tcl`) fail
+  on those warnings. The declaration only helps if the code is written
+  in a form both tools map:
+    - **Block RAM:** one memory variable per independently addressed
+      array, such as one per cache way, never a `[ways][sets]` array.
+      At most two ports, and each write port is a single write
+      statement: when several sources share it, their address, data
+      and byte lanes are chosen before the write. The write sits in an
+      `always_ff` with no reset (resets belong to control state, not to
+      the array), and the read is registered. yosys merges several
+      write sites or packs a 2-D array into one block RAM by itself;
+      Vivado builds either from flip-flops or LUT RAM instead.
+    - **LUT RAM:** one write port; the read may be combinational. A
+      second independent read port gets its own copy of the memory, as
+      the regfile's `regs_a`/`regs_b` do.
+    - **Registers:** arrays that need a reset, or whose every entry is
+      read at once (PLRU state, valid vectors, the pinned TLB).
+
+  ```systemverilog
+  (* ram_style = "block" *) logic [31:0] mem [DEPTH];
+
+  always_ff @(posedge i_clk) begin
+      if (rd_en)
+          rdata_q <= mem[rd_addr];
+      if (wr_en) begin
+          if (wr_be[0]) mem[wr_addr][ 7: 0] <= wr_data[ 7: 0];
+          if (wr_be[1]) mem[wr_addr][15: 8] <= wr_data[15: 8];
+          if (wr_be[2]) mem[wr_addr][23:16] <= wr_data[23:16];
+          if (wr_be[3]) mem[wr_addr][31:24] <= wr_data[31:24];
+      end
+  end
+  ```
 - **Lint Offsets:** If a specific lint warning must be suppressed, use the Verilator inline comments:
   ```systemverilog
   /* verilator lint_off UNUSEDSIGNAL */

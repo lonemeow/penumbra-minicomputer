@@ -84,6 +84,9 @@ gotchas) for working inside a subtree:
 - Comments explain *why*, never restate *what*, and are non-temporal (no
   "changed from…"/history — git holds that).
 - Module instances: one parameter and one port per line (minimizes diff churn).
+- Every memory declares its storage (`ram_style`/`rom_style`) and is
+  written in a form both yosys and Vivado map the same way; the forms
+  are in the coding standards ("Toolchain Compatibility").
 - Full RTL style guide: `doc/internals/coding-standards.md`.
 
 ### Naming: hardware vs software terminology

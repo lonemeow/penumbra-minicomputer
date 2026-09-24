@@ -701,36 +701,27 @@ since one seed says nothing about placement.
 
 ## Hardware: memories must map the same way under yosys and Vivado
 
-One RTL source feeds both FPGA flows, so a memory has to map to the
-same kind of storage under yosys (ECP5) and Vivado (Artix-7). The
-gen2 L1 and L2 caches did not, which cost the Nexys machine five
-times its logic and a fifth of its fmax; d4831a2 and b809191 fixed
-them. What is left:
+One RTL source feeds both FPGA flows, so every memory declares its
+storage and is written in a form both yosys and Vivado map alike
+(coding standards, "Toolchain Compatibility"); yosys fails a build
+that breaks the declaration and the Vivado signoff gate does the
+same. The gen2 caches, the gate and the declarations landed in
+2920dbc, fe677f1, 92de501 and 08ed166. What is left:
 
-- Enforcement. yosys fails a build whose `ram_style` it cannot honor
-  (`no valid mapping found`); Vivado warns and falls back (`Synth
-  8-6849` "infeasible attribute", `8-7186` "attribute ignored"). A
-  signoff gate on those two messages in `hw/tools/vivado/gates.tcl`
-  would hold Vivado to the declared mapping as well.
-- Declared intent. Only an attribute makes a mismatch detectable;
-  memories without one are free to differ. The SPI FIFOs (512×8) do
-  today: block RAM under yosys, LUT RAM under Vivado. Every memory of
-  any size should carry `ram_style` `"block"`, `"distributed"` or
-  `"registers"` (all three mean the same in both tools).
-- The portable forms, written down in
-  `doc/internals/coding-standards.md`: one memory per way rather than
-  a `[ways][sets]` array; each write port a single write statement,
-  its address, data and byte lanes chosen beforehand, in a process
-  with no reset; a registered read for block RAM.
+- `spi_fifo` reads its head entry combinationally, so it can only be
+  LUT RAM as written; its 512-deep SPI instances map to block RAM
+  under yosys and LUT RAM under Vivado. It is to become block RAM
+  under both, read one entry ahead with a bypass for a same-cycle
+  write.
+- The SDRAM CDC's slot arrays stay undeclared on purpose while the
+  ECP5-side crossing is being reworked; `slot_we` maps to flip-flops
+  under yosys and LUT RAM under Vivado.
 - gen3's `penumbra3_tlb_store` declares `vpn_mem` and `pte_mem` as
   `[WAYS][SETS]` arrays written at `[i_wr_way]` from the process that
-  resets `valid_q`: the L2 tags' shape, so Vivado will build them
-  from flip-flops. gen3's L1 and L2, next on its build list (this
-  file, "gen3 (Penumbra/3) Phase-1 build status"), are cheaper written
-  in the portable forms from the start than recoded after.
-- The L2 valid bits now take one RAMB18 per way under Vivado for 1K
-  bits; LUT RAM would hold them in 16 LUTs a way on the Artix-7,
-  against an ECP5 block RAM each today.
+  resets `valid_q`: the old L2 tags' shape, which Vivado builds from
+  flip-flops. gen3's L1 and L2, next on its build list (this file,
+  "gen3 (Penumbra/3) Phase-1 build status"), are cheaper written in
+  the portable forms from the start than recoded after.
 
 ## Ruled out
 
