@@ -699,6 +699,50 @@ rather than the bare-core probe.  If it costs clock it is not a lever,
 and that is the expected answer.  A seed sweep is needed either way,
 since one seed says nothing about placement.
 
+## Hardware: gen2 caches build from fabric under Vivado
+
+On the Nexys Video (Vivado 2025.2, XC7A200T-1), the gen2.5 machine's
+large memories do not map to block RAM, although the same RTL does
+under yosys on the ECP5 (the machine could not fit an ECP5-85F
+otherwise). Vivado's synthesis mapping report for
+`nexysvideo_penumbra2_5_top`:
+
+| Memory | Mapped to |
+|--------|-----------|
+| L2 data, 4 × 4K×32 (`l2_cache`, `g_data[*].mem`) | distributed RAM, 1408 `RAM64M` each |
+| L2 valid bits, 4 × 1K×1 | distributed RAM |
+| L2 tags | flip-flops (`tags_reg[way][set][bit]`), no memory inferred |
+| L1 I and D data, 2 ways × 512×32 each (`cache_bram_vipt`) | distributed RAM, 176 `RAM64M` each |
+
+The machine takes 67k LUTs (25k of them as memory) and 83k
+flip-flops, half the part. Its critical path runs from the L2 FSM
+state to the tag flops' clock enable: one LUT and 22.7 ns of routing,
+for an fmax of 41.9 MHz (place and route at Explore). That meets the
+37.5 MHz bring-up clock, but it stands between the Nexys and a faster
+gen2.x, which is one of the port's goals.
+
+One source has to infer block RAM under both yosys and Vivado; a
+cache written twice, once per tool, would split the machine the two
+boards share, so an array that cannot be written portably is a
+blocker for the port, not a tuning item. Vivado's own reasons (sv2v
+keeps every `ram_style` attribute, so these are pattern problems):
+
+- tags, `Synth 8-7186` ("not inferred as ram due to incorrect
+  usage"): the 2-D `tags[NUM_WAYS][NUM_SETS]` array, read for every
+  way at once, is split element by element. The data array already
+  avoids the same problem under yosys with one generated memory per
+  way (the comment at `g_data`); the tags never got that split.
+- data, `Synth 8-6849` ("infeasible attribute ram_style = block"):
+  one process holds a read at `i_addr` and two writes at different
+  addresses (the fill beat and the store-hit update), which Vivado
+  counts as three ports. yosys merges the two exclusive writes into
+  one port; muxing address, data and byte enables before a single
+  write is the form both tools map to a simple dual-port block RAM.
+
+Open: recode the L2 tag and data arrays, then the L1s', in those
+forms; confirm both mapping reports; re-check ULX3S timing, which
+the change moves.
+
 ## Ruled out
 
 - **Partial-line delivery for fills.**  Critical-word-first burst
