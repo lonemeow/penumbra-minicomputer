@@ -304,7 +304,11 @@ bitstream anyway. The routed design gets a bitstream only when:
 - `report_cdc` finds no unsafe or unknown crossing and no synchronizer
   flop without `ASYNC_REG`;
 - methodology and DRC checks find nothing at critical-warning severity
-  or above, and the run logs no critical warning at all.
+  or above, and the run logs no critical warning at all;
+- every memory is built the way its `ram_style` declares. yosys fails
+  a build it cannot honor; Vivado only warns and falls back to another
+  kind of storage, so without this gate the same RTL could map
+  differently on the two families.
 
 The timing floor is zero slack. Vivado times setup at the slow corner
 (85 °C, minimum voltage) and hold at the fast one, with each clock's
