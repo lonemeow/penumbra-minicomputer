@@ -50,7 +50,12 @@ VERILATOR_FLAGS = $(VERILATOR_BASE_FLAGS) $(if $(CORE_SUB),-Ihw/rtl/$(CORE) )$(V
 # the session selects: a variant fork on the include path would shadow
 # the submodules a base module instantiates. A variant's own module
 # tests name its directory first themselves (test-modules-variant).
-VERILATOR_MODULE_FLAGS = $(VERILATOR_BASE_FLAGS) $(VERILATOR_INCLUDES)
+#
+# A board top under test instantiates vendor primitives, which the lint
+# stubs stand in for; as a -v library file, a stub file's modules only
+# elaborate where something instantiates them.
+VERILATOR_BOARD_LIBS   = -Ihw/rtl/fpga/nexysvideo -v hw/rtl/fpga/xc7/xc7_prim.sv
+VERILATOR_MODULE_FLAGS = $(VERILATOR_BASE_FLAGS) $(VERILATOR_INCLUDES) $(VERILATOR_BOARD_LIBS)
 
 BUILD_DIR   = build
 WAVE_DIR    = waves
@@ -289,6 +294,7 @@ MODULE_TESTS = \
     fill_sequencer \
     ecp5_pll_test \
     xc7_mmcm_test \
+    nexysvideo_uart_test_top \
     unified_mem \
     uart \
     busctl \
@@ -1265,6 +1271,15 @@ FPGA_SRC_ulx3s_audio_test_top = hw/rtl/io/audio/audio_sigma_delta.sv \
                                 $(FPGA_RTL)/ecp5_pll_pkg.sv \
                                 $(FPGA_RTL)/ulx3s/ulx3s_audio_test_top.sv
 
+# Nexys Video console bring-up: the shared MMCM and power-on reset in
+# front of a bare serial shifter on the UART port — no CPU or bus, so it
+# is built via the TOP= escape hatch (make fpga TOP=nexysvideo_uart_test_top).
+FPGA_SRC_nexysvideo_uart_test_top = hw/rtl/common/build_check.sv \
+                                    $(FPGA_RTL)/xc7/xc7_mmcm_pkg.sv \
+                                    $(FPGA_RTL)/nexysvideo/nexysvideo_clk_rst.sv \
+                                    $(FPGA_RTL)/nexysvideo/nexysvideo_uart_test_top.sv
+XDC_nexysvideo_uart_test_top = hw/constraints/nexysvideo_uart_test_top.xdc
+
 # Tops that embed the boot ROM and/or microcode: their hex images are
 # generated before synthesis and inlined by inline_hex.py.
 # gen2 embeds the boot ROM (no microcode — the gen2 core is hardwired).
@@ -1380,8 +1395,10 @@ LPF_DESIGN = $(if $(LPF_DESIGN_$(TOP)),$(LPF_DESIGN_$(TOP)),$(LPF_DESIGN_$(TOP_M
 PREPACK_ulx3s_penumbra2_top = hw/constraints/ulx3s_penumbra2_floorplan.py
 PREPACK = $(if $(PREPACK_$(TOP)),$(PREPACK_$(TOP)),$(PREPACK_$(TOP_MODULE)))
 
-# ECP5 primitive stubs — for Verilator lint only, not synthesis.
-FPGA_LINT_STUBS = $(FPGA_RTL)/ecp5_prim.sv
+# Primitive stubs, per device family — for Verilator lint only, not
+# synthesis.
+FPGA_LINT_STUBS     = $(FPGA_RTL)/ecp5_prim.sv
+FPGA_LINT_STUBS_xc7 = $(FPGA_RTL)/xc7/xc7_prim.sv
 
 # Ladder linearity sweep — drives the modulator against a swept model
 # of the board's resistor ladder and reports in-band distortion per
@@ -1401,9 +1418,11 @@ audio-sweep:
 
 .PHONY: fpga flash fpga-lint
 
-# Lint covers every registered top (plus the video bring-up probe)
-# regardless of TOP. Use Verilator --lint-only with ECP5 primitive stubs.
-fpga-lint: $(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_SRC_ulx3s_penumbra2_probe_top) $(FPGA_SRC_ulx3s_penumbra2_top) $(FPGA_SRC_ulx3s_video_test_top) $(FPGA_SRC_ulx3s_audio_test_top) $(FPGA_LINT_STUBS)
+# Lint covers every registered top (plus the bring-up probes)
+# regardless of TOP. Use Verilator --lint-only with each family's
+# primitive stubs.
+fpga-lint: $(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_SRC_ulx3s_penumbra2_probe_top) $(FPGA_SRC_ulx3s_penumbra2_top) $(FPGA_SRC_ulx3s_video_test_top) $(FPGA_SRC_ulx3s_audio_test_top) $(FPGA_LINT_STUBS) \
+           $(FPGA_SRC_nexysvideo_uart_test_top) $(FPGA_LINT_STUBS_xc7)
 	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall -Wno-fatal \
 		-Wno-PINMISSING -Wno-PINCONNECTEMPTY \
 		$(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_LINT_STUBS) --top ulx3s_penumbra1_top
@@ -1419,6 +1438,9 @@ fpga-lint: $(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_SRC_ulx3s_penumbra2_probe_top)
 	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall -Wno-fatal \
 		-Wno-PINMISSING -Wno-PINCONNECTEMPTY \
 		$(FPGA_SRC_ulx3s_audio_test_top) $(FPGA_LINT_STUBS) --top ulx3s_audio_test_top
+	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall -Wno-fatal \
+		-Wno-PINMISSING -Wno-PINCONNECTEMPTY \
+		$(FPGA_SRC_nexysvideo_uart_test_top) $(FPGA_LINT_STUBS_xc7) --top nexysvideo_uart_test_top
 
 fpga: $(BUILD_DIR)/$(TOP).bit
 	@echo "Bitstream: $(BUILD_DIR)/$(TOP).bit$(if $(filter ecp5,$(FPGA_FAMILY)), (PHASE_DEG=$(PHASE_DEG)))"

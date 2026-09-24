@@ -285,6 +285,15 @@ the shared module.
   IF2 tag-compare/way-mux path and the L1↔L2 layer in front of nextpnr
   (`make timing BOARD=ulx3s CORE=penumbra2 VARIANT=probe`), not a
   usable machine.
+- `nexysvideo/nexysvideo_clk_rst.sv` — clocking and power-on reset
+  every Nexys Video top shares: the CPU clock from the 100 MHz
+  oscillator through an MMCM (`xc7_mmcm_pkg`, from `CPU_HZ`), and a
+  reset held at least 10 ms past MMCM lock and CPU RESET release.
+- `nexysvideo/nexysvideo_uart_test_top.sv` — console bring-up top
+  (`make fpga TOP=nexysvideo_uart_test_top`): banner and echo on the
+  UART port, LEDs for lock, reset, a 1 Hz heartbeat, RX activity and
+  framing errors. Constraints in
+  `hw/constraints/nexysvideo_uart_test_top.xdc`.
 
 ## Boot ROM (`rom/`)
 
