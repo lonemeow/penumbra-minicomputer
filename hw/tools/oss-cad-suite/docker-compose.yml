@@ -7,7 +7,6 @@ services:
     privileged: true 
     devices:
       - "/dev/bus/usb:/dev/bus/usb"
-      - "/dev/ttyUSB0:/dev/ttyUSB0"
     environment:
       - PATH=/opt/oss-cad-suite/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     stdin_open: true # docker run -i
