@@ -9,7 +9,7 @@
  *      [DHRY_VBASE, DHRY_VBASE+image_size) window are mapped to
  *      PA = VA - DHRY_VBASE + load_base (the physical address ROM
  *      chose); faults below DHRY_VBASE stay identity-mapped (low
- *      RAM, page-0 vectors, stack); faults at >= 0xFF000000 stay
+ *      RAM, page-0 vectors); faults at >= 0xFF000000 stay
  *      identity-mapped uncached (MMIO).
  *
  * Entry state (from ROM boot command):
@@ -24,7 +24,7 @@
  *   3. Install vector table entries, pin handler page + page 0
  *   4. Enable MMU (image is now reachable at its linked VA)
  *   5. Enable caches
- *   6. Set up stack, call bench_main(bootdata) at fixed VA
+ *   6. Set up the stack (in .bss), call bench_main(bootdata) at fixed VA
  */
 
 /* ── MMU sysregs (device 0) ───────────────────────────────────── */
@@ -58,7 +58,12 @@
 /* ── Fixed addresses ──────────────────────────────────────────── */
 #define HANDLER_PAGE        0x1000
 #define TIMER_BASE_ADDR     0x38         /* accumulated ticks, page 0 */
-#define STACK_TOP           0x00100000   /* 1 MB — identity-mapped */
+
+/* ── Stack ────────────────────────────────────────────────────────
+ * The stack is part of the image's .bss, above DHRY_VBASE, so the ROM
+ * allocates it with the program and the miss handler maps it with the
+ * load bias. */
+#define BENCH_STACK_BYTES   16384
 #define DHRY_VBASE          0x80000000   /* must match dhry.ld */
 
 
@@ -82,7 +87,6 @@
 
 _start:
         mov     r5, r1                  /* save bootdata pointer */
-        li      sp, 0x00080000          /* temp stack at 512 KB (identity-mapped) */
 
         /* r4 = load_bias = runtime(.Lselfaddr) − linktime(.Lselfaddr) */
         mov     r4, pc
@@ -227,7 +231,7 @@ _start:
  * Phase 5: Set stack + call bench_main
  * ═════════════════════════════════════════════════════════════════ */
 
-        li      sp, STACK_TOP
+        li      sp, _bench_stack_top
         mov     r1, r5                  /* bootdata pointer */
         bl      bench_main
         break                           /* halt CPU */
@@ -400,3 +404,11 @@ _rmh_load_bias: .long 0
 _irq_save_r1:   .long 0
 
 _handler_end:
+
+
+/* ── Stack, allocated with the image ─────────────────────────────── */
+        .section .bss.stack,"aw",@nobits
+        .balign 16
+_bench_stack:
+        .space  BENCH_STACK_BYTES
+_bench_stack_top:

@@ -9,9 +9,8 @@
  * non-zero exit count at the end.
  *
  * Test window policy:
- *   • Reserve the first MEMTEST_RESERVED_LO bytes of RAM for our own
- *     code+data+stack (we live there — see bench.ld + crt0.S, stack
- *     at 0x100000 = 1 MB).
+ *   • Start past our own image: code, data and the stack crt0.S puts
+ *     in .bss form one block the ROM allocated, ending at _end.
  *   • Cap the window at MEMTEST_MAX_BYTES so we don't spend hours
  *     walking 32 MB on every pattern by default.  Override with
  *     +full=1 plusarg style, or just edit the constant.
@@ -50,14 +49,6 @@ struct btag_device {
 };
 
 /* ── Test window policy ───────────────────────────────────────── */
-/*
- * STACK_TOP in crt0.S is 0x00100000 (1 MB).  We reserve the entire
- * first 2 MB so there's room for stack growth, .bss, and any
- * unaligned image base the ROM picks (find_memory_region rounds up
- * to a 4 KB page boundary, but we want a comfortable margin).
- */
-#define MEMTEST_RESERVED_LO  (2 * 1024 * 1024)
-
 /*
  * Default test window — small enough that all six patterns finish
  * in a few seconds, large enough to span multiple SDRAM rows
@@ -140,8 +131,18 @@ void bench_main(uint32_t bootdata) {
         return;
     }
 
-    uint32_t lo = ram->base + MEMTEST_RESERVED_LO;
-    uint32_t hi = ram->base + ram->dev_size;
+    /* The window starts at the first page past the program (the image
+     * runs identity-mapped, so _end is a physical address) and runs to
+     * the end of the RAM region. */
+    extern char _end[];
+    uint32_t image_end = ((uint32_t)_end + 4095u) & ~4095u;
+    uint32_t ram_end   = ram->base + ram->dev_size;
+    uint32_t lo = image_end > ram->base ? image_end : ram->base;
+    if (lo >= ram_end) {
+        bench_puts("No RAM past the program to test — abort.\n");
+        return;
+    }
+    uint32_t hi = ram_end;
     if (hi - lo > MEMTEST_MAX_BYTES)
         hi = lo + MEMTEST_MAX_BYTES;
 

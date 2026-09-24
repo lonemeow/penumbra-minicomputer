@@ -10,7 +10,7 @@
  *   2. Copy TLB miss + IRQ handlers to page 0x1000
  *   3. Install vector table entries, pin handler page + page 0
  *   4. Identity-map current code page, enable MMU (for caching)
- *   5. Set up stack, call bench_main(bootdata)
+ *   5. Set up the stack (in .bss), call bench_main(bootdata)
  */
 
 /* ── ELF dynamic section tags ─────────────────────────────────── */
@@ -56,7 +56,11 @@
 /* ── Fixed addresses ──────────────────────────────────────────── */
 #define HANDLER_PAGE        0x1000
 #define TIMER_BASE_ADDR    0x38    /* accumulated ticks, page 0 */
-#define STACK_TOP           0x00100000  /* 1 MB */
+
+/* ── Stack ────────────────────────────────────────────────────────
+ * The stack is part of the image's .bss, so the ROM allocates it with
+ * the rest of the program. */
+#define BENCH_STACK_BYTES   16384
 
 
 /* ═════════════════════════════════════════════════════════════════
@@ -73,7 +77,6 @@
 
 _start:
         mov     r5, r1                  /* save bootdata pointer */
-        li      sp, 0x00080000          /* temp stack at 512 KB */
 
         /* Compute runtime address of _DYNAMIC (PC-relative) */
         mov     r2, pc
@@ -299,7 +302,13 @@ _start:
  * Phase 5: Set stack + call bench_main
  * ═════════════════════════════════════════════════════════════════ */
 
-        li      sp, STACK_TOP
+        /* The stack's top, from a .data slot the relocator patched: a
+         * direct PC-relative reference cannot reach past a large image. */
+        mov     r2, pc
+        add     r2, #8
+        add     r2, #%pcrel(.Laddr_stack_top)
+        ldw     r2, [r2]
+        mov     sp, r2
         mov     r1, r5                  /* bootdata pointer */
         bl      bench_main
         break                           /* halt CPU */
@@ -312,6 +321,8 @@ _start:
         .align  4
 .Ldynamic_linkaddr:
         .long   _DYNAMIC
+.Laddr_stack_top:
+        .long   _bench_stack_top
 .Laddr_handler_start:
         .long   _handler_start
 .Laddr_handler_end:
@@ -480,3 +491,11 @@ _rmh_cached_base:  .long 0
 _rmh_cached_limit: .long 0
 
 _handler_end:
+
+
+/* ── Stack, allocated with the image ─────────────────────────────── */
+        .section .bss.stack,"aw",@nobits
+        .balign 16
+_bench_stack:
+        .space  BENCH_STACK_BYTES
+_bench_stack_top:
