@@ -297,6 +297,7 @@ MODULE_TESTS = \
     ecp5_pll_test \
     xc7_mmcm_test \
     nexysvideo_uart_test_top \
+    onchip_ram \
     unified_mem \
     uart \
     busctl \
