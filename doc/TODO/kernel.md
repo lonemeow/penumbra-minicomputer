@@ -842,6 +842,25 @@ Open: reserve the vector table's page explicitly, and release the
 rest of the RAM below the kernel, which holds nothing the kernel
 reads once bootinfo is copied.
 
+## NetBSD: PENBOOT's stack sits at a fixed address
+
+PENBOOT's `crt0.S` starts the stack at `0xB000`, "just below where
+loader is loaded", and `boot.c` reserves a fixed `0`–`0xC000` for
+"vectors, boot data, CRT stack" before placing its heap and the
+kernel. Neither comes from the boot data, contrary to the handoff
+contract ([boot-protocol.md: ROM to Loaded
+Program](../system/boot-protocol.md#rom-to-loaded-program)). `0xB000`
+is right only by the arithmetic of the ROM's placement: a 35,224-byte
+`PENBOOT.ELF` is read into a scratch buffer at `0x2000`–`0xA998`, and
+the image goes on the next page, `0xB000`, so the stack grows down
+into the dead scratch buffer. A file under 32 KB loads at `0xA000`
+instead, and the stack then starts inside PENBOOT's own image and
+overwrites it as it grows, silently.
+
+Open: give PENBOOT its stack in `.bss`, and reserve only the vector
+table, the boot data (`total_size` bytes at R1) and its own image in
+place of the fixed low range.
+
 ## Ruled out
 
 - **Refill way pick: set bits mixed into the counter bit, or an empty

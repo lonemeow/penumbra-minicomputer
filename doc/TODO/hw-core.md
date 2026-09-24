@@ -718,6 +718,47 @@ same. The gen2 caches, the gate and the declarations landed in
   "gen3 (Penumbra/3) Phase-1 build status"), are cheaper written in
   the portable forms from the start than recoded after.
 
+## Hardware: an L2 CTRL write reroutes an access already on the bus
+
+`l2_cache.sv` chooses between the cache path and pass-through from
+the live `l2_enable` every cycle, including for an access already
+waiting on the bus. A `WRSYS` to `CACHE_CTRL` that lands while a
+pass-through read is outstanding moves that read to the cached path
+mid-flight: the L2 stops driving its strobe in the cycle the device
+acks, against the bus rule that the master holds strobe and address
+through the ack (`doc/hardware/bus-protocol.md`).
+
+The benchmark startups enable the L2 with the L1 I-cache already on,
+so an L1 line fill is streaming through the disabled L2 when the
+write commits. Booting `DHRYSTON.ELF` on the Nexys Video machine top
+in RTL sim trips `bus_device_simple`'s "strobe dropped before its
+ack" in `u_ram` right after the ROM's jump: the read of `0x8210` is
+strobed for one cycle, `l2_enable` rises at that edge, and the strobe
+is gone in the ack cycle. With assertions switched off Dhrystone runs
+correctly, since on-chip RAM's ack simply goes unused, so on the
+Nexys the race stops simulations rather than the hardware. On the
+ULX3S the SDRAM adapter accepts a read the cycle it is strobed and
+has no dropped-strobe check, so the race goes unnoticed there;
+whether its late ack can land as the first beat of the L2's refill
+of the same line, delivering the wrong word when the dropped read was
+not the line's first, is unverified.
+
+Found by reading the same code, not observed: the INVAL_ALL request
+is a one-cycle pulse acted on only in `S_IDLE` with no request in
+stage 1, so one arriving during a line fill or behind a stage-1 read
+is dropped without a trace, and one arriving while a pass-through
+access waits on the bus enters `S_INVAL_ALL` and drops that strobe
+the same way. The L1 (`cache_bram_vipt.sv`) already follows the rule
+the L2 lacks: an access completes on the state it started with,
+whatever a `WRSYS` changes meanwhile.
+
+Open: hold a CTRL write and the INVAL_ALL request pending and apply
+them at the first cycle with nothing in flight (no request in the
+lookup stages, no bus access awaiting its ack), with CTRL reading
+back the pending value. Regressions: an `l2_cache` unit test that
+enables the L2 during a pass-through read and issues INVAL_ALL during
+a fill, and the Dhrystone boot on the Nexys top with assertions on.
+
 ## Ruled out
 
 - **Partial-line delivery for fills.**  Critical-word-first burst
