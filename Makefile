@@ -63,8 +63,10 @@ WAVE_DIR    = waves
 # ── Generic module simulation ──────────────────────────────────
 # Usage: make sim MOD=alu  (expects hw/rtl/**/alu.sv and hw/sim/tb_alu.cpp)
 #        make sim MOD=machine_sim PROG=test_mem TB=tb_cpu_mem
+# PROG replaces the boot ROM's image for that run; without it, boot_rom
+# loads program.hex.
 MOD  ?=
-PROG ?= test_add
+PROG ?=
 TB   ?= tb_$(MOD)
 
 # Shared packages — always included. --top-module tells Verilator which
