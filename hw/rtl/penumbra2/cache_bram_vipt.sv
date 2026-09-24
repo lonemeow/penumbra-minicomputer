@@ -578,20 +578,30 @@ module cache_bram_vipt
             // Data writes: fill-stream beats, or the store-hit local update
             // at resolve (the L1 copy mirrors the write-through immediately;
             // it need not wait on the downstream). The two sites are in
-            // different states, so they share the one write port.
-            logic dwr_fill, dwr_hit;
+            // different states, so they share the one write port, its
+            // address, data and lanes chosen ahead of the single write:
+            // yosys would merge two write sites itself, Vivado would build
+            // the array from LUT RAM instead.
+            logic                          dwr_fill;
+            logic                          dwr_hit;
+            logic [SET_BITS+WORD_BITS-1:0] dwr_idx;
+            logic [31:0]                   dwr_data;
+            logic [3:0]                    dwr_be;
+
             assign dwr_fill = (state == S_FILL) && i_fill_we
                               && (fill_way == WAY_BITS'(gw));
             assign dwr_hit  = wr_hit_resolve && (hit_way == WAY_BITS'(gw));
+            assign dwr_idx  = dwr_fill ? data_idx(fill_set, i_fill_word)
+                                       : data_idx(set_q, word_q);
+            assign dwr_data = dwr_fill ? i_fill_wdata : i_wdata;
+            assign dwr_be   = dwr_fill ? 4'hF : i_byte_en;
 
             always_ff @(posedge i_clk) begin
-                if (dwr_fill) begin
-                    data_mem[data_idx(fill_set, i_fill_word)] <= i_fill_wdata;
-                end else if (dwr_hit) begin
-                    if (i_byte_en[0]) data_mem[data_idx(set_q, word_q)][ 7: 0] <= i_wdata[ 7: 0];
-                    if (i_byte_en[1]) data_mem[data_idx(set_q, word_q)][15: 8] <= i_wdata[15: 8];
-                    if (i_byte_en[2]) data_mem[data_idx(set_q, word_q)][23:16] <= i_wdata[23:16];
-                    if (i_byte_en[3]) data_mem[data_idx(set_q, word_q)][31:24] <= i_wdata[31:24];
+                if (dwr_fill || dwr_hit) begin
+                    if (dwr_be[0]) data_mem[dwr_idx][ 7: 0] <= dwr_data[ 7: 0];
+                    if (dwr_be[1]) data_mem[dwr_idx][15: 8] <= dwr_data[15: 8];
+                    if (dwr_be[2]) data_mem[dwr_idx][23:16] <= dwr_data[23:16];
+                    if (dwr_be[3]) data_mem[dwr_idx][31:24] <= dwr_data[31:24];
                 end
             end
         end
