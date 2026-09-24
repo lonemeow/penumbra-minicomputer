@@ -2,8 +2,9 @@
 //
 // Models a single SDRAM chip on a shared 16-bit DQ bus.  Implements
 // the JEDEC command set used by sdram_ctrl: ACTIVATE, READ, WRITE,
-// PRECHARGE, AUTO_REFRESH, MODE_REGISTER_SET.  Burst length and CAS
-// latency are derived from the mode register written during init.
+// PRECHARGE, AUTO_REFRESH, MODE_REGISTER_SET.  Burst length, write
+// burst mode and CAS latency are derived from the mode register
+// written during init.
 //
 // Storage: associative array keyed by (bank,row,col).  Verilator does
 // not preallocate the full chip — pages are created as written.  This
@@ -57,6 +58,7 @@ module sdram_model
     // ── Mode register (latched on MRS) ─────────────────────
     logic [2:0] mr_bl;
     logic [2:0] mr_cl;
+    logic       mr_wbl;      // 1 = each WRITE commits a single location
 
     // ── Decoded command from chip pins ─────────────────────
     wire [3:0] cmd_in = {i_csn, i_rasn, i_casn, i_wen};
@@ -69,15 +71,20 @@ module sdram_model
     logic [3:0]            rd_lat;
     logic                  rd_auto_pre;
 
-    // ── Write tracking (BL=2 today; extend if BL changes) ──
+    // ── Write tracking ─────────────────────────────────────
     logic                  wr_active;
     logic [BA_BITS-1:0]    wr_bank;
     logic [COL_BITS-1:0]   wr_col;
+    logic [3:0]            wr_beat;
     logic                  wr_auto_pre;
+
+    // A write covers one location per command under write-burst-mode,
+    // otherwise it runs for the programmed burst length.
+    wire [31:0] wr_burst_len = mr_wbl ? 32'd1 : 32'(bl_to_int(mr_bl));
 
     // ── Column offsets within in-flight bursts ─────────────
     wire [COL_BITS-1:0] rd_col_eff = rd_col + COL_BITS'(rd_beat);
-    wire [COL_BITS-1:0] wr_col_p1  = wr_col + COL_BITS'(1);
+    wire [COL_BITS-1:0] wr_col_eff = wr_col + COL_BITS'(wr_beat);
 
     // ── DQ output (combinational from registered state) ────
     logic [DQ_BITS-1:0]    dq_drive;
@@ -108,8 +115,10 @@ module sdram_model
         end
         rd_active   = 0;
         wr_active   = 0;
+        wr_beat     = '0;
         mr_bl       = SDRAM_BL_2;
         mr_cl       = 3'd2;
+        mr_wbl      = 1'b0;
         rd_bank     = '0;
         rd_col      = '0;
         rd_beat     = '0;
@@ -150,19 +159,22 @@ module sdram_model
                 end
             end
 
-            // ── Advance in-flight write (BL=2: one extra beat) ──
+            // ── Advance in-flight write ──────────────────
             if (wr_active) begin
                 if (!i_dqm[0])
                     mem[mem_idx(int'(wr_bank),
                                 int'(bank_row[wr_bank]),
-                                int'(wr_col_p1))][7:0]  <= io_d[7:0];
+                                int'(wr_col_eff))][7:0]  <= io_d[7:0];
                 if (!i_dqm[1])
                     mem[mem_idx(int'(wr_bank),
                                 int'(bank_row[wr_bank]),
-                                int'(wr_col_p1))][15:8] <= io_d[15:8];
-                wr_active <= 1'b0;
-                if (wr_auto_pre)
-                    bank_state[wr_bank] <= B_IDLE;
+                                int'(wr_col_eff))][15:8] <= io_d[15:8];
+                wr_beat <= wr_beat + 4'd1;
+                if (int'(wr_beat) == int'(wr_burst_len) - 1) begin
+                    wr_active <= 1'b0;
+                    if (wr_auto_pre)
+                        bank_state[wr_bank] <= B_IDLE;
+                end
             end
 
             // ── Decode current command ───────────────────
@@ -216,10 +228,12 @@ module sdram_model
                                     int'(bank_row[i_ba]),
                                     int'(i_a[COL_BITS-1:0]))][15:8] <= io_d[15:8];
 
-                    if (mr_bl == SDRAM_BL_2) begin
+                    // Beat 0 landed above; the rest, if any, follow.
+                    if (wr_burst_len > 32'd1) begin
                         wr_active   <= 1'b1;
                         wr_bank     <= i_ba;
                         wr_col      <= i_a[COL_BITS-1:0];
+                        wr_beat     <= 4'd1;
                         wr_auto_pre <= i_a[10];
                     end else if (i_a[10]) begin
                         bank_state[i_ba] <= B_IDLE;
@@ -253,6 +267,7 @@ module sdram_model
                     end
                     mr_bl  <= i_a[2:0];
                     mr_cl  <= i_a[6:4];
+                    mr_wbl <= i_a[9];
                 end
 
                 default: begin

@@ -298,6 +298,7 @@ MODULE_TESTS = \
     audio_multi_test:tb_audio_multi \
     timer \
     sdram_test \
+    sdram_bl8_test:tb_sdram_bl8_test \
     sdram_cdc \
     cache_test:tb_cache \
     cache_vipt_test:tb_cache_vipt \
@@ -1131,9 +1132,9 @@ FPGA_AUDIO_TOPS = ulx3s_audio_test_top
 # AUDIO_CHANNELS, or a new CPU_HZ, whose target reweights nextpnr's
 # per-domain criticality and whose CLK_FREQ retunes every derived
 # divider.
-DEFAULT_SEED_ulx3s_penumbra1_top   := 6
-DEFAULT_SEED_ulx3s_penumbra2_top   := 6
-DEFAULT_SEED_ulx3s_penumbra2_5_top := 12
+DEFAULT_SEED_ulx3s_penumbra1_top   := 0
+DEFAULT_SEED_ulx3s_penumbra2_top   := 3
+DEFAULT_SEED_ulx3s_penumbra2_5_top := 0
 
 
 # BOARD/CORE porcelain → TOP derivation (CORE defaults to penumbra2_5

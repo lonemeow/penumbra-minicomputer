@@ -236,8 +236,12 @@ exposed external bus.
 - `sdram_sim.sv` — wraps `sdram_stack` + `phy_sim` + chip model
   into a `simple_mem`-shaped device.
 - `sdram_test.sv` — DUT wrapper exposing controller req/rsp for
-  `tb_sdram_test`.
+  `tb_sdram_test`; `BURST_LEN` selects the read burst.
+- `sdram_bl8_test.sv` — the same chain at an eight-beat burst, named as
+  its own module because Verilator selects a top rather than a
+  parameter set (`tb_sdram_bl8_test`).
 - `sdram_model.sv` — behavioral SDR DRAM chip (JEDEC command set,
+  burst length and write-burst mode read from the mode register,
   sparse storage, protocol checking).
 - `simple_mem.sv` — parameterizable sync SRAM model (default 16 MB),
   configurable READ_LATENCY/WRITE_LATENCY.

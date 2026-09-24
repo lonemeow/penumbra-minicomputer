@@ -169,7 +169,10 @@ S_IDLE                  Ready for requests
 S_REFRESH               Periodic AUTO REFRESH (preempts IDLE)
 S_ACT                   ACTIVATE issued (or skipped on row hit), waiting T_RCD
 S_RW                    READ/WRITE issued (no auto-precharge — row stays open)
-S_BURST                 Data beats (BL=2)
+S_BURST                 Unreachable — S_RW captures every beat at any
+                        burst length.  Held because dropping it re-encodes
+                        the FSM into more LUT4s than the floorplan corridor
+                        has room for
 S_RECOVER               Wait T_WR after writes (reads return immediately —
                         row stays open)
 S_PRECHARGE_TO_ACT      PRECHARGE issued for row conflict; will ACTIVATE
@@ -236,11 +239,25 @@ adds the trailing `T_RP` term in the worst-case bound above. With
 `open_valid = 0` (no row open), the FSM goes straight to `S_REFRESH`
 and skips this step.
 
+### Read burst length
+
+`BURST_LEN` is the read burst in DQ beats. It sets the mode register's
+burst field, the column alignment a read starts on, and the response
+width, which is `32 * BURST_LEN/2` bits because a 32-bit word is two
+beats on a x16 part. The whole burst arrives as one response, so the
+consumer indexes the word it asked for.
+
+Writes do not scale with it. Above two beats the mode register also
+programs single-location write, so each `WRITE` commits one half-word
+and a word is two consecutive commands — rather than spending the
+remaining beats masking data the CPU never asked to store. At two
+beats that mode earns nothing, since one command plus its second beat
+already costs the same two cycles, so it stays off.
+
 ### Future-proofing parameters (shaped holes, not implementations)
 
 | Parameter | Today's value | Status / future use |
 |-----------|---------------|---------------------|
-| `BURST_LEN` | `2` | BL=8 line buffer (step 7) |
 | `AUTO_PRECHARGE` | (off) | Removed — open-row tracking always active |
 | `OPEN_ROW_TRACKING` | (single-row, on) | Per-bank tracking would extend `open_valid`/`open_row` to arrays of `2^BA_BITS` |
 
@@ -361,7 +378,7 @@ Three-level test pyramid:
 | 5 | Phase-shift sweep build target + bring-up doc | Documented working window | ⚙ in progress |
 | 6 | Open-row tracking + auto-precharge-off (Level 1 of `sdram-optimization.md`) | `tb_sdram_test` cold-vs-hit cycle counts; `_ram_check` + membench unchanged on hardware | ✅ landed |
 | 7 | Layer-pipelining: depth-2 CDC FIFO + speculative `addr+4` prefetch in bus adapter | `tb_sdram_cdc` + `make benchmark-rtl` membench miss-LDW improvement | ✅ landed |
-| 8 | (Later) BL=8 line buffer (Level 2 of `sdram-optimization.md`) | Re-run validation, measure Dhrystone | deferred |
+| 8 | BL=8 line buffer (Level 2 of `sdram-optimization.md`) | `tb_sdram_bl8_test` burst ordering + alignment; adapter line buffer still to come | ⚙ controller done, adapter open |
 
 ### Step 4 wiring notes
 

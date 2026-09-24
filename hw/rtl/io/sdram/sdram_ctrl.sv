@@ -31,6 +31,11 @@ module sdram_ctrl
     parameter int BA_BITS   = 2,
     parameter int DQ_BITS   = 16,
 
+    // Read burst length in DQ beats.  Shapes reads only: a write
+    // issues one command per half-word, so its cost does not move
+    // with this.  See the mode register below.
+    parameter int BURST_LEN = 2,
+
     // ── Timings (cycles) ─────────────────────────────────
     parameter int T_RCD       = 2,
     parameter int T_RP        = 2,
@@ -52,7 +57,14 @@ module sdram_ctrl
     // countdown (cl_cnt) so beat 0 is captured on the cycle the
     // SDRAM-driven data finishes propagating through the input flop.
     parameter int PHY_OUT_LATENCY = 0,
-    parameter int PHY_IN_LATENCY  = 0
+    parameter int PHY_IN_LATENCY  = 0,
+
+    // ── Derived from BURST_LEN; not meant to be overridden ──
+    // A 32-bit word is two DQ beats on a x16 part, so one read burst
+    // answers with BURST_LEN/2 words.
+    parameter int RSP_WORDS = BURST_LEN / 2,
+    parameter int RSP_BITS  = 32 * RSP_WORDS,
+    parameter int BEAT_BITS = $clog2(BURST_LEN)
 )(
     input  logic                  i_clk,
     input  logic                  i_rst,
@@ -66,7 +78,7 @@ module sdram_ctrl
     output logic                  o_req_ready,
 
     output logic                  o_rsp_valid,
-    output logic [31:0]           o_rsp_data,
+    output logic [RSP_BITS-1:0]   o_rsp_data,
     input  logic                  i_rsp_ready,        // unused; consumer always ready
 
     // Pulses one cycle when a transaction commits.  For reads this
@@ -106,12 +118,28 @@ module sdram_ctrl
     /* verilator lint_on UNUSEDSIGNAL */
 
     // ── Mode register value ─────────────────────────────────
-    // [2:0]  BL  = 001   (BL=2)
-    // [3]    BT  = 0     (sequential)
-    // [6:4]  CL        (parameter)
-    // [12:7] reserved   (zero)
+    // [2:0]   BL  = log2(BURST_LEN)
+    // [3]     BT  = 0     (sequential)
+    // [6:4]   CL        (parameter)
+    // [8:7]   reserved  (zero)
+    // [9]     WBL = 1    (single-location write)
+    // [12:10] reserved  (zero)
+    //
+    // Burst length governs reads and writes alike unless WBL says
+    // otherwise.  A write here only ever covers one 32-bit word, so
+    // under a long burst it would spend the extra beats masking data
+    // the CPU never asked to store.  Single-location write decouples
+    // the two: each WRITE command commits exactly one half-word, and a
+    // word becomes two consecutive commands.
+    //
+    // A two-beat burst already costs those same two cycles, so the
+    // optional mode earns nothing there and is left off: the shortest
+    // burst writes as one command plus its second beat.
+    localparam bit SINGLE_LOC_WRITE = (BURST_LEN > 2);
+
     localparam logic [ROW_BITS-1:0] MODE_REG =
-        {{(ROW_BITS-7){1'b0}}, 3'(CAS_LATENCY), 1'b0, 3'b001};
+        {{(ROW_BITS-10){1'b0}}, SINGLE_LOC_WRITE, 2'b00,
+         3'(CAS_LATENCY), 1'b0, 3'($clog2(BURST_LEN))};
 
     // ── FSM states ──────────────────────────────────────────
     typedef enum logic [3:0] {
@@ -123,8 +151,13 @@ module sdram_ctrl
         S_IDLE,
         S_REFRESH,
         S_ACT,                   // wait T_RCD after ACTIVATE
-        S_RW,                    // RD/WR command issued; first beat
-        S_BURST,                 // (reserved for BL>2 in step 6)
+        S_RW,                    // RD/WR command issued; beats follow
+        // Unreachable: S_RW captures every beat at any burst length.
+        // The state stays because a twelve-state enum encodes into 20
+        // more LUT4s than this thirteen-state one, and the controller
+        // is confined by the floorplan to a corridor with no room to
+        // spend them — see hw/constraints/ulx3s_penumbra2_floorplan.py.
+        S_BURST,
         S_RECOVER,               // wait T_WR before next command
         S_PRECHARGE_TO_ACT,      // row-conflict: PRECHARGE then ACT pending req
         S_PRECHARGE_TO_REFRESH   // pending-refresh with open row: close then refresh
@@ -160,10 +193,9 @@ module sdram_ctrl
         open_valid && (addr_bank == open_bank) && (addr_row == open_row);
 
     // ── Burst / read assembly state ─────────────────────────
-    logic                  beat;       // 0 = first beat, 1 = second
+    logic [BEAT_BITS-1:0]  beat;       // beat index within the burst
     logic [3:0]            cl_cnt;     // CAS latency countdown
-    logic [DQ_BITS-1:0]    rd_low;
-    logic [31:0]           rdata_reg;
+    logic [RSP_BITS-1:0]   rdata_reg;
     logic                  rsp_valid_r;
     logic                  done_r;
 
@@ -244,10 +276,9 @@ module sdram_ctrl
             o_phy_dq_oe      <= 1'b0;
             o_req_ready      <= 1'b0;
             wait_cnt         <= CNT_BITS'(T_POWERUP);
-            beat             <= 1'b0;
+            beat             <= '0;
             cl_cnt           <= '0;
-            rd_low           <= '0;
-            rdata_reg        <= 32'hDEAD_BEEF;
+            rdata_reg        <= {RSP_WORDS{32'hDEAD_BEEF}};
             rsp_valid_r      <= 1'b0;
             done_r           <= 1'b0;
             req_we_r         <= 1'b0;
@@ -388,17 +419,12 @@ module sdram_ctrl
                         // Issue READ or WRITE.  Auto-precharge is OFF
                         // (A10=0) — open-row tracking keeps the row open
                         // for the next request to potentially hit.
-                        // The BL=2 burst MUST start on an even col so beat 0
-                        // is the low half-word of the CPU 32-bit word.  Force
-                        // col[0]=0 even for sub-word accesses (e.g. STB at
-                        // byte offset 2 has addr[1]=1, which would otherwise
-                        // start the burst on the upper-half col and roll
-                        // beat 1 into the *next* word.)
+                        // The column differs by direction, so each branch
+                        // drives it.
                         o_phy_a                <= '0;
-                        o_phy_a[COL_BITS-1:0]  <= {req_col[COL_BITS-1:1], 1'b0};
                         o_phy_a[10]            <= 1'b0;     // no auto-precharge
                         o_phy_ba               <= req_bank;
-                        beat                   <= 1'b0;
+                        beat                   <= '0;
 
                         // Mark this bank+row as the open row.  Same
                         // assignment whether we got here via cold ACT or
@@ -408,15 +434,27 @@ module sdram_ctrl
                         open_row               <= req_row;
 
                         if (req_we_r) begin
+                            // A write covers one word wherever it sits in
+                            // the row, so it addresses that word's low
+                            // half-word.  Sub-word accesses still land on
+                            // the even column: byte lanes are selected by
+                            // DQM, not by the address.
                             o_phy_cmd    <= SDRAM_CMD_WRITE;
+                            o_phy_a[COL_BITS-1:0] <= {req_col[COL_BITS-1:1], 1'b0};
                             // Beat 0 of write goes out on DQ this cycle
                             o_phy_dq_oe  <= 1'b1;
                             o_phy_dq_out <= req_wdata_r[15:0];
                             o_phy_dqm    <= ~req_byte_en_r[1:0];
-                            beat         <= 1'b1;     // S_RW will issue beat 1
+                            beat         <= BEAT_BITS'(1);
                             state        <= S_RW;
                         end else begin
+                            // A burst wraps inside its aligned group, so
+                            // starting anywhere but the group base returns
+                            // the same words rotated.  Align down and let
+                            // the consumer index the word it asked for.
                             o_phy_cmd    <= SDRAM_CMD_READ;
+                            o_phy_a[COL_BITS-1:0] <=
+                                {req_col[COL_BITS-1:BEAT_BITS], {BEAT_BITS{1'b0}}};
                             o_phy_dqm    <= 2'b00;    // unmask reads
                             cl_cnt       <= 4'(PHY_OUT_LATENCY+CAS_LATENCY+PHY_IN_LATENCY);
                             state        <= S_RW;
@@ -430,12 +468,22 @@ module sdram_ctrl
                 S_RW: begin
                     o_phy_dqm <= 2'b00;
                     if (req_we_r) begin
-                        // Beat 1 of write — data committed this cycle.
+                        // High half-word.  Under single-location write
+                        // it needs its own command, which the open row
+                        // accepts back to back with the first; otherwise
+                        // it is simply beat 1 of the burst already running.
                         // From the cache's POV the write is "done"; the
                         // controller still needs T_WR before another
                         // request can issue (a follow-up PRECHARGE on
                         // a row conflict has to land >= T_WR after the
                         // last write data).  Row stays open.
+                        if (SINGLE_LOC_WRITE) begin
+                            o_phy_cmd             <= SDRAM_CMD_WRITE;
+                            o_phy_a               <= '0;
+                            o_phy_a[COL_BITS-1:0] <= {req_col[COL_BITS-1:1], 1'b1};
+                            o_phy_a[10]           <= 1'b0;
+                            o_phy_ba              <= req_bank;
+                        end
                         o_phy_dq_oe  <= 1'b1;
                         o_phy_dq_out <= req_wdata_r[31:16];
                         o_phy_dqm    <= ~req_byte_en_r[3:2];
@@ -446,15 +494,18 @@ module sdram_ctrl
                         if (cl_cnt != 0) begin
                             cl_cnt <= cl_cnt - 1'b1;
                         end else begin
-                            beat <= ~beat;
-                            if (!beat) begin
-                                rd_low <= i_phy_dq_in;
-                            end else begin
+                            // One DQ beat lands per cycle, `beat` counting
+                            // which.  The burst reads out low half-word
+                            // first, so beat b belongs at bit 16*b of the
+                            // response and beat 0 is the low half of word 0.
+                            rdata_reg <= {i_phy_dq_in, rdata_reg[RSP_BITS-1:16]};
+
+                            beat <= beat + BEAT_BITS'(1);
+                            if (beat == BEAT_BITS'(BURST_LEN - 1)) begin
                                 // Last beat of the read burst captured.
                                 // Row stays open — no T_RP, return to
                                 // IDLE immediately so a same-row hit
                                 // can issue the next RD on the next cycle.
-                                rdata_reg   <= {i_phy_dq_in, rd_low};
                                 rsp_valid_r <= 1'b1;
                                 done_r      <= 1'b1;
                                 wait_cnt    <= '0;
@@ -464,7 +515,6 @@ module sdram_ctrl
                     end
                 end
 
-                // ── BURST: reserved for BL>2 (step 6) ───────
                 S_BURST: begin
                     state <= S_RECOVER;
                 end

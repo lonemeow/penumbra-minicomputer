@@ -10,7 +10,12 @@
 
 module sdram_test
     import sdram_pkg::*;
-(
+#(
+    // Read burst length in DQ beats — see sdram_ctrl.  A longer burst
+    // widens the response to the words it returns in one go.
+    parameter int BURST_LEN = 2,
+    parameter int RSP_BITS  = 32 * (BURST_LEN / 2)
+) (
     input  logic        i_clk,
     input  logic        i_rst,
 
@@ -22,7 +27,7 @@ module sdram_test
     output logic        o_req_ready,
 
     output logic        o_rsp_valid,
-    output logic [31:0] o_rsp_data,
+    output logic [RSP_BITS-1:0] o_rsp_data,
     input  logic        i_rsp_ready,
 
     output logic        o_init_done,
@@ -56,7 +61,8 @@ module sdram_test
         .T_MRD       (SDP.T_MRD),
         .T_REFI      (SDP.T_REFI),
         .T_POWERUP   (W9825_SIM_T_POWERUP),    // sim override
-        .CAS_LATENCY (SDP.CAS_LATENCY)
+        .CAS_LATENCY (SDP.CAS_LATENCY),
+        .BURST_LEN   (BURST_LEN)
     ) u_ctrl (
         .i_clk         (i_clk),
         .i_rst         (i_rst),
