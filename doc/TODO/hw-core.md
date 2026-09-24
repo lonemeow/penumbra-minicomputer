@@ -699,49 +699,38 @@ rather than the bare-core probe.  If it costs clock it is not a lever,
 and that is the expected answer.  A seed sweep is needed either way,
 since one seed says nothing about placement.
 
-## Hardware: gen2 caches build from fabric under Vivado
+## Hardware: memories must map the same way under yosys and Vivado
 
-On the Nexys Video (Vivado 2025.2, XC7A200T-1), the gen2.5 machine's
-large memories do not map to block RAM, although the same RTL does
-under yosys on the ECP5 (the machine could not fit an ECP5-85F
-otherwise). Vivado's synthesis mapping report for
-`nexysvideo_penumbra2_5_top`:
+One RTL source feeds both FPGA flows, so a memory has to map to the
+same kind of storage under yosys (ECP5) and Vivado (Artix-7). The
+gen2 L1 and L2 caches did not, which cost the Nexys machine five
+times its logic and a fifth of its fmax; d4831a2 and b809191 fixed
+them. What is left:
 
-| Memory | Mapped to |
-|--------|-----------|
-| L2 data, 4 × 4K×32 (`l2_cache`, `g_data[*].mem`) | distributed RAM, 1408 `RAM64M` each |
-| L2 valid bits, 4 × 1K×1 | distributed RAM |
-| L2 tags | flip-flops (`tags_reg[way][set][bit]`), no memory inferred |
-| L1 I and D data, 2 ways × 512×32 each (`cache_bram_vipt`) | distributed RAM, 176 `RAM64M` each |
-
-The machine takes 67k LUTs (25k of them as memory) and 83k
-flip-flops, half the part. Its critical path runs from the L2 FSM
-state to the tag flops' clock enable: one LUT and 22.7 ns of routing,
-for an fmax of 41.9 MHz (place and route at Explore). That meets the
-37.5 MHz bring-up clock, but it stands between the Nexys and a faster
-gen2.x, which is one of the port's goals.
-
-One source has to infer block RAM under both yosys and Vivado; a
-cache written twice, once per tool, would split the machine the two
-boards share, so an array that cannot be written portably is a
-blocker for the port, not a tuning item. Vivado's own reasons (sv2v
-keeps every `ram_style` attribute, so these are pattern problems):
-
-- tags, `Synth 8-7186` ("not inferred as ram due to incorrect
-  usage"): the 2-D `tags[NUM_WAYS][NUM_SETS]` array, read for every
-  way at once, is split element by element. The data array already
-  avoids the same problem under yosys with one generated memory per
-  way (the comment at `g_data`); the tags never got that split.
-- data, `Synth 8-6849` ("infeasible attribute ram_style = block"):
-  one process holds a read at `i_addr` and two writes at different
-  addresses (the fill beat and the store-hit update), which Vivado
-  counts as three ports. yosys merges the two exclusive writes into
-  one port; muxing address, data and byte enables before a single
-  write is the form both tools map to a simple dual-port block RAM.
-
-Open: recode the L2 tag and data arrays, then the L1s', in those
-forms; confirm both mapping reports; re-check ULX3S timing, which
-the change moves.
+- Enforcement. yosys fails a build whose `ram_style` it cannot honor
+  (`no valid mapping found`); Vivado warns and falls back (`Synth
+  8-6849` "infeasible attribute", `8-7186` "attribute ignored"). A
+  signoff gate on those two messages in `hw/tools/vivado/gates.tcl`
+  would hold Vivado to the declared mapping as well.
+- Declared intent. Only an attribute makes a mismatch detectable;
+  memories without one are free to differ. The SPI FIFOs (512×8) do
+  today: block RAM under yosys, LUT RAM under Vivado. Every memory of
+  any size should carry `ram_style` `"block"`, `"distributed"` or
+  `"registers"` (all three mean the same in both tools).
+- The portable forms, written down in
+  `doc/internals/coding-standards.md`: one memory per way rather than
+  a `[ways][sets]` array; each write port a single write statement,
+  its address, data and byte lanes chosen beforehand, in a process
+  with no reset; a registered read for block RAM.
+- gen3's `penumbra3_tlb_store` declares `vpn_mem` and `pte_mem` as
+  `[WAYS][SETS]` arrays written at `[i_wr_way]` from the process that
+  resets `valid_q`: the L2 tags' shape, so Vivado will build them
+  from flip-flops. gen3's L1 and L2, next on its build list (this
+  file, "gen3 (Penumbra/3) Phase-1 build status"), are cheaper written
+  in the portable forms from the start than recoded after.
+- The L2 valid bits now take one RAMB18 per way under Vivado for 1K
+  bits; LUT RAM would hold them in 16 LUTs a way on the Artix-7,
+  against an ECP5 block RAM each today.
 
 ## Ruled out
 
