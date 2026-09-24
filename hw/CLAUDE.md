@@ -295,10 +295,12 @@ the shared module.
   reset held at least 10 ms past MMCM lock and CPU RESET release.
 - `nexysvideo/nexysvideo_penumbra2_top.sv` — gen2 machine on the Nexys
   Video (`BOARD=nexysvideo CORE=penumbra2[_5]`), growing one device per
-  bring-up step: boot ROM, UART, and 128 KiB of `onchip_ram` as system
-  RAM until the DDR3. Its boot testbench
+  bring-up step: boot ROM, UART, the microSD slot over SPI (autoconfig,
+  card power off during the reset hold), and 128 KiB of `onchip_ram` as
+  system RAM until the DDR3. Its boot testbench
   (`make -C hw/rom && make sim MOD=nexysvideo_penumbra2_top`) runs the
-  ROM to the monitor through the board pins.
+  ROM to the monitor through the board pins, with a simulated card on
+  the SD pins.
 - `nexysvideo/nexysvideo_uart_test_top.sv` — console bring-up top
   (`make fpga TOP=nexysvideo_uart_test_top`): banner and echo on the
   UART port, LEDs for lock, reset, a 1 Hz heartbeat, RX activity and

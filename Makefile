@@ -1298,8 +1298,10 @@ FPGA_SRC_nexysvideo_penumbra2_top = $(SRC_COMMON) $(SRC_CORE) \
                                     hw/rtl/soc/bus_response_fabric.sv \
                                     hw/rtl/soc/boot_rom.sv \
                                     hw/rtl/soc/onchip_ram.sv \
+                                    hw/rtl/soc/autoconfig_dev.sv \
                                     hw/rtl/io/spi_fifo.sv \
                                     hw/rtl/io/uart.sv \
+                                    hw/rtl/io/spi.sv \
                                     $(SRC_BOARD_nexysvideo) \
                                     $(FPGA_RTL)/nexysvideo/nexysvideo_penumbra2_top.sv
 XDC_nexysvideo_penumbra2_top = hw/constraints/nexysvideo_penumbra2_top.xdc
