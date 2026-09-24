@@ -793,9 +793,10 @@ out:
  *
  * Usage: go <addr>
  *
- * Calls the target as a C function with R1 = boot data pointer
- * (BOOTDATA_BASE). If the target returns, we fall back into the
- * monitor loop. A real stage 1 bootloader won't return.
+ * Jumps to the target with R1 = boot data pointer, one-way like
+ * `boot`: the target owns all RAM but the boot data and the vector
+ * table, this ROM's stack included (doc/system/boot-protocol.md,
+ * ROM to Loaded Program).
  */
 static void cmd_go(const char *args) {
     const char *p = args;
