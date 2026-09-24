@@ -92,13 +92,15 @@ module video_fbgen #(
     localparam logic [FB_ADDR_W-1:0] FB_LAST_WORD = FB_ADDR_W'(FB_WORDS - 1);
     localparam logic [11:0]          H_ACT        = 12'(H_ACTIVE);
 
-    initial begin
-        assert (FB_WIDTH % 4 == 0)
-            else $fatal(1, "video_fbgen: FB_WIDTH %0d is not a whole number of words", FB_WIDTH);
-        assert (FB_WIDTH * 2 == H_ACTIVE && FB_HEIGHT * 2 == V_ACTIVE)
-            else $fatal(1, "video_fbgen: %0dx%0d does not double onto the %0dx%0d raster",
-                        FB_WIDTH, FB_HEIGHT, H_ACTIVE, V_ACTIVE);
-    end
+    build_check #(
+        .COND (FB_WIDTH % 4 == 0),
+        .MSG  ("video_fbgen: FB_WIDTH is not a whole number of words")
+    ) u_check_fb_words ();
+
+    build_check #(
+        .COND (FB_WIDTH * 2 == H_ACTIVE && FB_HEIGHT * 2 == V_ACTIVE),
+        .MSG  ("video_fbgen: FB_WIDTH x FB_HEIGHT does not double onto the raster")
+    ) u_check_fb_doubling ();
 
     // ── Scan address: a counter and the line start to fall back to ──
     // The counter is what the RAM's read port sees, so nothing but a

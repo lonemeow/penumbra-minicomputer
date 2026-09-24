@@ -64,10 +64,10 @@ module video_textgen #(
     output logic        o_vsync
 );
 
-    initial begin
-        assert (COLUMNS * ROWS <= 4096)
-            else $fatal(1, "video_textgen: %0dx%0d grid exceeds the cell RAM", COLUMNS, ROWS);
-    end
+    build_check #(
+        .COND (COLUMNS * ROWS <= 4096),
+        .MSG  ("video_textgen: COLUMNS x ROWS grid exceeds the cell RAM")
+    ) u_check_grid_fits ();
 
     // ── Cursor blink: frame counter on vsync assertion ──────────
     // blink_show covers frames 0..31 after reset, then toggles every

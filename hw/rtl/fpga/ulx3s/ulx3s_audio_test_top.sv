@@ -102,15 +102,20 @@ module ulx3s_audio_test_top (
         .ENCLKOS3     (1'b1)
     );
 
-    initial begin
-        assert (PLL.valid)
-            else $fatal(1, "ecp5_pll: no legal PLL config for the audio VCO");
-        assert (AUDIO_DIV != 0)
-            else $fatal(1, "ecp5_pll: VCO %0d Hz cannot produce %0d Hz exactly",
-                        PLL.vco_hz, AUDIO_HZ);
-        assert (int'(AUDIO_HZ) % 48_000 == 0)
-            else $fatal(1, "audio: %0d Hz does not divide to 48 kHz", AUDIO_HZ);
-    end
+    build_check #(
+        .COND (PLL.valid),
+        .MSG  ("ecp5_pll: no legal PLL config for the audio VCO")
+    ) u_check_pll_valid ();
+
+    build_check #(
+        .COND (AUDIO_DIV != 0),
+        .MSG  ("ecp5_pll: VCO cannot produce AUDIO_HZ exactly")
+    ) u_check_audio_div ();
+
+    build_check #(
+        .COND (int'(AUDIO_HZ) % 48_000 == 0),
+        .MSG  ("audio: AUDIO_HZ does not divide to 48 kHz")
+    ) u_check_sample_rate ();
 
     // ── Reset ──────────────────────────────────────────────────
     // Everything below runs on clk_audio, so there is one domain and

@@ -94,14 +94,15 @@ module ulx3s_video_test_top (
     // The serializer's clock contract is an exact 5x serial:pixel
     // ratio; this top owns that invariant, so check the divider pair
     // the PLL actually built, not just the requested targets.
-    initial begin
-        assert (PLL.valid)
-            else $fatal(1, "ecp5_pll: no legal PLL config for %0d/%0d Hz video clocks",
-                        SERIAL_HZ, PIXEL_HZ);
-        assert (PLL.clkos_div == 5 * PLL.clkop_div)
-            else $fatal(1, "ecp5_pll: CLKOS_DIV %0d != 5x CLKOP_DIV %0d; serial:pixel ratio broken",
-                        PLL.clkos_div, PLL.clkop_div);
-    end
+    build_check #(
+        .COND (PLL.valid),
+        .MSG  ("ecp5_pll: no legal PLL config for SERIAL_HZ/PIXEL_HZ video clocks")
+    ) u_check_pll_valid ();
+
+    build_check #(
+        .COND (PLL.clkos_div == 5 * PLL.clkop_div),
+        .MSG  ("ecp5_pll: CLKOS_DIV != 5x CLKOP_DIV; serial:pixel ratio broken")
+    ) u_check_serial_ratio ();
 
     // ── Reset ──────────────────────────────────────────────────
     // Produces rst, the synchronous reset for the whole video chain;

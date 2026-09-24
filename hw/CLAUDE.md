@@ -67,6 +67,10 @@ cross-referenced from another generation's directory.
   own start/busy handshake; see `doc/internals/divmul.md`).
 - `tlb_pinned.sv` — 8-entry FA pinned TLB, pinned-hit-wins. Parameterized
   for one or two translate ports (`DUAL_TRANSLATE`); both cores use it.
+- `build_check.sv` — elaboration-time configuration check that stops
+  every build tool; use it for any build-time check, never `initial
+  assert` or a generate-block `$error`, which sv2v defuses
+  (`doc/internals/coding-standards.md`).
 
 ### Penumbra/2 core (`rtl/penumbra2/`)
 The gen2 6-stage pipelined core (design in `doc/internals/penumbra2/`)

@@ -41,9 +41,10 @@ module bus_response_fabric #(
     output logic                        o_fault    // valid with o_ack
 );
 
-    if (TIMEOUT_CYCLES < 2) begin : chk_timeout
-        $error("TIMEOUT_CYCLES must be at least 2");
-    end
+    build_check #(
+        .COND (TIMEOUT_CYCLES >= 2),
+        .MSG  ("bus_response_fabric: TIMEOUT_CYCLES must be at least 2")
+    ) u_check_timeout ();
 
     localparam int WAIT_W = $clog2(TIMEOUT_CYCLES);
 

@@ -79,9 +79,10 @@ module divmul
 
     localparam int MUL_STEPS = 32 / MUL_BITS_PER_STEP;
 
-    if (32 % MUL_BITS_PER_STEP != 0) begin : g_step_divides_32
-        $error("divmul: MUL_BITS_PER_STEP must divide 32");
-    end
+    build_check #(
+        .COND (32 % MUL_BITS_PER_STEP == 0),
+        .MSG  ("divmul: MUL_BITS_PER_STEP must divide 32")
+    ) u_check_step_divides_32 ();
 
     // ── ALU op-field encodings (gen1 core-internal contract) ─────
     // Mirror alu.sv's local OP_* params and uasm.py's alu map.  This is

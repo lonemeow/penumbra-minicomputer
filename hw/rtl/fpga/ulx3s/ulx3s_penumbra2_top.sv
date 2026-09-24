@@ -208,16 +208,20 @@ module ulx3s_penumbra2_top (
     // at fVCO/6). ecp5_pll_compute is free to pick a different SDRAM divider
     // for some target; if it does, those phase constants no longer apply, so
     // refuse to build rather than forward a wrong SDRAM pin clock.
-    initial begin
-        assert (PLL.valid)
-            else $fatal(1, "ecp5_pll: no legal PLL config for CPU_HZ=%0d", CPU_HZ);
-        assert (PLL.clkos_div == 6)
-            else $fatal(1, "ecp5_pll: CLKOS_DIV=%0d != 6; SDRAM phase table invalid",
-                        PLL.clkos_div);
-        assert (CLKOS3_DIV_VAL != 0)
-            else $fatal(1, "ecp5_pll: VCO %0d cannot serve the 60 MHz USB clock",
-                        PLL.vco_hz);
-    end
+    build_check #(
+        .COND (PLL.valid),
+        .MSG  ("ecp5_pll: no legal PLL config for CPU_HZ")
+    ) u_check_pll_valid ();
+
+    build_check #(
+        .COND (PLL.clkos_div == 6),
+        .MSG  ("ecp5_pll: CLKOS_DIV != 6; SDRAM phase table invalid")
+    ) u_check_sdram_div ();
+
+    build_check #(
+        .COND (CLKOS3_DIV_VAL != 0),
+        .MSG  ("ecp5_pll: VCO cannot serve the 60 MHz USB clock")
+    ) u_check_usb_div ();
 
     // ── Reset: PLL lock + btn[1] (FIRE1) manual reset ──────────
     // Hold reset until PLL locks, then count 2^19 clocks (~21 ms at
@@ -333,12 +337,15 @@ module ulx3s_penumbra2_top (
         .ENCLKOS3     (1'b0)
     );
 
-    initial begin
-        assert (VPLL.valid)
-            else $fatal(1, "ecp5_pll: no legal video PLL config");
-        assert (VPLL.clkos_div == 5 * VPLL.clkop_div)
-            else $fatal(1, "ecp5_pll: video serial:pixel ratio is not 5x");
-    end
+    build_check #(
+        .COND (VPLL.valid),
+        .MSG  ("ecp5_pll: no legal video PLL config")
+    ) u_check_video_pll_valid ();
+
+    build_check #(
+        .COND (VPLL.clkos_div == 5 * VPLL.clkop_div),
+        .MSG  ("ecp5_pll: video serial:pixel ratio is not 5x")
+    ) u_check_video_ratio ();
 
     // ── Video-domain reset: main reset OR video-PLL unlock ─────
     // Clocked on the crystal, which runs regardless of either PLL's

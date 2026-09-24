@@ -165,19 +165,22 @@ module cache_bram_vipt
     localparam int WAY_BITS    = $clog2(NUM_WAYS);
     localparam int PAGE_BYTES  = 4096;                 // architectural page size
 
-    // Parameter validity — elaboration-time generate checks, hard errors
-    // in every flow (simulation and synthesis), so an unsupported
-    // geometry can never build silently.
-    if (NUM_WAYS != 2 && NUM_WAYS != 4) begin : g_check_ways
-        $error("cache_bram_vipt: tree-PLRU is coded for 2 or 4 ways");
-    end
-    if (CACHE_BYTES / NUM_WAYS > PAGE_BYTES) begin : g_check_vipt
-        $error("cache_bram_vipt: way size exceeds the page size (VIPT precondition)");
-    end
-    if (LINE_WORDS < 2 || (1 << WORD_BITS) != LINE_WORDS
-        || (1 << SET_BITS) != NUM_SETS) begin : g_check_pow2
-        $error("cache_bram_vipt: geometry must be power-of-two with multi-word lines");
-    end
+    // Parameter validity: an unsupported geometry must never build.
+    build_check #(
+        .COND (NUM_WAYS == 2 || NUM_WAYS == 4),
+        .MSG  ("cache_bram_vipt: tree-PLRU is coded for 2 or 4 ways")
+    ) u_check_ways ();
+
+    build_check #(
+        .COND (CACHE_BYTES / NUM_WAYS <= PAGE_BYTES),
+        .MSG  ("cache_bram_vipt: way size exceeds the page size (VIPT precondition)")
+    ) u_check_vipt ();
+
+    build_check #(
+        .COND (LINE_WORDS >= 2 && (1 << WORD_BITS) == LINE_WORDS
+               && (1 << SET_BITS) == NUM_SETS),
+        .MSG  ("cache_bram_vipt: geometry must be power-of-two with multi-word lines")
+    ) u_check_pow2 ();
 
     function automatic logic [SET_BITS+WORD_BITS-1:0] data_idx(
         input logic [SET_BITS-1:0]  s,

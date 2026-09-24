@@ -1075,6 +1075,7 @@ FPGA_SRC_ulx3s_penumbra3_probe_decode_top = $(SRC_COMMON) $(SRC_CORE_penumbra3) 
 # rather than registered as a BOARD/CORE machine.
 FPGA_SRC_ulx3s_video_test_top = hw/rtl/io/video/video_pkg.sv \
                                 $(filter-out %/video_pkg.sv, $(wildcard hw/rtl/io/video/*.sv)) \
+                                hw/rtl/common/build_check.sv \
                                 $(FPGA_RTL)/ecp5_pll_pkg.sv \
                                 $(FPGA_RTL)/ulx3s/ulx3s_video_test_top.sv
 
@@ -1088,6 +1089,7 @@ FPGA_SRC_ulx3s_audio_test_top = hw/rtl/io/audio/audio_sigma_delta.sv \
                                 hw/rtl/io/audio/audio_sine_rom.sv \
                                 hw/rtl/io/audio/audio_tone_gen.sv \
                                 hw/rtl/io/audio/audio_sample_rom.sv \
+                                hw/rtl/common/build_check.sv \
                                 $(FPGA_RTL)/ecp5_pll_pkg.sv \
                                 $(FPGA_RTL)/ulx3s/ulx3s_audio_test_top.sv
 

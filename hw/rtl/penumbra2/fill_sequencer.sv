@@ -68,9 +68,10 @@ module fill_sequencer #(
     localparam int WORD_BITS   = $clog2(LINE_WORDS);
     localparam int OFFSET_BITS = $clog2(LINE_BYTES);
 
-    if (LINE_WORDS < 2 || (1 << WORD_BITS) != LINE_WORDS) begin : g_check_line
-        $error("fill_sequencer: line must be a power-of-two number of words, at least 2");
-    end
+    build_check #(
+        .COND (LINE_WORDS >= 2 && (1 << WORD_BITS) == LINE_WORDS),
+        .MSG  ("fill_sequencer: line must be a power-of-two number of words, at least 2")
+    ) u_check_line ();
 
     typedef enum logic [1:0] {
         S_IDLE,                 // pass-through; a line request engages

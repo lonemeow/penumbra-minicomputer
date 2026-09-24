@@ -67,6 +67,17 @@ Prefix all module ports to distinguish them from internal signals:
 
 - **Verilator:** All modules must pass Verilator linting (`-Wall`).
 - **Yosys:** Avoid complex SystemVerilog features that Yosys does not yet support (e.g., interfaces with complex modports, some types of unpacked arrays). Stick to "Synthesizable SystemVerilog."
+- **Build-time checks use `build_check`.** A check on configuration
+  (a parameter combination the logic cannot honor, a PLL with no
+  legal divider set) instantiates `hw/rtl/common/build_check.sv`,
+  never an `initial assert` or a generate-block `$error`/`$fatal`.
+  sv2v, which feeds every synthesis flow, deletes the assertion and
+  turns the severity task into a message synthesis prints and then
+  carries on from, so an impossible configuration ships as a
+  bitstream. `build_check` stops elaboration in Verilator, yosys and
+  Vivado alike; its header documents the interface. Assertions about
+  behavior during simulation (`assert property`, asserts in `always`
+  blocks) stay assertions: they are simulation-only by intent.
 - **Lint Offsets:** If a specific lint warning must be suppressed, use the Verilator inline comments:
   ```systemverilog
   /* verilator lint_off UNUSEDSIGNAL */

@@ -21,11 +21,11 @@
 // 600 MHz / 100 MHz). The CPU clock then derives off the same VCO. A target
 // whose VCO would force a different CLKOS_DIV is still returned, but the caller
 // must check `clkos_div` before trusting its phase constants — the board tops
-// assert it.
+// check it.
 //
 // The phase-detector frequency is floored at PFD_MIN: a target whose best
 // (smallest) CLKI_DIV still can't keep fPFD at/above the datasheet minimum
-// returns valid=0. An unlockable clock is then a build-time assert failure
+// returns valid=0. An unlockable clock is then a build-time check failure
 // (the board tops check PLL.valid) instead of a dead board. `pfd_hz` is still
 // surfaced so the achieved margin is visible at the call site.
 //
@@ -62,7 +62,7 @@ package ecp5_pll_pkg;
 
     // Compute the EHXPLLL config for (in_hz -> cpu_hz, sdram_hz). Constant-
     // folded at elaboration; valid=0 means no legal divider set exists, which
-    // a caller must treat as a hard error (the tops assert valid).
+    // a caller must treat as a hard error (the tops check valid).
     function automatic ecp5_pll_cfg_t ecp5_pll_compute(
         longint in_hz, longint cpu_hz, longint sdram_hz);
         ecp5_pll_cfg_t r;

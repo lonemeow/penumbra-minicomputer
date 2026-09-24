@@ -23,15 +23,20 @@ module bus_devsel #(
 
     // Elaboration-time checks — catch misconfiguration before
     // simulation or synthesis produces silent misdecode.
-    if (SIZE == 0) begin : chk_nonzero
-        $error("SIZE must be non-zero");
-    end
-    if ((SIZE & (SIZE - 1)) != 0) begin : chk_pow2
-        $error("SIZE must be a power of 2");
-    end
-    if ((BASE & (SIZE - 1)) != 0) begin : chk_aligned
-        $error("BASE must be naturally aligned to SIZE");
-    end
+    build_check #(
+        .COND (SIZE != 0),
+        .MSG  ("bus_devsel: SIZE must be non-zero")
+    ) u_check_nonzero ();
+
+    build_check #(
+        .COND ((SIZE & (SIZE - 1)) == 0),
+        .MSG  ("bus_devsel: SIZE must be a power of 2")
+    ) u_check_pow2 ();
+
+    build_check #(
+        .COND ((BASE & (SIZE - 1)) == 0),
+        .MSG  ("bus_devsel: BASE must be naturally aligned to SIZE")
+    ) u_check_aligned ();
 
     assign o_sel = (i_addr & ~(SIZE - 1)) == BASE;
 
