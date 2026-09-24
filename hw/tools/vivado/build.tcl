@@ -52,10 +52,12 @@ foreach f $xdcs {
 }
 synth_design -top $top -part $part
 
+# Placement and routing run at their default effort; Explore costs them
+# minutes a build, where the steps around them take seconds at it.
 opt_design -directive Explore
-place_design -directive Explore
+place_design
 phys_opt_design -directive Explore
-route_design -directive Explore
+route_design
 phys_opt_design -directive Explore
 
 report_timing_summary -max_paths 10 -report_unconstrained \
