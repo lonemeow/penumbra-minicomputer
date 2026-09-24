@@ -79,9 +79,12 @@ struct SdPins {
         bool selected = powered && !cs_n;
         card->select(selected);
         if (selected && last_cs_n) {
+            // A newly selected card has nothing queued (select() clears
+            // the model's queue on deselect), so it starts on 0xFF.
             bits = 0;
             boundary = false;
-            miso_byte = reply;
+            reply = 0xFF;
+            miso_byte = 0xFF;
         }
         if (selected && sck && !last_sck) {
             mosi_byte = (uint8_t)((mosi_byte << 1) | mosi);
