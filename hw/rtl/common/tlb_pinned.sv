@@ -80,8 +80,8 @@ module tlb_pinned
     // Storage — NUM_ENTRIES × 64 bits
     // ══════════════════════════════════════════════════════════
 
-    logic [31:0] entries_vpn [0:NUM_ENTRIES-1];
-    logic [31:0] entries_pte [0:NUM_ENTRIES-1];
+    (* ram_style = "registers" *) logic [31:0] entries_vpn [0:NUM_ENTRIES-1];
+    (* ram_style = "registers" *) logic [31:0] entries_pte [0:NUM_ENTRIES-1];
 
     // ══════════════════════════════════════════════════════════
     // Lookup logic — fully associative (check all entries)

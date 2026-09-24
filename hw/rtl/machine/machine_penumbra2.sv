@@ -499,7 +499,7 @@ module machine_penumbra2
     // device-write → RDSYS-read-back path with no side effects, which no
     // real device offers (their writes enable MMUs and flash caches).
     localparam logic [3:0] SYSDEV_SCRATCH = 4'd6;
-    logic [31:0] scratch_q [0:3];
+    (* ram_style = "distributed" *) logic [31:0] scratch_q [0:3];
     always_ff @(posedge i_clk)
         if (sys_we && sys_wr_dev == SYSDEV_SCRATCH && sys_wr_reg[3:2] == 2'b00)
             scratch_q[sys_wr_reg[1:0]] <= sys_wdata;

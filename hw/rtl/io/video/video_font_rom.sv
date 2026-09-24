@@ -22,7 +22,7 @@ module video_font_rom (
     output logic [7:0] o_pixels  // glyph row; bit 7 = leftmost, 1 = FG
 );
 
-    logic [7:0] rom [0:4095];
+    (* rom_style = "block" *) logic [7:0] rom [0:4095];
 
     initial $readmemh("font8x16.hex", rom);
 

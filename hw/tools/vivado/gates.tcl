@@ -19,8 +19,8 @@
 #   an MMCM VCO outside its band (AVAL-46), are only critical warnings.
 #   The run's log is the record, because get_msg_config's counts miss
 #   messages raised inside some commands (route_design's among them).
-# - Memory mapping: every memory built the way its ram_style declares
-#   (log_failures, below).
+# - Memory mapping: every memory built the way its ram_style or
+#   rom_style declares (log_failures, below).
 #
 # The methodology and DRC gates read the results of the last
 # report_methodology and report_drc, so build.tcl runs those first.
@@ -74,7 +74,8 @@ proc gate_failures {log} {
 }
 
 # The gates read from the run's log: every critical warning, and every
-# memory synthesis did not build the way its ram_style declares. Vivado
+# memory synthesis did not build the way its ram_style or rom_style
+# declares. Vivado
 # only warns and falls back to another kind of storage (Synth 8-6849,
 # an infeasible style; 8-7186, a style ignored because the array was not
 # inferred as a memory), where yosys fails the build, so the same RTL
@@ -86,10 +87,10 @@ proc log_failures {log} {
     foreach line [split [read $f] "\n"] {
         if {[regexp {^CRITICAL WARNING: \[([^\]]+)\]} $line -> id]} {
             dict incr critical $id
-        } elseif {[regexp {\[Synth 8-6849\] Infeasible attribute (ram_style = "[a-z]+") set for RAM "([^"]+)"} \
+        } elseif {[regexp {\[Synth 8-6849\] Infeasible attribute ((?:ram|rom)_style = "[a-z]+") set for RAM "([^"]+)"} \
                        $line -> attr mem]} {
             dict set style $mem "$attr is infeasible"
-        } elseif {[regexp {\[Synth 8-7186\] Applying attribute (ram_style = "[a-z]+") is ignored, object '([^'\[]+)} \
+        } elseif {[regexp {\[Synth 8-7186\] Applying attribute ((?:ram|rom)_style = "[a-z]+") is ignored, object '([^'\[]+)} \
                        $line -> attr mem]} {
             dict set style $mem "$attr was ignored: not inferred as a memory"
         }

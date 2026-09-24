@@ -194,6 +194,7 @@ module l2_cache
     // sites onto one BRAM by itself; Vivado does neither, and builds
     // such an array from flops or LUT RAM instead.
     // ══════════════════════════════════════════════════════════
+    (* ram_style = "registers" *)
     logic [2:0]          plru     [NUM_SETS];
 
     // ══════════════════════════════════════════════════════════

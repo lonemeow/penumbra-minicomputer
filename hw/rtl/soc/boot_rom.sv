@@ -26,7 +26,7 @@ module boot_rom
 
     localparam ADDR_BITS = $clog2(ROM_WORDS);
 
-    logic [31:0] rom [0:ROM_WORDS-1];
+    (* rom_style = "block" *) logic [31:0] rom [0:ROM_WORDS-1];
 
 `ifdef VERILATOR
     // Simulation: +rom_hex=<path> selects the image, so testbench programs

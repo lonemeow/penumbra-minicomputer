@@ -35,7 +35,7 @@ module penumbra2_scratch_file
     localparam int N_SCR  = int'(SPR_SCR3) - int'(SPR_SCR0) + 1;
     localparam int SCR_IW = $clog2(N_SCR);
 
-    logic [31:0] scr [N_SCR];
+    (* ram_style = "distributed" *) logic [31:0] scr [N_SCR];
 
     // SCRn occupy contiguous SPR numbers (SPR_SCR0..SPR_SCR3), so the array
     // index is simply the SPR number offset from SPR_SCR0 (a SCRn sel is in

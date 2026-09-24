@@ -138,9 +138,9 @@ module audio_mixer #(
     // Only the fraction survives a frame: the whole part of the phase is
     // consumed as it appears, so keeping it would be keeping a number
     // that is always immediately spent.
-    logic [15:0]                frac_q   [CHANNELS];
-    logic signed [SAMPLE_W-1:0] held_l_q [CHANNELS];
-    logic signed [SAMPLE_W-1:0] held_r_q [CHANNELS];
+    (* ram_style = "registers" *) logic [15:0]                frac_q   [CHANNELS];
+    (* ram_style = "registers" *) logic signed [SAMPLE_W-1:0] held_l_q [CHANNELS];
+    (* ram_style = "registers" *) logic signed [SAMPLE_W-1:0] held_r_q [CHANNELS];
 
     logic signed [ACC_W-1:0]    acc_l_q, acc_r_q;
 

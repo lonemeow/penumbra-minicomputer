@@ -68,9 +68,9 @@ module penumbra2_btb #(
 
     // Entry store. `valid` is a flop vector so reset can clear it (a BRAM/RAM
     // cannot); tags and targets need no reset because `valid` gates every read.
-    logic              valid   [ENTRIES];
-    logic [TAG_W-1:0]  tags    [ENTRIES];
-    logic [29:0]       targets [ENTRIES];
+    (* ram_style = "registers" *)   logic              valid   [ENTRIES];
+    (* ram_style = "distributed" *) logic [TAG_W-1:0]  tags    [ENTRIES];
+    (* ram_style = "distributed" *) logic [29:0]       targets [ENTRIES];
 
     // PC field split, shared by the lookup and update sides.
     logic [IDX_W-1:0]  look_idx;

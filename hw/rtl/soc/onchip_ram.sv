@@ -41,7 +41,7 @@ module onchip_ram #(
         .o_ack   (o_ack)
     );
 
-    logic [31:0] mem [0:WORDS-1];
+    (* ram_style = "block" *) logic [31:0] mem [0:WORDS-1];
     logic [31:0] rdata_q;
 
     always_ff @(posedge i_clk) begin

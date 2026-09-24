@@ -178,7 +178,7 @@ module usbhc_capture #(
     // Written every USB clock while recording; read from the CPU domain.
     // Simultaneous access to one word never happens by contract: readout
     // is only meaningful under FROZEN, when the recorder is stopped.
-    logic [15:0] mem [DEPTH];
+    (* ram_style = "block" *) logic [15:0] mem [DEPTH];
 
     always_ff @(posedge i_usb_clk) begin
         if (recording)

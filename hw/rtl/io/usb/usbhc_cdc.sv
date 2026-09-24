@@ -111,7 +111,7 @@ module usbhc_cdc #(
     assign ubuf_idx = i_ubuf_addr[AW-1:0];
 
     /* verilator lint_off MULTIDRIVEN */
-    logic [7:0] buf_mem [0:BUF_BYTES-1];
+    (* ram_style = "block" *) logic [7:0] buf_mem [0:BUF_BYTES-1];
     /* verilator lint_on MULTIDRIVEN */
 
     always_ff @(posedge i_clk) begin

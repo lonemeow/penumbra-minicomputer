@@ -34,7 +34,7 @@ module video_cell_ram #(
     output logic [15:0]              o_scan_data
 );
 
-    logic [15:0] mem [0:DEPTH-1];
+    (* ram_style = "block" *) logic [15:0] mem [0:DEPTH-1];
 
     if (INIT_HEX != "") begin : g_preload
         initial $readmemh(INIT_HEX, mem);

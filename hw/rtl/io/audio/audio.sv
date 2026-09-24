@@ -105,9 +105,9 @@ module audio
     logic [CHANNELS-1:0] irq_status_q;
     logic [CHANNELS-1:0] irq_enable_q;
     logic [CHANNELS-1:0] underrun_q;
-    logic [31:0]         wm_q  [CHANNELS];
-    logic [31:0]         inc_q [CHANNELS];
-    logic [31:0]         vol_q [CHANNELS];
+    (* ram_style = "registers" *) logic [31:0] wm_q  [CHANNELS];
+    (* ram_style = "registers" *) logic [31:0] inc_q [CHANNELS];
+    (* ram_style = "registers" *) logic [31:0] vol_q [CHANNELS];
     logic [31:0]         master_vol_q;
 
     logic [LVL_W-1:0]    level    [CHANNELS];

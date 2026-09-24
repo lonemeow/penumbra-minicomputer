@@ -45,7 +45,7 @@ module penumbra2_fetch_buffer #(
     localparam int PTR_W = (DEPTH <= 1) ? 1 : $clog2(DEPTH);
     localparam int CNT_W = $clog2(DEPTH + 1);
 
-    logic [PAYLOAD_W-1:0] mem [0:DEPTH-1];
+    (* ram_style = "distributed" *) logic [PAYLOAD_W-1:0] mem [0:DEPTH-1];
     logic [PTR_W-1:0]     wptr, rptr;
     logic [CNT_W-1:0]     count;
 

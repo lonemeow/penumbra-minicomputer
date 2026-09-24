@@ -84,7 +84,7 @@ module audio_chan_fifo #(
 
     // The memory itself. One word is one frame — 16-bit stereo, left in
     // the low half — so nothing here interprets the contents.
-    logic [31:0] mem [0:DEPTH-1];
+    (* ram_style = "block" *) logic [31:0] mem [0:DEPTH-1];
 
     // ── Write side ───────────────────────────────────────────
     logic [PTR_W:0] rd_in_wr;      // read pointer as this side sees it

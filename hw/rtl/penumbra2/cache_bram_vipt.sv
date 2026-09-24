@@ -301,8 +301,8 @@ module cache_bram_vipt
     // ══════════════════════════════════════════════════════════
     // Storage — valid flops + replacement flops
     // ══════════════════════════════════════════════════════════
-    logic [NUM_SETS-1:0] valid_vec [NUM_WAYS];
-    logic [2:0]          plru      [NUM_SETS];
+    (* ram_style = "registers" *) logic [NUM_SETS-1:0] valid_vec [NUM_WAYS];
+    (* ram_style = "registers" *) logic [2:0]          plru      [NUM_SETS];
 
     // Per-way BRAM read outputs (registered at launch, held by i_en).
     logic [TAG_BITS-1:0] tag_out  [NUM_WAYS];
