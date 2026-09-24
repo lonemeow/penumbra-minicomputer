@@ -352,12 +352,13 @@ LDW   R4, [Rv + #VECT_SCRATCH_R4]
 ERET
 ```
 
-> **Note.** Physical addresses in the first page of RAM (`0x0000_0000`
-> and up) are occupied by the exception vector table and the boot
-> data tagged list that the ROM hands to the loader (see
-> [boot-protocol.md](./boot-protocol.md)). Don't reuse those physical
-> offsets for handler scratch — the pinned vector page gives you a
-> clean, guaranteed-resident workspace instead.
+> **Note.** Keep handler scratch out of low physical RAM:
+> `0x0000_0000`–`0x0000_003F` is the exception vector table, and
+> which of the rest is free only the boot data says (see
+> [boot-protocol.md: ROM to Loaded
+> Program](./boot-protocol.md#rom-to-loaded-program)). The pinned
+> vector page gives you a clean, guaranteed-resident workspace
+> instead.
 
 ### Pinned-Slot Assignment
 
@@ -482,9 +483,10 @@ Recommended flow:
 2. Initialize memory (SDRAM on FPGA, SRAM in discrete).
 3. Load the kernel from storage into RAM.
 4. Set up the interrupt vector table at physical `0x00000000`.
-   (The boot ROM also populates the boot-data tagged list at physical
-   `0x00000040` — don't overwrite it until the kernel has consumed it;
-   see [boot-protocol.md](./boot-protocol.md).)
+   (The boot data lies wherever R1 points, possibly right beside the
+   vector table — don't overwrite it until it has been consumed; see
+   [boot-protocol.md: ROM to Loaded
+   Program](./boot-protocol.md#rom-to-loaded-program).)
 5. Build initial page tables in RAM.
 6. Allocate a pinned vector page containing the TLB miss handler code,
    scratch save area, and PD pointer slot. Populate the PD pointer.

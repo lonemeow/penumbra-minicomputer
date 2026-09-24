@@ -35,6 +35,60 @@ early boot firmware.
  └───────────────────────┘
 ```
 
+## Boot Interfaces
+
+Two contracts meet at the boot ROM: what the hardware promises the
+ROM, and what the ROM promises the program it starts. A guarantee in
+one is not a guarantee in the other, and software stays portable
+across machines only while that holds.
+
+### Hardware to ROM
+
+What every Penumbra machine provides the boot ROM, before any
+discovery has run:
+
+- The CPU starts at `RESET_PC` (`0xFFFF_0000`) in supervisor mode,
+  with the MMU in flat mode and every cache disabled.
+- At least two pages (8 KB) of RAM at physical address 0 — see
+  [bus.md: Minimum RAM Requirement](./bus.md#minimum-ram-requirement).
+  The ROM runs before it knows what else exists, so it keeps its own
+  working state there: the vector table, the RAM probe's save area,
+  its stack and the boot data.
+- The console UART at its hardwired address.
+
+Everything else — how much RAM there is, which devices exist and
+where they sit — the ROM discovers, through the RAM probe and
+autoconfig, and records in the boot data.
+
+### ROM to Loaded Program
+
+What a program the ROM starts (`PENBOOT.ELF`, or any other ELF the
+monitor boots) can rely on at its entry point:
+
+- Supervisor mode, MMU off, interrupts off, every cache disabled.
+  R1 holds the physical address of the boot data; R2 is undefined.
+- Its PT_LOAD segments where the ROM placed them, `.bss` zeroed. The
+  load address is the ROM's choice, so the program finds it at run
+  time.
+- The boot data: `total_size` bytes at R1, anywhere in RAM. R1 is
+  the only way to find it, and it stays intact until the program
+  itself reuses that memory.
+- The exception vector table at physical `0x00`–`0x3F`, where the
+  architecture fixes it ([architecture.md: Vector
+  Table](./architecture.md#vector-table)). Its entries still name the
+  ROM's handlers; the program installs its own before it relies on
+  an exception.
+
+The jump is one-way. Nothing else of the ROM's survives the handoff:
+its stack and the buffer it read the ELF file into are free RAM.
+
+The program learns the RAM layout only from the boot data's
+`MEMORY` entries. It assumes no amount of RAM and no RAM at a fixed
+address other than the vector table — in particular not the two low
+pages the hardware guarantees the ROM, which are the ROM's alone.
+The RAM free to the program is the `MEMORY` regions less the vector
+table, the boot data and its own image.
+
 ## Boot ROM
 
 **Location:** On-chip ROM at `0xFFFF_0000` (CPU reset vector).
@@ -65,13 +119,14 @@ and `go` commands provide raw sector reads and direct address
 jumps.
 
 **Environment:** Physical addressing, supervisor mode, no MMU.
-Stack top at `0x2000`, growing down into page 1 (pages 0–1 are the
-reserved low-RAM region; general RAM starts at page 2).  The boot
+The ROM works out of the two low pages the hardware guarantees it
+([Hardware to ROM](#hardware-to-rom)); how it lays them out is its
+own business, not part of what it hands a loaded program.  The boot
 ROM is OS-agnostic — it knows nothing about NetBSD or any other OS.
 
 **Boot data:** The ROM writes a Penumbra-specific boot data
-structure (see below) to a well-known physical address before
-jumping to the loader.
+structure (see below) and passes its physical address to the loader
+in R1.
 
 ## Boot Loader
 
@@ -210,7 +265,9 @@ The ROM monitor uses `sd:<controller>,<cs>` syntax where `<controller>` is the i
 
 **Entry alignment:** All entries are 4-byte aligned (matching Penumbra's ILP32 word size). The `size` field is always a multiple of 4. Consumers advance by `size` bytes and can assume word-aligned access.
 
-**Location in RAM:** The ROM places the boot data at the top of the first detected RAM page that isn't reserved for the vector table or trap stack. The exact address depends on RAM layout, but R1 always points to it, so consumers don't need to know a fixed address.
+**Location in RAM:** Anywhere in RAM, at the ROM's choice. R1 is
+the only way to find it; a consumer never uses a fixed address (see
+[ROM to Loaded Program](#rom-to-loaded-program)).
 
 ### NetBSD Bootinfo Translation
 
@@ -275,7 +332,8 @@ Target layout for the ULX3S SD card:
 
 9. **Initial MMU setup:** The bootloader is not required to pre-map kernel pages. The kernel's entry code is responsible for building its own page tables in physical mode, installing its exception handlers, and enabling the MMU before jumping to its virtual link address.
 
-10. **Boot data physical location:** The ROM places the boot data at physical address `0x0000_0040` (page 0, immediately following the exception vector table).
+10. **Boot data location:** Not part of the interface. The ROM may
+    place it anywhere in RAM; consumers find it only through R1.
 
 ## Open Questions
 

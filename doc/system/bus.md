@@ -72,6 +72,12 @@ probe that discovers additional RAM itself needs these two pages
 working. The RAM probe (see below) extends the usable region upward
 from the 2-page floor.
 
+The guarantee is to the boot ROM alone: it is what lets the ROM run
+before it has discovered anything. A program the ROM loads takes the
+RAM layout from the boot data instead and relies on none of this —
+see [boot-protocol.md: Boot
+Interfaces](./boot-protocol.md#boot-interfaces).
+
 ### I/O Peripheral Map
 
 Only the console UART has a fixed I/O address. Every other peripheral

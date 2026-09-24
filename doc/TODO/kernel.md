@@ -823,6 +823,25 @@ structure wastes most of a page and a pinned slot is scarce; and the
 mechanics, which are a linker section plus a pin at boot in
 `pmap_bootstrap`, alongside the existing pinned-slot assignments.
 
+## Kernel: physical memory setup keeps off the vector page by placement
+
+`penumbra_physmem_init()` (`startup.c`) hands UVM every `MEMORY`
+region, less the part of the kernel's own region below the end of
+the kernel image and message buffer. That exclusion is the only thing
+keeping UVM off page 0, where the architecture fixes the exception
+vector table, and it covers page 0 only because PENBOOT loads the
+kernel into the region that starts at 0. A kernel loaded into any
+other region — base RAM too small for it, the kernel in expansion
+RAM — would have page 0 handed out as a free page while its vectors
+live there. The same exclusion also strands everything below the
+kernel (the ROM's scratch buffer, PENBOOT and its heap) for the life
+of the system; bootinfo is not at risk, since `locore.S` copies it
+into `bootinfo_store` first.
+
+Open: reserve the vector table's page explicitly, and release the
+rest of the RAM below the kernel, which holds nothing the kernel
+reads once bootinfo is copied.
+
 ## Ruled out
 
 - **Refill way pick: set bits mixed into the counter bit, or an empty

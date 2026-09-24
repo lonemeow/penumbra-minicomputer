@@ -688,3 +688,28 @@ sequence each. Padding the table to 32 entries turns the index into
 dwarfs it — but the cost scales with pixels rather than iterations, so
 it grows in relative terms on a framebuffer, where shallow escape
 counts are common.
+
+## Benchmark: bare-metal startups use fixed low RAM
+
+The harness startups (`benchmark/common/crt0.S`,
+`benchmark/dhrystone/dhry_crt0.S`) copy their TLB-miss and interrupt
+handlers to physical `0x1000` and pin that page, keep the timer's
+accumulated ticks at `0x38` — reserved vector 14 — and pin page 0 so
+the handlers reach it with the MMU on. `bench.c` and `tlbrange.c`
+address both by constant, and `memtest` and `membench` fall back to
+boot data at `0x40` when R1 is 0. None of it comes from the boot
+data, and the two low pages are guaranteed to the ROM, not to what
+it loads ([boot-protocol.md: ROM to Loaded
+Program](../system/boot-protocol.md#rom-to-loaded-program)). It
+works only because every machine so far has RAM there, and the tick
+word breaks silently once vector 14 is assigned.
+
+Open:
+
+- Run the handler block in place from a page-aligned section of the
+  image and pin that page; the handlers are PC-relative already.
+- Move the tick word into the handler block beside the other handler
+  state, and reach it by symbol from `bench.c`.
+- Drop the page-0 pin and the `0x40` fallbacks.
+- Take the memtest window from the `MEMORY` entry holding the image,
+  not the first one.
