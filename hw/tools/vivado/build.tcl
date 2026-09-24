@@ -25,11 +25,26 @@ set out     [file normalize $out]
 set log     [file normalize $log]
 set verilog [file normalize $verilog]
 set xdcs    [lmap f $xdcs {file normalize $f}]
+set srcdir  [pwd]
 file mkdir $out.vivado
 cd $out.vivado
 
 # A failed build must not leave an older bitstream behind to program.
 file delete -force $out.bit
+
+# Vivado resolves a $readmemh/$readmemb file name against its working
+# directory, the scratch directory above, and synthesizes a memory whose
+# image it cannot open as all zeros. Each image the design names is
+# copied in from where make runs, so a missing one stops the build here.
+set f [open $verilog r]
+set text [read $f]
+close $f
+foreach {- image} [regexp -all -inline {\$readmem[hb]\s*\(\s*"([^"]+)"} $text] {
+    if {[file pathtype $image] eq "relative"} {
+        file mkdir [file dirname $image]
+        file copy -force [file join $srcdir $image] $image
+    }
+}
 
 read_verilog $verilog
 foreach f $xdcs {
