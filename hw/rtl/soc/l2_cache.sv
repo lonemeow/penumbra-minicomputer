@@ -187,10 +187,13 @@ module l2_cache
     // enough to drag fmax 1-2 MHz below the L2-off baseline).
     // plru stays in flops — 3 bits × NUM_SETS, with a parallel
     // read+update pattern that doesn't fit BRAM nicely.
+    //
+    // Every BRAM here is one generated memory per way with one read
+    // and one write port, each port written by a single statement in
+    // a process of its own. yosys maps a 2-D array or several write
+    // sites onto one BRAM by itself; Vivado does neither, and builds
+    // such an array from flops or LUT RAM instead.
     // ══════════════════════════════════════════════════════════
-    (* ram_style = "block" *)
-    logic [TAG_BITS-1:0] tags     [NUM_WAYS][NUM_SETS];
-
     logic [2:0]          plru     [NUM_SETS];
 
     // ══════════════════════════════════════════════════════════
@@ -200,11 +203,19 @@ module l2_cache
     logic [31:0]         data_out [NUM_WAYS];
     logic                valid_out[NUM_WAYS];
 
-    always_ff @(posedge i_clk) begin
-        for (int w = 0; w < NUM_WAYS; w++) begin
-            tag_out[w]   <= tags [w][addr_set(i_addr)];
+    // Per-way tags, installed with the line's last fill word.
+    generate
+        for (genvar gw = 0; gw < NUM_WAYS; gw++) begin : g_tag
+            (* ram_style = "block" *)
+            logic [TAG_BITS-1:0] mem [NUM_SETS];
+
+            always_ff @(posedge i_clk) begin
+                tag_out[gw] <= mem[addr_set(i_addr)];
+                if (!i_rst && fill_install && fill_way == WAY_BITS'(gw))
+                    mem[fill_set] <= fill_tag;
+            end
         end
-    end
+    endgenerate
 
     // ══════════════════════════════════════════════════════════
     // Per-way data memory — must be SEPARATE named variables.
@@ -239,38 +250,37 @@ module l2_cache
     //      output mux drove o_mem_we in cycle 0); this updates the
     //      cached copy so subsequent reads see the new bytes
     //      without paying an SDRAM round-trip.  Conditions are
-    //      mutually exclusive (S_FILL vs S_IDLE), so the priority
-    //      encoder collapses.
+    //      mutually exclusive (S_FILL vs S_IDLE), so both share the
+    //      one write port, its address, data and lanes chosen ahead
+    //      of the write.
     generate
         for (genvar gw = 0; gw < NUM_WAYS; gw++) begin : g_data
             (* ram_style = "block" *)
             logic [31:0] mem [NUM_SETS * LINE_WORDS];
 
+            logic                          dwr_fill;
+            logic                          dwr_hit;
+            logic [SET_BITS+WORD_BITS-1:0] dwr_idx;
+            logic [31:0]                   dwr_data;
+            logic [3:0]                    dwr_be;
+
+            assign dwr_fill = fill_beat && fill_way == WAY_BITS'(gw);
+            assign dwr_hit  = state == S_IDLE && s1_valid && s1_we
+                              && hit && hit_way == WAY_BITS'(gw);
+            assign dwr_idx  = dwr_fill
+                ? data_idx(fill_set, fill_word_idx[WORD_BITS-1:0])
+                : data_idx(addr_set(s1_addr), addr_word(s1_addr));
+            assign dwr_data = dwr_fill ? i_mem_rdata : s1_wdata;
+            assign dwr_be   = dwr_fill ? 4'hF : s1_byte_en;
+
             always_ff @(posedge i_clk) begin
                 data_out[gw] <= mem[data_idx(addr_set(i_addr),
                                              addr_word(i_addr))];
-                if (fill_beat && fill_way == WAY_BITS'(gw)) begin
-                    mem[data_idx(fill_set,
-                                 fill_word_idx[WORD_BITS-1:0])]
-                        <= i_mem_rdata;
-                end else if (state == S_IDLE && s1_valid && s1_we
-                             && hit && hit_way == WAY_BITS'(gw)) begin
-                    if (s1_byte_en[0])
-                        mem[data_idx(addr_set(s1_addr),
-                                     addr_word(s1_addr))][ 7: 0]
-                            <= s1_wdata[ 7: 0];
-                    if (s1_byte_en[1])
-                        mem[data_idx(addr_set(s1_addr),
-                                     addr_word(s1_addr))][15: 8]
-                            <= s1_wdata[15: 8];
-                    if (s1_byte_en[2])
-                        mem[data_idx(addr_set(s1_addr),
-                                     addr_word(s1_addr))][23:16]
-                            <= s1_wdata[23:16];
-                    if (s1_byte_en[3])
-                        mem[data_idx(addr_set(s1_addr),
-                                     addr_word(s1_addr))][31:24]
-                            <= s1_wdata[31:24];
+                if (dwr_fill || dwr_hit) begin
+                    if (dwr_be[0]) mem[dwr_idx][ 7: 0] <= dwr_data[ 7: 0];
+                    if (dwr_be[1]) mem[dwr_idx][15: 8] <= dwr_data[15: 8];
+                    if (dwr_be[2]) mem[dwr_idx][23:16] <= dwr_data[23:16];
+                    if (dwr_be[3]) mem[dwr_idx][31:24] <= dwr_data[31:24];
                 end
             end
         end
@@ -288,8 +298,9 @@ module l2_cache
     //   2. S_FILL last-word install: set mem[fill_set] in fill_way.
     //   3. S_IDLE miss kickoff: clear the PLRU victim's mem[set].
     // Conditions are mutually exclusive (different states; or
-    // different `gw` selection in S_IDLE), so the priority encoder
-    // collapses.  Phase 1.5 dropped the "S_IDLE write hit clears
+    // different `gw` selection in S_IDLE), so all three share the one
+    // write port, its address and data chosen ahead of the write
+    // (in this priority order).  Phase 1.5 dropped the "S_IDLE write hit clears
     // hit_way's valid bit" path that used to live here — write
     // hits now update the cached data via g_data (above) and leave
     // the valid bit alone.
@@ -299,18 +310,30 @@ module l2_cache
             (* ram_style = "block" *)
             logic mem [NUM_SETS];
 
+            logic                vwr_inval;
+            logic                vwr_fill;
+            logic                vwr_miss;
+            logic [SET_BITS-1:0] vwr_idx;
+
+            assign vwr_inval = state == S_INVAL_ALL;
+            assign vwr_fill  = fill_install && fill_way == WAY_BITS'(gw);
+            assign vwr_miss  = state == S_IDLE && s1_valid && s1_re && !hit
+                               && plru_victim(plru[addr_set(s1_addr)])
+                                  == WAY_BITS'(gw);
+
+            always_comb begin
+                if (vwr_inval)
+                    vwr_idx = inval_walk_idx;
+                else if (vwr_fill)
+                    vwr_idx = fill_set;
+                else
+                    vwr_idx = addr_set(s1_addr);
+            end
+
             always_ff @(posedge i_clk) begin
                 valid_out[gw] <= mem[addr_set(i_addr)];
-
-                if (state == S_INVAL_ALL) begin
-                    mem[inval_walk_idx] <= 1'b0;
-                end else if (fill_install && fill_way == WAY_BITS'(gw)) begin
-                    mem[fill_set] <= 1'b1;
-                end else if (state == S_IDLE && s1_valid && s1_re && !hit
-                             && plru_victim(plru[addr_set(s1_addr)])
-                                == WAY_BITS'(gw)) begin
-                    mem[addr_set(s1_addr)] <= 1'b0;
-                end
+                if (vwr_inval || vwr_fill || vwr_miss)
+                    mem[vwr_idx] <= vwr_fill && !vwr_inval;
             end
         end
     endgenerate
@@ -833,10 +856,10 @@ module l2_cache
                         // generate block above (g_data[gw].mem
                         // always_ff) — keyed on fill_way == gw.
                         if (fill_word_idx == LAST_FILL_WORD) begin
-                            // Last word — install tag and return to
-                            // S_IDLE.  fill_way's valid bit is set by
-                            // the g_valid generate block on the same
-                            // edge.  The CPU's request is still
+                            // Last word — return to S_IDLE.  fill_way's
+                            // tag and valid bit are installed by the
+                            // g_tag and g_valid generate blocks on the
+                            // same edge.  The CPU's request is still
                             // pending; the pipeline will re-serve it
                             // as a hit in the next 2 cycles.
                             //
@@ -847,7 +870,6 @@ module l2_cache
                             // this branch and would otherwise put the
                             // bus response path in front of the plru
                             // array's per-set clock-enable.
-                            tags [fill_way][fill_set] <= fill_tag;
                             state <= S_IDLE;
                         end else begin
                             fill_word_idx <= fill_word_idx + 1'b1;
