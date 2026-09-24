@@ -468,15 +468,14 @@ straight through: the song is known, so cues are placed where it does.
 
 The ROM reads the ELF into a scratch buffer at 0x2000 and loads the
 image directly above it, so the image ends near twice the file size.
-`crt0.S` starts the stack at 1 MB growing down, so an ELF approaching
-500 KB — less the stack's depth — runs its image into the stack;
-`rt_mem_init()` panics when it does. Music and assets ride in the ELF,
-so this is the budget they share until the stack moves.
+The stack lives in the image's `.bss` (`crt0.S`), and the heap is
+everything past the image to the end of base RAM, so the one limit on
+music and assets, which ride in the ELF, is base RAM itself;
+`rt_mem_init()` panics when the image leaves nothing for the heap.
 
-Everything above the stack is the heap's, to the end of base RAM.
-Anything derived at startup belongs there rather than in the ELF —
-the replayer's samples, expanded from 8-bit bytes to device frames,
-are 4x their size in the module.
+Anything derived at startup belongs in the heap rather than in the
+ELF — the replayer's samples, expanded from 8-bit bytes to device
+frames, are 4x their size in the module.
 
 The heap is a free list in address order, first fit, merging
 neighbours as they come back. Parts take a few large buffers rather
@@ -486,6 +485,20 @@ order is never LIFO: a part frees from `leave()`, by which time the
 next part's precalc has already allocated. Blocks start on an L2 line,
 and a part that forgets to free surfaces as an out-of-memory panic
 rather than as slow decay.
+
+## Fixed low RAM
+
+Open. `crt0.S` copies the TLB-miss and interrupt handlers to
+physical `0x1000` and pins that page and page 0, `bootdata.c` falls
+back to boot data at `0x40` when R1 is 0, and `rt_mem_init()` takes
+the heap from the `MEMORY` entry at base 0. None of that comes from
+the boot data, and the two low pages are guaranteed to the ROM, not
+to what it loads (`doc/system/boot-protocol.md`, ROM to Loaded
+Program); it works only because every machine so far has RAM there.
+The fix: run the handler block in place from a page-aligned section
+of the image and pin that page, drop the page-0 pin — which returns a
+slot to `.pinned` — and the `0x40` fallback, and take the heap from
+the `MEMORY` entry holding the image.
 
 ## Interrupt context
 

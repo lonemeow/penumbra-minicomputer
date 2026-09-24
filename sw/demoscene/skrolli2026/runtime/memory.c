@@ -1,10 +1,10 @@
 /*
- * memory.c — the heap: RAM above the stack, in blocks with a free list
+ * memory.c — the heap: RAM past the image, in blocks with a free list
  * kept in address order so neighbours can be merged back together.
  *
- * The ROM loads the image low, directly above its copy of the ELF file;
- * crt0.S starts the stack at STACK_TOP growing down.  Everything from
- * STACK_TOP to the end of base RAM is free.
+ * The ROM loads the image, whose .bss holds the stack (crt0.S), into
+ * base RAM; everything from the end of the image to the end of base
+ * RAM is free.
  *
  * Parts hold buffers for as long as they run and hand them back from
  * leave(), by which time the next part has already allocated its own,
@@ -13,9 +13,6 @@
  */
 
 #include "rt_internal.h"
-
-#define STACK_TOP       0x00100000      /* matches crt0.S */
-#define STACK_RESERVE   0x00010000
 
 #define ALIGN           16              /* one L2 line */
 
@@ -38,16 +35,17 @@ static uint32_t heap_end;
 
 void rt_mem_init(uint32_t bootdata)
 {
-    uint32_t base, size;
+    uint32_t base, size, heap_start;
 
     if (!rt_find_device(bootdata, ACFG_CLASS_MEMORY, &base, &size) || base)
         rt_panic("no base RAM in the boot data");
-    if ((uint32_t)_end > STACK_TOP - STACK_RESERVE)
-        rt_panic("image runs into the stack");
+    heap_start = ((uint32_t)_end + ALIGN - 1) & ~(ALIGN - 1u);
+    if (heap_start + BLK_HDR >= size)
+        rt_panic("no base RAM past the image");
 
     heap_end = size;
-    free_list = (struct blk *)STACK_TOP;
-    free_list->size = heap_end - STACK_TOP;
+    free_list = (struct blk *)heap_start;
+    free_list->size = heap_end - heap_start;
     free_list->state = BLK_FREE;
     free_list->next = 0;
 }

@@ -55,7 +55,11 @@
 
 /* ── Fixed addresses ──────────────────────────────────────────── */
 #define HANDLER_PAGE        0x1000
-#define STACK_TOP           0x00100000  /* 1 MB */
+
+/* ── Stack ────────────────────────────────────────────────────────
+ * The stack is part of the image's .bss, so the ROM allocates it with
+ * the rest of the program; the heap (memory.c) starts past the image. */
+#define RT_STACK_BYTES      65536
 
 
 /* ═════════════════════════════════════════════════════════════════
@@ -72,7 +76,6 @@
 
 _start:
         mov     r5, r1                  /* save bootdata pointer */
-        li      sp, 0x00080000          /* temp stack at 512 KB */
 
         /* Compute runtime address of _DYNAMIC (PC-relative) */
         mov     r2, pc
@@ -334,7 +337,13 @@ _start:
  * Phase 5: Set stack + call rt_main
  * ═════════════════════════════════════════════════════════════════ */
 
-        li      sp, STACK_TOP
+        /* The stack's top, from a .data slot the relocator patched: a
+         * direct PC-relative reference cannot reach past a large image. */
+        mov     r2, pc
+        add     r2, #8
+        add     r2, #%pcrel(.Laddr_stack_top)
+        ldw     r2, [r2]
+        mov     sp, r2
         mov     r1, r5                  /* bootdata pointer */
         bl      rt_main
         break                           /* halt CPU */
@@ -347,6 +356,8 @@ _start:
         .align  4
 .Ldynamic_linkaddr:
         .long   _DYNAMIC
+.Laddr_stack_top:
+        .long   _rt_stack_top
 .Laddr_handler_start:
         .long   _handler_start
 .Laddr_handler_end:
@@ -497,3 +508,11 @@ _irq_save_esr:  .long 0
 _irq_c_entry:   .long 0
 
 _handler_end:
+
+
+/* ── Stack, allocated with the image ─────────────────────────────── */
+        .section .bss.stack,"aw",@nobits
+        .balign 16
+_rt_stack:
+        .space  RT_STACK_BYTES
+_rt_stack_top:
