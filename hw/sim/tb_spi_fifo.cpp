@@ -7,9 +7,12 @@
 // Documented contract (from spi_fifo.sv header):
 //   - Circular buffer, power-of-2 depth, 8-bit data.
 //   - Synchronous write port (i_wr/i_wdata), pop port (i_rd).
-//   - o_rdata is valid same cycle as i_rd (combinational read).
+//   - A pushed entry becomes poppable one cycle after its push:
+//     o_empty clears then, and o_rdata holds the head whenever
+//     !o_empty, valid in the cycle i_rd pops it.
 //   - Full/empty disambiguated with an extra pointer MSB.
-//   - o_level = entries currently stored (0..DEPTH).
+//   - o_level = entries pushed and not yet popped (0..DEPTH), counted
+//     from the push.
 //   - i_flush synchronously clears (same effect as i_rst on pointers).
 //   - Simultaneous read+write while full is allowed and preserves
 //     level (write_valid = i_wr && (!o_full || i_rd)).
@@ -50,11 +53,15 @@ static void push(Vspi_fifo* d, uint8_t byte) {
     d->i_wr = 0;
 }
 
-// Pop one byte.  o_rdata is combinational, valid the same cycle i_rd
-// is asserted.  Sample before the tick.
+// Pop one byte as a consumer does: wait while o_empty, then pop.
+// o_rdata is valid in the popping cycle; sample before the tick.
 static uint8_t pop(Vspi_fifo* d) {
-    d->i_rd = 1;
     d->i_wr = 0;
+    d->i_rd = 0;
+    d->eval();
+    for (int i = 0; i < 4 && d->o_empty; i++)
+        tick(d);
+    d->i_rd = 1;
     d->eval();
     uint8_t v = d->o_rdata;
     tick(d);
@@ -106,13 +113,30 @@ static void test_reset_state(Vspi_fifo* d) {
 }
 
 static void test_push_one(Vspi_fifo* d) {
-    printf("── Push one byte: not empty, level=1 ──\n");
+    printf("── Push one byte: counted at once, poppable a cycle later ──\n");
     reset(d);
 
     push(d, 0x42);
-    check_bool("push.not_empty", d->o_empty, false);
+    check("push.level_counts_it_at_once", d->o_level, 1u);
     check_bool("push.not_full", d->o_full, false);
-    check("push.level_one", d->o_level, 1u);
+    check_bool("push.not_poppable_in_the_next_cycle", d->o_empty, true);
+    tick(d);
+    check_bool("push.poppable_one_cycle_later", d->o_empty, false);
+    check("push.head_is_the_pushed_byte", d->o_rdata, 0x42u);
+}
+
+static void test_early_pop_is_ignored(Vspi_fifo* d) {
+    printf("── A pop before the pushed byte is poppable does nothing ──\n");
+    reset(d);
+
+    push(d, 0x5A);
+    d->i_rd = 1;                 // the cycle right after the push
+    d->eval();
+    tick(d);
+    d->i_rd = 0;
+    check("early_pop.level_unchanged", d->o_level, 1u);
+    check("early_pop.byte_still_there", pop(d), 0x5Au);
+    check_bool("early_pop.empty_after_the_real_pop", d->o_empty, true);
 }
 
 static void test_push_pop_round_trip(Vspi_fifo* d) {
@@ -297,6 +321,7 @@ int main() {
 
     test_reset_state(d);
     test_push_one(d);
+    test_early_pop_is_ignored(d);
     test_push_pop_round_trip(d);
     test_fifo_ordering(d);
     test_fill_to_full(d);

@@ -708,11 +708,6 @@ that breaks the declaration and the Vivado signoff gate does the
 same. The gen2 caches, the gate and the declarations landed in
 2920dbc, fe677f1, 92de501 and 08ed166. What is left:
 
-- `spi_fifo` reads its head entry combinationally, so it can only be
-  LUT RAM as written; its 512-deep SPI instances map to block RAM
-  under yosys and LUT RAM under Vivado. It is to become block RAM
-  under both, read one entry ahead with a bypass for a same-cycle
-  write.
 - The SDRAM CDC's slot arrays stay undeclared on purpose while the
   ECP5-side crossing is being reworked; `slot_we` maps to flip-flops
   under yosys and LUT RAM under Vivado.

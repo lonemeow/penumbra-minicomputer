@@ -9,6 +9,15 @@
 // Full/empty use the classic "extra MSB" trick: pointers are
 // (ADDR_WIDTH+1) bits wide.  When the low ADDR_WIDTH bits match,
 // the MSBs distinguish full (differ) from empty (same).
+//
+// The storage is block RAM, and a pushed entry becomes poppable one
+// cycle after its push: o_empty compares against the write pointer
+// as it stood a cycle earlier. The RAM reads the next head every
+// cycle, and by the time an entry is poppable that read has seen it
+// written, so a pop's o_rdata never needs a path around the RAM.
+// o_full and o_level count an entry from its push, so the producer
+// can never overfill; a consumer that reads o_level and then pops is
+// a bus access later, when every entry counted is poppable.
 
 module spi_fifo
     import penumbra_pkg::*;
@@ -24,12 +33,12 @@ module spi_fifo
 
     // Read port
     input  logic       i_rd,       // read enable (pop)
-    output logic [7:0] o_rdata,    // read data (valid same cycle as i_rd)
+    output logic [7:0] o_rdata,    // head entry, valid whenever !o_empty
 
     // Status
     output logic       o_full,
-    output logic       o_empty,
-    output logic [LEVEL_BITS-1:0] o_level,  // number of entries currently stored
+    output logic       o_empty,    // no entry poppable yet
+    output logic [LEVEL_BITS-1:0] o_level,  // entries pushed and not yet popped
 
     // Control
     input  logic       i_flush     // synchronous clear
@@ -38,37 +47,49 @@ module spi_fifo
     localparam ADDR_WIDTH = $clog2(DEPTH);
     localparam LEVEL_BITS = ADDR_WIDTH + 1;   // 0..DEPTH
 
-    // Storage
-    logic [7:0] mem [DEPTH];
+    (* ram_style = "block" *) logic [7:0] mem [DEPTH];
 
     // Pointers — one extra MSB for full/empty disambiguation
-    logic [ADDR_WIDTH:0] wr_ptr, rd_ptr;
+    logic [ADDR_WIDTH:0] wr_ptr_q, rd_ptr_q;
+    logic [ADDR_WIDTH:0] wr_ptr_d, rd_ptr_d;
+    logic [ADDR_WIDTH:0] wr_ptr_seen_q;   // wr_ptr_q one cycle late: the pop side's view
 
-    assign o_empty = wr_ptr == rd_ptr;
-    assign o_full  = (wr_ptr[ADDR_WIDTH-1:0] == rd_ptr[ADDR_WIDTH-1:0]) &&
-                     (wr_ptr[ADDR_WIDTH] != rd_ptr[ADDR_WIDTH]);
-    assign o_level = wr_ptr - rd_ptr;
-    assign o_rdata = mem[rd_ptr[ADDR_WIDTH-1:0]];
+    assign o_empty = wr_ptr_seen_q == rd_ptr_q;
+    assign o_full  = (wr_ptr_q[ADDR_WIDTH-1:0] == rd_ptr_q[ADDR_WIDTH-1:0]) &&
+                     (wr_ptr_q[ADDR_WIDTH] != rd_ptr_q[ADDR_WIDTH]);
+    assign o_level = wr_ptr_q - rd_ptr_q;
 
     logic write_valid;
     logic read_valid;
+    logic write_en;     // write_valid that is not cleared by a reset or flush
 
     assign write_valid = i_wr && (!o_full || i_rd);
     assign read_valid  = i_rd && !o_empty;
+    assign write_en    = write_valid && !(i_rst || i_flush);
+
+    always_comb begin
+        if (i_rst || i_flush) begin
+            wr_ptr_d = '0;
+            rd_ptr_d = '0;
+        end else begin
+            wr_ptr_d = write_valid ? wr_ptr_q + 1'b1 : wr_ptr_q;
+            rd_ptr_d = read_valid  ? rd_ptr_q + 1'b1 : rd_ptr_q;
+        end
+    end
 
     always_ff @(posedge i_clk) begin
-        if (i_rst || i_flush) begin
-            wr_ptr <= '0;
-            rd_ptr <= '0;
-        end else begin
-            if (write_valid) begin
-                mem[wr_ptr[ADDR_WIDTH-1:0]] <= i_wdata;
-                wr_ptr      <= wr_ptr + 1;
-            end
-            if (read_valid) begin
-                rd_ptr  <= rd_ptr + 1;
-            end
-        end
+        wr_ptr_q      <= wr_ptr_d;
+        rd_ptr_q      <= rd_ptr_d;
+        wr_ptr_seen_q <= (i_rst || i_flush) ? '0 : wr_ptr_q;
+    end
+
+    always_ff @(posedge i_clk) begin
+        if (write_en)
+            mem[wr_ptr_q[ADDR_WIDTH-1:0]] <= i_wdata;
+    end
+
+    always_ff @(posedge i_clk) begin
+        o_rdata <= mem[rd_ptr_d[ADDR_WIDTH-1:0]];
     end
 
 endmodule
