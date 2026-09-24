@@ -2,25 +2,34 @@
 # shared sv2v step writes to a bitstream (the xc7 half of `make fpga`).
 #
 # Usage: vivado -mode batch -source build.tcl
-#            -tclargs <top module> <part> <out> <verilog> [<xdc> ...]
+#            -tclargs <top module> <part> <out> <log> <verilog> [<xdc> ...]
 #
-# <out> is the artifact prefix (build/<top>). Outputs:
-#   <out>.bit                   the bitstream
+# <out> is the artifact prefix (build/<top>), and <log> the file given
+# to vivado -log, which the critical-warning gate reads. Outputs:
+#   <out>.bit                   the bitstream, only when every gate passes
 #   <out>_timing_summary.rpt    read by `make timing`
-#   <out>_utilization.rpt, <out>_drc.rpt
+#   <out>_utilization.rpt, <out>_drc.rpt, <out>_methodology.rpt,
+#   <out>_cdc.rpt
 #   <out>_routed.dcp            for interactive timing analysis
-# Reports come before the bitstream, so a failed bitgen still leaves
-# them to read. Vivado's own scratch (.Xil/, clockInfo.txt) goes to
+# The signoff gates (gates.tcl) run on the routed design; a failure
+# exits non-zero without a bitstream, after the reports and checkpoint
+# are written. Vivado's own scratch (.Xil/, clockInfo.txt) goes to
 # <out>.vivado/ rather than the directory make runs in.
 
-lassign $argv top part out verilog
-set xdcs [lrange $argv 4 end]
+lassign $argv top part out log verilog
+set xdcs [lrange $argv 5 end]
+
+source [file join [file dirname [file normalize [info script]]] gates.tcl]
 
 set out     [file normalize $out]
+set log     [file normalize $log]
 set verilog [file normalize $verilog]
 set xdcs    [lmap f $xdcs {file normalize $f}]
 file mkdir $out.vivado
 cd $out.vivado
+
+# A failed build must not leave an older bitstream behind to program.
+file delete -force $out.bit
 
 read_verilog $verilog
 foreach f $xdcs {
@@ -38,5 +47,21 @@ report_timing_summary -max_paths 10 -report_unconstrained \
     -file ${out}_timing_summary.rpt
 report_utilization -file ${out}_utilization.rpt
 report_drc -file ${out}_drc.rpt
+report_methodology -file ${out}_methodology.rpt
+report_cdc -details -file ${out}_cdc.rpt
 write_checkpoint -force ${out}_routed.dcp
+
+set failures [gate_failures $log]
+foreach line [clock_fmax_lines] {
+    puts "Timing: $line"
+}
+if {[llength $failures] > 0} {
+    foreach f $failures {
+        puts "GATE FAILED: $f"
+    }
+    puts "Signoff: FAIL, no bitstream written"
+    exit 1
+}
+puts "Signoff: PASS"
+
 write_bitstream -force ${out}.bit

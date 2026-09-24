@@ -1503,13 +1503,15 @@ FPGA_SYNTH_OUT_ecp5 = $(BUILD_DIR)/$(TOP).json
 FPGA_SYNTH_CMD_ecp5 = $(FPGA_TOOLS)/yosys -p "read_verilog $(BUILD_DIR)/$(TOP)_sv2v.v; synth_ecp5 -top $(TOP_MODULE) -json $@"
 
 FPGA_SYNTH_OUT_xc7  = $(BUILD_DIR)/$(TOP).bit
-FPGA_SYNTH_DEPS_xc7 = $(XDC) $(XDC_MASTER) hw/tools/xdc_check.py $(VIVADO_TOOLS)/build.tcl
+FPGA_SYNTH_DEPS_xc7 = $(XDC) $(XDC_MASTER) hw/tools/xdc_check.py $(VIVADO_TOOLS)/build.tcl \
+                      $(VIVADO_TOOLS)/gates.tcl
+FPGA_VIVADO_LOG     = $(BUILD_DIR)/$(TOP)_vivado.log
 FPGA_SYNTH_CMD_xc7  = python3 hw/tools/xdc_check.py $(XDC_MASTER) $(XDC) && \
                       $(VIVADO_TOOLS)/bin/vivado -mode batch -nojournal \
-                      -log $(BUILD_DIR)/$(TOP)_vivado.log \
+                      -log $(FPGA_VIVADO_LOG) \
                       -source $(VIVADO_TOOLS)/build.tcl \
                       -tclargs $(TOP_MODULE) $(PART_$(FPGA_BOARD)) $(BUILD_DIR)/$(TOP) \
-                               $(BUILD_DIR)/$(TOP)_sv2v.v $(XDC)
+                               $(FPGA_VIVADO_LOG) $(BUILD_DIR)/$(TOP)_sv2v.v $(XDC)
 
 $(FPGA_SYNTH_OUT_$(FPGA_FAMILY)): $(FPGA_SRC) $(PHASE_STAMP) $(SDRAM_STAMP) \
     $(if $(filter $(TOP),$(FPGA_UCODE_TOPS)),$(UCODE_SRC)) \

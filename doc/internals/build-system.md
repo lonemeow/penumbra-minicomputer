@@ -293,3 +293,27 @@ master XDC, which is vendored verbatim under `hw/third_party/` and
 never edited; `hw/tools/xdc_check.py` holds every pin and board-clock
 line of a top's XDC to the master before each build, so a mistyped
 pin or I/O standard stops the build before Vivado runs.
+
+An xc7 build ends in signoff gates (`hw/tools/vivado/gates.tcl`),
+because Vivado reports a design that fails timing and writes its
+bitstream anyway. The routed design gets a bitstream only when:
+
+- setup, hold and pulse width are met on every clock;
+- `check_timing` finds every flop clocked, every endpoint constrained,
+  and every I/O port either given a delay or explicitly false-pathed;
+- `report_cdc` finds no unsafe or unknown crossing and no synchronizer
+  flop without `ASYNC_REG`;
+- methodology and DRC checks find nothing at critical-warning severity
+  or above, and the run logs no critical warning at all.
+
+The timing floor is zero slack. Vivado times setup at the slow corner
+(85 °C, minimum voltage) and hold at the fast one, with each clock's
+jitter charged to every path, so a met constraint already holds across
+the device's operating range. A design that wants margin states it in
+its XDC as clock uncertainty, which the tools then optimize against.
+The coverage and crossing gates carry the weight: slack says nothing
+about a path Vivado was never asked to time. On failure the reports
+and routed checkpoint are still written and any older bitstream is
+deleted, so `make flash` has nothing stale to program. Pass or fail,
+the build prints each clock's worst slack and the frequency its worst
+path would allow.
