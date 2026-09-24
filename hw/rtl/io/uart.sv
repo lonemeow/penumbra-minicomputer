@@ -366,7 +366,7 @@ module uart
     // samples data at mid-bit, delivers byte to RBR.
 
     // Synchronize i_rx to avoid metastability
-    logic rx_sync1, rx_sync2;
+    (* ASYNC_REG = "TRUE" *) logic rx_sync1, rx_sync2;
     always_ff @(posedge i_clk) begin
         rx_sync1 <= i_rx;
         rx_sync2 <= rx_sync1;
