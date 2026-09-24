@@ -18,9 +18,9 @@
 //    with a low stop bit sets led[4], is not echoed, and reset clears it;
 //  - heartbeat: led[2] toggles every CPU_HZ / 2 cycles, through reset.
 #include "Vnexysvideo_uart_test_top.h"
+#include "uart_host.h"
 #include "verilated.h"
 #include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -51,74 +51,19 @@ static void chk(bool ok, const char* what) {
 
 static bool led(int n) { return (top->led >> n) & 1; }
 
-// ── Host receiver: decodes uart_rx_out as the FT232R would ──────────
-// Samples each bit at its ideal middle from the start edge, and checks
-// every transition inside a frame against the ideal bit grid.
-struct HostRx {
-    bool in_frame = false;
-    uint64_t start = 0;
-    int next = 0;               // next sample: 0 start, 1..8 data, 9 stop
-    uint8_t byte = 0;
-    bool last = true;
-    std::string text;
-    int frame_errors = 0;
-    double worst_edge_err = 0;  // fraction of the edge's distance from start
-    uint64_t last_activity = 0;
-
-    uint64_t sample_at(int k) const {
-        return start + (uint64_t)std::llround((k + 0.5) * BIT);
-    }
-
-    void step(bool line) {
-        if (line != last)
-            last_activity = cycle;
-        if (!in_frame) {
-            if (last && !line) {
-                in_frame = true;
-                start = cycle;
-                next = 0;
-                byte = 0;
-            }
-        } else {
-            if (line != last) {
-                double bits = double(cycle - start) / BIT;
-                double k = std::round(bits);
-                if (k >= 1) {
-                    double err = std::fabs(bits - k) / k;
-                    if (err > worst_edge_err)
-                        worst_edge_err = err;
-                }
-            }
-            if (cycle == sample_at(next)) {
-                if (next == 0 && line) {
-                    in_frame = false;             // glitch, not a start bit
-                } else if (next >= 1 && next <= 8) {
-                    byte |= (uint8_t)line << (next - 1);
-                } else if (next == 9) {
-                    if (line)
-                        text += (char)byte;
-                    else
-                        frame_errors++;
-                    in_frame = false;
-                }
-                next++;
-            }
-        }
-        last = line;
-    }
-};
-
-static HostRx host;
+static UartHostRx host(BIT);
+static UartHostTx host_tx(BIT);
 static std::vector<uint64_t> beat_toggles;
 static bool last_beat = false;
 
 static void tick() {
+    top->uart_tx_in = host_tx.line(cycle);
     top->clk = 0;
     top->eval();
     top->clk = 1;
     top->eval();
     cycle++;
-    host.step(top->uart_rx_out);
+    host.step(top->uart_rx_out, cycle);
     bool beat = led(LED_BEAT);
     if (beat != last_beat)
         beat_toggles.push_back(cycle);
@@ -152,17 +97,11 @@ static void wait_tx_quiet() {
         tick();
 }
 
-// Drive one frame into uart_tx_in at exactly BAUD.
+// Send one frame into uart_tx_in and run until it is out.
 static void host_send(uint8_t byte, bool stop_bit = true) {
-    uint64_t t0 = cycle;
-    for (int k = 0; k < 10; k++) {
-        bool bit = k == 0 ? false : k == 9 ? stop_bit : (byte >> (k - 1)) & 1;
-        top->uart_tx_in = bit;
-        uint64_t end = t0 + (uint64_t)std::llround((k + 1) * BIT);
-        while (cycle < end)
-            tick();
-    }
-    top->uart_tx_in = 1;
+    host_tx.send(byte, stop_bit);
+    while (host_tx.busy())
+        tick();
 }
 
 static void check_release(const char* after) {
