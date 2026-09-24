@@ -1179,6 +1179,11 @@ SRC_MACHINE_penumbra2 = hw/rtl/machine/machine_penumbra2.sv \
 SRC_BOARD_ulx3s = $(FPGA_RTL)/ecp5_pll_pkg.sv
 LPF_ulx3s       = hw/constraints/ulx3s_v20.lpf
 
+# The Nexys Video's clocking and power-on reset, shared by its tops; the
+# MMCM package comes first because the clock/reset module imports it.
+SRC_BOARD_nexysvideo = $(FPGA_RTL)/xc7/xc7_mmcm_pkg.sv \
+                       $(FPGA_RTL)/nexysvideo/nexysvideo_clk_rst.sv
+
 # Each board's device family picks the flow that builds and programs
 # it: ecp5 (yosys, nextpnr-ecp5, ecppack, fujprog) or xc7 (Vivado,
 # openFPGALoader).
@@ -1205,7 +1210,8 @@ XDC = $(if $(XDC_$(TOP)),$(XDC_$(TOP)),$(XDC_$(TOP_MODULE)))
 # silently empty source list.
 FPGA_TOPS = ulx3s_penumbra1_top ulx3s_penumbra2_probe_top ulx3s_penumbra2_top \
             ulx3s_penumbra2_5_top ulx3s_penumbra3_probe_memtlb_top \
-            ulx3s_penumbra3_probe_issue_top ulx3s_penumbra3_probe_decode_top
+            ulx3s_penumbra3_probe_issue_top ulx3s_penumbra3_probe_decode_top \
+            nexysvideo_penumbra2_top nexysvideo_penumbra2_5_top
 
 FPGA_SRC_ulx3s_penumbra1_top = $(SRC_COMMON) $(SRC_CORE_penumbra1) \
                                $(SRC_FABRIC) $(SRC_BOARD_ulx3s) \
@@ -1278,15 +1284,31 @@ FPGA_SRC_ulx3s_audio_test_top = hw/rtl/io/audio/audio_sigma_delta.sv \
 # front of a bare serial shifter on the UART port — no CPU or bus, so it
 # is built via the TOP= escape hatch (make fpga TOP=nexysvideo_uart_test_top).
 FPGA_SRC_nexysvideo_uart_test_top = hw/rtl/common/build_check.sv \
-                                    $(FPGA_RTL)/xc7/xc7_mmcm_pkg.sv \
-                                    $(FPGA_RTL)/nexysvideo/nexysvideo_clk_rst.sv \
+                                    $(SRC_BOARD_nexysvideo) \
                                     $(FPGA_RTL)/nexysvideo/nexysvideo_uart_test_top.sv
 XDC_nexysvideo_uart_test_top = hw/constraints/nexysvideo_uart_test_top.xdc
+
+# The gen2 machine on the Nexys Video, growing one device per bring-up
+# step. Its devices are named rather than taken from SRC_FABRIC, whose
+# wildcards bring the ECP5 PHYs.
+FPGA_SRC_nexysvideo_penumbra2_top = $(SRC_COMMON) $(SRC_CORE) \
+                                    $(SRC_MACHINE_penumbra2) \
+                                    hw/rtl/soc/bus_devsel.sv \
+                                    hw/rtl/soc/bus_device_simple.sv \
+                                    hw/rtl/soc/bus_response_fabric.sv \
+                                    hw/rtl/soc/boot_rom.sv \
+                                    hw/rtl/soc/onchip_ram.sv \
+                                    hw/rtl/io/spi_fifo.sv \
+                                    hw/rtl/io/uart.sv \
+                                    $(SRC_BOARD_nexysvideo) \
+                                    $(FPGA_RTL)/nexysvideo/nexysvideo_penumbra2_top.sv
+XDC_nexysvideo_penumbra2_top = hw/constraints/nexysvideo_penumbra2_top.xdc
 
 # Tops that embed the boot ROM and/or microcode: their hex images are
 # generated before synthesis and inlined by inline_hex.py.
 # gen2 embeds the boot ROM (no microcode — the gen2 core is hardwired).
-FPGA_ROM_TOPS   = ulx3s_penumbra1_top ulx3s_penumbra2_top ulx3s_penumbra2_5_top
+FPGA_ROM_TOPS   = ulx3s_penumbra1_top ulx3s_penumbra2_top ulx3s_penumbra2_5_top \
+                  nexysvideo_penumbra2_top nexysvideo_penumbra2_5_top
 FPGA_UCODE_TOPS = ulx3s_penumbra1_top
 # Tops that embed the display font image: it must exist at the repo
 # root before yosys resolves its $readmemh.  Every top carrying a
@@ -1425,7 +1447,8 @@ audio-sweep:
 # regardless of TOP. Use Verilator --lint-only with each family's
 # primitive stubs.
 fpga-lint: $(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_SRC_ulx3s_penumbra2_probe_top) $(FPGA_SRC_ulx3s_penumbra2_top) $(FPGA_SRC_ulx3s_video_test_top) $(FPGA_SRC_ulx3s_audio_test_top) $(FPGA_LINT_STUBS) \
-           $(FPGA_SRC_nexysvideo_uart_test_top) $(FPGA_LINT_STUBS_xc7)
+           $(FPGA_SRC_nexysvideo_uart_test_top) $(FPGA_SRC_nexysvideo_penumbra2_top) \
+           $(FPGA_LINT_STUBS_xc7)
 	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall -Wno-fatal \
 		-Wno-PINMISSING -Wno-PINCONNECTEMPTY \
 		$(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_LINT_STUBS) --top ulx3s_penumbra1_top
@@ -1444,6 +1467,9 @@ fpga-lint: $(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_SRC_ulx3s_penumbra2_probe_top)
 	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall -Wno-fatal \
 		-Wno-PINMISSING -Wno-PINCONNECTEMPTY \
 		$(FPGA_SRC_nexysvideo_uart_test_top) $(FPGA_LINT_STUBS_xc7) --top nexysvideo_uart_test_top
+	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall -Wno-fatal \
+		-Wno-PINMISSING -Wno-PINCONNECTEMPTY \
+		$(FPGA_SRC_nexysvideo_penumbra2_top) $(FPGA_LINT_STUBS_xc7) --top nexysvideo_penumbra2_top
 
 fpga: $(BUILD_DIR)/$(TOP).bit
 	@echo "Bitstream: $(BUILD_DIR)/$(TOP).bit$(if $(filter ecp5,$(FPGA_FAMILY)), (PHASE_DEG=$(PHASE_DEG)))"
