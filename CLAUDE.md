@@ -240,7 +240,8 @@ nextpnr-ecp5, ecppack, fujprog usable as normal commands:
 
 Board top-levels under `hw/rtl/fpga/ulx3s/`: `ulx3s_penumbra2_top.sv`
 (the default core, built as gen2.5) and `ulx3s_penumbra1_top.sv`.
-Serial 115200 8N1 on `/dev/ttyUSB0`. SD slot autoconfigured as
+Serial 115200 8N1 on `/dev/ulx3s-console` (udev rules in
+`hw/tools/udev/`). SD slot autoconfigured as
 `CLASS_SD`; `boot sd:0,0` loads `PENBOOT.ELF` from FAT32. Toolchain
 mechanics (wrapper multi-call, sv2v + `$readmemh` workaround, USB
 passthrough) in `hw/CLAUDE.md`.

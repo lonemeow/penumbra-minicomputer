@@ -523,9 +523,37 @@ make fpga BOARD=ulx3s CORE=penumbra1 PHASE_DEG=180   # Default — step-4 baseli
 
 Valid values: `0, 45, 90, 135, 180, 225, 270, 315`. See `doc/internals/sdram-controller.md` for the bring-up sweep procedure.
 
+### Board USB devices
+
+`hw/tools/udev/99-penumbra-boards.rules` lets the containerized
+programmers open each board's FTDI chip as your UID, and gives each
+board's console a fixed name, whichever `ttyUSB` number it enumerates
+as:
+
+| Name | Device |
+|------|--------|
+| `/dev/ulx3s-console` | ULX3S: its one FT231X, which carries both console and JTAG |
+| `/dev/nexysvideo-console` | Nexys Video UART port (FT232R) |
+
+The names are symlinks next to the kernel's `ttyUSB` nodes. The
+programmers find their chip by USB ID and never open them. The Nexys
+Video's FT232R is a stock part that only its serial number tells
+apart, so its rule names one board; edit the serial for another. The
+Nexys Video's PROG port also shows up as two `ttyUSB` nodes (its JTAG
+and parallel-transfer channels); neither is a console.
+
+The file includes the USB access rules, so it replaces any older
+hand-written rule for these IDs. Install, or reinstall after editing:
+
+```sh
+sudo install -m 644 hw/tools/udev/99-penumbra-boards.rules /etc/udev/rules.d/
+sudo udevadm control --reload
+sudo udevadm trigger
+```
+
 ### Serial console
 
-After flashing: `/dev/ttyUSB0` at **115200 8N1**. The boot ROM accepts `boot sd:0,0` to load `PENBOOT.ELF` from FAT32.
+After flashing: `/dev/ulx3s-console` at **115200 8N1**. The boot ROM accepts `boot sd:0,0` to load `PENBOOT.ELF` from FAT32.
 
 ---
 
@@ -595,13 +623,9 @@ make openfpgaloader-image
 ```
 
 `make flash` runs it through `hw/tools/openfpgaloader/bin/openFPGALoader`
-as your UID, so the board's JTAG device needs a udev rule that lets
-you open it. For the Nexys Video's FT2232 (0403:6010), in
-`/etc/udev/rules.d/`:
-
-```
-SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="6010", MODE="0666", GROUP="plugdev"
-```
+as your UID, so the board's JTAG device needs the udev rules in
+[Board USB devices](#board-usb-devices), which also name the
+console `/dev/nexysvideo-console` (115200 8N1).
 
 Under WSL2, attach both of the board's USB ports (PROG and UART) with
 usbipd. The board powers its USB chips itself, so they disappear on

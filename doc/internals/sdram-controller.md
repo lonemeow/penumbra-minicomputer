@@ -508,7 +508,7 @@ For each of the 8 phase values:
 
 1. `make flash PHASE_DEG=N BOARD=ulx3s CORE=penumbra1`
 2. Power-cycle (or press btn[1]) and capture the ROM monitor output
-   over `/dev/ttyUSB0` at 115200 8N1.
+   over `/dev/ulx3s-console` at 115200 8N1.
 3. Record the `_ram_check` result and the detected RAM size.
 4. (Optional) `boot sd:0,0/PENBOOT.ELF` and confirm the kernel
    reaches single-user shell — passes only if the cache-on /
