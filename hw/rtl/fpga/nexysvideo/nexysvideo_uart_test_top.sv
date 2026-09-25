@@ -160,7 +160,7 @@ module nexysvideo_uart_test_top (
     // ── Banner, then echo ──────────────────────────────────────
     // A byte that arrives while the banner is going out waits in echo_q;
     // a second one replaces it.
-    localparam BANNER = "\r\nPenumbra Nexys Video UART test\r\n";
+    localparam BANNER = "\015\nPenumbra Nexys Video UART test\015\n";
     localparam int BANNER_LEN = $bits(BANNER) / 8;
     localparam int BANNER_W   = $clog2(BANNER_LEN + 1);
 
