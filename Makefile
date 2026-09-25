@@ -395,7 +395,8 @@ MODULE_TESTS = \
 VARIANT_MODULE_TESTS = \
     penumbra2_ex_stage:tb_penumbra2_5_ex_stage:hw/rtl/penumbra2_5/penumbra2_ex_stage.sv \
     penumbra2_btb:tb_penumbra2_5_btb:hw/rtl/penumbra2_5/penumbra2_btb.sv \
-    sdram_sim:tb_sdram_line_test:hw/rtl/sim/sdram_sim.sv,hw/rtl/io/sdram_line/sdram_bus_adapter.sv,hw/rtl/io/sdram_line/sdram_stack.sv
+    sdram_sim:tb_sdram_line_test:hw/rtl/sim/sdram_sim.sv,hw/rtl/io/sdram_line/sdram_bus_adapter.sv,hw/rtl/io/sdram_line/sdram_stack.sv \
+    ddr3_stack_test:tb_ddr3_stack_test:hw/rtl/sim/ddr3_stack_test.sv,hw/rtl/io/sdram_line/sdram_bus_adapter.sv,hw/rtl/io/ddr3/ddr3_stack.sv,hw/rtl/sim/wb_line_mem.sv
 
 # Built-in text-video font ROM image, read by video_font_rom via
 # $readmemh: generated from the NetBSD console font bold8x16

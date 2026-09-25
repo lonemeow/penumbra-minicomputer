@@ -34,8 +34,9 @@
 //   - the memory port, pipelined Wishbone: one 128-bit burst (16 bytes,
 //     the chip's BL8) per request, addressed in bursts; i_sel masks
 //     bytes on writes; i_aux rides along and returns with the ack, so a
-//     consumer can tell a write's ack from a read's. The bus cycle is
-//     held open, so nothing in flight is ever cancelled.
+//     consumer can tell a write's ack from a read's. Dropping i_cyc
+//     cancels whatever is in flight, acks included; calibration runs on
+//     regardless.
 //   - the debug port, UberDDR3's second Wishbone: a small register map
 //     of PHY delays and self-test counters (ddr3_controller.v).
 //   - o_calib_complete: calibration, and the self-test when BIST_MODE
@@ -68,6 +69,7 @@ module nexysvideo_ddr3 #(
     input  logic                     i_rst_n,
 
     // ── Memory port ─────────────────────────────────────────
+    input  logic                     i_cyc,
     input  logic                     i_stb,
     input  logic                     i_we,
     input  logic [ADDR_BITS-1:0]     i_addr,
@@ -139,7 +141,7 @@ module nexysvideo_ddr3 #(
         .i_ddr3_clk_90       (i_ddr3_clk_90),
         .i_rst_n             (i_rst_n),
 
-        .i_wb_cyc            (1'b1),
+        .i_wb_cyc            (i_cyc),
         .i_wb_stb            (i_stb),
         .i_wb_we             (i_we),
         .i_wb_addr           (i_addr),

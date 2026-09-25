@@ -236,6 +236,11 @@ exposed external bus.
 - `sdram/sdram_phy_ecp5.sv` — IOB flops + ODDRX1F clock forward.
   `i_clk` is CLKOS @ 0°, `i_clk_sdram` is CLKOS2 @ ~270° (see
   `doc/internals/sdram-controller.md` and `sdram-optimization.md`).
+- `ddr3/ddr3_stack.sv` — the line-buffer adapter and `sdram_cdc` ending
+  in a DDR3 controller's pipelined-Wishbone port instead of
+  `sdram_ctrl`: one 128-bit burst per line, the glue stateless. Drops
+  the Wishbone cycle in reset, cancelling a request in flight. Takes
+  the line adapter from `sdram_line/`, so a source list names it.
 
 ### Simulation glue (`rtl/sim/`)
 - `machine_penumbra2_sim.sv` — `machine_penumbra2` + `unified_bus_mem`:
@@ -265,6 +270,11 @@ exposed external bus.
   sparse storage, protocol checking).
 - `simple_mem.sv` — parameterizable sync SRAM model (default 16 MB),
   configurable READ_LATENCY/WRITE_LATENCY.
+- `wb_line_mem.sv` — pipelined-Wishbone memory of 16-byte lines with
+  random stall and ack latency, standing in for the DDR3 controller.
+- `ddr3_stack_test.sv` — `ddr3_stack` on `wb_line_mem`, the memory
+  reset apart from the stack (`tb_ddr3_stack_test`, a variant module
+  test so it gets the line adapter).
 
 ### FPGA top-levels (`rtl/fpga/`)
 Board tops live under `rtl/fpga/<board>/`, one file per registered
