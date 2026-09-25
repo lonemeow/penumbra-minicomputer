@@ -57,7 +57,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
  * reads it, so it sits in the hot data region the pinned slots draw
  * from (kern.ldscript).
  */
-struct cpu_info cpu_info_store __section(".data.hot0") = {
+struct cpu_info cpu_info_store = {
 	.ci_curlwp = &lwp0,
 };
 

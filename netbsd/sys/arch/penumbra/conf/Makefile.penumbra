@@ -33,7 +33,7 @@ GENASSYM_CONF=	${PENUMBRA}/penumbra/genassym.cf
 COMPILER_RESOURCE_DIR!=	${CC} -print-resource-dir
 CPPFLAGS+=	-Dpenumbra -D__NetBSD__ -isystem ${COMPILER_RESOURCE_DIR}/include
 CFLAGS+=	-ffreestanding -mno-red-zone -Wno-unused-command-line-argument \
-		-Wno-error=unused-but-set-variable -ffunction-sections
+		-Wno-error=unused-but-set-variable
 AFLAGS+=	-x assembler-with-cpp
 
 ##

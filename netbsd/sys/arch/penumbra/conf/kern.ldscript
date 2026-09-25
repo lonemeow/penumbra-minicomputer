@@ -3,43 +3,6 @@
 /* Linker script for NetBSD/penumbra kernels */
 #include "assym.h"
 
-/*
- * Tenants of the hot text page, in one list because it is expanded
- * twice: once to place them, once to assert each arrived.  A pattern
- * matching nothing is silent, so a mistyped name -- or one that is an
- * alias rather than the symbol a section is named for -- would
- * otherwise simply not happen.
- *
- * A() starts a routine on a cache line; P() packs one that fits
- * within a single line into the tail an aligned neighbour leaves.
- * Routines reached only from DIAGNOSTIC are listed unconditionally:
- * they exist in either kernel, so one built without it spends their
- * bytes and nothing else.
- */
-#define HOT_STR_(x) #x
-#define HOT_STR(x) HOT_STR_(x)
-
-#define HOT_TEXT_TENANTS \
-	A(splx) \
-	A(spl0) \
-	A(splvm) \
-	A(splhigh) \
-	A(splsoftserial) \
-	A(rw_vector_enter) \
-	A(rw_vector_tryenter) \
-	A(rw_vector_exit) \
-	A(getticks) \
-	A(mutex_owned) \
-	A(cpu_intr_p) \
-	A(cpu_softintr_p) \
-	A(kpreempt_disabled) \
-	A(rw_lock_held) \
-	A(cv_has_waiters) \
-	A(radix_tree_empty_tree_p) \
-	A(pool_redzone_check) \
-	P(cpu_kpreempt_disabled) \
-	P(_membar_sync)
-
 OUTPUT_FORMAT("elf32-penumbra")
 OUTPUT_ARCH(penumbra)
 ENTRY(_start)
@@ -53,36 +16,6 @@ SECTIONS
   .text :
   {
     _ftext = . ;
-
-    /*
-     * First in .text so no later code change moves a region across a
-     * page boundary into another TLB set.  Deliberately not padded to
-     * a page: the slot pins all of it, so whatever follows rides along.
-     * ALIGN keeps a routine off a line it has no use for; object sizes
-     * drift, so that cannot be left to luck.
-     */
-    _hot_text0_start = . ;
-
-    /* Assembly objects carry a single .text, so pull them whole. */
-    . = ALIGN(COHERENCY_UNIT); *memcpy.o(.text)
-    . = ALIGN(COHERENCY_UNIT); *memset.o(.text)
-    . = ALIGN(COHERENCY_UNIT); *memcmp.o(.text)
-    . = ALIGN(COHERENCY_UNIT); *strlen.o(.text)
-    . = ALIGN(COHERENCY_UNIT); *strcmp.o(.text)
-    . = ALIGN(COHERENCY_UNIT); *strcpy.o(.text)
-    . = ALIGN(COHERENCY_UNIT); *atomic_cas.o(.text)
-    . = ALIGN(COHERENCY_UNIT); *lock_stubs.o(.text)
-
-    /* C routines, whose objects hold far more than the page. */
-#define A(sym) . = ALIGN(COHERENCY_UNIT); _hot_at_##sym = . ; \
-	*(.text.sym) ; _hot_end_##sym = . ;
-#define P(sym) _hot_at_##sym = . ; *(.text.sym) ; _hot_end_##sym = . ;
-    HOT_TEXT_TENANTS
-#undef A
-#undef P
-
-    _hot_text0_end = . ;
-
     *(.text)
     *(.text.*)
     *(.gnu.warning)
@@ -105,12 +38,6 @@ SECTIONS
   .data :
   {
     _fdata = . ;
-
-    /* Hot data, first in .data for the same reason. */
-    _hot_data0_start = . ;
-    *(.data.hot0)
-    _hot_data0_end = . ;
-
     *(.data)
     CONSTRUCTORS
     . = ALIGN(32);
@@ -143,39 +70,4 @@ SECTIONS
   /* A wildcard claiming the section first goes wrong silently. */
   ASSERT(_etext - _real_handlers_page_start <= 2 * PAGE_SIZE,
          "trap page must be linked after all live text")
-
-  /* For nm: what is left of each pinned page. */
-  _hot_text0_free = PAGE_SIZE - (_hot_text0_end - _hot_text0_start);
-  _hot_data0_free = PAGE_SIZE - (_hot_data0_end - _hot_data0_start);
-
-  /*
-   * A pinned slot holds one page, so a region spilling past one stops
-   * being covered by the slot it was given.  That is silent at run
-   * time, so fail here instead.  How many regions get pinned depends
-   * on the MMU and is decided at boot, not here.
-   */
-  ASSERT(_hot_text0_end - _hot_text0_start <= PAGE_SIZE,
-         "hot text region 0 exceeds one page")
-
-  /*
-   * Each tenant has to have arrived and to sit within the fewest lines
-   * its size needs.  Both are judged from the recorded bounds rather
-   * than from `.`, which does not hold the placement position when an
-   * ASSERT inside an output section reads it.
-   */
-#define A(sym) HOT_CHECK(sym)
-#define P(sym) HOT_CHECK(sym)
-#define HOT_CHECK(sym) \
-  ASSERT(_hot_end_##sym > _hot_at_##sym, \
-         HOT_STR(sym did not land on the hot text page)) \
-  ASSERT((_hot_end_##sym - 1) / COHERENCY_UNIT \
-         - _hot_at_##sym / COHERENCY_UNIT \
-         == (_hot_end_##sym - 1 - _hot_at_##sym) / COHERENCY_UNIT, \
-         HOT_STR(sym straddles a cache line))
-  HOT_TEXT_TENANTS
-#undef A
-#undef P
-
-  ASSERT(_hot_data0_end - _hot_data0_start <= PAGE_SIZE,
-         "hot data region 0 exceeds one page")
 }
