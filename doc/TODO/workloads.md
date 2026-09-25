@@ -308,9 +308,9 @@ Two consequences:
   two programs.
 - A deliberate layout — function ordering, or padding chosen against
   the TLB's sets — is worth measuring in its own right, on the same
-  footing as the drawer work.  The kernel-side version of this is
-  "pack the hottest syscall-path text onto shared pages"; nothing
-  equivalent exists for userland.
+  footing as the drawer work.  The kernel-side version was tried and
+  declined — see "Ruled out" in [kernel.md](kernel.md) — on evidence
+  that may carry over: the layout noise swamped the effect.
 
 `r_phase` gaps:
 

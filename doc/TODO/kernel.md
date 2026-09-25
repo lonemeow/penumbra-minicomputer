@@ -310,33 +310,14 @@ code-generation problem.
   cell: 10 instructions per cell where 6 do.  Hoisting them into
   locals, as `b82fb4b0df29` did for Doom's column drawer, fixes it.
 
-## Kernel: pack the hottest syscall-path text onto shared pages
-
-The mechanism landed in `ed1c6e2`: per-function sections, a hot text
-region and a hot data region linked first and pinned at boot, and each
-tenant placed so it does not straddle a cache line.  What is open is
-which routines belong in it.
-
-The current set was picked from a profile that `1966179` then moved,
-since several tenants were chosen for rwlock paths whose cost that
-commit removed.  Two strategies are still unseparated: take the
-highest refills-per-byte wherever it lives (67 tenants drawn from 41
-pages, each only partly evacuated) or take whole groups so a few pages
-go cold entirely (19 tenants, 5 pages, 79-100% each).  The first
-predicts 2.6x the benefit under a linear model that eviction does not
-obey, so only a measured sweep separates them.
-
-Both are bounded by "Kernel: count TLB refills", "What pinning can
-reach", so this is worth one sweep rather than a campaign.
-
 ## Kernel: count TLB refills
 
 Nothing counts refills.  `_real_miss_handler` resolves them without
 entering `trap()`, so neither `vmstat -s` nor an evcnt sees them, and
 the CPU perfctrs count the handler's ~59 instructions as instructions
 of whatever was running.  The TLB's shape, and why its misses move
-with layout, are in "Kernel: pack the hottest syscall-path text onto
-shared pages".
+with layout, are in "The layout lottery" in
+[design-notes.md](../system/netbsd/design-notes.md).
 
 Doom makes the case.  Moving its lumps out of the zone removed ~1M
 instructions a frame, a fifth of the total, with the game's own work
@@ -808,6 +789,19 @@ mechanics, which are a linker section plus a pin at boot in
 `pmap_bootstrap`, alongside the existing pinned-slot assignments.
 
 ## Ruled out
+
+- **Pinning hot kernel pages.**  Hot text and data were gathered into
+  fixed regions, linked first and pinned into the slots the MMU leaves
+  spare.  Five hardware runs could not separate it from noise: builds
+  differing only by a few hundred bytes of shift moved `getpid` by up
+  to 28%, and once the region's successor was aligned so tenant edits
+  moved nothing else, changing the tenant list made no measurable
+  difference at all.  The lever is bounded in any case -- two spare
+  slots against 259 kernel text and 2,919 data pages that take
+  refills, the hottest single page 1.5% of the total ("Kernel: count
+  TLB refills", "What pinning can reach").  Reverted along with
+  `-ffunction-sections`, which existed only to name individual
+  routines for it.
 
 - **Uncached MMIO `STW` as a hardware write-path asymmetry.**  The
   write path is symmetric: RTL-sim microbenches put an uncached `STW`

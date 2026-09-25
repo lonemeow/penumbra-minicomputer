@@ -672,13 +672,17 @@ placement of hot pages is bounded at low single digits ("What pinning
 can reach", same entry), and a third to a half of kernel refills fall
 on runtime allocations no arrangement can touch.
 
-What is unknown is whether the machine can afford it.  The TLB sits on
-the address path of every access, and the fetch/TLB path is already
-the limiter on more than one top, so the honest experiment is to build
-the main TLB 16x4 and read fmax from the full board top rather than
-the bare-core probe.  If it costs clock it is not a lever, and that is
-the expected answer.  A seed sweep is needed either way, since one
-seed says nothing about placement.
+Capacity is not on the table on gen2.5: neither a larger L1 nor a
+larger TLB fits the ECP5, so re-shaping the 64 entries is the only
+form this can take there, and anything else waits for gen3.
+
+What is unknown is whether the machine can afford even that.  The TLB
+sits on the address path of every access, and the fetch/TLB path is
+already the limiter on more than one top, so the honest experiment is
+to build the main TLB 16x4 and read fmax from the full board top
+rather than the bare-core probe.  If it costs clock it is not a lever,
+and that is the expected answer.  A seed sweep is needed either way,
+since one seed says nothing about placement.
 
 ## Ruled out
 

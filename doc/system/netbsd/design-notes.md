@@ -175,38 +175,6 @@ This is why a change is judged on *both* the work it does and the
 refill count, never on one total: the two move independently, and a
 build can lose more to a re-roll than the change itself saved.
 
-### Hot regions at fixed addresses
-
-The linker script gathers the hottest routines into `_hot_text0` and
-the hottest data into `_hot_data0`, placed first in `.text` and
-`.data`.  First matters: nothing precedes them, so no later code
-change can move them.  Their addresses are `KERNEL_TEXT_BASE` plus a
-fixed offset, known while writing the code rather than discovered
-after linking.
-
-The ELF entry point moves after the text region as a result, which is
-sound because the bootloader jumps to `e_entry` rather than to the
-load address.  Boot code being first is a convention from machines
-where those coincided.
-
-Each region is asserted at link time to fit one page, because a page
-is what a pinned slot covers; a region that outgrows one would
-silently stop being covered.  Regions are *not* padded to a page --
-whatever follows shares the page and gets pinned along with them,
-which is free coverage, while padding would only displace it.
-
-Routines reach a region individually rather than by object, because
-the C routines worth pinning sit in objects many times the size of a
-page.  A section carries the name of the symbol that defines it, never
-an alias, and a pattern matching nothing is silent, so a tenant named
-wrongly simply does not arrive.
-
-A tenant wider than a cache line starts on one.  A routine entered
-mid-line spans a line it has no use for, and the sizes involved drift
-with unrelated changes, so this cannot be left to luck; a routine that
-fits inside a single line follows unaligned instead, riding in the
-tail an aligned neighbour leaves and costing no line of its own.
-
 ### Trap page: code variants, not parameters
 
 The TLB miss handler carries the set count, way count and page size as
@@ -228,25 +196,23 @@ The images are linked after all live text.  They are never executed
 where they are linked, so their size must not decide where live code
 lands.
 
-### Structural and spare pinned slots
+### Structural pinned slots
 
-Some pinned slots are structural: translation, or an operation the
-kernel cannot otherwise express, depends on each.  The vector page,
-both page-table roots, the L2 window and two page windows are
-structural; the second page window earns its slot by letting
-`pmap_copy_page` map source and destination at once, which removes a
-4 KB bounce buffer and halves the bytes moved per copy.
-
-Whatever the MMU provides beyond those is spent on hot pages, in a
-priority order fixed at compile time and walked at boot until the
-slots run out.  The count comes from `MMU_CONFIG`, so the same kernel
-pins fewer regions on a smaller MMU and more on a larger one without
-recompiling.
+Pinned slots are structural: translation, or an operation the kernel
+cannot otherwise express, depends on each.  The vector page, both
+page-table roots, the L2 window and two page windows are structural;
+the second page window earns its slot by letting `pmap_copy_page` map
+source and destination at once, which removes a 4 KB bounce buffer and
+halves the bytes moved per copy.
 
 A slot is worth more than the page it holds.  The pinned TLB is a
 separate structure, so covering a page there also hands its way back
 to the set it used to occupy: pinning one page whose own cost was
 13,891 refills dropped its set's total from 45,960 to 14,370.
+
+What the MMU provides beyond the structural slots is unused.  Spending
+it on hot pages was tried and did not pay -- see "Ruled out" in
+[kernel.md](../../TODO/kernel.md).
 
 ### What none of this reaches
 
