@@ -47,6 +47,14 @@ adapter's speculative-prefetch FSM: it must abandon an orphaned spec on a
 gap exactly as it already does on an address mispredict. File:
 `hw/rtl/io/sdram/sdram_bus_adapter.sv`.
 
+Scope: the word stack only. The line stack
+(`hw/rtl/io/sdram_line/sdram_bus_adapter.sv`) speculates on nothing and
+keeps one request outstanding, so it has no orphaned-spec state to
+desync and cannot reach this wedge — a gap between reads is just a gap.
+A top's stack is pinned beside its placement seed, so which tops this
+entry covers follows `SDRAM_STACK_<top>` in the Makefile rather than
+being listed here.
+
 ## Hardware: gen3 (Penumbra/3) Phase-1 build status
 
 Phase 0 (the four structural probes) passed; see
@@ -411,7 +419,7 @@ Two layered variants on the same idea:
 2. **Early restart.**  Serve the requested word the moment *it*
    arrives during `S_FILL` (not waiting for the rest of the line —
    the remaining words finish into BRAM in background).  Burst
-   order does not help it: with the BL=8 line buffer (Level 2 in
+   order does not help it: where the line stack is built (Level 2 in
    `doc/internals/sdram-optimization.md`) every word lands at once,
    so early restart would save the bus walk of words 1–3 and the L2
    re-serve, whichever word was requested — see "partial-line

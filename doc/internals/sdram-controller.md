@@ -20,7 +20,7 @@ adopting so those optimizations can be added incrementally.
 | Version | Location | State |
 |---------|----------|-------|
 | v1 | (deleted) | Removed once step 4 passed `_ram_check` on hardware. |
-| v2 | `hw/rtl/io/sdram/` + `hw/rtl/sim/sdram_model.sv` | Steps 1–4 verified on hardware (100 MHz CL2); step 5 (phase sweep + bring-up doc) in progress; step 6 (open-row + auto-precharge-off) landed; layer-pipelining follow-on (depth-2 CDC + speculative-prefetch bus adapter) also landed. |
+| v2 | `hw/rtl/io/sdram{,_line}/` + `hw/rtl/sim/sdram_model.sv` | Steps 1–4 verified on hardware (100 MHz CL2); step 5 (phase sweep + bring-up doc) in progress; step 6 (open-row + auto-precharge-off) landed; layer-pipelining (depth-2 CDC + speculative-prefetch adapter) landed; step 8 (whole-line reads) landed as a second stack a top selects between. |
 
 ## Locked design decisions
 
@@ -97,8 +97,12 @@ hw/rtl/io/sdram/
 ├── sdram_phy_ecp5.sv         ECP5 PHY: IOB flops, ODDRX1F clock fwd, tristate DQ
 ├── sdram_phy_sim.sv          Plain-SystemVerilog PHY for Verilator
 ├── sdram_cdc.sv              Async req/ack CDC bridge (added in step 4)
-├── sdram_bus_adapter.sv      Sync bus i_re/i_we/o_ack ↔ controller req/ack
+├── sdram_bus_adapter.sv      Sync bus i_re/i_we/o_ack ↔ controller req/ack (word stack)
 └── sdram_stack.sv            Adapter → CDC → controller as one unit; integrations add the PHY
+
+hw/rtl/io/sdram_line/         Line stack: same two module names, whole-line reads
+├── sdram_bus_adapter.sv      Holds the line a controller command returns
+└── sdram_stack.sv            Ties BURST_LEN, the CDC width and the held line together
 
 hw/rtl/sim/
 ├── sdram_model.sv            Behavioral SDR DRAM chip model (for tests)
@@ -323,6 +327,29 @@ Single-word transactions on the bus side, same back-side contract as
 `simple_mem`/`boot_rom` — drop-in replacement at the SDRAM
 region.
 
+### Two stacks
+
+The bus can only ask for one word, so an adapter that wants to exploit
+sequential access has to infer it, and there are two ways to. Both are
+built, under the same module names and the same ports, in
+`hw/rtl/io/sdram/` and `hw/rtl/io/sdram_line/`; a top picks one as a
+fileset (`SDRAM_STACK`, defaulted per top in the Makefile) and no board
+file mentions the choice.
+
+Which one suits a top is a placement question rather than a logical
+one — the line stack carries a wider datapath — so it is measured per
+artifact the way a placement seed is.
+
+| | word stack | line stack |
+|---|---|---|
+| Controller | one word per command (`BURST_LEN` 2) | a whole line (`BURST_LEN` 8) |
+| CDC response | 32 bits | 128 bits |
+| Sequential reads | speculation races a prefetch against the cache | the line is already held |
+| Outstanding | two (real + speculation) | one |
+| Write into a held line | — | drops the line |
+
+### Word stack: speculative prefetch
+
 Internally pipelined for cache fills:
 
 - **Speculative prefetch.** On every accepted read the adapter pushes
@@ -349,6 +376,32 @@ The adapter still presents a single-word contract upward, so the cache
 and other masters see no protocol change — burst-fill speedup comes
 entirely from the spec-buffer hits the cache observes as faster
 single-word completions.
+
+### Line stack: a held line
+
+The controller answers with a whole burst and the adapter keeps it, so
+the inference is in the geometry rather than in a guess:
+
+- **One request outstanding.** A read either hits the held line and
+  never reaches the controller, or misses and asks for the line
+  containing it. Nothing is speculative, so there is no speculation to
+  abandon, no second consumer to route a response to, and no tag FIFO
+  to tell them apart — the adapter is smaller than the one that
+  speculates, not larger.
+- **Alignment is the controller's.** A burst wraps inside its aligned
+  group, so the controller starts it at the group base and the adapter
+  indexes the word it wanted out of the response.
+- **A write drops the line.** Merging the write into the held copy
+  would have to reproduce the byte-lane select memory applies, and a
+  divergence there is silent until something reads it back. Dropping
+  it leaves correctness with the refetch, which the CDC's ordering
+  already guarantees observes the write.
+
+The win covers scattered access as well as sequential, because the
+pattern that reaches the adapter is a *line fill* either way. That
+holds while a cache line and a burst are the same size; a line wider
+than a burst, or a miss that fills less than a line, would put it back
+in question.
 
 ## Validation strategy
 
@@ -378,7 +431,7 @@ Three-level test pyramid:
 | 5 | Phase-shift sweep build target + bring-up doc | Documented working window | ⚙ in progress |
 | 6 | Open-row tracking + auto-precharge-off (Level 1 of `sdram-optimization.md`) | `tb_sdram_test` cold-vs-hit cycle counts; `_ram_check` + membench unchanged on hardware | ✅ landed |
 | 7 | Layer-pipelining: depth-2 CDC FIFO + speculative `addr+4` prefetch in bus adapter | `tb_sdram_cdc` + `make benchmark-rtl` membench miss-LDW improvement | ✅ landed |
-| 8 | BL=8 line buffer (Level 2 of `sdram-optimization.md`) | `tb_sdram_bl8_test` burst ordering + alignment; adapter line buffer still to come | ⚙ controller done, adapter open |
+| 8 | Whole-line reads (Level 2 of `sdram-optimization.md`) | `tb_sdram_bl8_test` burst ordering + alignment; `tb_sdram_line_test` hit/miss/invalidate; membench cycles-per-miss on hardware | ✅ landed |
 
 ### Step 4 wiring notes
 

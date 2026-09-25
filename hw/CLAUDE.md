@@ -35,7 +35,8 @@ hw/
 │   ├── penumbra2/ # gen2 6-stage pipelined core + its MMU / L1 / arbiter / fill modules
 │   ├── machine/   # machine integrations (machine_<generation>.sv)
 │   ├── soc/       # Bus controller, autoconfig, caches (L1 VIPT, L1 PIPT, L2), boot ROM, cpuid/machid
-│   ├── io/        # Real UART, real SPI, SDRAM v2 controller/adapter/PHY/CDC,
+│   ├── io/        # Real UART, real SPI, SDRAM v2 controller/adapter/PHY/CDC
+│   │              #   (+ sdram_line/, the whole-line adapter variant),
 │   │              #   usb/ (SIE cells + MAC + host controller), video/
 │   ├── sim/       # machine_sim + machine_penumbra2_sim, sim devices, memory models
 │   └── fpga/      # FPGA helpers (ECP5 PLL package, lint stubs); board tops under <board>/
@@ -213,6 +214,14 @@ exposed external bus.
 - `sdram/sdram_stack.sv` — adapter → CDC → controller as one unit,
   bus port to PHY command interface; board tops and `sdram_sim`
   instantiate it and supply their own PHY.
+- `sdram_line/` — the same two module names built the other way: the
+  controller answers a command with a whole cache line and the adapter
+  holds it, so the rest of a fill needs no controller traffic and a
+  write into the held line drops it. A top picks a stack as a fileset
+  (`SDRAM_STACK`, defaulted per top beside its placement seed), so no
+  board file names the choice. The CDC, controller and PHYs are shared
+  — only the adapter and the stack differ. Which one a top closes
+  timing under is a placement question; measure it per top.
 - `sdram/sdram_cdc.sv` — depth-2 async FIFO bridge across the
   CPU↔SDRAM clock domains. Up to 2 outstanding, order-preserving;
   Gray pointers via 2-FF synchronizers; data-before-valid CDC.
@@ -234,7 +243,11 @@ exposed external bus.
 - `sim_uart.sv` — NS16450-compatible UART for sim (no FIFO).
 - `sim_spi.sv` — SPI master + SD card emulator (via `+sdcard=`).
 - `sdram_sim.sv` — wraps `sdram_stack` + `phy_sim` + chip model
-  into a `simple_mem`-shaped device.
+  into a `simple_mem`-shaped device. Built twice: once from the
+  word stack for `tb_sdram_sim`, and once from the line fileset for
+  `tb_sdram_line_test` (a `VARIANT_MODULE_TESTS` entry naming the
+  forked sources, since the choice is a fileset rather than a
+  parameter).
 - `sdram_test.sv` — DUT wrapper exposing controller req/rsp for
   `tb_sdram_test`; `BURST_LEN` selects the read burst.
 - `sdram_bl8_test.sv` — the same chain at an eight-beat burst, named as

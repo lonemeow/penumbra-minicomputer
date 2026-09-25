@@ -4,8 +4,9 @@
 
 The SDRAM controller (`hw/rtl/io/sdram/sdram_ctrl.sv`) advances through
 a sequence of optimisation levels.  Level 1 (open-row tracking, no
-auto-precharge) is live, Level 2 is a deferred design plan, and
-Level 3 is declined.
+auto-precharge) and Level 2 (whole-line reads) are both live — Level 2
+as a second stack a top selects between, since whether it closes timing
+is a placement question — and Level 3 is declined.
 This file is the catalog of those levels — what each one buys, what it
 costs, and how it composes with the others.
 
@@ -62,7 +63,7 @@ CDC FIFO.  That hides the bus-traversal latency between the cache and
 SDRAM rather than the SDRAM-internal command overhead targeted here.
 See `sdram-controller.md` § "Bus adapter" and § "CDC bridge".
 
-### Level 2: BL=8 Line Buffer
+### Level 2: BL=8 Line Buffer ✅ landed
 
 Change SDRAM burst length from 2 to 8.  Each SDRAM burst reads
 8 × 16-bit = 4 × 32-bit words — exactly one cache line.
@@ -147,9 +148,11 @@ immediately after the previous one completes.
 3. ✅ **Layer-pipelining** (depth-2 CDC + speculative-prefetch bus
    adapter) — orthogonal to the levels here, hides bus-traversal
    latency between cache and SDRAM
-4. **Level 2 (BL=8 line buffer)** — one CDC crossing per line instead
-   of three round trips, matches cache line size exactly, and roughly
-   halves the SDRAM side of a line fill (~28–36 → ~16–19 cycles)
+4. ✅ **Level 2 (BL=8 line buffer)** — one CDC crossing per line instead
+   of three round trips, matches cache line size exactly. Built as the
+   `hw/rtl/io/sdram_line/` stack rather than in place, because the
+   wider datapath costs a top placement margin it may not have; which
+   stack a top defaults to is pinned beside its placement seed.
 5. **Level 3** — declined; fills are atomic, so word order never shows
 
 ## SDRAM Burst Length and Cache Line Size Relationship
