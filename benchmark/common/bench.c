@@ -66,6 +66,7 @@ static uint32_t timer_freq;
 #define CACHE_CTRL_ENABLE     1
 
 /* Perfctr register numbers, identical across every cache device */
+#define CACHE_INFO            0
 #define CACHE_READ_HITS       10
 #define CACHE_READ_MISSES     11
 #define CACHE_WRITE_HITS      12
@@ -302,6 +303,38 @@ void bench_cache_perf_snapshot_l1i(bench_cache_perf_t *out) {
     out->read_misses  = read_sysreg(SYSDEV_L1_ICACHE, CACHE_READ_MISSES);
     out->write_hits   = read_sysreg(SYSDEV_L1_ICACHE, CACHE_WRITE_HITS);
     out->write_misses = read_sysreg(SYSDEV_L1_ICACHE, CACHE_WRITE_MISSES);
+}
+
+/* ── Cache geometry (INFO, reg 0) ───────────────────────────────
+ * A present cache always reports INFO != 0, because LINE_WORDS,
+ * NUM_SETS and NUM_WAYS are each at least 1.  Layout is in
+ * doc/system/sysregs.md under "INFO (reg 0)".
+ */
+static void decode_geom(uint32_t info, bench_cache_geom_t *out) {
+    out->present    = (info != 0);
+    out->line_words = info & 0x3Fu;
+    out->num_sets   = (info >> 6)  & 0x7FFFu;
+    out->num_ways   = (info >> 21) & 0x1Fu;
+    out->bytes      = out->present
+                    ? out->line_words * 4u * out->num_sets * out->num_ways
+                    : 0u;
+}
+
+void bench_cache_geom_l1d(bench_cache_geom_t *out) {
+    decode_geom(read_sysreg(SYSDEV_L1_DCACHE, CACHE_INFO), out);
+}
+
+void bench_cache_geom_l2(bench_cache_geom_t *out) {
+    decode_geom(read_sysreg(SYSDEV_L2_CACHE, CACHE_INFO), out);
+}
+
+/* The outermost cache a load can hit: what a working set has to exceed
+ * before an access reaches memory.  Falls back to L1 on a machine with
+ * no L2, and to zero when neither reports geometry. */
+void bench_cache_geom_outermost(bench_cache_geom_t *out) {
+    bench_cache_geom_l2(out);
+    if (!out->present)
+        bench_cache_geom_l1d(out);
 }
 
 void bench_cache_perf_snapshot_l2(bench_cache_perf_t *out) {

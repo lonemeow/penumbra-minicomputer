@@ -210,9 +210,14 @@ $(BUILDDIR)/MEMTEST.ELF: $(CRT0_OBJ) $(MEMTEST_OBJ) $(COMMON_OBJ) $(PENSTRING_LI
 # Build: make membench
 # Output: build/benchmark/MEMBENCH.ELF (load via boot sd:0,0/MEMBENCH.ELF)
 
-MEMBENCH_OBJ := $(BUILDDIR)/membench_entry.o
+# The access loops are hand-written so the instruction stream stays
+# fixed across compiler changes — see membench/loops.S.
+MEMBENCH_OBJ := $(BUILDDIR)/membench_entry.o $(BUILDDIR)/membench_loops.o
 
 $(BUILDDIR)/membench_entry.o: membench/entry.c common/bench.h | $(BUILDDIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILDDIR)/membench_loops.o: membench/loops.S | $(BUILDDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 membench: $(BUILDDIR)/MEMBENCH.ELF

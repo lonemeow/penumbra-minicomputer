@@ -1,42 +1,32 @@
 /*
- * entry.c — bench_main for the memory throughput / latency bench.
+ * entry.c — bench_main for the memory hierarchy bench.
  *
- * Test matrix:
+ * Measures the path from the CPU to memory, at three levels:
  *
- *                 word (LDW/STW)   half (LDH/STH)   byte (LDB/STB)
- *   cached read        ✓                ✓                 ✓
- *   cached write       ✓                ✓                 ✓
- *   uncached read      ✓                ✓                 ✓
- *   uncached write     ✓                ✓                 ✓
+ *   • Cache hit — a working set inside the L1, the upper bound on
+ *     throughput when nothing reaches memory at all.
+ *   • Sub-word sweep — half-word and byte accesses across the full
+ *     working set, which exercise extract/replicate on the way.
+ *   • Memory path — hand-written loops (membench/loops.S) over a
+ *     working set several times the outermost cache, reported in
+ *     cycles per L2 read miss rather than wall-clock throughput.
+ *   • Uncached page — a pinned NC page, where every access is a bare
+ *     memory round trip with no cache in the way.
  *
- * Cached tests sweep a 64 KiB working set — comfortably larger than
- * the 1 KiB direct-mapped D-cache (64 sets × 4 words × 1 way × 4 B).
- * Sequential access pattern → 75% cache hits + 25% line-fill misses,
- * so the cached MB/s number reflects the *burst-fill* path through
- * cache → bus_adapter → CDC → controller.  Open-row tracking (step 6
- * of the SDRAM rollout) should improve this number directly because
- * sequential cache lines all hit the same row.
+ * Working sets are derived at run time from each cache's INFO
+ * register.  Sizing them by constant is how a memory benchmark stops
+ * measuring memory: a figure chosen to outrun a 1 KiB L1 sits entirely
+ * inside a 64 KiB L2, and the tests then report the cache they meant
+ * to defeat.
  *
- * Uncached tests pin a single 4 KiB page with PTE_KERNEL_NC and run
- * a tight loop within it.  Every access becomes a single-word SDRAM
- * round-trip — the ratio between this and the cached number is the
- * controller's burst speedup.  Step 6 won't change the uncached
- * number (each access still pays the full ACT/RW/PRECHARGE cost).
+ * The memory-path tests report cycles per miss because that ratio is
+ * indifferent to code quality — the stall counters are mutually
+ * exclusive, so stall_load holds only cycles a read spent waiting, and
+ * the miss count comes from the cache.  Wall-clock throughput, which
+ * the other tests report, does move with how well the loop is
+ * scheduled; that is the right number for them and the wrong one here.
  *
- * Cache hit/miss microbenchmarks isolate the two endpoints of the
- * cached-sweep curve:
- *   • Cache hit: HIT_WORKING_BYTES (512 B) fits inside the 1 KiB
- *     D-cache, so after the first warmup pass every access hits.
- *     Reports MB/s — the upper bound of cached throughput.
- *   • Cache miss: stride MISS_STRIDE_BYTES (64 B) exceeds any
- *     plausible cacheline, so every access pays a full line-fill.
- *     Reports ns/miss — isolates SDRAM-roundtrip + bus-traversal
- *     latency for one cache line.  Direct measurement of the path
- *     that pipelined SDRAM reads should accelerate.
- *
- * Each test runs for ~MEAS_TARGET_US of measured time and reports
- * MB/s (throughput) or ns/op (latency) so the numbers are directly
- * comparable across architectures and across optimisation commits.
+ * Each test runs for ~MEAS_TARGET_US of measured time.
  */
 
 #include "bench.h"
@@ -79,9 +69,23 @@ struct btag_device {
 } while (0)
 
 /* ── Test geometry ────────────────────────────────────────────── */
-#define CACHED_WORKING_BYTES    (64u * 1024u)   /* 64× the 1 KiB cache */
-#define HIT_WORKING_BYTES       (512u)          /* fits inside 1 KiB D-cache */
-#define MISS_STRIDE_BYTES       64u             /* > any plausible cacheline */
+/* Working sets are derived from the cache geometry the machine reports,
+ * not written down here.  A constant chosen against one hierarchy
+ * quietly becomes a cache test on the next: 64 KiB outran a 1 KiB L1 by
+ * 64x, and fits entirely inside a 64 KiB L2.
+ *
+ * MEMORY_WORKING_MULTIPLE sets how far past the outermost cache a
+ * memory test reaches, so each pass evicts what the last one left.
+ * LOOP_GRANULE_BYTES is the coarsest unroll in loops.S (the strided
+ * loop's 8 x 64 B), which every working set must be a multiple of.
+ * HIT_WORKING_FRACTION keeps the hit test inside the L1 with room to
+ * spare for the loop's own footprint. */
+#define MEMORY_WORKING_MULTIPLE 4u
+#define MEMORY_WORKING_FALLBACK (256u * 1024u)  /* no cache reports geometry */
+#define LOOP_GRANULE_BYTES      512u
+#define HIT_WORKING_FRACTION    2u              /* half the L1 */
+#define HIT_WORKING_FALLBACK    (512u)
+#define MISS_STRIDE_BYTES       64u             /* MEMBENCH_STRIDE in loops.S */
 #define UNCACHED_PAGE_BYTES     (4u  * 1024u)
 #define UNCACHED_TEST_VA        0x80000000u     /* unused VA range */
 #define MEMTEST_RESERVED_LO     (2u  * 1024u * 1024u)
@@ -165,6 +169,22 @@ static void print_mb_per_s(uint32_t bytes, uint32_t us) {
 
 typedef uint32_t (*sweep_fn)(uint32_t base, uint32_t bytes);
 
+/* ── Hand-written access loops (membench/loops.S) ───────────────
+ * Frozen instruction streams with an exact access count, so a number
+ * recorded today still means the same thing after the compiler moves.
+ * The "use" forms fold each result into the return value and measure
+ * how fast the core consumes loaded data; the "discard" forms never
+ * read what they loaded and measure the memory system's delivery rate.
+ * They coincide on a core that stalls until load data returns. */
+uint32_t membench_seq_ldw_use(uint32_t base, uint32_t bytes);
+uint32_t membench_seq_ldw_discard(uint32_t base, uint32_t bytes);
+uint32_t membench_stride_ldw_use(uint32_t base, uint32_t bytes);
+uint32_t membench_stride_ldw_discard(uint32_t base, uint32_t bytes);
+
+static uint32_t round_up_pow2(uint32_t v, uint32_t granule) {
+    return (v + granule - 1u) & ~(granule - 1u);
+}
+
 /* Returned dummy is XOR'd with bench_sink so the compiler can't
  * elide the load chain. */
 static uint32_t sweep_ldw(uint32_t base, uint32_t bytes) {
@@ -235,27 +255,6 @@ static uint32_t sweep_stb(uint32_t base, uint32_t bytes) {
     return 0;
 }
 
-/* ── Cache-miss strided read ──────────────────────────────────────
- * Same overall shape as sweep_ldw, but accesses are spaced by
- * MISS_STRIDE_BYTES (= 64 B) so each LDW lands in a different
- * cache line and every access pays a full line-fill.  Working set
- * (CACHED_WORKING_BYTES = 64 KiB) is many times the cache, so even
- * after the first pass none of the lines we touch are still resident.
- *
- * Number of misses per pass = bytes / MISS_STRIDE_BYTES.
- */
-static uint32_t sweep_miss_ldw(uint32_t base, uint32_t bytes) {
-    volatile uint32_t *p = (volatile uint32_t *)base;
-    uint32_t n = bytes >> 2;   /* total words in region */
-    uint32_t s = 0;
-    /* Stride is 16 words (= 64 B); 8 accesses per outer iter cover 128 words. */
-    for (uint32_t i = 0; i < n; i += 128) {
-        s ^= p[i +  0]; s ^= p[i + 16]; s ^= p[i + 32]; s ^= p[i + 48];
-        s ^= p[i + 64]; s ^= p[i + 80]; s ^= p[i + 96]; s ^= p[i + 112];
-    }
-    return s;
-}
-
 /* ── Unified perf-line printer ────────────────────────────────────
  * One report format for every test: "<count> <unit>, <ms> ms, X.YYY
  * MB/s, <ns> ns/op".  bytes = useful-data total (passes × working
@@ -309,30 +308,72 @@ static void run_sweep_test(const char *label,
     print_perf_line(label, passes, "passes", us, bytes, ops);
 }
 
-/* ── Run one cache-miss test ───────────────────────────────────
- * Same pass-counting harness as run_sweep_test.  Useful-byte total
- * is misses × 4 (one word per stride), so the MB/s number reads as
- * "useful data delivered" — directly comparable to hit MB/s. */
-static void run_miss_test(const char *label,
-                          sweep_fn fn,
-                          uint32_t base,
-                          uint32_t working,
-                          uint32_t stride_bytes) {
+
+/* ── Run one memory-hierarchy test ─────────────────────────────
+ * Wraps a pass loop in the CPU stall counters and the L2 cache
+ * counters, and reports cycles per L2 read miss.
+ *
+ * That ratio is the number to compare across memory-system changes,
+ * because neither term moves with code quality: the counters are
+ * mutually exclusive, so stall_load holds only cycles a data read
+ * spent waiting, and the miss count comes from the cache itself.  A
+ * worse-scheduled loop takes longer without changing either.
+ *
+ * The predicted miss count is printed beside the observed one.  The
+ * loops are hand-written, so how many distinct lines a pass touches is
+ * known exactly; a disagreement is a fact about the hardware rather
+ * than a question about the code.
+ */
+static void run_memory_test(const char *label,
+                            sweep_fn fn,
+                            uint32_t base,
+                            uint32_t working,
+                            uint32_t access_stride,
+                            uint32_t line_bytes) {
+    bench_perf_t p0, p1;
+    bench_cache_perf_t c0, c1;
     uint32_t deadline = bench_us_to_ticks(MEAS_TARGET_US);
     uint32_t sink = 0;
     uint32_t passes = 0;
 
+    bench_perf_snapshot(&p0);
+    bench_cache_perf_snapshot_l2(&c0);
     bench_timer_start();
     while (bench_timer_elapsed_ticks() < deadline) {
         sink ^= fn(base, working);
         passes++;
     }
-    uint32_t us = bench_timer_elapsed_us();
+    bench_cache_perf_snapshot_l2(&c1);
+    bench_perf_snapshot(&p1);
     bench_sink ^= sink;
 
-    uint32_t misses = passes * (working / stride_bytes);
-    uint32_t bytes  = misses * 4u;   /* one word delivered per miss */
-    print_perf_line(label, misses, "misses", us, bytes, misses);
+    /* A stride at least a line wide touches one line per access;
+     * a narrower one touches every line in the working set. */
+    uint32_t lines_per_pass = (access_stride >= line_bytes)
+                            ? (working / access_stride)
+                            : (working / line_bytes);
+    uint32_t accesses  = passes * (working / access_stride);
+    uint32_t predicted = passes * lines_per_pass;
+    uint32_t observed  = c1.read_misses - c0.read_misses;
+    uint32_t stall     = p1.stall_load  - p0.stall_load;
+
+    bench_puts(label);
+    bench_puts(": ");
+    bench_print_uint(accesses);
+    bench_puts(" reads, L2 read misses ");
+    bench_print_uint(observed);
+    bench_puts(" (predicted ");
+    bench_print_uint(predicted);
+    bench_puts(")\n  stall_load ");
+    bench_print_uint(stall);
+    bench_puts(" cyc");
+    if (observed) {
+        bench_puts(", ");
+        bench_print_uint(stall / observed);
+        bench_puts(" cyc/miss");
+    }
+    bench_puts("\n");
+    bench_perf_print_delta(label, &p0, &p1);
 }
 
 /* ── Uncached fixed-page latency loops ─────────────────────────
@@ -454,13 +495,28 @@ void bench_main(uint32_t bootdata) {
         return;
     }
 
+    /* Size the working sets from what the machine says it has, so the
+     * memory tests reach memory on any hierarchy rather than on the one
+     * this file was written against. */
+    bench_cache_geom_t l1d, outer;
+    bench_cache_geom_l1d(&l1d);
+    bench_cache_geom_outermost(&outer);
+
+    uint32_t mem_working = outer.present
+        ? round_up_pow2(outer.bytes * MEMORY_WORKING_MULTIPLE, LOOP_GRANULE_BYTES)
+        : MEMORY_WORKING_FALLBACK;
+    uint32_t hit_working = l1d.present
+        ? round_up_pow2(l1d.bytes / HIT_WORKING_FRACTION, LOOP_GRANULE_BYTES)
+        : HIT_WORKING_FALLBACK;
+    uint32_t line_bytes  = outer.present ? outer.line_words * 4u : 16u;
+
     /* Layout in the test region:
      *   [reserved low ........................ MEMTEST_RESERVED_LO ]
-     *   [cached working set, 64 KiB                                ]
+     *   [working set, sized above                                  ]
      *   [uncached test page (PA), 4 KiB                            ]
      */
     uint32_t cached_base = (ram->base + MEMTEST_RESERVED_LO + 0xFFF) & ~0xFFFu;
-    uint32_t uncached_pa = cached_base + CACHED_WORKING_BYTES;
+    uint32_t uncached_pa = cached_base + mem_working;
 
     /* Sanity check: the test region must fit in the discovered RAM. */
     if (uncached_pa + UNCACHED_PAGE_BYTES > ram->base + ram->dev_size) {
@@ -470,30 +526,55 @@ void bench_main(uint32_t bootdata) {
 
     pin_uncached(2, UNCACHED_TEST_VA, uncached_pa);
 
-    bench_puts("Cached working set:   ");
-    print_hex32(cached_base); bench_puts(" .. ");
-    print_hex32(cached_base + CACHED_WORKING_BYTES); bench_puts("\n");
+    bench_puts("L1-D:                 ");
+    if (l1d.present) {
+        bench_print_uint(l1d.bytes); bench_puts(" B, ");
+        bench_print_uint(l1d.line_words * 4u); bench_puts(" B lines, ");
+        bench_print_uint(l1d.num_ways); bench_puts("-way\n");
+    } else bench_puts("absent\n");
+    bench_puts("Outermost cache:      ");
+    if (outer.present) {
+        bench_print_uint(outer.bytes); bench_puts(" B, ");
+        bench_print_uint(line_bytes); bench_puts(" B lines, ");
+        bench_print_uint(outer.num_ways); bench_puts("-way\n");
+    } else bench_puts("absent\n");
+    bench_puts("Working set:          ");
+    bench_print_uint(mem_working); bench_puts(" B at ");
+    print_hex32(cached_base); bench_puts("\n");
     bench_puts("Uncached page:        VA ");
     print_hex32(UNCACHED_TEST_VA); bench_puts(" -> PA ");
     print_hex32(uncached_pa); bench_puts("\n");
     bench_puts("Timer freq:           ");
     bench_print_uint(bench_timer_freq_hz()); bench_puts(" Hz\n\n");
 
-    bench_puts("-- Cache hit (512 B working set, fits in 1 KiB D-cache) --\n");
-    run_sweep_test("hit LDW", sweep_ldw, cached_base, HIT_WORKING_BYTES, 4);
-    run_sweep_test("hit STW", sweep_stw, cached_base, HIT_WORKING_BYTES, 4);
+    bench_puts("-- Cache hit (fits in L1-D) --\n");
+    run_sweep_test("hit LDW", sweep_ldw, cached_base, hit_working, 4);
+    run_sweep_test("hit STW", sweep_stw, cached_base, hit_working, 4);
 
-    bench_puts("\n-- Cached sweep (64 KiB, sequential) --\n");
-    run_sweep_test("cached LDW", sweep_ldw, cached_base, CACHED_WORKING_BYTES, 4);
-    run_sweep_test("cached LDH", sweep_ldh, cached_base, CACHED_WORKING_BYTES, 2);
-    run_sweep_test("cached LDB", sweep_ldb, cached_base, CACHED_WORKING_BYTES, 1);
-    run_sweep_test("cached STW", sweep_stw, cached_base, CACHED_WORKING_BYTES, 4);
-    run_sweep_test("cached STH", sweep_sth, cached_base, CACHED_WORKING_BYTES, 2);
-    run_sweep_test("cached STB", sweep_stb, cached_base, CACHED_WORKING_BYTES, 1);
+    bench_puts("\n-- Sub-word sweep over the working set --\n");
+    run_sweep_test("sweep LDH", sweep_ldh, cached_base, mem_working, 2);
+    run_sweep_test("sweep LDB", sweep_ldb, cached_base, mem_working, 1);
+    run_sweep_test("sweep STW", sweep_stw, cached_base, mem_working, 4);
+    run_sweep_test("sweep STH", sweep_sth, cached_base, mem_working, 2);
+    run_sweep_test("sweep STB", sweep_stb, cached_base, mem_working, 1);
 
-    bench_puts("\n-- Cache miss (64 KiB, stride 64 B, 100% line-fill misses) --\n");
-    run_miss_test("miss LDW", sweep_miss_ldw, cached_base,
-                  CACHED_WORKING_BYTES, MISS_STRIDE_BYTES);
+    /* The memory path proper: hand-written loops, counter-measured.
+     * Sequential is what a line fill looks like — a memory answering
+     * with more than one word serves the rest without another round
+     * trip.  Strided touches one word per line, so it gets nothing
+     * from that and is the check that the same change costs nothing
+     * where it cannot help. */
+    bench_puts("\n-- Memory path, sequential --\n");
+    run_memory_test("seq load-use    ", membench_seq_ldw_use,
+                    cached_base, mem_working, 4u, line_bytes);
+    run_memory_test("seq load-discard", membench_seq_ldw_discard,
+                    cached_base, mem_working, 4u, line_bytes);
+
+    bench_puts("\n-- Memory path, one word per line --\n");
+    run_memory_test("stride load-use    ", membench_stride_ldw_use,
+                    cached_base, mem_working, MISS_STRIDE_BYTES, line_bytes);
+    run_memory_test("stride load-discard", membench_stride_ldw_discard,
+                    cached_base, mem_working, MISS_STRIDE_BYTES, line_bytes);
 
     bench_puts("\n-- Uncached single-page latency (4 KiB, pinned NC) --\n");
     run_uncached_ldw(UNCACHED_TEST_VA);

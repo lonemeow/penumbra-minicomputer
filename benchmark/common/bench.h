@@ -118,6 +118,32 @@ void bench_perf_print_delta(const char *label,
                             const bench_perf_t *after);
 
 /*
+ * Cache geometry, decoded from a cache device's INFO register.
+ * `bytes` is the total data the cache holds — the size a working set
+ * has to exceed for its accesses to reach the next level down.
+ * `present` is false when the device id is unmapped on this bitstream,
+ * which is how a variant without an L2 reports itself.
+ */
+typedef struct {
+    int      present;
+    uint32_t line_words;
+    uint32_t num_sets;
+    uint32_t num_ways;
+    uint32_t bytes;
+} bench_cache_geom_t;
+
+void bench_cache_geom_l1d(bench_cache_geom_t *out);
+void bench_cache_geom_l2 (bench_cache_geom_t *out);
+
+/*
+ * The outermost cache a load can hit — L2 where there is one, else
+ * L1-D.  A benchmark that means to reach memory sizes its working set
+ * from this rather than from a constant, so it stays honest on a
+ * machine whose hierarchy it was not written against.
+ */
+void bench_cache_geom_outermost(bench_cache_geom_t *out);
+
+/*
  * Cache performance counter snapshot.
  * Free-running 32-bit counters from each cache device's regs 10-13.
  * Layout is identical for L1-D, L1-I, L2, and any future cache slot;
