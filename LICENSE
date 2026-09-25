@@ -66,3 +66,13 @@ their own respective licenses.
 6. Digilent board constraint files (hw/third_party/digilent-xdc/)
    Copyright (c) 2017 Digilent. Licensed under the MIT License.
    See hw/third_party/digilent-xdc/License.txt for the full text.
+
+7. UberDDR3 DDR3 controller (hw/third_party/uberddr3/)
+   Copyright (C) 2023-2025 Angelo Jacobo. Licensed under the GNU General
+   Public License, version 3 or (at your option) any later version; the
+   ECC files rtl/ecc/ecc_enc.sv and rtl/ecc/ecc_dec.sv are Copyright (C)
+   2017 ROA Logic BV under their own permissive notice. Only the Nexys
+   Video build uses it. A Nexys Video bitstream that incorporates it is a
+   combined work, GPL-3.0 as a whole when distributed; Penumbra's own
+   source files remain under the BSD 2-Clause License above.
+   See hw/third_party/uberddr3/LICENSE and README.md.

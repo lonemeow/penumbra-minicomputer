@@ -46,7 +46,7 @@ hw/
 ├── rom/         # Boot ROM (C + asm) and its standalone Makefile
 ├── sim/         # tb_cpu_prog (program runner), sim_console + per-core shims, per-module tbs,
 │                #   uart_host.h (a serial host for tbs driving a board top's pins)
-├── third_party/ # vendored files under their own licenses (Digilent board XDCs)
+├── third_party/ # vendored files under their own licenses (Digilent board XDCs, UberDDR3)
 └── tools/       # uasm.py (microcode), oss-cad-suite wrappers
 ```
 
