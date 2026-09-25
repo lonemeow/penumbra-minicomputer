@@ -366,9 +366,15 @@ MODULE_TESTS = \
 # Variant-fork unit tests: a fork (penumbra2_5/) shares its base module's name,
 # so the name-based search in test-modules resolves to the base. Name the source
 # explicitly here. Fields: top-module : testbench : source.sv
+# <top module>:<testbench>:<explicit sources, comma-separated>.  The
+# list carries the top module, which Verilator does not hunt for on the
+# -I path, and any forked file, which has to define its module before
+# the same-named one on that path does.  Everything else still resolves
+# from the library path as usual.
 VARIANT_MODULE_TESTS = \
     penumbra2_ex_stage:tb_penumbra2_5_ex_stage:hw/rtl/penumbra2_5/penumbra2_ex_stage.sv \
-    penumbra2_btb:tb_penumbra2_5_btb:hw/rtl/penumbra2_5/penumbra2_btb.sv
+    penumbra2_btb:tb_penumbra2_5_btb:hw/rtl/penumbra2_5/penumbra2_btb.sv \
+    sdram_sim:tb_sdram_line_test:hw/rtl/sim/sdram_sim.sv,hw/rtl/io/sdram_line/sdram_bus_adapter.sv,hw/rtl/io/sdram_line/sdram_stack.sv
 
 # Built-in text-video font ROM image, read by video_font_rom via
 # $readmemh: generated from the NetBSD console font bold8x16
@@ -436,7 +442,7 @@ test-modules: test-modules-variant font8x16.hex splash_cells.hex
 test-modules-variant:
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
 	@for e in $(VARIANT_MODULE_TESTS); do \
-		m=$${e%%:*}; r=$${e#*:}; tb=$${r%%:*}; s=$${r#*:}; \
+		m=$${e%%:*}; r=$${e#*:}; tb=$${r%%:*}; s=`echo $${r#*:} | tr , ' '`; \
 		$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_BASE_FLAGS) -Ihw/rtl/penumbra2_5 $(VERILATOR_INCLUDES) --top-module $$m --Mdir $(BUILD_DIR)/$$tb.verilator -o ../V$$tb $(PKG_SV) $$s hw/sim/$$tb.cpp >/dev/null 2>&1 || { printf "  \033[31mBUILD FAIL\033[0m  %s\n" "$$tb"; exit 1; }; \
 		$(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/V$$tb $(DOCKER_IMAGE) || exit 1; \
 	done
@@ -963,13 +969,38 @@ SRC_AUDIO = hw/rtl/io/audio/audio.sv \
             hw/rtl/io/audio/audio_sigma_delta.sv \
             hw/rtl/io/audio/audio_ladder_out.sv
 
+# ── SDRAM stack selection ───────────────────────────────────────
+# Which shape of SDRAM stack a top builds:
+#   word — a controller command answers one word; the adapter hides
+#          latency by speculating on the next address.
+#   line — a command answers a whole burst; the adapter holds it, so
+#          the rest of a sequential run needs no controller traffic.
+#
+# The two define the same modules with the same ports, so choosing is a
+# fileset substitution: no board top mentions it and none has to change.
+# SDRAM_LINE_FORKED names which files the line variant overrides, and
+# the filter-out drops those from the base set so the variant's copies
+# are the only definitions — a missing entry surfaces as a duplicate
+# module error rather than a silently mixed build.
+SDRAM_STACK ?= word
+SDRAM_LINE_FORKED := sdram_bus_adapter sdram_stack
+
+SRC_SDRAM_word = $(filter-out %/sdram_pkg.sv, $(wildcard hw/rtl/io/sdram/*.sv))
+SRC_SDRAM_line = $(filter-out $(SDRAM_LINE_FORKED:%=hw/rtl/io/sdram/%.sv),$(SRC_SDRAM_word)) \
+                 $(wildcard hw/rtl/io/sdram_line/*.sv)
+SRC_SDRAM = $(SRC_SDRAM_$(SDRAM_STACK))
+
+ifeq ($(filter $(SDRAM_STACK),word line),)
+$(error SDRAM_STACK must be `word` or `line`, got `$(SDRAM_STACK)`)
+endif
+
 SRC_FABRIC = hw/rtl/io/sdram/sdram_pkg.sv \
              $(SRC_AUDIO) \
              hw/rtl/io/usb/usb_pkg.sv \
              hw/rtl/io/video/video_pkg.sv \
              $(wildcard hw/rtl/soc/*.sv) \
              $(wildcard hw/rtl/io/*.sv) \
-             $(filter-out %/sdram_pkg.sv, $(wildcard hw/rtl/io/sdram/*.sv)) \
+             $(SRC_SDRAM) \
              $(filter-out %/usb_pkg.sv, $(wildcard hw/rtl/io/usb/*.sv)) \
              $(filter-out %/video_pkg.sv, $(wildcard hw/rtl/io/video/*.sv))
 
@@ -1256,6 +1287,15 @@ $(PHASE_STAMP):
 	@rm -f $(BUILD_DIR)/.phase-*
 	@touch $@
 
+# Switching stacks swaps which files are in the source set without
+# touching any file's timestamp, so the synthesis result would otherwise
+# look up to date against a set it was not built from.
+SDRAM_STAMP = $(BUILD_DIR)/.sdram-$(SDRAM_STACK)
+$(SDRAM_STAMP):
+	@mkdir -p $(BUILD_DIR)
+	@rm -f $(BUILD_DIR)/.sdram-*
+	@touch $@
+
 # Build hex files and convert SV→V before synthesis.
 # sv2v converts full SystemVerilog (module-level imports, packages)
 # to Verilog-2005 that Yosys reads natively.  -D SDRAM_PHASE_DEG=N
@@ -1268,7 +1308,7 @@ $(PHASE_STAMP):
 # being spuriously rebuilt by unrelated edits.
 UCODE_SRC = hw/microcode/microcode.uasm
 ROM_SRCS  = $(wildcard hw/rom/*.c hw/rom/*.h hw/rom/*.s hw/rom/*.ld hw/rom/Makefile)
-$(BUILD_DIR)/$(TOP).json: $(FPGA_SRC) $(PHASE_STAMP) \
+$(BUILD_DIR)/$(TOP).json: $(FPGA_SRC) $(PHASE_STAMP) $(SDRAM_STAMP) \
     $(if $(filter $(TOP),$(FPGA_UCODE_TOPS)),$(UCODE_SRC)) \
     $(if $(filter $(TOP),$(FPGA_ROM_TOPS)),$(ROM_SRCS)) \
     $(if $(filter $(TOP),$(FPGA_VIDEO_TOPS)),font8x16.hex) \

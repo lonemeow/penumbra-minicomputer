@@ -211,6 +211,12 @@ nextpnr-ecp5, ecppack, fujprog usable as normal commands:
   `TOP_MODULE` the shared synth module (`doc/internals/build-system.md`).
   `TOP=<module>` stays as the low-level escape hatch.
 - `make flash BOARD=ulx3s CORE=penumbra1` — build + flash via USB.
+- `SDRAM_STACK=word|line` — which shape of SDRAM stack a top builds
+  (default `word`). `line` swaps the bus adapter and stack for the
+  variants in `hw/rtl/io/sdram_line/`, so one controller command
+  returns a whole burst and the adapter holds it; the controller, CDC
+  and PHYs are shared. Both define the same modules with the same
+  ports, so no board top mentions the choice.
 - `make fpga-lint` — Verilator lint check (full gen1 system).
 - `make timing BOARD=ulx3s CORE=penumbra1 [TOP_N=10]` — pretty-print
   fmax + top critical paths from `build/<top>_timing.json`.
