@@ -34,7 +34,7 @@ module nexysvideo_penumbra2_top (
 );
     import penumbra_pkg::*;
 
-    localparam longint CPU_HZ    = 50_000_000;
+    localparam longint CPU_HZ    = 60_000_000;
     localparam int     RAM_WORDS = 32768;       // 128 KiB
     localparam int     ROM_WORDS = 16384;       // 64 KiB
 

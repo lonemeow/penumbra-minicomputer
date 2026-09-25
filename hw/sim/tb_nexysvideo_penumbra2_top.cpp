@@ -28,7 +28,7 @@
 #include <string>
 
 // The top's CPU_HZ, the console's baud rate, and its RAM size.
-static const uint64_t CPU_HZ = 50000000;
+static const uint64_t CPU_HZ = 60000000;
 static const uint64_t BAUD = 115200;
 static const double BIT = double(CPU_HZ) / double(BAUD);
 
