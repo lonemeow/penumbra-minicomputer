@@ -527,6 +527,16 @@ test-iss: $(ISS)
 		--bin "iss=./$(ISS)" \
 		$(ISA_PROGS)
 
+# ── ISS option tests (fast, no Docker) ────────────────────────
+# The ISS's own options (+core=, ...) against programs with known
+# answers, the expected values written from the hardware's parameters.
+# See sw/sim/tests/.
+# Usage: make test-iss-options
+.PHONY: test-iss-options
+test-iss-options: $(ISS)
+	@python3 sw/sim/tests/run_iss_tests.py --iss ./$(ISS) \
+		--asm "$(PASM) --org 0xFFFF0000" --outdir $(BUILD_DIR)/iss-tests
+
 # ── Compiler Correctness Tests ─────────────────────────────────
 # Runs curated tests from llvm-test-suite on ISS +hosted mode.
 # Usage: make test-compiler [OPT="-O2"]
@@ -632,7 +642,7 @@ simulate: $(ISS)
 	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX) CFLAGS=$(CFLAGS)
 	@$(ISS) program.hex $(if $(SDCARD),+sdcard=$(SDCARD)) $(if $(USBDEV),+usbdev=$(USBDEV)) $(if $(TRACE),+trace=$(TRACE)) $(if $(TRACE_WINDOW),+trace_window=$(TRACE_WINDOW)) $(if $(HALT_ON),'+halt_on=$(HALT_ON)') $(if $(RAW),+raw)
 
-$(ISS): sw/sim/penumbra_iss.cpp hw/sim/usb_device_sim.h hw/sim/usb_msc_sim.h
+$(ISS): sw/sim/penumbra_iss.cpp sw/sim/penumbra_cores.h hw/sim/usb_device_sim.h hw/sim/usb_msc_sim.h
 	@$(MAKE) -C sw/sim
 
 # ── RTL simulation (Verilator — cycle-accurate, slow) ─────────

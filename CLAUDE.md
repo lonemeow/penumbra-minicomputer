@@ -148,6 +148,9 @@ Open work lives in `doc/TODO/`, one file per area; the table in
   input. Same `SDCARD`/`TRACE` options.
 - `make test-iss` — the `hw/sim/programs/isa/` conformance suite on
   the ISS (no Docker).
+- `make test-iss-options` — the ISS's own options (`+core=`, …)
+  against programs with known answers (`sw/sim/tests/`); expected
+  values are written from the hardware's parameters.
 - `make test [CORE=penumbra1|penumbra2]` — `isa/` + the core's
   microarch suite (`hw/sim/programs/<core>/`) on RTL sim via Docker.
   `CORE` also takes a microarch sub-variant (`penumbra<n>_<sub>`, e.g.
@@ -287,8 +290,13 @@ rom.ld ──────────────────┘
   simulator, single C++ file. Covers full ISA + 8 exceptions +
   software-managed TLB + UART + SPI/SD + bus autoconfig. Run:
   `sw/sim/penumbra-iss program.hex [+sdcard=img] [+usbdev=disk:img]
-  [+trace=log] [+raw] [+trap-pc0]`. `+trap-pc0` aborts on PC=0 fetch (catches null-pointer
+  [+trace=log] [+raw] [+trap-pc0] [+core=gen]`. `+trap-pc0` aborts on PC=0 fetch (catches null-pointer
   jumps; off by default because some OS tests probe address 0).
+  `+core=` picks the hardware generation the ISS presents, spelled as
+  `make CORE=` spells it (`penumbra1` by default, `penumbra2`,
+  `penumbra2_5`): its CPU name and the geometry its caches report.
+  The table is `sw/sim/penumbra_cores.h`; a generation's cache
+  geometry or CPU name changing in RTL has to change there too.
   Measurement options: `+opstats` (instruction-class histogram),
   `+branchstats`, and `+pcprof` — see below.
 - **Execution profiles** (`+pcprof=file` plus

@@ -15,7 +15,11 @@
 //   PC=XXXXXXXX SR=XXXXXXXX [SVNZCV] R1=... R2=... ... R14=...
 //
 // Usage: penumbra-iss [program.hex] [+sdcard=path] [+trace=path] [+raw]
-//                     [+trap-pc0] [+halt-on-break]
+//                     [+trap-pc0] [+halt-on-break] [+core=generation]
+//
+// +core= names the hardware generation the ISS presents, spelled as
+// `make CORE=` spells it (penumbra_cores.h): its CPU name and the
+// geometry its caches report.  The default is penumbra1.
 //
 // +raw enables full raw TTY mode: all control characters (Ctrl-C,
 // Ctrl-Z, etc.) pass through to the simulated UART for job control
@@ -43,6 +47,8 @@
 // the one device model both simulators enumerate against.
 #include "../../hw/sim/usb_device_sim.h"
 #include "../../hw/sim/usb_msc_sim.h"
+
+#include "penumbra_cores.h"
 
 // ═══════════════════════════════════════════════════════════════
 // SD Card Emulator (inline — same protocol as hw/sim/sd_card_sim.h
@@ -411,7 +417,10 @@ enum { VEC_BUS_FAULT=0, VEC_TIMER=1, VEC_TLB_MISS=2, VEC_TLB_PROT=3,
 
 // Sysreg device IDs
 enum { SYSDEV_MMU=0, SYSDEV_CPU=1, SYSDEV_L1_DCACHE=2, SYSDEV_L1_ICACHE=3, SYSDEV_BUS=4,
-       SYSDEV_TIMER=7, SYSDEV_MACH=8, SYSDEV_DEBUG=15 };
+       SYSDEV_TIMER=7, SYSDEV_MACH=8, SYSDEV_L2_CACHE=9, SYSDEV_DEBUG=15 };
+
+// Cache device registers (the unified map every cache shares)
+enum { CACHE_REG_INFO=0, CACHE_REG_CTRL=1 };
 
 // Debug watchpoints — halt on physical memory write to watched addresses
 static constexpr int DBG_MAX_WATCH = 16;
@@ -1040,12 +1049,18 @@ static struct {
     uint8_t  asid()    const { return (cr >> 8) & 0xFF; }
 } mmu;
 
+// The hardware generation the ISS presents (+core=), set before reset.
+static const CoreGeneration* core_gen;
+
 // --- Sysreg: System ID (device 1, read-only) ---
 static uint32_t cpuid_read(int reg) {
-    static const uint32_t cpu_name[4] = {0x756E6550,0x6172626D,0x0000312F,0};
     switch (reg) {
         case 0: return 1;            // CPU_ISA: version 1
-        case 1: case 2: case 3: case 4: return cpu_name[reg-1];
+        // "Penumbra" + the generation tag, 16 bytes packed LE, null-padded
+        case 1: return 0x756E6550;   // "Penu"
+        case 2: return 0x6172626D;   // "mbra"
+        case 3: return core_gen->cpu_name2;
+        case 4: return 0;
         // The ISS is instruction-accurate, not cycle-accurate.  We expose
         // insn_count for both registers so the bench harness can read
         // them without special-casing — IPC will always be 1 on the ISS,
@@ -1058,6 +1073,45 @@ static uint32_t cpuid_read(int reg) {
         case 7: case 8: case 9: case 10: return 0;
         default: return 0;
     }
+}
+
+// --- Sysreg: the caches (devices 2, 3 and 9) ---
+// The ISS holds no cache contents; caches are performance-transparent.
+// What it presents is what software reads: the generation's geometry
+// (INFO) and the enable software wrote (CTRL), so the kernel's cache
+// bring-up sees the machine it would run on.  STATUS never reads busy
+// and the event counters read 0.
+struct CacheDevice {
+    const CacheGeometry* geometry;
+    bool                 enabled;
+};
+static CacheDevice cache_l1d, cache_l1i, cache_l2;
+
+static CacheDevice& cache_device(int dev) {
+    switch (dev) {
+        case SYSDEV_L1_DCACHE: return cache_l1d;
+        case SYSDEV_L1_ICACHE: return cache_l1i;
+        default:               return cache_l2;
+    }
+}
+
+static void cache_devices_reset() {
+    cache_l1d = { &core_gen->l1d, false };
+    cache_l1i = { &core_gen->l1i, false };
+    cache_l2  = { &core_gen->l2,  false };
+}
+
+static uint32_t cache_read(int dev, int reg) {
+    const CacheDevice& c = cache_device(dev);
+    switch (reg) {
+        case CACHE_REG_INFO: return c.geometry->info();
+        case CACHE_REG_CTRL: return c.enabled ? 1 : 0;
+        default:             return 0;
+    }
+}
+
+static void cache_write(int dev, int reg, uint32_t val) {
+    if (reg == CACHE_REG_CTRL) cache_device(dev).enabled = val & 1;
 }
 
 static uint32_t machid_read(int reg) {
@@ -1851,13 +1905,8 @@ static uint32_t sysreg_read(int dev, int reg) {
             default: return 0;
         }
     case SYSDEV_CPU: return cpuid_read(reg);
-    case SYSDEV_L1_DCACHE: case SYSDEV_L1_ICACHE:
-        // Unified CACHE_INFO layout: line_words[5:0]|num_sets[20:6]|
-        // num_ways[25:21]|addressing[27:26]|wb[28]|wa[29].
-        // Report a plausible L1 (16 sets × 1-way × 4 words, PIPT, WT/WnA);
-        // the ISS doesn't model timing so the values are advisory.
-        if (reg == 0) return (0u << 26) | (1u << 21) | (16u << 6) | 4u;
-        return 0;
+    case SYSDEV_L1_DCACHE: case SYSDEV_L1_ICACHE: case SYSDEV_L2_CACHE:
+        return cache_read(dev, reg);
     case SYSDEV_BUS: return (reg == 0) ? busctl.reg : 0;
     case SYSDEV_TIMER: return timer.read_reg(reg);
     case SYSDEV_MACH: return machid_read(reg);
@@ -1913,8 +1962,9 @@ static void sysreg_write(int dev, int reg, uint32_t val) {
             dbg.watch_val = val;
         }
         break;
-    case SYSDEV_L1_DCACHE: case SYSDEV_L1_ICACHE:
-        break; // Cache control: accept and ignore in ISS
+    case SYSDEV_L1_DCACHE: case SYSDEV_L1_ICACHE: case SYSDEV_L2_CACHE:
+        cache_write(dev, reg, val);
+        break;
     }
 }
 
@@ -2951,6 +3001,7 @@ static void cpu_reset() {
     usb.reset();
     display.reset();
     audio.reset();
+    cache_devices_reset();
     // An enumerable full-speed device sits attached from power-on,
     // exactly as the RTL program runner presents it.
     usb.dev_attached = true;
@@ -3044,6 +3095,7 @@ int main(int argc, char** argv) {
     const char* usbdev_spec = nullptr;
     const char* trace_path = nullptr;
     const char* audio_path = nullptr;
+    const char* core_name = DEFAULT_CORE_GENERATION;
 
     for (int i = 1; i < argc; i++) {
         if (strncmp(argv[i], "+sdcard=", 8) == 0) sd_path = argv[i] + 8;
@@ -3075,11 +3127,20 @@ int main(int argc, char** argv) {
         }
         else if (strncmp(argv[i], "+trace_window=", 14) == 0)
             trace_window = (size_t)strtoull(argv[i] + 14, nullptr, 0);
+        else if (strncmp(argv[i], "+core=", 6) == 0) core_name = argv[i] + 6;
         else hex_path = argv[i];
     }
 
     if (!hex_path) {
-        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+usbdev=type:config] [+audiofile=path] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+pcprof=path [+pcprof_start=addr]] [+irq_at_pc=addr[,period]]\n");
+        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+usbdev=type:config] [+audiofile=path] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+pcprof=path [+pcprof_start=addr]] [+irq_at_pc=addr[,period]] [+core=generation]\n");
+        return 1;
+    }
+
+    core_gen = find_core_generation(core_name);
+    if (!core_gen) {
+        fprintf(stderr, "unknown +core generation '%s' (available:", core_name);
+        for (const CoreGeneration& g : CORE_GENERATIONS) fprintf(stderr, " %s", g.name);
+        fprintf(stderr, ")\n");
         return 1;
     }
 
