@@ -226,6 +226,38 @@ closes trivially. **On fail (deadlock):** decide **now** — fix the shared
 or change the gen3 burst pattern so the adapter never sees a gapped stream.
 Never a "work around in the core later."
 
+### P0.5 — physical-tag compare behind the TLB verdict (proposed)
+
+Added after the other four passed. P0.3 measured the TLB's verdict alone;
+the L1 compares its tags against the frame that verdict selects, in the
+same cycle, and the L1's size target sets how wide that compare is. See
+[the L1 compare behind the verdict](./mem-stage.md#the-l1-compare-behind-the-verdict).
+
+**Claim.** MEM2 (and IF2) close with the L1's physical-tag compare, at the
+associativity the board's L1 size needs, chained behind the BRAM TLB
+verdict; on the fetch side, the way-muxed word still reaches the
+decode-on-enqueue FIFO write in the cycle.
+
+**Build.**
+- The P0.3 translate path unchanged: registered BRAM TLB output, 2-way
+  match, pinned override.
+- The L1's per-way tag BRAMs, registered, at the target way count (4 for a
+  16 KB L1, 2 for 8 KB), and the per-way data BRAMs.
+- The compare in the shape the design intends — each cache way against
+  every candidate frame (both TLB ways and the pinned result), the TLB
+  match selecting — then the way mux into the registered load result; for
+  IF2, into the word→bundle decode and the FIFO slot write.
+- Read/write exclusivity written into every array's RTL, so the netlist
+  carries no read-during-write bypass after the EBRs.
+
+**Path to read.** TLB BRAM output → match / candidate compares → hit and
+way select → data way mux → result flop (MEM2) or FIFO write (IF2).
+
+**Pass.** BRAM-cone bar. **On fail:** take the associativity down with the
+L1 size (8 KB 2-way keeps roughly half the benefit of 16 KB 4-way), or
+move the way select a cycle later — a structural choice for the board's
+L1, made before the L1 is written.
+
 ## Recommended order — fail fast
 
 The probes are independent and can run in parallel, but if run in sequence,

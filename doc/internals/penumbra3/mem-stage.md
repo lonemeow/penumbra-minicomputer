@@ -143,6 +143,22 @@ The permission half is the self-contained piece to implement against this
 contract; the hit-detect/way-select and the BRAM storage around it are the
 surrounding wiring.
 
+### The L1 compare behind the verdict
+
+The D-cache's tag compare is physical: it needs the frame number the
+verdict selects. Done in series, MEM2 holds the TLB way match, the frame
+select, the cache's per-way tag compare, the way mux and the sub-word
+extract in one cycle; IF2 holds the same chain ahead of decode-on-enqueue.
+The usual shape compares each cache way's tag against every candidate
+frame at once — one per TLB way, plus the pinned TLB's — and lets the TLB
+match pick among the results, so the depth is the slower compare plus a
+select rather than the sum of the two.
+
+The cache's way count sets the width of that compare, and the size target
+sets the way count: a VIPT L1 above 8 KB needs at least 4 ways with 4 KB
+pages. P0.3 measured the TLB verdict alone; the chained compare at the
+L1's intended associativity is [P0.5](./phase0-probes.md#p05--physical-tag-compare-behind-the-tlb-verdict-proposed).
+
 ## Fault contract (commit-time)
 
 A translation fault does not redirect from the translate path. The fault
@@ -163,12 +179,27 @@ the ~14 ns post-Tco budget. A pass earns back the BRAM TLB; a fail forces a
 structural decision (associativity, or accepting an async-LUTRAM TLB and
 its cone) made now rather than mid-build.
 
+The "tag compare" P0.3 measures is the TLB's own VPN match. It does not
+include the L1's physical-tag compare that consumes the verdict (see
+[the L1 compare behind the verdict](#the-l1-compare-behind-the-verdict)).
+Its TLB store also carries yosys's read-during-write bypass (about 134
+LUTs and 137 flops on the BRAM outputs); the pass includes that logic,
+so writing the read/write exclusivity into the RTL is margin, not a
+repair ([timing outline](./timing-outline.md#4-caches)).
+
 ## Open parameters
 
 Settled when the RTL lands, not load-bearing for the contract above:
 
-- **Entry count** per copy (gen2's main TLB carried 64 entries 2-way; gen3
-  starts there and tunes if the BRAM geometry or miss rate argues
-  otherwise).
+- **Entry count** per copy. Measured, the miss rate argues for sets: at
+  2 ways, 64 sets remove 54–81 % of refills against gen2's 32, 128 sets
+  72–94 %, 256 sets 92–98 %, on Doom and the kernel paths where refills
+  are the largest single cost
+  ([memory-performance](./memory-performance.md#tlb-sets-and-a-cheaper-refill)).
+  A copy's BRAM is 512 entries deep at its narrowest, so 256 sets cost no
+  EBRs and leave the 2-way compare unchanged: 256×2 is the proposed
+  geometry. It needs `MMU_CONFIG` version 2 and a wider `TLB_INDEX`
+  ([`mmu.md`](../../system/mmu.md)), the architectural change that comes
+  first.
 - **Index function** (which vaddr bits select the set) — chosen with the
   cache index so the two BRAM reads launch from the same MEM1 address path.

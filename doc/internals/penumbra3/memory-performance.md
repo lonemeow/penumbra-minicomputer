@@ -1,14 +1,15 @@
 # Penumbra/3 — Memory-path performance: measurements and levers
 
-> **Applies to:** Penumbra/3 · memory hierarchy (in design). Measured on
-> the shared SDRAM stack gen3 reuses and on the gen2 L1↔L2 chain gen3
-> replaces.
+> **Applies to:** Penumbra/3 · memory hierarchy and address translation
+> (in design). Measured on the shared SDRAM stacks gen3 reuses, on the
+> gen2 L1↔L2 chain gen3 replaces, and on the software TLB refill gen3
+> inherits.
 
-This records what the memory path costs, cycle by cycle, and what two
+This records what the memory path costs, cycle by cycle, and what
 gen2.5 hardware workload profiles say about where gen3's cycles will go.
 It then collects the design levers those numbers point to for the gen3
-uncore. The levers are proposals ranked by evidence, not decisions, and
-every estimate is labeled as one.
+uncore and TLB. The levers are proposals ranked by evidence, not
+decisions, and every estimate is labeled as one.
 
 Every lever here must preserve the completion contract in
 [`memory-completion.md`](./memory-completion.md) and the structural rules
@@ -30,6 +31,26 @@ between the two.
 Chain B excludes the gen2 `txn_arbiter` in front of the sequencer (one
 registered cycle per transaction) and the L1/core miss overhead, so a
 real gen2 miss costs somewhat more than chain B shows.
+
+Chains A and B ran on the word stack (`hw/rtl/io/sdram/`), whose adapter
+speculates one word ahead. The later measurements below (2026-09-25) use
+the line stack (`hw/rtl/io/sdram_line/`), which answers a read with the
+whole line and holds it, and add three instruments:
+
+| Instrument | What it is | What it gives |
+|---|---|---|
+| Machine trace | `machine_penumbra2_sim`, gen2.5 core, line stack, clocks at the hardware ratio (37.5 : 100 MHz); a probe program reads `CPU_CYCLES` or `STALL_LOAD` around one dependent load, and the testbench logs every memory-side FSM each cycle | the cost of one miss and which layer owns each cycle |
+| Hardware membench | `benchmark/membench` on the ULX3S at 37.5 MHz, both stacks | `STALL_LOAD` cycles per L2 read miss |
+| Shadow models | a scratch ISS patch feeding every fetch, load and store (physical address, PTE `C`) and every main-TLB translation into parallel cache and TLB models while NetBSD runs real workloads | miss counts by kind, for geometries that were never built |
+
+The shadow models count accesses the way the RTL perfctrs do. Run over
+the same window as Doom's own perfctr snapshot (`perf_demo_track` to
+its exit handler), the as-built model reproduces the hardware's printed
+rates: L1I 97.2 % (hardware 97.3 %), L1D 80.5 % (79.7 %), L2 85.3 %
+(86.0 %), over 570 M instructions against the hardware's 579 M. Its
+TLB model reproduces the real refill count within 3 %. That calibration
+is what lets the split by kind below stand in for counters the hardware
+does not print.
 
 ## SDRAM line fill (chain A)
 
@@ -79,6 +100,60 @@ passes `i_mem_rdata` during `S_FILL`); only the busy-drop is missing.
 cycles, each a registered hand-off: the arbiter's request register, the
 sequencer's engage cycle, the L2 stage-0 latch, and the stage-1 tag
 compare.
+
+## A miss on the line stack (gen2.5 machine, hardware-checked)
+
+Measured 2026-09-25 with the machine trace, cross-checked on hardware.
+`STALL_LOAD` per miss is the membench figure; the probe reads the same
+counter, so the two compare directly.
+
+| | Hardware membench | Machine trace |
+|---|---|---|
+| L1 hit | — | 1 |
+| L1 miss, L2 hit | — | 17 |
+| L1 miss, L2 miss, line stack | 38.2 | 38–39 |
+| L1 miss, L2 miss, word stack | 55.2 | 51–52 ¹ |
+
+¹ The word stack's speculation depends on the access stride, which
+differs between the two tests (16 B membench, 64 B probe), so this row
+agrees only roughly. The line stack speculates on nothing and agrees
+within a cycle. The simulated PHY omits the board's one-cycle pipeline
+each way (about +0.75 CPU cycles) and the probe's miss took a row
+conflict membench mostly avoids (about −1.25); the two roughly cancel.
+
+The line stack took **17 cycles off every L2 miss** on hardware. Where
+the 38 go, cycle by cycle:
+
+| Part | Cycles |
+|---|---|
+| Base load cycle (every load pays it) | 1 |
+| L1 miss → arbiter register → sequencer engage → L2 stage 0 → stage-1 miss | 4 |
+| **SDRAM→L2: bus request raised → last word acked, line installed** | **19** |
+| L2 re-serves the line to L1, 3 cycles a word | 12 |
+| Sequencer drain + L1 serve | 2 |
+
+An L2 hit costs the front, the 12-cycle word walk and the tail: 16
+cycles above a hit, 17 on the counter.
+
+**The SDRAM→L2 leg** (19 cycles, about 505 ns at 37.5 MHz):
+
+| | Cycles | What |
+|---|---|---|
+| Bus request presented; adapter pushes to the CDC | 2 | adapter start + push |
+| Request crosses to the SDRAM clock | ~1.5–2 | 2-FF synchronizers + controller accept |
+| DRAM work | ~5.3 | precharge, activate, read, CL2, 8-beat burst (~4 on a row hit) |
+| Response crosses back; adapter captures it | ~3 | 2-FF synchronizers + the capture edge |
+| Word 0 acked | 1 | |
+| Words 1–3 from the adapter's held line | 6 | the bus floor: 2 cycles a word |
+
+The fractional splits come from SDRAM-clock samples and are good to
+about half a cycle; the 10 cycles between the push and word 0 are exact,
+and the crossings take 4–5 of them.
+
+About a quarter of the SDRAM leg is the DRAM itself; the rest is clock
+crossings and bus hand-offs, six cycles of them the protocol floor. The
+on-chip L1↔L2 part (4 + 12 + 2 = 18) is as large as the whole SDRAM leg,
+which is what [one uncore pipeline](#one-uncore-pipeline) attacks.
 
 ## Store latency below the arbiter (chain B)
 
@@ -156,11 +231,106 @@ against about 0 on Dhrystone. Their larger code footprint misses L1-I
 but mostly hits L2, which makes the L2-hit fill (13 cycles in chain B)
 the cost to attack.
 
+### Doom — TLB refills, then fetch fills and data misses
+
+Measured 2026-09-25: the 150-tic `BENCH.lmp` timedemo, a `PERFCTR=1`
+build, 149 frames. Hardware: 1,709.8 M cycles, 579.0 M instructions,
+CPI 2.95, 11.48 M cycles a frame; stalls ifetch 12.9 %, load 18.4 %,
+store 13.4 %, flush 13.5 %, hazard 5.1 %, funit 2.9 %. The split by
+kind comes from the calibrated shadow models, per frame:
+
+| Event | Per frame | Hits L2 | Misses L2 |
+|---|---|---|---|
+| L1-I fill | 106 K | 98.9 K (93 %) | 7.1 K |
+| L1-D read fill | 49.4 K | 25.0 K (51 %) | 24.4 K |
+| Cacheable store | 250 K | 41 % miss L1-D (write-no-allocate: no fill) | |
+| TLB refill | 16.9 K | | |
+
+At the [line-stack costs](#a-miss-on-the-line-stack-gen25-machine-hardware-checked)
+the fetch fills come to ~1.8 M cycles a frame. The hardware's ifetch
+bucket is 1.48 M, so the model runs about a quarter high on the fetch
+side, most likely because some fetch-miss cycles overlap other stall
+classes and are charged there. The load side (~2.0 M, counting the
+~1.2 cycles every load pays) agrees with the 2.1 M bucket.
+
+**TLB refills are the largest single item.** At 4.4 a thousand
+instructions and the measured [~137–170 cycles a
+refill](#tlb-sets-and-a-cheaper-refill), they cost 2.3–2.9 M cycles a
+frame — about a fifth of it, and about 22 % of the instructions retired
+are the refill handler. The count moves with link layout: 9.4 K a frame
+on the 2026-09-22 build ("Kernel: count TLB refills" in
+`doc/TODO/kernel.md`), 16.9 K on this one.
+
 | Workload | Binding cost | Lever |
 |---|---|---|
 | Dhrystone | store latency | [store buffer](#store-buffer-at-the-core-boundary) |
 | fork / exec / pipe | L2-hit fill | [one uncore pipeline](#one-uncore-pipeline) with a line-wide or 1-word-per-cycle L2 read |
 | plasma | L2-miss fill | [whole-line SDRAM fetch](#sdram-side-whole-line-fetch), [fill-through](#one-uncore-pipeline), [stream prefetch](#next-line-prefetch-into-stream-buffers) |
+| Doom | TLB refills; then L2-hit fetch fills and L2-miss data fills | [TLB sets](#tlb-sets-and-a-cheaper-refill), [one uncore pipeline](#one-uncore-pipeline), [L1 size](#l1-geometry) |
+
+## Miss profiles from the shadow models
+
+The shadow models run NetBSD workloads under the calibrated ISS: Doom
+over its perfctr window, a shell loop (ten rounds of `ls -l /usr/bin |
+sort | tail` and a `grep` over `/etc/rc.subr`), and `pbench kernel`. A
+fill's cost is taken at the machine trace's 16 cycles (L2 hit) and 37
+(L2 miss), and at the ~6 and ~24 the line-wide transfer is estimated at
+([one uncore pipeline](#one-uncore-pipeline)). Kernel paths dominate
+the fetch misses: 67–96 % of L1-I misses are taken in supervisor mode,
+and nearly all of them hit L2.
+
+### L1 geometry
+
+Stall cycles from L1 fills, as today's fill cost → the line-wide
+transfer's, with the same geometry for L1-I and L1-D:
+
+| L1 | Doom, M cycles a frame | shell loop, cycles / 1000 insns | `pbench kernel`, cycles / 1000 insns |
+|---|---|---|---|
+| 4 KB 2-way (gen2) | 3.15 → 1.50 | 1762 → 781 | 1335 → 553 |
+| 8 KB 2-way | 2.02 → 1.07 | 1347 → 621 | 919 → 397 |
+| 16 KB 4-way | 1.34 → 0.81 | 906 → 446 | 536 → 251 |
+
+- 8 KB 2-way halves Doom's L1-I misses (15.8 M → 7.0 M over the run):
+  the renderer's hot loops fit 8 KB and not 4 KB. 16 KB 4-way removes
+  86 % of them.
+- Cache size and associativity are coupled: a VIPT L1 indexes within
+  the 4 KB page, so anything above 8 KB needs at least 4 ways, and every
+  way adds a physical-tag compare to the IF2 and MEM2 cones (see
+  [`mem-stage.md`](./mem-stage.md#the-mem2-verdict-cone)).
+
+### L2 capacity
+
+With a 16 KB 4-way L1, at line-wide fill costs:
+
+| L2 | Doom, M cycles a frame | Doom data L2 misses a frame | `pbench kernel`, cycles / 1000 insns |
+|---|---|---|---|
+| 64 KB 4-way | 0.81 | 23.8 K | 251 |
+| 128 KB 4-way | 0.73 | 20.8 K | 222 |
+| 256 KB 8-way | 0.64 | 17.3 K | 192 |
+| 512 KB 8-way | 0.34 | 3.7 K | 175 |
+
+Doom's data working set fits at 512 KB. That is affordable in block RAM
+on an Artix-7 board and not on the ECP5, whose 208 EBRs are 142 used by
+the gen2.5 full top.
+
+### Next-line structure
+
+- 69–78 % of L1-I misses are to the line after the previous L1-I miss
+  (Doom 78 %, shell loop 69 %, `pbench kernel` 72 %).
+- L2 misses that continue one of the two most recent miss streams: Doom
+  47 %, shell loop 51 %, `pbench kernel` 54 %, `pbench libc` 85 %.
+
+### Reading the printed L2 rate
+
+The L2 perfctr counts fill *words*: a fill that hits L2 is four read
+hits, one that misses is one read miss and three read hits (the words
+re-served after the install), and every write-through store is one
+write event. A larger L1 therefore *lowers* the printed rate — fewer
+easy word hits — while L2 line misses barely move: Doom at 8 KB 2-way
+prints 76 % against 85 % at 4 KB with 4.66 M line misses against 4.68 M.
+The rate cannot judge an L1 change. The raw counts can: L2 line misses
+are the read misses, and fills that hit L2 are (read hits − 3 × read
+misses) / 4.
 
 ## Levers for the gen3 uncore
 
@@ -251,7 +421,48 @@ request).
 | Requesting the *external* bus during the lookup and withdrawing on a hit (once DMA masters exist) | yes — hidden arbitration, as in PCI and VME: a bus request can be withdrawn, a bus cycle cannot | hides grant latency |
 
 Estimated from the chain-B numbers with the SDRAM side unchanged: an
-L2-miss fill of about 46–55 cycles becomes about 33–42.
+L2-miss fill of about 46–55 cycles becomes about 33–42. Against the
+[line stack's measured miss](#a-miss-on-the-line-stack-gen25-machine-hardware-checked),
+fill-through and a line-wide transfer on gen2's own structure take an
+L2-miss fill from 37 cycles above a hit to about 24, and an L2-hit fill
+from 16 to about 5–6.
+
+#### The line-wide transfer
+
+One L2 access returns the whole line and L1 installs it in one cycle —
+the stronger of the two hit-fill forms above. Both storage shapes were
+checked by synthesis (yosys `synth_ecp5`):
+
+- **L2 data in 128-bit rows**, one line per way per access: 8 EBRs a
+  way in 1K×18 mode with byte enables, the same count as the word-wide
+  layout, so the write-through byte update still maps.
+- **L1 data written a line at a time and read a word at a time**:
+  yosys maps it natively to asymmetric ports (36-bit write, 9-bit read),
+  4 EBRs a way for up to 512 lines — 8 KB a way — so the word select
+  happens inside the EBR and no LUT joins the hit path. 8 KB of L1 costs
+  the same EBRs as 4 KB in this shape.
+- **Read-during-write emulation.** For any BRAM whose read and write
+  could coincide, yosys adds a bypass that returns the old data: flops
+  capturing the write, and a mux on the EBR output. On gen2's L1 tag
+  array that is 27 LUTs and 51 flops, merged into the first compare
+  LUT; on the line-write/word-read array it is 155 LUTs, 65 `PFUMX` and
+  296 flops, two LUT levels on the read path. Writing the exclusivity
+  into the RTL — the write gated off while a read launches, or the read
+  enable gated by a registered write strobe — lets yosys prove the
+  collision cannot happen and drop the bypass (1 LUT and 16 LUTs
+  respectively). The `no_rw_check` attribute removes it too, but only by
+  telling synthesis to assume what it cannot check, so a broken
+  invariant would silently diverge hardware from simulation; it is not
+  used.
+
+With the line in one register at the L2's output, the fill sequencer's
+word walk disappears; the arbiter routes a line and a done strobe.
+Every registered hop left on the fill path costs one cycle per fill, and
+with a 4 KB L1 fills run at about 40 per 1000 instructions in Doom and
+75–95 on the kernel paths, so each hop is worth several percent of
+cycles and the hops are worth budgeting explicitly. At 37.5 MHz: an L2-hit
+fill of about 5 cycles, an L2-miss fill of about 24, of which the bus,
+the clock crossings and the DRAM own about 19.
 
 "One pipeline" does not require one file. The select, the tag/data
 store, the line walk and the bus master can stay separate submodules;
@@ -293,11 +504,19 @@ word 0 lands ahead of the whole line — about 1.5 cycles for halves at
 37.5 MHz. See "partial-line delivery for fills" under Ruled out in
 `doc/TODO/hw-core.md`.
 
-This is a change to a shared device (`io/sdram`), the Level-2 line
-buffer of [`sdram-optimization.md`](../sdram-optimization.md#level-2-bl8-line-buffer);
-gen1 and gen2 benefit too. The same rework is the place to fix the
-adapter's suspected deadlock on gapped read streams, recorded in
-`doc/TODO/hw-core.md`.
+This is the Level-2 line buffer of
+[`sdram-optimization.md`](../sdram-optimization.md#level-2-bl8-line-buffer--landed).
+
+**Built, and measured on hardware.** It landed as the line stack
+(`hw/rtl/io/sdram_line/`), a second SDRAM stack a top selects as a
+fileset; the gen2 tops use it. An L2 read miss went from 55 to 38
+`STALL_LOAD` cycles on hardware — 17 saved against the ~13 estimated —
+and the SDRAM leg, bus request to line installed, measures 19 cycles
+at 37.5 MHz against the 16–19 estimated
+([breakdown](#a-miss-on-the-line-stack-gen25-machine-hardware-checked)).
+The line stack keeps one request outstanding and speculates on nothing,
+so the gapped-read deadlock recorded in `doc/TODO/hw-core.md` belongs
+to the word stack alone.
 
 ### Next-line prefetch into stream buffers
 
@@ -323,6 +542,21 @@ The same structure can live on the system-clock side of the SDRAM
 adapter as a small line buffer, needing no change above the bus. It
 comes after the latency fixes, which also shrink its worst case.
 
+**Measured reach** ([next-line structure](#next-line-structure)). Two
+stream buffers could catch 47 % of Doom's L2 misses, 51–54 % on the
+kernel paths and 85 % in `pbench libc`. At about 10 cycles saved per
+caught miss that is roughly 1 % of Doom's cycles: worth it for the
+streaming demos and bulk copies, not a lever for Doom.
+
+**The fetch side has more structure.** 69–78 % of L1-I misses are to
+the line after the previous one. Under a blocking, single-outstanding
+uncore a next-line fetch prefetch roughly breaks even — the extra L2
+read costs about what the avoided miss saves. It pays once it overlaps
+execution: after the store buffer puts background traffic on the
+uncore, a one-line stream buffer beside L1-I, filled from L2 while the
+core runs the current line, is the same kind of work and sits outside
+the core's timing cones.
+
 For scale: the 386 and 486 had no hardware data prefetch at all. Their
 only spatial prefetch was the 486's burst line fill, bounded by the line
 that already missed. Commodity hardware prefetchers arrived around 2000
@@ -340,6 +574,118 @@ drain the buffer and block, losing plasma's store win. A framebuffer
 wants uncached-but-bufferable (write-combining) semantics, which is
 close to the uncacheable-but-idempotent case the reserved PTE `S` bit
 is earmarked for; the two decisions belong together.
+
+## TLB: sets, and a cheaper refill
+
+The TLB is software-managed: a miss traps to the kernel's
+`_real_miss_handler`, which walks the two-level page table through
+pinned windows and installs the entry with `WRSYS`. Measured
+2026-09-25.
+
+**What a refill costs** — the machine trace running a replica of that
+handler, same instruction sequence:
+
+| Load | Cycles |
+|---|---|
+| TLB hit | 6 |
+| TLB miss, handler code and PTE line cached | 143 (a refill of ~137) |
+| TLB miss, PTE line not cached | 174–180 (~170) |
+
+Per operation above a no-op baseline: `WRSYS` ~6.3 cycles (a drain and
+refetch), `RDSYS` ~2, `WRSPR` / `RDSPR` ~1; trap entry, the
+MMU-bypassed vector fetch and `ERET` together ~31. The handler's ~50
+instructions hold 6 `WRSYS` (three re-point the pinned L2-table window,
+three install the entry), 4 `RDSYS`, 6 scratch moves and 2 page-table
+loads, so a refill splits roughly into ~31 cycles of trap, ~38 of
+`WRSYS` and ~68 for the rest of the walk. Instruction-count profiles
+understate it about threefold.
+
+**How often.** Refills per 1000 instructions, as built: Doom 4.4, the
+shell loop 6.1, `pbench kernel` 4.8, boot 3.0. At ~137–170 cycles that
+is about a fifth of Doom's cycles and 0.7–1.0 cycles per instruction on
+the kernel paths — the largest single cost this document records.
+
+**Layouts.** Shadow TLBs against the 32×2 as built, with random
+replacement, which is what a software-managed refill gives:
+
+| Layout | Entries | Doom | shell loop | `pbench kernel` |
+|---|---|---|---|---|
+| 32×2, LRU | 64 | −11 % | −16 % | −19 % |
+| 16×4 | 64 | −61 % | −27 % | −46 % |
+| 64×2 | 128 | −81 % | −55 % | −54 % |
+| 64×2, hashed index | 128 | −80 % | −61 % | −68 % |
+| 32×4 | 128 | −85 % | −71 % | −85 % |
+| 128×2 | 256 | −94 % | −82 % | −72 % |
+| 64×4 | 256 | −95 % | −91 % | −95 % |
+| 256×2 | 512 | −98 % | −94 % | −92 % |
+| fully associative, LRU | 64 | −81 % | −57 % | −68 % |
+
+Replacement policy buys little at the built shape; sets and ways buy
+nearly everything, and a hashed index helps only the kernel paths. The
+shadows see an invalidation only when the kernel invalidates the same
+entry in the real TLB, so the larger models keep a few stale entries and
+read slightly optimistic; the as-built shadow reproduces the real
+refill count within 3 %.
+
+**In gen3 the sets are free.** A BRAM TLB copy is 512 entries deep at
+its narrowest and 32 sets use a sliver of it, so 256×2 costs no EBRs and
+no compare width — one more index bit per doubling — and removes 92–98 %
+of refills. The software interface is ready for a new geometry:
+`MMU_CONFIG` reports it and the kernel copies the refill handler built
+for it at boot, stopping on one it does not know. Version 1 of
+`MMU_CONFIG` names at most 32 sets and 2 ways, and a set field wider
+than 5 bits collides with `TLB_INDEX`'s way bit (5) and pinned-select
+bit (6), so a larger geometry needs version 2 with a wider `TLB_INDEX`
+— a change to [`mmu.md`](../../system/mmu.md) first.
+
+**Cheaper refills**, independent of layout:
+
+- **The page-table window** is re-pointed on every refill: 3 of the 6
+  `WRSYS`, ~20–25 cycles. Skipping it when the window already maps the
+  L2 table the walk needs is a kernel-only change.
+- **`WRSYS` serialization** is ~28 % of a refill. The
+  [serialize-every-`WRSYS` default](./timing-outline.md#multi-cycle-and-serializing-instructions-divmul-wrsys-eret)
+  costs several percent of cycles at these refill rates, more at gen3's
+  lower base CPI, which argues for the selective form there.
+- **The vector fetch is uncached**, an SDRAM round trip per trap unless
+  the adapter still holds that line; making it cacheable is recorded
+  under the gen3 build status in `doc/TODO/hw-core.md`.
+
+## Synchronous CPU/SDRAM clocking — ruled out
+
+The async FIFO in `sdram_cdc` costs 4–5 CPU cycles a round trip,
+the two crossings in the [SDRAM→L2
+leg](#a-miss-on-the-line-stack-gen25-machine-hardware-checked). Clocks
+from one PLL at a whole-number ratio have a fixed phase and could cross
+with a register each way instead, about 1.5 cycles. Analysed and
+declined 2026-09-25:
+
+- **The PLL leaves no useful ratio.** The ECP5 phase detector needs at
+  least 10 MHz (5 MHz was flashed and never locked; see
+  `hw/rtl/fpga/ecp5_pll_pkg.sv`), so the VCO is a multiple of 12.5 MHz,
+  and USB's exact 60 MHz shares the PLL, so it is a multiple of 60 too:
+  within the 400–800 MHz band only 600 MHz. That gives 37.5 : 75 (2:1,
+  where the slower burst eats most of the saving, net ~2 cycles a
+  miss), 33.3 : 100 (3:1, the CPU 11 % slower) or 40 : 120 (above
+  gen2.5's fmax). Moving USB to its own PLL opens 675 MHz and
+  37.5 : 112.5 (3:1, CL2, inside the SDRAM's spec).
+- **nextpnr does not check the crossing.** A test design with a
+  37.5 / 112.5 MHz pair and a deliberately long 14.2 ns crossing, against
+  an 8.9 ns budget, reported it as a "Max delay" line only — no slack,
+  no failure, both clocks passing. `--ignore-rel-clk` produced a
+  byte-identical bitstream, and placement gave the crossing no weight.
+  A synchronous crossing would sit outside everything the flow
+  verifies; a post-route delay check could cover setup, but hold on the
+  coincident edges would stay unchecked.
+- **The payoff is small:** ~3–4 cycles an L2 miss, about 1–1.5 % of
+  Doom and the kernel paths once the fill path and TLB above land.
+
+The async FIFO is correct by construction whatever the placer does. Its
+own untimed assumption — data settles before the synchronized pointer
+announces it, a budget of about two receiving-clock periods — holds with
+a wide margin: gen2.5's worst CPU↔SDRAM crossing delay is 6.2 ns, the
+reset fan-out. Vivado does time clocks derived from one MMCM, so this
+conclusion belongs to the ECP5 flow, not to an Artix-7 board.
 
 ## Estimated effect at 37.5 MHz
 
@@ -364,6 +710,24 @@ per-transaction registration overhead.
 | + L2-miss fill ~60 → ~35 (whole-line SDRAM fetch + fill-through) | ~42 | 1.4× |
 | + two-stream prefetch | ~28–31 | ~2× |
 
+**Doom** (11.48 M cycles a frame, 3.29 fps on gen2.5), each lever alone
+on gen2's structure, from the [shadow-model
+profile](#doom--tlb-refills-then-fetch-fills-and-data-misses). The
+ranges' lower ends scale the fetch-side savings down by the quarter the
+model over-predicts ifetch. The levers overlap — the refill handler's
+own fills are inside the fill figures — so they do not simply add.
+
+| Change | Cycles a frame saved | Frame rate |
+|---|---|---|
+| Line-wide L2→L1 transfer + fill-through | 1.4–1.65 M | +14–17 % |
+| 8 KB 2-way L1 | 0.9–1.1 M | +9–11 % |
+| Both | 1.8–2.1 M | +18–22 % |
+| 64×2 TLB | 1.9–2.4 M | +19–26 % |
+| 256×2 TLB | 2.3–2.8 M | +24–33 % |
+
+The TLB rows depend on the build's link layout, which moved Doom's
+refills between 9.4 K and 16.9 K a frame; they are this build's.
+
 ## Design target: memory latency in CPU cycles
 
 Streaming performance is set by how many CPU cycles a miss costs, not by
@@ -371,15 +735,21 @@ cache size. A 386DX-33 fetched a word from DRAM in about 3–5 clocks,
 with its memory controller on the CPU clock and nothing in between; a
 486DX-33 filled a 16-byte line in 5 clocks from its external cache,
 about 10–15 from DRAM. Both had caches that plasma would overflow, and
-both ran it well. Penumbra's L2-miss fill is about 60 cycles, of which
-the SDRAM chip itself accounts for about 7–9; the rest is the stack of
-word-at-a-time hand-offs described above.
+both ran it well. With the line stack Penumbra's L2 read miss costs 38
+cycles on hardware at 37.5 MHz, of which the SDRAM chip itself accounts
+for about 5–6; the rest is the stack of hand-offs, clock crossings and
+word-at-a-time bus transfers
+[broken down above](#a-miss-on-the-line-stack-gen25-machine-hardware-checked).
 
 That makes a 486-like L2-miss line of about 20–25 cycles the target for
 gen3's uncore — reachable with the whole-line SDRAM fetch and the single
 uncore pipeline, within the word-at-a-time bus contract. The contract
 also sets the floor under it: two cycles a word on the bus, six of them
-after the line has landed.
+after the line has landed, and about 19 cycles from raising the bus
+request to holding the line, which leaves roughly 5 for everything the
+uncore does around it. At 50 MHz the SDRAM leg grows by 2–3 cycles,
+since the DRAM's time and the SDRAM-side synchronizers are fixed in
+nanoseconds.
 
 ## Open measurements
 
@@ -390,12 +760,20 @@ after the line has landed.
   than a ~10-instruction inner loop should cost. The per-frame syscalls
   (the keypress poll, `clock_gettime`) sweeping the 4 KB L1-I are a
   guess, not a finding.
-- **fork / exec / pipe fill split.** The L1-I miss count and the L2
-  hit/miss split for instruction fills size the uncore-pipeline win.
 - **gen3 blocking-store latency.** Once the uncore exists, the Phase-1
   store cost is the baseline the store buffer is measured against;
   gen3's extra registered hand-offs may put it above gen2.5's 5 cycles.
-- **Reproducible chains.** Chains A and B were scratch wrappers. Landing
-  them as characterization tests, alongside `tb_l2_cache`'s
-  back-to-back read-throughput test, would let these numbers be
-  re-measured after each change.
+- **Refill cost on hardware.** The ~137–170 cycles come from the machine
+  trace with a replica handler. Nothing counts refills on hardware yet
+  ("Kernel: count TLB refills" in `doc/TODO/kernel.md`); a counter would
+  also confirm the per-frame rate the shadow model reports.
+- **Hardware cache counts.** The benchmark report prints combined hit
+  rates; printing the four raw counts per cache would give the
+  fills-by-kind split on hardware directly
+  ([reading the printed L2 rate](#reading-the-printed-l2-rate)), in place
+  of the shadow model's.
+- **Reproducible chains and models.** Chains A and B, the machine-trace
+  probe and the ISS shadow models were scratch tools. Landing the probe
+  as a characterization test, alongside `tb_l2_cache`'s back-to-back
+  read-throughput test, and the shadow models as an ISS option, would
+  let these numbers be re-measured after each change.

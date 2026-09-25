@@ -216,7 +216,9 @@ runs on hardware.
 | Fmax | reliable 50 MHz w/ margin; reliable 37.5 fallback | gen2 topped at barely-37.5 |
 | CPI, cache-hot tight loop | ~1.1–1.3 (forwarding from day one) | gen2 ~2.5–3.0 unforwarded |
 | CMP+Bcc heavy | ~1.0–1.1 (flags forwarded, BTB) | — |
-| L1 size | ≥16 KB | gen2 4 KB (then 2-way) |
+| L1 size | per board: ECP5 4–8 KB, Artix-7 ≥16 KB ([geometry data](./memory-performance.md#l1-geometry)) | gen2 4 KB (then 2-way) |
+| Main TLB | 256×2 in BRAM ([refill data](./memory-performance.md#tlb-sets-and-a-cheaper-refill)) | gen2 32×2 |
+| L2-miss fill | ~20–25 cycles ([design target](./memory-performance.md#design-target-memory-latency-in-cpu-cycles)) | gen2.5 38 with the line stack |
 | Load-use stall | 1 (forwarded) | gen2 4 |
 | Taken-branch bubbles | 0 predicted / full flush cold | gen2 3 |
 
@@ -249,6 +251,7 @@ decision-on-fail — are in [`phase0-probes.md`](./phase0-probes.md).
 | P0.2 registered decode→issue | `pre-decoded FIFO slot → regmap → scoreboard/forward compare → issue` starts from flops and fits |
 | P0.3 split MEM + BRAM TLB | MEM1-launch / MEM2-verdict absorbs the 5.8 ns BRAM Tco + tag/permission compare in the period |
 | P0.4 CPU↔bus burst + SDRAM survival | registered line-transaction into the **real `sdram_bus_adapter`** streams without the gapped-read deadlock |
+| P0.5 physical-tag compare *(proposed, added after exit)* | the L1's tag compare at the board's associativity, chained behind the BRAM TLB verdict, still closes in MEM2 and IF2 |
 
 **Gate rule (the anti-dead-end rule).** If a probe is structurally short of
 reliable-50, decide *at that probe* — redesign the boundary, or consciously

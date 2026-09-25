@@ -188,12 +188,15 @@ cycles, never critical-path logic.**
     gate, not a combinational drain cone.
   - **Do NOT classify WRSYS by register identity in the core** — a layering smell
     (WRSYS is an opaque uncore write; the core shouldn't know which sys_reg matters).
-    **Default: serialize *every* WRSYS** — zero classification, trivially correct; the
-    flush (~3–5 cyc refill ×3 per PTE write) sits inside a software TLB-miss handler
-    already costing ~50–150 cyc, so it is noise at real miss rates. (Confirm no *hot*
-    WRSYS exists — e.g. a scratch SPR written in a fast loop — before relying on this.)
-    If multi-AS TLB churn ever justifies selectivity, move the policy **out** of the
-    core, not into the decoder:
+    **Default: serialize *every* WRSYS** — zero classification, trivially correct, and
+    the form to build first. **It is not noise, though: the TLB refill is a hot
+    WRSYS path.** Measured on gen2.5, a WRSYS costs ~6.3 cycles, the kernel's refill
+    handler issues six per refill (~28 % of a ~137-cycle refill), and refills run
+    4–6 per 1000 instructions on Doom and the kernel paths — several percent of all
+    cycles, more at gen3's lower base CPI
+    ([memory-performance](./memory-performance.md#tlb-sets-and-a-cheaper-refill)).
+    A larger TLB shrinks the refill count, and so the case; what remains argues for
+    selectivity. Move the policy **out** of the core, not into the decoder:
       - **explicit barrier op** (SFENCE/FENCE.I style, cf. Wally `CSRWriteFenceM`):
         WRSYS stays non-serializing, the kernel fences once per PTE *batch* — flush cost
         scales with fault count, not PTE count. Preferred. *(software declares the sync)*
@@ -223,8 +226,23 @@ cycles, never critical-path logic.**
   a **registered qualifier consumed by replay**, not a combinational stall.
 - **Bookkeeping off the hit→busy cone:** PLRU touch, dirty, write-hit are
   registered/deferred (gen2's L1 already does this — keep it).
-- **L1: write-through**, keep the timing-critical level simple; size up to **16 KB+**
-  (gen2's 4 KB is half the field and most of the ~10 % miss rate).
+- **L1: write-through**, keep the timing-critical level simple.
+- **Size the L1 per board, and read size and ways together.** A VIPT L1 indexes
+  within the 4 KB page, so anything above 8 KB needs at least 4 ways, and each way
+  is one more physical-tag compare fed by the TLB verdict in the same cycle (IF2 and
+  MEM2). Measured miss profiles: 8 KB 2-way cuts L1 fill stall 24–36 % against
+  gen2's 4 KB, 16 KB 4-way 49–60 %
+  ([memory-performance](./memory-performance.md#l1-geometry)). The ECP5 is expected
+  to hold 4–8 KB; an Artix-7 board has the block RAM and timing room for 16 KB+.
+- **State BRAM read/write exclusivity in the RTL.** Where a BRAM's read and write
+  could coincide, yosys adds a bypass that returns the old data — flops capturing
+  the write and a mux on the EBR output, i.e. logic after the Tco that the
+  hit-path rule forbids. gen2's L1 tag array carries 27 LUTs and 51 flops of it;
+  `penumbra3_tlb_store` about 134 LUTs and 137 flops. Gating the write off while a
+  read launches, or the read enable with a registered write strobe, lets yosys
+  prove the collision cannot happen and drop it. Never `no_rw_check`: it assumes
+  what synthesis cannot check, so a broken invariant would diverge hardware from
+  simulation silently.
 - **L2: write-through; write-back / write-allocate only if stores prove
   throughput-bound.** Store latency, the measured binding cost, is a store-buffer
   problem ([memory-performance](./memory-performance.md)). If write-back lands, its
@@ -248,6 +266,12 @@ cycles, never critical-path logic.**
   path) — gen2 already does this (Decision 16). Re-pipelining the translate is
   **kernel-invisible**. Carry it forward.
 - Keep TLB associativity modest; duplication + sync read makes 2-way fit.
+- **Grow the TLB by sets, not ways.** In BRAM, depth is already paid for: 256×2
+  costs no EBRs and no compare width over 32×2, and removes 92–98 % of refills on
+  Doom and the kernel paths, where refills are the largest single cost measured
+  ([memory-performance](./memory-performance.md#tlb-sets-and-a-cheaper-refill)).
+  Beyond 32×2 the software interface needs `MMU_CONFIG` version 2 and a wider
+  `TLB_INDEX` ([`mmu.md`](../../system/mmu.md)) — doc first.
 
 ## 6. Bus / uncore — the Amiga decouple
 
@@ -274,6 +298,16 @@ cycles, never critical-path logic.**
   which keeps its single-outstanding handshake.
 - **L2 produces registered outputs** (busy/data/fill_done) so the L2 tag cone never
   reaches the L1/arbiter combinationally.
+- **Prefer line-wide to word-streamed.** One L2 access returns the line (128-bit
+  rows, the same EBR count as word rows) and L1 installs it in one cycle (a
+  36-bit-write / 9-bit-read array, word select inside the EBR). On an L2 miss, hand
+  L1 the line the bus just delivered instead of re-reading it (fill-through).
+  Estimated on gen2's structure: L2-hit fill 16 → ~5 cycles, L2-miss fill
+  37 → ~24 ([memory-performance](./memory-performance.md#the-line-wide-transfer)).
+- **Budget the fill path's hops.** Each registered hand-off on it costs one cycle
+  per fill, and fills run at 40–95 per 1000 instructions with a 4 KB L1. About 19
+  cycles of an L2 miss belong to the bus, the clock crossings and the DRAM; aim for
+  ~5 around them.
 
 ## 8. FPGA / tooling / hardware reality
 
@@ -282,7 +316,14 @@ cycles, never critical-path logic.**
   it on comparable fabric) but tight. **Design for margin, not barely-closing** — a
   1-of-N-seeds close is *not* a close.
 - CPU clock ∈ {25, 37.5, 50} from the 600 MHz VCO (SDRAM phase fixed). Target
-  **reliable 50** (600/12) with slack; reliable 37.5 is the fallback.
+  **reliable 50** (600/12) with slack; reliable 37.5 is the fallback. The VCO is
+  pinned: the phase detector needs ≥10 MHz (5 MHz never locked) and USB's exact
+  60 MHz shares the PLL, which leaves 600 MHz as the only legal VCO.
+- **No synchronous crossings between PLL clocks.** nextpnr reports a path between
+  two PLL outputs as a delay only — no slack, no failure, no placement weight — so
+  a crossing that relies on a fixed clock ratio is unverified by the flow. Cross
+  with the async FIFO, which is correct whatever the placer does
+  ([memory-performance](./memory-performance.md#synchronous-cpusdram-clocking--ruled-out)).
 
 ## 9. Reuse boundary
 

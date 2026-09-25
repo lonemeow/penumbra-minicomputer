@@ -134,6 +134,14 @@ embedded FSM -- miss orchestration is in `load_complete`) -> L2 (write-through)
 `ulx3s_penumbra3_top`. **Open decision at the L1 step:** the store write-through
 path is unbuilt -- `mem2_stage` writes the L1 copy (`o_dcache_we`) but issues no
 write-through to L2/memory and does not block (stores retire via `mem2_commits`).
+**Before the L1 is written:** run the proposed P0.5 probe
+(`doc/internals/penumbra3/phase0-probes.md`, "P0.5 -- physical-tag compare
+behind the TLB verdict") at the associativity each board's L1 size needs --
+P0.3 timed the TLB verdict alone, not the L1 compare chained behind it.
+**Before the TLB store's geometry is fixed:** the proposed 256x2 needs
+`MMU_CONFIG` version 2 and a wider `TLB_INDEX` in `doc/system/mmu.md`
+(evidence: `doc/internals/penumbra3/memory-performance.md`, "TLB: sets, and a
+cheaper refill").
 Phase-1's gating checkpoint is then the **full-top composition timing read**
 (bare skeleton, no BTB) -- calibrates the probe->full margin before feature work.
 
@@ -708,3 +716,13 @@ since one seed says nothing about placement.
   past races.  Analysis in
   `doc/internals/penumbra3/memory-performance.md` ("SDRAM side:
   whole-line fetch").
+- **Synchronous CPU/SDRAM clocking.**  Clocks from one PLL at a
+  whole-number ratio would replace the async CDC's 4–5 cycles per L2
+  miss with ~1.5.  Declined: with USB's 60 MHz on the same PLL and the
+  10 MHz phase-detector floor, the only legal VCO is 600 MHz, whose
+  integer pairs cost the CPU clock or most of the saving; and nextpnr
+  reports a path between PLL clocks as a delay only (no slack, no
+  failure, no placement weight, `--ignore-rel-clk` a no-op), so the
+  crossing would go unverified.  Worth ~1–1.5 % of Doom and the kernel
+  paths.  Analysis in `doc/internals/penumbra3/memory-performance.md`
+  ("Synchronous CPU/SDRAM clocking — ruled out").
