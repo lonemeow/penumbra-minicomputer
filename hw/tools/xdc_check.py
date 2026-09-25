@@ -1,29 +1,39 @@
 #!/usr/bin/env python3
-"""Check a board top's XDC against the board's vendored master XDC.
+"""Check a board top's XDC against the board's vendored board facts.
 
-The master (hw/third_party/digilent-xdc/) is board truth: pin
-locations, I/O standards and the oscillator clock, every line
-commented out, plus a few uncommented board-wide settings. A top's XDC
-copies the lines for the pins it uses, uncommented and otherwise
-unchanged, keeping the master's port names. This fails when a top's
-XDC states a board fact the master does not state, or leaves out a
+The masters are board truth, as the manufacturer states it:
+
+- a master XDC (hw/third_party/digilent-xdc/): pin locations, I/O
+  standards and the oscillator clock, every line commented out, plus
+  a few uncommented board-wide settings;
+- a memory interface generator project (a `.prj`,
+  hw/third_party/digilent-boards/): the pins and I/O standards of the
+  board's DRAM, which the master XDC leaves out. Each pin stands for
+  the line `set_property -dict { PACKAGE_PIN <pad> IOSTANDARD <std> }
+  [get_ports { <name> }]`.
+
+A top's XDC copies the lines for the pins it uses, uncommented and
+otherwise unchanged, keeping the masters' port names. This fails when a
+top's XDC states a board fact no master states, or leaves out a
 board-wide setting:
 
 - a line setting PACKAGE_PIN or IOSTANDARD, or a create_clock on a
-  top-level port, that is not one of the master's lines;
+  top-level port, that is not one of the masters' lines;
 - a missing master line that is active in the master itself (such as
   CONFIG_VOLTAGE), which every design on the board needs.
 
 Lines compare with whitespace collapsed and any trailing `; #...`
 schematic comment dropped. Everything else in a top's XDC (generated
-clocks, timing exceptions, CDC constraints) is design intent and
-passes unchecked.
+clocks, timing exceptions, CDC constraints, termination and slew) is
+design intent and passes unchecked.
 
-Usage: python3 xdc_check.py master.xdc top.xdc [top.xdc ...]
+Usage: python3 xdc_check.py --master FILE [--master FILE ...] top.xdc [top.xdc ...]
 """
 
+import argparse
 import re
 import sys
+import xml.etree.ElementTree as ET
 
 BOARD_FACT = re.compile(r'\b(PACKAGE_PIN|IOSTANDARD)\b|^create_clock\b.*\bget_ports\b')
 TRAILING_COMMENT = re.compile(r';\s*#.*$')
@@ -35,7 +45,7 @@ def normalize(line):
     return ' '.join(line.rstrip(';').split())
 
 
-def load_master(path):
+def load_master_xdc(path):
     """Return (board facts, board-wide lines) from a master XDC."""
     facts = set()
     board_wide = []
@@ -49,7 +59,25 @@ def load_master(path):
     return facts, board_wide
 
 
-def check(master_path, top_path, facts, board_wide):
+def load_master_prj(path):
+    """Return (board facts, board-wide lines) from a MIG project: the
+    pin lines its pins stand for, and no board-wide lines."""
+    facts = set()
+    for pin in ET.parse(path).iter('Pin'):
+        pad = pin.get('PADName')
+        std = pin.get('IOSTANDARD')
+        name = pin.get('name')
+        if pad and std and name:
+            facts.add(normalize(f'set_property -dict {{ PACKAGE_PIN {pad} '
+                                f'IOSTANDARD {std} }} [get_ports {{ {name} }}]'))
+    return facts, []
+
+
+def load_master(path):
+    return load_master_prj(path) if path.endswith('.prj') else load_master_xdc(path)
+
+
+def check(masters, top_path, facts, board_wide):
     errors = []
     present = set()
     with open(top_path) as f:
@@ -59,26 +87,31 @@ def check(master_path, top_path, facts, board_wide):
                 continue
             present.add(line)
             if BOARD_FACT.search(line) and line not in facts:
-                errors.append(f'{top_path}:{number}: not a line of {master_path}: {line}')
+                errors.append(f'{top_path}:{number}: not a board fact of {masters}: {line}')
     for line in board_wide:
         if line not in present:
-            errors.append(f'{top_path}: missing board-wide line from {master_path}: {line}')
+            errors.append(f'{top_path}: missing board-wide line from {masters}: {line}')
     return errors
 
 
 def main(argv):
-    if len(argv) < 2:
-        print(__doc__.strip().splitlines()[-1], file=sys.stderr)
-        return 2
-    if len(argv) == 2:
-        print(f'no top XDC to check against {argv[1]}: an xc7 top needs '
+    parser = argparse.ArgumentParser(usage=__doc__.strip().splitlines()[-1].split(': ', 1)[1])
+    parser.add_argument('--master', action='append', required=True)
+    parser.add_argument('tops', nargs='*')
+    args = parser.parse_args(argv[1:])
+    masters = ', '.join(args.master)
+    if not args.tops:
+        print(f'no top XDC to check against {masters}: an xc7 top needs '
               f'its own constraints (XDC_<top> in the Makefile)', file=sys.stderr)
         return 1
-    master_path, top_paths = argv[1], argv[2:]
-    facts, board_wide = load_master(master_path)
+    facts, board_wide = set(), []
+    for path in args.master:
+        more_facts, more_board_wide = load_master(path)
+        facts |= more_facts
+        board_wide += more_board_wide
     errors = []
-    for top_path in top_paths:
-        errors += check(master_path, top_path, facts, board_wide)
+    for top_path in args.tops:
+        errors += check(masters, top_path, facts, board_wide)
     for error in errors:
         print(error, file=sys.stderr)
     return 1 if errors else 0

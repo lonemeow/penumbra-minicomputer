@@ -29,7 +29,8 @@ into `build/`.
 
 Penumbra's own files stay BSD 2-Clause. Exactly one Penumbra file may
 instantiate `ddr3_top`: the Nexys-specific wrapper that exposes it as a
-plain Wishbone port, itself licensed GPL-3.0-or-later. Everything
+plain Wishbone port (`hw/rtl/fpga/nexysvideo/nexysvideo_ddr3.sv`),
+itself licensed GPL-3.0-or-later. Everything
 behind that port knows nothing of UberDDR3. A Nexys Video bitstream
 incorporating this directory is a combined work, GPL-3.0 as a whole if
 it is ever distributed, with its Corresponding Source the public

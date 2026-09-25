@@ -76,3 +76,7 @@ their own respective licenses.
    combined work, GPL-3.0 as a whole when distributed; Penumbra's own
    source files remain under the BSD 2-Clause License above.
    See hw/third_party/uberddr3/LICENSE and README.md.
+
+8. Digilent Vivado board files (hw/third_party/digilent-boards/)
+   Copyright (c) 2021 Digilent, Inc. Licensed under the MIT License.
+   See hw/third_party/digilent-boards/License.txt for the full text.

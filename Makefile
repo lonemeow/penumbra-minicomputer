@@ -297,6 +297,7 @@ MODULE_TESTS = \
     ecp5_pll_test \
     xc7_mmcm_test \
     nexysvideo_uart_test_top \
+    nexysvideo_ddr3_selftest_test \
     onchip_ram \
     unified_mem \
     uart \
@@ -1197,11 +1198,14 @@ PART_nexysvideo      = xc7a200tsbg484-1
 OFL_BOARD_nexysvideo = nexysVideo
 
 # An xc7 board's master XDC holds the vendor's pin constraints, all
-# commented out. Vivado flags a constraint on a port the top lacks, so
-# each top has its own XDC_<top> with the master lines it uses,
-# uncommented, plus its design constraints; hw/tools/xdc_check.py
-# checks those lines against the master on every xc7 build.
-XDC_MASTER_nexysvideo = hw/third_party/digilent-xdc/Nexys-Video-Master.xdc
+# commented out, and its memory interface generator project the DRAM's
+# pins the master XDC leaves out. Vivado flags a constraint on a port
+# the top lacks, so each top has its own XDC_<top> with the master lines
+# it uses, uncommented, plus its design constraints;
+# hw/tools/xdc_check.py checks those lines against the masters on every
+# xc7 build.
+XDC_MASTER_nexysvideo = hw/third_party/digilent-xdc/Nexys-Video-Master.xdc \
+                        hw/third_party/digilent-boards/nexys_video_mig.prj
 XDC_MASTER = $(XDC_MASTER_$(FPGA_BOARD))
 XDC = $(if $(XDC_$(TOP)),$(XDC_$(TOP)),$(XDC_$(TOP_MODULE)))
 
@@ -1289,6 +1293,30 @@ FPGA_SRC_nexysvideo_uart_test_top = hw/rtl/common/build_check.sv \
                                     $(SRC_BOARD_nexysvideo) \
                                     $(FPGA_RTL)/nexysvideo/nexysvideo_uart_test_top.sv
 XDC_nexysvideo_uart_test_top = hw/constraints/nexysvideo_uart_test_top.xdc
+
+# The Nexys Video's DDR3 controller: UberDDR3 as vendored, behind the one
+# GPL wrapper that instantiates it (nexysvideo_ddr3.sv). Its files set
+# `default_nettype none, which reaches every file after them in one
+# sv2v run, so a source list puts them last.
+SRC_UBERDDR3 = hw/third_party/uberddr3/rtl/ecc/ecc_enc.sv \
+               hw/third_party/uberddr3/rtl/ecc/ecc_dec.sv \
+               hw/third_party/uberddr3/rtl/ddr3_phy.v \
+               hw/third_party/uberddr3/rtl/ddr3_controller.v \
+               hw/third_party/uberddr3/rtl/ddr3_top.v
+SRC_DDR3_nexysvideo = $(FPGA_RTL)/nexysvideo/nexysvideo_ddr3_clk.sv \
+                      $(FPGA_RTL)/nexysvideo/nexysvideo_ddr3.sv
+
+# Nexys Video DDR3 bring-up: the controller alone at the machine's
+# configuration, calibrating and self-testing the whole chip in a loop
+# with a line per run on the console — no CPU or bus, built via the
+# TOP= escape hatch (make fpga TOP=nexysvideo_ddr3_test_top).
+FPGA_SRC_nexysvideo_ddr3_test_top = hw/rtl/common/build_check.sv \
+                                    $(FPGA_RTL)/xc7/xc7_thermal_guard.sv \
+                                    $(SRC_DDR3_nexysvideo) \
+                                    $(FPGA_RTL)/nexysvideo/nexysvideo_ddr3_selftest.sv \
+                                    $(FPGA_RTL)/nexysvideo/nexysvideo_ddr3_test_top.sv \
+                                    $(SRC_UBERDDR3)
+XDC_nexysvideo_ddr3_test_top = hw/constraints/nexysvideo_ddr3_test_top.xdc
 
 # The gen2 machine on the Nexys Video, growing one device per bring-up
 # step. Its devices are named rather than taken from SRC_FABRIC, whose
@@ -1539,7 +1567,7 @@ FPGA_SYNTH_OUT_xc7  = $(BUILD_DIR)/$(TOP).bit
 FPGA_SYNTH_DEPS_xc7 = $(XDC) $(XDC_MASTER) hw/tools/xdc_check.py $(VIVADO_TOOLS)/build.tcl \
                       $(VIVADO_TOOLS)/gates.tcl
 FPGA_VIVADO_LOG     = $(BUILD_DIR)/$(TOP)_vivado.log
-FPGA_SYNTH_CMD_xc7  = python3 hw/tools/xdc_check.py $(XDC_MASTER) $(XDC) && \
+FPGA_SYNTH_CMD_xc7  = python3 hw/tools/xdc_check.py $(addprefix --master ,$(XDC_MASTER)) $(XDC) && \
                       $(VIVADO_TOOLS)/bin/vivado -mode batch -nojournal \
                       -log $(FPGA_VIVADO_LOG) \
                       -source $(VIVADO_TOOLS)/build.tcl \

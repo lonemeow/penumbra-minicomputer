@@ -290,9 +290,12 @@ critical warning for each constraint naming a missing port, so an xc7
 top has its own XDC (`XDC_<top>`) holding only its pins. Those lines
 are copied, uncommented and otherwise unchanged, from the board's
 master XDC, which is vendored verbatim under `hw/third_party/` and
-never edited; `hw/tools/xdc_check.py` holds every pin and board-clock
-line of a top's XDC to the master before each build, so a mistyped
-pin or I/O standard stops the build before Vivado runs.
+never edited. A board whose DRAM pins the master XDC leaves out has
+them from its memory interface generator project, vendored the same
+way; each of its pins stands for the one XDC line that states it.
+`hw/tools/xdc_check.py` holds every pin and board-clock line of a
+top's XDC to those masters before each build, so a mistyped pin or
+I/O standard stops the build before Vivado runs.
 
 An xc7 build ends in signoff gates (`hw/tools/vivado/gates.tcl`),
 because Vivado reports a design that fails timing and writes its

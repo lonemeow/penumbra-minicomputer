@@ -314,6 +314,21 @@ the shared module.
   UART port, LEDs for lock, reset, a 1 Hz heartbeat, RX activity and
   framing errors. Constraints in
   `hw/constraints/nexysvideo_uart_test_top.xdc`.
+- `nexysvideo/nexysvideo_ddr3.sv` — the board's DDR3 behind UberDDR3
+  (`hw/third_party/uberddr3/`), at the machine's configuration (x16,
+  two lanes, 15 row bits): a Wishbone burst port, UberDDR3's debug
+  port, calibration complete. The one file that instantiates
+  `ddr3_top`, so the one licensed GPL-3.0-or-later.
+- `nexysvideo/nexysvideo_ddr3_clk.sv` — the DDR3 controller's four
+  clocks (83.33, 333.33, 333.33 at 90 degrees, 200 MHz) from one PLL.
+- `nexysvideo/nexysvideo_ddr3_selftest.sv` — runs the controller's
+  calibration and full-chip self-test over and over, one line per run
+  on the console (verdict, reads checked, mismatches, calibration
+  time). Testbench `make sim MOD=nexysvideo_ddr3_selftest_test`.
+- `nexysvideo/nexysvideo_ddr3_test_top.sv` — DDR3 bring-up top
+  (`make fpga TOP=nexysvideo_ddr3_test_top`): the controller and its
+  self-test alone, no CPU. Its DDR3 pin lines come from Digilent's MIG
+  project (`hw/third_party/digilent-boards/`).
 
 ## Boot ROM (`rom/`)
 
