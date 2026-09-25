@@ -28,7 +28,7 @@
 #include <string>
 
 // The top's CPU_HZ, the console's baud rate, and its RAM size.
-static const uint64_t CPU_HZ = 37500000;
+static const uint64_t CPU_HZ = 50000000;
 static const uint64_t BAUD = 115200;
 static const double BIT = double(CPU_HZ) / double(BAUD);
 
@@ -189,7 +189,14 @@ int main(int argc, char** argv) {
     const std::string boot = host.text;
     expect(boot, "RAM: OK");
     expect(boot, "Hardware: Nexys Video");
-    expect(boot, "@ 37.500 MHz");
+    // The banner's format: kHz digits only when the clock has any.
+    char banner_mhz[32];
+    unsigned long long mhz = CPU_HZ / 1000000, khz = CPU_HZ / 1000 % 1000;
+    if (khz)
+        snprintf(banner_mhz, sizeof banner_mhz, "@ %llu.%03llu MHz", mhz, khz);
+    else
+        snprintf(banner_mhz, sizeof banner_mhz, "@ %llu MHz", mhz);
+    expect(boot, banner_mhz);
     expect(boot, "Detecting base RAM... 128kB found");
     expect(boot, "  SD SD @ 0x");
     expect(boot, "1 device(s) found");
