@@ -15,6 +15,7 @@
 //   led[3]  toggles on every byte received
 //   led[4]  a received frame ended in a low stop bit (wrong baud, or a
 //           break); held until reset
+//   led[7]  the die above the thermal guard's warning threshold
 
 module nexysvideo_uart_test_top (
     input  logic       clk,          // 100 MHz oscillator
@@ -38,6 +39,14 @@ module nexysvideo_uart_test_top (
         .o_clk        (cpu_clk),
         .o_locked     (locked),
         .o_rst        (rst)
+    );
+
+    // Over-temperature shutdown, off the oscillator itself.
+    logic thermal_warn;
+
+    xc7_thermal_guard u_thermal (
+        .i_clk  (clk),
+        .o_warn (thermal_warn)
     );
 
     // ── Bit timing ─────────────────────────────────────────────
@@ -199,6 +208,6 @@ module nexysvideo_uart_test_top (
         end
     end
 
-    assign led = {3'b000, rx_frame_err_q, rx_toggle_q, beat_q, !rst, locked};
+    assign led = {thermal_warn, 2'b00, rx_frame_err_q, rx_toggle_q, beat_q, !rst, locked};
 
 endmodule

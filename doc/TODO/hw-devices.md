@@ -850,3 +850,31 @@ milliseconds per voice:
 - **Software mixer:** move the outgoing voice to a spare slot and fade
   it over 1–5 ms, as OpenMPT does, and ramp gain changes across a
   tick.
+
+## Hardware + kernel: die temperature and thermal warning for the kernel
+
+The Nexys Video's bitstreams arm the XADC's over-temperature shutdown
+(`hw/rtl/fpga/xc7/xc7_thermal_guard.sv`): past 85 °C the part disables
+itself and stays off until reprogrammed or power-cycled. The kernel
+sees none of it: nothing reports the temperature, and a shutdown
+arrives without a word on the console.
+
+Open:
+
+- **A sensor device on the bus.** Autoconfigured under a new device
+  class, specified in `doc/system/devices/` before any RTL. It reads
+  the XADC's status registers through the guard's DRP port, tied off
+  today: die temperature with its minimum and maximum since
+  configuration, and the VCCINT, VCCAUX and VCCBRAM supplies. The XADC
+  runs off the board oscillator rather than the CPU clock, so the
+  device crosses that domain for each DRP access.
+- **An interrupt on the warning.** The guard's `o_warn` (the XADC's
+  temperature alarm, 75 °C rising, 70 °C falling) becomes the device's
+  interrupt, synchronized into the CPU clock domain, so the kernel can
+  print a warning and act before the hard cut at 85 °C.
+- **The driver.** NetBSD's `sysmon_envsys(9)` is the framework: a
+  temperature sensor with warning and critical limits shows in
+  `envstat(8)`, and its limit events reach `powerd(8)`'s scripts, which
+  can log, or shut the system down cleanly ahead of the hardware.
+- **Supply alarms**, if they earn their place: they need thresholds in
+  the guard's configuration, and nothing acts on them yet.

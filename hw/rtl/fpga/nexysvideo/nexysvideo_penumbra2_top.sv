@@ -10,7 +10,8 @@
 //
 // The LEDs report the board-level pieces under the machine: led[0] MMCM
 // locked, led[1] reset released, led[2] a 1 Hz heartbeat counted off the
-// CPU clock. The console is 115200 8N1.
+// CPU clock, led[7] the die above the thermal guard's warning threshold.
+// The console is 115200 8N1.
 
 // CPU microarchitecture variant: 0 = gen2 baseline, 1 = gen2.5
 // (forwarding/prediction). Set by the build (sv2v -D) per CORE; the
@@ -50,6 +51,14 @@ module nexysvideo_penumbra2_top (
         .o_clk        (cpu_clk),
         .o_locked     (locked),
         .o_rst        (rst)
+    );
+
+    // Over-temperature shutdown, off the oscillator itself.
+    logic thermal_warn;
+
+    xc7_thermal_guard u_thermal (
+        .i_clk  (clk),
+        .o_warn (thermal_warn)
     );
 
     // ══════════════════════════════════════════════════════════
@@ -331,6 +340,6 @@ module nexysvideo_penumbra2_top (
         end
     end
 
-    assign led = {5'b00000, beat_q, !rst, locked};
+    assign led = {thermal_warn, 4'b0000, beat_q, !rst, locked};
 
 endmodule

@@ -293,6 +293,14 @@ the shared module.
   every Nexys Video top shares: the CPU clock from the 100 MHz
   oscillator through an MMCM (`xc7_mmcm_pkg`, from `CPU_HZ`), and a
   reset held at least 10 ms past MMCM lock and CPU RESET release.
+- `xc7/xc7_thermal_guard.sv` — the XADC's over-temperature shutdown,
+  armed, in every 7-series top: the part shuts itself down past 85 C
+  and never restarts by itself, only when reprogrammed or power-cycled;
+  a warning (75 C, clearing at
+  70 C) drives led[7]. Clocked off the oscillator, not the MMCM. The
+  xc7 flow refuses a bitstream without it (thermal gate in
+  `hw/tools/vivado/gates.tcl`). Its DRP port is where a kernel-visible
+  sensor device attaches (`doc/TODO/hw-devices.md`).
 - `nexysvideo/nexysvideo_penumbra2_top.sv` — gen2 machine on the Nexys
   Video (`BOARD=nexysvideo CORE=penumbra2[_5]`), growing one device per
   bring-up step: boot ROM, UART, the microSD slot over SPI (autoconfig,

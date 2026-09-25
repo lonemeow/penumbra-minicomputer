@@ -52,6 +52,10 @@ foreach f $xdcs {
 }
 synth_design -top $top -part $part
 
+# The XADC's over-temperature shutdown acts only if the bitstream allows
+# it; the thermal gate checks that every design arms it (gates.tcl).
+set_property BITSTREAM.CONFIG.OVERTEMPPOWERDOWN ENABLE [current_design]
+
 # Placement and routing run at their default effort; Explore costs them
 # minutes a build, where the steps around them take seconds at it.
 opt_design -directive Explore
@@ -71,6 +75,9 @@ write_checkpoint -force ${out}_routed.dcp
 set failures [gate_failures $log]
 foreach line [clock_fmax_lines] {
     puts "Timing: $line"
+}
+foreach line [thermal_lines] {
+    puts "Thermal: $line"
 }
 if {[llength $failures] > 0} {
     foreach f $failures {

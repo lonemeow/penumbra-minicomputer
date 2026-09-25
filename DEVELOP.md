@@ -631,3 +631,26 @@ Under WSL2, attach both of the board's USB ports (PROG and UART) with
 usbipd. The board powers its USB chips itself, so they disappear on
 every power cycle; `usbipd attach --wsl --busid <id> --auto-attach`
 re-attaches them.
+
+### Thermal protection
+
+Every Xilinx bitstream from this repo arms the FPGA's own
+over-temperature shutdown (`hw/rtl/fpga/xc7/xc7_thermal_guard.sv`; the
+build refuses a design without it). Past 85 °C die temperature the
+part disables itself and releases every pin, and it never restarts
+by itself: it stays off until it is reprogrammed or the board's power
+is removed. A shut-down board looks dead, its LEDs faintly lit by the
+released pins' pull-ups and its console silent. Find out why it got
+that hot before flashing it again. LED7 lights first, from 75 °C
+until the die cools below 70 °C. Bitstreams from elsewhere, Digilent's
+demos included, carry no such protection unless they arm it themselves.
+
+The die temperature is readable over JTAG whatever bitstream is
+running, without disturbing it:
+
+```sh
+hw/tools/openfpgaloader/bin/openFPGALoader -b nexysVideo --read-xadc
+```
+
+`temp` is the present die temperature and `maxtemp` the highest since
+the bitstream was loaded.

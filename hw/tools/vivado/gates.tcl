@@ -21,6 +21,10 @@
 #   messages raised inside some commands (route_design's among them).
 # - Memory mapping: every memory built the way its ram_style or
 #   rom_style declares (log_failures, below).
+# - Thermal: the design carries the thermal guard's XADC with its
+#   over-temperature shutdown armed, and the bitstream allows the
+#   shutdown (thermal_failures, below). No bitstream leaves the flow
+#   able to run the part past its rated junction temperature unchecked.
 #
 # The methodology and DRC gates read the results of the last
 # report_methodology and report_drc, so build.tcl runs those first.
@@ -69,8 +73,60 @@ proc gate_failures {log} {
     lappend fail {*}[severe_by_rule methodology [get_methodology_violations -quiet]]
     lappend fail {*}[severe_by_rule drc [get_drc_violations -quiet]]
     lappend fail {*}[log_failures $log]
+    lappend fail {*}[thermal_failures]
 
     return $fail
+}
+
+# The thermal guard (xc7_thermal_guard.sv): exactly one XADC, its
+# over-temperature alarm not disabled (INIT_41 bit 0), its shutdown
+# armed (INIT_53's four LSBs 0011b), and the bitstream allowing the
+# shutdown. Any one missing leaves the part without its protection.
+proc thermal_failures {} {
+    set fail {}
+    if {[get_property BITSTREAM.CONFIG.OVERTEMPPOWERDOWN [current_design]] ne "ENABLE"} {
+        lappend fail "thermal: BITSTREAM.CONFIG.OVERTEMPPOWERDOWN is not ENABLE"
+    }
+    set xadc [get_cells -quiet -hierarchical -filter {REF_NAME == XADC}]
+    if {[llength $xadc] != 1} {
+        lappend fail "thermal: [llength $xadc] XADC instances; the thermal guard provides one"
+        return $fail
+    }
+    if {[xadc_init $xadc 41] & 0x1} {
+        lappend fail "thermal: the XADC's over-temperature alarm is disabled (INIT_41)"
+    }
+    set ot_limit [xadc_init $xadc 53]
+    if {($ot_limit & 0xF) != 0x3} {
+        lappend fail [format "thermal: the XADC's shutdown is not armed (INIT_53 %04X)" $ot_limit]
+    }
+    return $fail
+}
+
+# The guard's thresholds in degrees C, read back from the XADC the
+# design synthesized: empty when there is not exactly one.
+proc thermal_lines {} {
+    set xadc [get_cells -quiet -hierarchical -filter {REF_NAME == XADC}]
+    if {[llength $xadc] != 1} {
+        return {}
+    }
+    return [list [format "shutdown at %.1f C (released below %.1f C), warning at %.1f C (clears below %.1f C)" \
+                      [xadc_celsius [xadc_init $xadc 53]] [xadc_celsius [xadc_init $xadc 57]] \
+                      [xadc_celsius [xadc_init $xadc 50]] [xadc_celsius [xadc_init $xadc 54]]]]
+}
+
+# An XADC cell's INIT_<reg> as an integer (Vivado reports 16'hXXXX).
+proc xadc_init {cell reg} {
+    set v [get_property INIT_$reg $cell]
+    if {![regexp {([0-9A-Fa-f]+)$} $v -> hex]} {
+        error "unreadable INIT_$reg on $cell: $v"
+    }
+    return [expr {"0x$hex" + 0}]
+}
+
+# A 16-bit, MSB-justified XADC temperature code in degrees C (UG480,
+# Equation 4-2).
+proc xadc_celsius {code} {
+    return [expr {($code >> 4) * 503.975 / 4096 - 273.15}]
 }
 
 # The gates read from the run's log: every critical warning, and every

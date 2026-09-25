@@ -308,7 +308,14 @@ bitstream anyway. The routed design gets a bitstream only when:
 - every memory is built the way its `ram_style` declares. yosys fails
   a build it cannot honor; Vivado only warns and falls back to another
   kind of storage, so without this gate the same RTL could map
-  differently on the two families.
+  differently on the two families;
+- the design carries the thermal guard (`xc7_thermal_guard.sv`), one
+  XADC with its over-temperature shutdown armed, and the bitstream
+  allows the shutdown (`build.tcl` sets
+  `BITSTREAM.CONFIG.OVERTEMPPOWERDOWN`). The shutdown is off unless
+  both ask for it, and a board top that forgot the guard would leave
+  the part free to run past its rated junction temperature. The build
+  log prints the thresholds it armed (`Thermal:`).
 
 The timing floor is zero slack. Vivado times setup at the slow corner
 (85 °C, minimum voltage) and hold at the fast one, with each clock's

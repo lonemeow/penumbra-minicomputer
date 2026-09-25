@@ -54,7 +54,7 @@ VERILATOR_FLAGS = $(VERILATOR_BASE_FLAGS) $(if $(CORE_SUB),-Ihw/rtl/$(CORE) )$(V
 # A board top under test instantiates vendor primitives, which the lint
 # stubs stand in for; as a -v library file, a stub file's modules only
 # elaborate where something instantiates them.
-VERILATOR_BOARD_LIBS   = -Ihw/rtl/fpga/nexysvideo -v hw/rtl/fpga/xc7/xc7_prim.sv
+VERILATOR_BOARD_LIBS   = -Ihw/rtl/fpga/nexysvideo -Ihw/rtl/fpga/xc7 -v hw/rtl/fpga/xc7/xc7_prim.sv
 VERILATOR_MODULE_FLAGS = $(VERILATOR_BASE_FLAGS) $(VERILATOR_INCLUDES) $(VERILATOR_BOARD_LIBS)
 
 BUILD_DIR   = build
@@ -1179,10 +1179,12 @@ SRC_MACHINE_penumbra2 = hw/rtl/machine/machine_penumbra2.sv \
 SRC_BOARD_ulx3s = $(FPGA_RTL)/ecp5_pll_pkg.sv
 LPF_ulx3s       = hw/constraints/ulx3s_v20.lpf
 
-# The Nexys Video's clocking and power-on reset, shared by its tops; the
-# MMCM package comes first because the clock/reset module imports it.
+# The Nexys Video's clocking, power-on reset and thermal guard, shared
+# by its tops; the MMCM package comes first because the clock/reset
+# module imports it.
 SRC_BOARD_nexysvideo = $(FPGA_RTL)/xc7/xc7_mmcm_pkg.sv \
-                       $(FPGA_RTL)/nexysvideo/nexysvideo_clk_rst.sv
+                       $(FPGA_RTL)/nexysvideo/nexysvideo_clk_rst.sv \
+                       $(FPGA_RTL)/xc7/xc7_thermal_guard.sv
 
 # Each board's device family picks the flow that builds and programs
 # it: ecp5 (yosys, nextpnr-ecp5, ecppack, fujprog) or xc7 (Vivado,
