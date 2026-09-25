@@ -982,17 +982,19 @@ SRC_AUDIO = hw/rtl/io/audio/audio.sv \
 # the filter-out drops those from the base set so the variant's copies
 # are the only definitions — a missing entry surfaces as a duplicate
 # module error rather than a silently mixed build.
-SDRAM_STACK ?= word
+# Which stack a given top defaults to is pinned beside its placement
+# seed, since both are answers to the same question about that artifact.
 SDRAM_LINE_FORKED := sdram_bus_adapter sdram_stack
 
 SRC_SDRAM_word = $(filter-out %/sdram_pkg.sv, $(wildcard hw/rtl/io/sdram/*.sv))
 SRC_SDRAM_line = $(filter-out $(SDRAM_LINE_FORKED:%=hw/rtl/io/sdram/%.sv),$(SRC_SDRAM_word)) \
                  $(wildcard hw/rtl/io/sdram_line/*.sv)
-SRC_SDRAM = $(SRC_SDRAM_$(SDRAM_STACK))
 
-ifeq ($(filter $(SDRAM_STACK),word line),)
-$(error SDRAM_STACK must be `word` or `line`, got `$(SDRAM_STACK)`)
-endif
+# An unknown stack names no fileset, which would otherwise synthesize a
+# top with no SDRAM at all.  The check expands with the variable rather
+# than at parse time, because the default depends on TOP.
+SRC_SDRAM = $(or $(SRC_SDRAM_$(SDRAM_STACK)),\
+                 $(error SDRAM_STACK must be `word` or `line`, got `$(SDRAM_STACK)`))
 
 SRC_FABRIC = hw/rtl/io/sdram/sdram_pkg.sv \
              $(SRC_AUDIO) \
@@ -1164,8 +1166,17 @@ FPGA_AUDIO_TOPS = ulx3s_audio_test_top
 # per-domain criticality and whose CLK_FREQ retunes every derived
 # divider.
 DEFAULT_SEED_ulx3s_penumbra1_top   := 0
-DEFAULT_SEED_ulx3s_penumbra2_top   := 3
-DEFAULT_SEED_ulx3s_penumbra2_5_top := 0
+DEFAULT_SEED_ulx3s_penumbra2_top   := 7
+DEFAULT_SEED_ulx3s_penumbra2_5_top := 2
+
+# Per-top default SDRAM stack (see SDRAM_STACK above).  Which stack a
+# top closes timing under is a placement question rather than a logical
+# one, so it is pinned per artifact TOP and re-measured the way the
+# placement seed is.
+SDRAM_STACK_ulx3s_penumbra1_top   := word
+SDRAM_STACK_ulx3s_penumbra2_top   := line
+SDRAM_STACK_ulx3s_penumbra2_5_top := line
+SDRAM_STACK ?= $(or $(SDRAM_STACK_$(TOP)),word)
 
 
 # BOARD/CORE porcelain → TOP derivation (CORE defaults to penumbra2_5
