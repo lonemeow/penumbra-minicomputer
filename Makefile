@@ -708,7 +708,7 @@ test-compiler-pic: $(ISS)
 
 .PHONY: simulate
 simulate: $(ISS)
-	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX) CFLAGS=$(CFLAGS)
+	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX)
 	@$(ISS) program.hex $(if $(SDCARD),+sdcard=$(SDCARD)) $(if $(USBDEV),+usbdev=$(USBDEV)) $(if $(TRACE),+trace=$(TRACE)) $(if $(TRACE_WINDOW),+trace_window=$(TRACE_WINDOW)) $(if $(HALT_ON),'+halt_on=$(HALT_ON)') $(if $(RAW),+raw)
 
 $(ISS): sw/sim/penumbra_iss.cpp sw/sim/penumbra_cores.h sw/sim/cache_model.h sw/sim/tlb_model.h hw/sim/usb_device_sim.h hw/sim/usb_msc_sim.h
@@ -767,7 +767,7 @@ simulate-rtl:
 		--Mdir $(BUILD_DIR)/$(CORE)$(SIM_MEM_TAG)_$(SIMRTL_TOP)_interactive.verilator \
 		-o ../$(SIMRTL_OUT) \
 		$(PKG_SV) $(SIMRTL_TOPSV) $(SIMRTL_TB) hw/sim/sim_console.cpp
-	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX) CFLAGS=$(CFLAGS)
+	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX)
 ifneq ($(CORE_BASE),penumbra2)
 	@$(UASM) hw/microcode/microcode.uasm -o microcode.hex
 endif
@@ -989,7 +989,7 @@ BENCH_ELFS := DHRYSTON.ELF MEMTEST.ELF MEMBENCH.ELF
 
 .PHONY: benchmark
 benchmark: sdimage-bench $(ISS)
-	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX) CFLAGS=$(CFLAGS)
+	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX)
 	@# +halt-on-break: each benchmark ends with a BREAK "done" sentinel.
 	@# Without it the interactive ISS traps that BREAK into the ROM monitor
 	@# and blocks on stdin, so the loop would never reach the next ELF.
@@ -1008,7 +1008,7 @@ benchmark-rtl: sdimage-bench
 		--Mdir $(BUILD_DIR)/$(CORE)$(SIM_MEM_TAG)_$(SIMRTL_TOP)_interactive.verilator \
 		-o ../$(SIMRTL_OUT) \
 		$(PKG_SV) $(SIMRTL_TOPSV) $(SIMRTL_TB) hw/sim/sim_console.cpp
-	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX) CFLAGS=$(CFLAGS)
+	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX)
 ifneq ($(CORE_BASE),penumbra2)
 	@$(UASM) hw/microcode/microcode.uasm -o microcode.hex
 endif

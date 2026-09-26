@@ -24,9 +24,12 @@ LD       = $(LLVM_PREFIX)/bin/ld.lld
 OBJCOPY  = $(LLVM_PREFIX)/bin/llvm-objcopy
 BIN2HEX  = python3 $(ROOT)/sw/tools/bin2hex.py
 
-CFLAGS   ?= -O0 -MMD -MP
-# Generated headers (splash art) live in the build directory.
-CFLAGS   += -I$(BUILD)
+CFLAGS   ?= -O0
+# What the build needs whatever CFLAGS says, so a CFLAGS from the
+# command line (the top-level Makefile's included) cannot drop it:
+# dependency files, and the build directory, where the generated
+# headers (splash art) live.
+ROM_CFLAGS := -MMD -MP -I$(BUILD)
 
 # ── Generated sources ─────────────────────────────────────────
 # The splash screen is authored as text and transcoded to CP437 rows;
@@ -70,7 +73,7 @@ $(SPLASH_H): $(SPLASH_TXT) $(ROOT)/hw/tools/text2cells.py | $(BUILD)
 
 # Pattern rule: C → object
 $(BUILD)/%.o: %.c $(GEN_HDRS) | $(BUILD)
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) $(ROM_CFLAGS) -c -o $@ $<
 
 # Pattern rule: assembly → object
 $(BUILD)/%.o: %.s | $(BUILD)
