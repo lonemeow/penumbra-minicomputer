@@ -271,7 +271,17 @@ exposed external bus.
 - `simple_mem.sv` — parameterizable sync SRAM model (default 16 MB),
   configurable READ_LATENCY/WRITE_LATENCY.
 - `wb_line_mem.sv` — pipelined-Wishbone memory of 16-byte lines with
-  random stall and ack latency, standing in for the DDR3 controller.
+  random stall and ack latency, standing in for the DDR3 controller:
+  dense over its whole address range (512 MiB of host memory at 25
+  address bits), stalled for `CALIB_CYCLES` after reset with
+  `o_calib_complete` low, as the controller calibrates.
+- `ddr3_sim.sv` — `ddr3_stack` on `wb_line_mem`, 512 MiB, in
+  `sdram_sim`'s bus shape plus the memory's calibration output; the
+  stack takes the machine's reset, the model its own.
+- `ddr3/machine_penumbra2_sim.sv` — fork of the gen2 sim wrapper with
+  `ddr3_sim` as RAM and the machine held in reset until calibration
+  (`SIM_MEM=ddr3`; the directory goes first on the path, like a core
+  variant's).
 - `ddr3_stack_test.sv` — `ddr3_stack` on `wb_line_mem`, the memory
   reset apart from the stack (`tb_ddr3_stack_test`, a variant module
   test so it gets the line adapter).

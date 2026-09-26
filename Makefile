@@ -43,8 +43,8 @@ VERILATOR_INCLUDES   = -Ihw/rtl/common -Ihw/rtl/penumbra1 -Ihw/rtl/penumbra2 -Ih
 
 # A core build (program runners, interactive sim) puts its variant's
 # directory first, so the variant's forks shadow the base modules they
-# replace.
-VERILATOR_FLAGS = $(VERILATOR_BASE_FLAGS) $(if $(CORE_SUB),-Ihw/rtl/$(CORE) )$(VERILATOR_INCLUDES)
+# replace, and its memory system's (SIM_MEM) next.
+VERILATOR_FLAGS = $(VERILATOR_BASE_FLAGS) $(if $(CORE_SUB),-Ihw/rtl/$(CORE) )$(addprefix -I,$(SIM_MEM_DIRS)) $(VERILATOR_INCLUDES)
 
 # A module test builds its module against the base files whatever CORE
 # the session selects: a variant fork on the include path would shadow
@@ -155,6 +155,27 @@ CORE_SUB  := $(word 2,$(subst _, ,$(CORE)))
 CPU_VARIANT_penumbra2_5 := 1
 CPU_VARIANT := $(or $(CPU_VARIANT_$(CORE)),0)
 
+# Which memory system backs the sim machine's RAM: `sdram`, the ULX3S's
+# (sdram_sim, 32 MiB), or `ddr3`, the Nexys Video's (ddr3_sim, 512 MiB;
+# gen2 only). ddr3 builds the fork of the sim wrapper in hw/rtl/sim/ddr3/
+# and puts the DDR3 stack, and the line adapter it takes, ahead of the
+# base files on the path. The runner and console binaries carry the
+# choice in their names, so both builds can sit side by side.
+SIM_MEM ?= sdram
+SIM_MEM_DIRS_ddr3 := hw/rtl/sim/ddr3 hw/rtl/io/ddr3 hw/rtl/io/sdram_line
+SIM_MEM_DIRS      := $(SIM_MEM_DIRS_$(SIM_MEM))
+SIM_MEM_TAG       := $(if $(SIM_MEM_DIRS),_$(SIM_MEM))
+ifeq ($(filter sdram ddr3,$(SIM_MEM)),)
+$(error SIM_MEM must be `sdram` or `ddr3`, got `$(SIM_MEM)`)
+endif
+ifeq ($(SIM_MEM)-$(filter penumbra2,$(CORE_BASE)),ddr3-)
+$(error SIM_MEM=ddr3 has a sim wrapper for gen2 only, not CORE=$(CORE))
+endif
+
+# A sim wrapper's source: the memory system's fork of it if there is one,
+# else the base file.
+sim_wrapper_sv = $(firstword $(wildcard $(addsuffix /$(1).sv,$(SIM_MEM_DIRS) hw/rtl/sim)))
+
 PROG_DIR    = hw/sim/programs
 ISA_PROGS  := $(sort $(wildcard $(PROG_DIR)/isa/test_*.s))
 # A variant inherits its base's programs and adds any of its own; the
@@ -223,9 +244,9 @@ test:
 		$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) \
 			-DPENUMBRA_CPU_VARIANT=$(CPU_VARIANT) \
 			--top-module $(RUNNER_MOD) \
-			--Mdir $(BUILD_DIR)/$(CORE)_$$tb.verilator \
-			-o ../V$(CORE)_$$tb \
-			$(PKG_SV) $$(find hw/rtl -name '$(RUNNER_MOD).sv') hw/sim/$$tb.cpp \
+			--Mdir $(BUILD_DIR)/$(CORE)$(SIM_MEM_TAG)_$$tb.verilator \
+			-o ../V$(CORE)$(SIM_MEM_TAG)_$$tb \
+			$(PKG_SV) $(call sim_wrapper_sv,$(RUNNER_MOD)) hw/sim/$$tb.cpp \
 			|| exit 1; \
 	done
 	@# Microcode for $$readmemh (gen1's machine; harmless for other cores)
@@ -233,7 +254,7 @@ test:
 	@python3 hw/tools/run-prog-tests.py --mode rtl \
 		--asm "$(PASM) --org 0xFFFF0000" --hexdir $(BUILD_DIR)/hex \
 		--provides "$(RUNNER_PROVIDES)" --default-runner $(RUNNER_DEFAULT) \
-		$(foreach tb,$(RUNNER_TBS),--bin "$(tb)=$(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/V$(CORE)_$(tb) $(DOCKER_IMAGE)") \
+		$(foreach tb,$(RUNNER_TBS),--bin "$(tb)=$(DOCKER_RUN) --entrypoint ./$(BUILD_DIR)/V$(CORE)$(SIM_MEM_TAG)_$(tb) $(DOCKER_IMAGE)") \
 		$(TEST_PROGS)
 
 # ── One program test (porcelain over the same runner flow) ─────
@@ -721,13 +742,14 @@ endif
 # program.hex (their INIT_FILE default), built by hw/rom.
 ifeq ($(CORE_BASE),penumbra2)
 SIMRTL_TOP    := machine_penumbra2_sim
-SIMRTL_OUT    := V$(CORE)_machine_penumbra2_sim_interactive
-SIMRTL_TOPSV  := hw/rtl/sim/machine_penumbra2_sim.sv
+SIMRTL_OUT    := V$(CORE)$(SIM_MEM_TAG)_machine_penumbra2_sim_interactive
+SIMRTL_TOPSV  := $(call sim_wrapper_sv,machine_penumbra2_sim)
 SIMRTL_TB     := hw/sim/tb_penumbra2_interactive.cpp
-# gen2's machine_penumbra2_sim backs RAM with the full sdram_sim stack (32 MB),
-# so a real boot image fits with no RAM parameter override. The CPU variant
-# flows in via the same -D as the test/fpga builds, so penumbra2_5 reports
-# "Penumbra/2.5" in the ROM banner here too.
+# gen2's machine_penumbra2_sim backs RAM with the full sdram_sim stack (32 MB;
+# ddr3_sim's 512 MB under SIM_MEM=ddr3), so a real boot image fits with no RAM
+# parameter override. The CPU variant flows in via the same -D as the
+# test/fpga builds, so penumbra2_5 reports "Penumbra/2.5" in the ROM banner
+# here too.
 SIMRTL_GFLAGS := -DPENUMBRA_CPU_VARIANT=$(CPU_VARIANT)
 else
 SIMRTL_TOP    := machine_sim
@@ -742,7 +764,7 @@ simulate-rtl:
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
 	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) $(SIMRTL_GFLAGS) \
 		--top-module $(SIMRTL_TOP) \
-		--Mdir $(BUILD_DIR)/$(CORE)_$(SIMRTL_TOP)_interactive.verilator \
+		--Mdir $(BUILD_DIR)/$(CORE)$(SIM_MEM_TAG)_$(SIMRTL_TOP)_interactive.verilator \
 		-o ../$(SIMRTL_OUT) \
 		$(PKG_SV) $(SIMRTL_TOPSV) $(SIMRTL_TB) hw/sim/sim_console.cpp
 	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX) CFLAGS=$(CFLAGS)
@@ -983,7 +1005,7 @@ benchmark-rtl: sdimage-bench
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
 	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) $(SIMRTL_GFLAGS) \
 		--top-module $(SIMRTL_TOP) \
-		--Mdir $(BUILD_DIR)/$(CORE)_$(SIMRTL_TOP)_interactive.verilator \
+		--Mdir $(BUILD_DIR)/$(CORE)$(SIM_MEM_TAG)_$(SIMRTL_TOP)_interactive.verilator \
 		-o ../$(SIMRTL_OUT) \
 		$(PKG_SV) $(SIMRTL_TOPSV) $(SIMRTL_TB) hw/sim/sim_console.cpp
 	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX) CFLAGS=$(CFLAGS)

@@ -62,23 +62,26 @@ module ddr3_stack_test (
         .i_wb_aux   (wb_aux_in)
     );
 
+    /* verilator lint_off PINCONNECTEMPTY */
     wb_line_mem #(
-        .ADDR_BITS (ADDR_BITS),
-        .AUX_WIDTH (AUX_WIDTH)
+        .ADDR_BITS        (ADDR_BITS),
+        .AUX_WIDTH        (AUX_WIDTH)
     ) u_mem (
-        .i_clk     (i_ctrl_clk),
-        .i_rst     (i_mem_rst),
-        .i_cyc     (o_wb_cyc),
-        .i_stb     (o_wb_stb),
-        .i_we      (wb_we),
-        .i_addr    (wb_addr),
-        .i_data    (wb_wdata),
-        .i_sel     (wb_sel),
-        .i_aux     (wb_aux_out),
-        .o_stall   (o_wb_stall),
-        .o_ack     (wb_ack),
-        .o_data    (wb_rdata),
-        .o_aux     (wb_aux_in)
+        .i_clk            (i_ctrl_clk),
+        .i_rst            (i_mem_rst),
+        .i_cyc            (o_wb_cyc),
+        .i_stb            (o_wb_stb),
+        .i_we             (wb_we),
+        .i_addr           (wb_addr),
+        .i_data           (wb_wdata),
+        .i_sel            (wb_sel),
+        .i_aux            (wb_aux_out),
+        .o_stall          (o_wb_stall),
+        .o_ack            (wb_ack),
+        .o_data           (wb_rdata),
+        .o_aux            (wb_aux_in),
+        .o_calib_complete ()
     );
+    /* verilator lint_on PINCONNECTEMPTY */
 
 endmodule

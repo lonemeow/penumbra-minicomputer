@@ -147,7 +147,7 @@ with a capability the base provides and the variant drops (such as
 
 | Target | Meaning |
 |--------|---------|
-| `make test [CORE=<generation>]` | `isa/` + `<generation>/` programs on that generation's RTL runner (default `CORE=penumbra2_5`) |
+| `make test [CORE=<generation>] [SIM_MEM=sdram\|ddr3]` | `isa/` + `<generation>/` programs on that generation's RTL runner (default `CORE=penumbra2_5`) |
 | `make test-iss` | `isa/` on the ISS — the generation-independent ISA reference |
 | `make test-prog CORE=<generation> PROG=<name>` | one program, porcelain for iteration |
 | `make test-modules` | per-module Verilator testbenches (all generations registered in `MODULE_TESTS`) |
@@ -157,6 +157,15 @@ with a capability the base provides and the variant drops (such as
 
 `make sim MOD=<m> TB=<tb> PROG=<p>` remains the low-level escape
 hatch beneath the porcelain, as `TOP=<module>` does for the FPGA flow.
+
+`SIM_MEM` picks the memory system the gen2 sim machine's RAM goes
+through, for `test`, `test-prog`, `simulate-rtl` and `benchmark-rtl`
+alike: `sdram` (the default) is the ULX3S's SDR stack at 32 MiB, and
+`ddr3` the Nexys Video's DDR3 stack on a model of its controller at
+512 MiB. The ddr3 wrapper is a fork of the gen2 one in
+`hw/rtl/sim/ddr3/`, found first on the `-I` path as a core variant's
+forks are, so the runner testbenches drive either unchanged; the
+binaries carry the choice in their names.
 
 The program-run loop lives in a script (`hw/tools/run-prog-tests.py`),
 not in Makefile shell blocks: the Makefile resolves *which* programs

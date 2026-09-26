@@ -168,6 +168,9 @@ Open work lives in `doc/TODO/`, one file per area; the table in
   `CORE` also takes a microarch sub-variant (`penumbra<n>_<sub>`, e.g.
   `penumbra2_5`): the base generation built with one core parameter set,
   inheriting its suite (mechanism in `doc/internals/build-system.md`).
+  `SIM_MEM=ddr3` (gen2 only, here and for `simulate-rtl`) runs the
+  machine on the Nexys Video's DDR3 memory stack, 512 MiB, in place of
+  the ULX3S's SDRAM.
   `make test-prog CORE=<core> PROG=<name>` runs one program. Programs
   carry lit-style `; RUNNER:` / `; REQUIRES:` header tags (scanned by
   `hw/tools/run-prog-tests.py`); suite layout and tag semantics in

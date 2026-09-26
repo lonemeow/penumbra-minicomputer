@@ -29,7 +29,7 @@
 #include <string>
 #include <vector>
 
-static const uint32_t SPAN = 4096 * 16;    // the model's storage, in bytes
+static const uint32_t SPAN = 4096 * 16;    // the bytes the test addresses
 
 static Vddr3_stack_test* d;
 static uint64_t t = 0;
