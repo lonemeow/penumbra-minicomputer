@@ -298,7 +298,20 @@ rom.ld ──────────────────┘
   The table is `sw/sim/penumbra_cores.h`; a generation's cache
   geometry or CPU name changing in RTL has to change there too.
   Measurement options: `+opstats` (instruction-class histogram),
-  `+branchstats`, and `+pcprof` — see below.
+  `+branchstats`, `+pcprof` and `+cachemodel` — see below.
+- **Cache model** (`+cachemodel[=list]`, `sw/sim/cache_model.h`) —
+  runs every fetch, load and store through shadow cache hierarchies:
+  the `+core=` generation's by default, or a comma-separated list of
+  generation names and explicit `L1I:L1D:L2` levels as `SIZE/WAYS`
+  (`8k/2:8k/2:64k/4`; 16-byte lines).  Each level follows the RTL's
+  replacement, write and enable behaviour, and each window reports the
+  counts the cache perfctrs keep plus L1 fills by kind, served from L2
+  or from memory.  A window opens at reset or at `+model_start=ADDR`
+  and closes at `+model_stop=ADDR` (both first user-mode execution,
+  as `+pcprof_start`), on `SIGUSR1` (which opens the next), or at
+  exit; `+model_report=file` writes the reports there instead of
+  stderr.  **Counts are architectural** — no wrong-path fetches, no
+  timing: multiply by costs measured on RTL or hardware for cycles.
 - **Execution profiles** (`+pcprof=file` plus
   `sw/tools/pcprof-report.py`) — buckets executed instructions by PC,
   exceptions by vector and TLB misses by faulting page.

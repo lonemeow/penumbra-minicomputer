@@ -20,6 +20,10 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 
+# Every case runs a few thousand instructions; a run still going after this
+# long is stuck, not slow.
+RUN_TIMEOUT = 30
+
 
 def cache_info(sets, ways, line_bytes, vipt):
     """A cache INFO word in penumbra_pkg.sv's unified layout."""
@@ -42,14 +46,51 @@ CORE_IDENTITY = {
 CTRL_READBACK = {6: 0, 7: 1}
 
 
+def hierarchy(l1i=(0, 0), l1d=(0, 0, 0, 0), l2=(0, 0, 0, 0), fills=None):
+    """A cache model's expected counts for one hierarchy over one window:
+    L1I (read hits, read misses), L1D and L2 (read hits, read misses,
+    write hits, write misses), and the L1 fills by (kind, mode) as
+    (from L2, from memory).  Fills not listed must be zero."""
+    return {"L1I": tuple(l1i) + (0, 0), "L1D": tuple(l1d), "L2": tuple(l2),
+            "fills": fills or {}}
+
+
+# cache_data.s, phase by phase (see the program's header).  A 16-byte line
+# is 4 words, so an L2-served fill counts 4 L2 read hits and a
+# memory-served one 1 read miss and 3 read hits.  Phase E's L2 sequence
+# takes 5 misses and 3 hits under the L2's tree-PLRU.
+DATA_PENUMBRA1 = hierarchy(                 # 1 KiB direct-mapped L1-D
+    l1d=(0, 128 + 128 + 1 + 8, 0, 2),       # A, B, D, E all miss; C both miss
+    l2=(128 * 3 + 128 * 4 + 4 + (5 * 3 + 3 * 4), 128 + 5, 1, 1),
+    fills={("D", "super"): (128 + 1 + 3, 128 + 5)})
+DATA_PENUMBRA2 = hierarchy(                 # 4 KiB 2-way L1-D
+    l1d=(128, 128 + 1 + 8, 1, 1),           # B hits; C hits 0x1000
+    l2=(128 * 3 + 4 + (5 * 3 + 3 * 4), 128 + 5, 1, 1),
+    fills={("D", "super"): (1 + 3, 128 + 5)})
+
+# cache_ifetch.s: 33 fetches.  Sharing a set, the loop's two lines miss
+# twice a round for ten rounds and the exit hits; apart, each misses once.
+IFETCH_PENUMBRA1 = hierarchy(
+    l1i=(10 + 3, 20), l2=(2 * 3 + 18 * 4, 2, 0, 0), fills={("I", "super"): (18, 2)})
+IFETCH_PENUMBRA2 = hierarchy(
+    l1i=(31, 2), l2=(2 * 3, 2, 0, 0), fills={("I", "super"): (0, 2)})
+
+# cache_window.s: inside the window, 16 re-loaded lines hit and 16 new
+# ones miss in both levels.
+WINDOW_PENUMBRA1 = hierarchy(
+    l1d=(16, 16, 0, 0), l2=(16 * 3, 16, 0, 0), fills={("D", "user"): (0, 16)})
+
+
 class Case:
     """One ISS run.  `regs` maps register number to its expected final
-    value; `error` instead expects the ISS to refuse the options with a
-    message matching the pattern."""
+    value; `windows` lists the cache-model windows expected in the report,
+    each as (how it opened and closed, {config label: hierarchy(...)});
+    `error` instead expects the ISS to refuse the options with a message
+    matching the pattern."""
 
-    def __init__(self, name, program, plusargs, regs=None, error=None):
+    def __init__(self, name, program, plusargs, regs=None, windows=None, error=None):
         self.name, self.program, self.plusargs = name, program, plusargs
-        self.regs, self.error = regs or {}, error
+        self.regs, self.windows, self.error = regs or {}, windows, error
 
 
 CASES = [
@@ -61,6 +102,24 @@ CASES = [
          regs={**CORE_IDENTITY["penumbra1"], **CTRL_READBACK}),
     Case("unknown core", "core_identity.s", ["+core=penumbra9"],
          error=r"unknown \+core generation 'penumbra9'"),
+    Case("cachemodel data", "cache_data.s",
+         ["+cachemodel=penumbra1,penumbra2,penumbra2_5,1k/1:1k/1:64k/4,4k/2:4k/2:64k/4"],
+         windows=[("reset to exit", {
+             "penumbra1": DATA_PENUMBRA1, "penumbra2": DATA_PENUMBRA2,
+             "penumbra2_5": DATA_PENUMBRA2, "1k/1:1k/1:64k/4": DATA_PENUMBRA1,
+             "4k/2:4k/2:64k/4": DATA_PENUMBRA2})]),
+    Case("cachemodel follows +core", "cache_data.s", ["+core=penumbra2_5", "+cachemodel"],
+         windows=[("reset to exit", {"penumbra2_5": DATA_PENUMBRA2})]),
+    Case("cachemodel ifetch", "cache_ifetch.s", ["+cachemodel=penumbra1,penumbra2"],
+         windows=[("reset to exit", {"penumbra1": IFETCH_PENUMBRA1,
+                                     "penumbra2": IFETCH_PENUMBRA2})]),
+    Case("model window", "cache_window.s",
+         ["+cachemodel", "+model_start=0xFFFF0800", "+model_stop=0xFFFF0900"],
+         windows=[("start PC to stop PC", {"penumbra1": WINDOW_PENUMBRA1})]),
+    Case("cachemodel bad ways", "cache_data.s", ["+cachemodel=4k/3:4k/2:64k/4"],
+         error=r"ways must be a power of two"),
+    Case("cachemodel unknown item", "cache_data.s", ["+cachemodel=penumbra7"],
+         error=r"neither a generation nor L1I:L1D:L2"),
 ]
 
 
@@ -72,19 +131,70 @@ def final_registers(stderr):
     return {int(n): int(v, 16) for n, v in re.findall(r"R(\d+)=([0-9a-fA-F]+)", lines[-1])}
 
 
+def parse_report(text):
+    """The cache model's windows: [(span, {label: counts})]."""
+    windows, counts = [], None
+    for line in text.splitlines():
+        m = re.match(r"== cache model window \d+: \d+ instructions, (.+) ==$", line)
+        if m:
+            windows.append((m.group(1), {}))
+            continue
+        m = re.match(r"-- (\S+): ", line)
+        if m:
+            counts = windows[-1][1].setdefault(m.group(1), {"fills": {}})
+            continue
+        m = re.match(r"\s+(L1I|L1D|L2)\s+(\d+)\s+(\d+)\s+(\d+|-)\s+(\d+|-)", line)
+        if m:
+            counts[m.group(1)] = tuple(0 if v == "-" else int(v) for v in m.groups()[1:])
+            continue
+        m = re.match(r"\s+([ID]) (user|super)\s+(\d+)\s+(\d+)", line)
+        if m:
+            counts["fills"][(m.group(1), m.group(2))] = (int(m.group(3)), int(m.group(4)))
+    return windows
+
+
+def compare_windows(expected, got):
+    problems = []
+    if [span for span, _ in got] != [span for span, _ in expected]:
+        return [f"windows {[s for s, _ in got]}, expected {[s for s, _ in expected]}"]
+    for (span, want_cfgs), (_, got_cfgs) in zip(expected, got):
+        for label, want in want_cfgs.items():
+            have = got_cfgs.get(label)
+            if have is None:
+                problems.append(f"{span}: no report for {label}")
+                continue
+            for level in ("L1I", "L1D", "L2"):
+                if have.get(level) != want[level]:
+                    problems.append(f"{label} {level} {have.get(level)}, expected {want[level]}")
+            for key in set(want["fills"]) | set(have["fills"]):
+                w, h = want["fills"].get(key, (0, 0)), have["fills"].get(key, (0, 0))
+                if w != h:
+                    problems.append(f"{label} fills {key[0]} {key[1]} {h}, expected {w}")
+    return problems
+
+
 def run_case(case, iss, asm, outdir):
     src = HERE / case.program
     hexfile = outdir / (src.stem + ".hex")
     subprocess.run(asm + [str(src), "-o", str(hexfile)], check=True,
                    stdout=subprocess.DEVNULL)
-    proc = subprocess.run([iss, str(hexfile), "+halt-on-break"] + case.plusargs,
-                          stdin=subprocess.DEVNULL, capture_output=True,
-                          text=True, timeout=30)
+    report = outdir / (re.sub(r"\W+", "_", case.name) + ".report")
+    plusargs = case.plusargs + ([f"+model_report={report}"] if case.windows else [])
+    try:
+        proc = subprocess.run([iss, str(hexfile), "+halt-on-break"] + plusargs,
+                              stdin=subprocess.DEVNULL, capture_output=True,
+                              text=True, timeout=RUN_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return [f"no BREAK within {RUN_TIMEOUT} s"]
     if case.error:
         if proc.returncode != 0 and re.search(case.error, proc.stderr):
             return []
         return [f"expected refusal matching /{case.error}/, "
                 f"got exit {proc.returncode}"]
+    if case.windows is not None:
+        if proc.returncode != 0 or not report.exists():
+            return [f"no model report (exit {proc.returncode}): {proc.stderr.strip()[-200:]}"]
+        return compare_windows(case.windows, parse_report(report.read_text()))
     regs = final_registers(proc.stderr)
     if regs is None:
         return [f"no register dump (exit {proc.returncode})"]

@@ -21,6 +21,10 @@
 // `make CORE=` spells it (penumbra_cores.h): its CPU name and the
 // geometry its caches report.  The default is penumbra1.
 //
+// +cachemodel[=list] runs every access through shadow cache hierarchies
+// (cache_model.h) and reports what they hit and missed, per measurement
+// window: +model_start= / +model_stop= PCs, SIGUSR1, +model_report=path.
+//
 // +raw enables full raw TTY mode: all control characters (Ctrl-C,
 // Ctrl-Z, etc.) pass through to the simulated UART for job control
 // inside the guest OS.  Use Ctrl-A as escape prefix:
@@ -49,6 +53,7 @@
 #include "../../hw/sim/usb_msc_sim.h"
 
 #include "penumbra_cores.h"
+#include "cache_model.h"
 
 // ═══════════════════════════════════════════════════════════════
 // SD Card Emulator (inline — same protocol as hw/sim/sd_card_sim.h
@@ -420,7 +425,7 @@ enum { SYSDEV_MMU=0, SYSDEV_CPU=1, SYSDEV_L1_DCACHE=2, SYSDEV_L1_ICACHE=3, SYSDE
        SYSDEV_TIMER=7, SYSDEV_MACH=8, SYSDEV_L2_CACHE=9, SYSDEV_DEBUG=15 };
 
 // Cache device registers (the unified map every cache shares)
-enum { CACHE_REG_INFO=0, CACHE_REG_CTRL=1 };
+enum { CACHE_REG_INFO=0, CACHE_REG_CTRL=1, CACHE_REG_INVAL_ALL=2 };
 
 // Debug watchpoints — halt on physical memory write to watched addresses
 static constexpr int DBG_MAX_WATCH = 16;
@@ -1110,9 +1115,78 @@ static uint32_t cache_read(int dev, int reg) {
     }
 }
 
+// +cachemodel: shadow hierarchies fed by every access (cache_model.h).
+static CacheModel* cache_model;
+
+static CacheEnables cache_enables() {
+    return { cache_l1i.enabled, cache_l1d.enabled, cache_l2.enabled };
+}
+
 static void cache_write(int dev, int reg, uint32_t val) {
     if (reg == CACHE_REG_CTRL) cache_device(dev).enabled = val & 1;
+    if (reg == CACHE_REG_INVAL_ALL && cache_model)
+        cache_model->invalidate(dev == SYSDEV_L1_ICACHE ? CacheLevel::L1I
+                              : dev == SYSDEV_L1_DCACHE ? CacheLevel::L1D : CacheLevel::L2);
 }
+
+static bool supervisor() { return cpu.sr & SR_S; }
+
+// --- Measurement window (+model_start, +model_stop, SIGUSR1) ---
+// The models watch the whole run, so their state warms from reset as the
+// hardware's would, but they count only inside a window and report each
+// window as it closes.  A window opens at reset, or at the first user-mode
+// execution of +model_start; it closes at the first user-mode execution of
+// +model_stop, on SIGUSR1 (which opens the next window at once), or when
+// the run ends.  User mode, as for +pcprof_start: the workload's own code,
+// not the kernel passing the same address on its behalf.
+static struct {
+    uint32_t    start_pc, stop_pc;
+    bool        open, finished;
+    const char* opened_by;
+    uint64_t    insn0;
+    int         number;
+    FILE*       out;
+} model_window;
+static volatile sig_atomic_t model_window_signal = 0;
+
+static bool models_active() { return cache_model != nullptr; }
+
+static void model_window_open(const char* why) {
+    if (cache_model) cache_model->clear_counts();
+    model_window.open      = true;
+    model_window.opened_by = why;
+    model_window.insn0     = cpu.insn_count;
+    model_window.number++;
+}
+
+static void model_window_close(const char* why) {
+    FILE* out = model_window.out;
+    uint64_t insns = cpu.insn_count - model_window.insn0;
+    fprintf(out, "== cache model window %d: %llu instructions, %s to %s ==\n",
+            model_window.number, (unsigned long long)insns, model_window.opened_by, why);
+    if (cache_model) cache_model->report(out, insns);
+    fflush(out);
+    model_window.open = false;
+}
+
+static void model_window_step() {
+    if (model_window_signal) {
+        model_window_signal = 0;
+        if (model_window.open) {
+            model_window_close("signal");
+            model_window_open("signal");
+        }
+    }
+    if (supervisor() || model_window.finished) return;
+    if (!model_window.open && cpu.pc == model_window.start_pc)
+        model_window_open("start PC");
+    else if (model_window.open && model_window.stop_pc && cpu.pc == model_window.stop_pc) {
+        model_window_close("stop PC");
+        model_window.finished = true;
+    }
+}
+
+static void model_window_on_signal(int) { model_window_signal = 1; }
 
 static uint32_t machid_read(int reg) {
     static const uint32_t mach_name[4] = {0x756D6953,0x6F74616C,0x00000072,0};
@@ -1389,7 +1463,7 @@ static void pcprof_write() {
 
 // Returns: 0=ok, VEC_TLB_MISS, VEC_TLB_PROT, VEC_ALIGN, VEC_BUS_FAULT
 static int mmu_translate(uint32_t vaddr, uint8_t access, int size,
-                         bool force_bypass, uint32_t& paddr) {
+                         bool force_bypass, uint32_t& paddr, bool& cacheable) {
     // Alignment check (always, even in bypass)
     if ((size == 2 && (vaddr & 3)) || (size == 1 && (vaddr & 1))) {
         mmu.fault_addr = vaddr;
@@ -1400,10 +1474,11 @@ static int mmu_translate(uint32_t vaddr, uint8_t access, int size,
 
     if (!mmu.enabled() || force_bypass) {
         paddr = vaddr;
+        cacheable = false;      // bypass is uncached
         return 0;
     }
 
-    bool cacheable, fault;
+    bool fault;
     bool hit = tlb_lookup(vaddr, mmu.asid(), access, !(cpu.sr & SR_S),
                           paddr, cacheable, fault);
     if (!hit) {
@@ -2211,7 +2286,8 @@ static void update_flags(const AluResult& r) {
 static uint32_t mem_load(uint32_t vaddr, int size, bool sign_ext, bool& took_exception) {
     took_exception = false;
     uint32_t paddr;
-    int fault = mmu_translate(vaddr, 1 /*read*/, size, false, paddr);
+    bool cacheable;
+    int fault = mmu_translate(vaddr, 1 /*read*/, size, false, paddr, cacheable);
     if (fault) { exception_entry(fault); took_exception = true; return 0; }
 
     bool bus_fault;
@@ -2223,6 +2299,8 @@ static uint32_t mem_load(uint32_t vaddr, int size, bool sign_ext, bool& took_exc
         took_exception = true;
         return 0;
     }
+
+    if (cache_model) cache_model->load(paddr, cacheable, supervisor(), cache_enables());
 
     // Byte/half extraction + sign extension
     if (size == 0) {
@@ -2239,11 +2317,14 @@ static uint32_t mem_load(uint32_t vaddr, int size, bool sign_ext, bool& took_exc
 static void mem_store(uint32_t vaddr, uint32_t data, int size, bool& took_exception) {
     took_exception = false;
     uint32_t paddr;
-    int fault = mmu_translate(vaddr, 2 /*write*/, size, false, paddr);
+    bool cacheable;
+    int fault = mmu_translate(vaddr, 2 /*write*/, size, false, paddr, cacheable);
     if (fault) { exception_entry(fault); took_exception = true; return; }
 
     bool bus_fault;
     phys_write(paddr, data, size, bus_fault);
+    if (!bus_fault && cache_model)
+        cache_model->store(paddr, cacheable, supervisor(), cache_enables());
     if (bus_fault) {
         mmu.fault_addr = vaddr;
         mmu.fault_status = (uint32_t)((!(cpu.sr&SR_S))<<11) | (2u<<8) | 0x04;
@@ -2259,11 +2340,14 @@ static void mem_store(uint32_t vaddr, uint32_t data, int size, bool& took_except
 static uint32_t insn_fetch(bool& took_exception) {
     took_exception = false;
     uint32_t paddr;
-    int fault = mmu_translate(cpu.pc, 4 /*exec*/, 2 /*word*/, false, paddr);
+    bool cacheable;
+    int fault = mmu_translate(cpu.pc, 4 /*exec*/, 2 /*word*/, false, paddr, cacheable);
     if (fault) { exception_entry(fault); took_exception = true; return 0; }
 
     bool bus_fault;
     uint32_t insn = phys_read(paddr, 2, bus_fault);
+    if (!bus_fault && cache_model)
+        cache_model->fetch(paddr, cacheable, supervisor(), cache_enables());
     if (bus_fault) {
         mmu.fault_addr = cpu.pc;
         mmu.fault_status = (uint32_t)((!(cpu.sr&SR_S))<<11) | (4u<<8) | 0x04;
@@ -3096,6 +3180,8 @@ int main(int argc, char** argv) {
     const char* trace_path = nullptr;
     const char* audio_path = nullptr;
     const char* core_name = DEFAULT_CORE_GENERATION;
+    const char* cachemodel_spec = nullptr;
+    const char* model_report_path = nullptr;
 
     for (int i = 1; i < argc; i++) {
         if (strncmp(argv[i], "+sdcard=", 8) == 0) sd_path = argv[i] + 8;
@@ -3128,11 +3214,18 @@ int main(int argc, char** argv) {
         else if (strncmp(argv[i], "+trace_window=", 14) == 0)
             trace_window = (size_t)strtoull(argv[i] + 14, nullptr, 0);
         else if (strncmp(argv[i], "+core=", 6) == 0) core_name = argv[i] + 6;
+        else if (strcmp(argv[i], "+cachemodel") == 0) cachemodel_spec = "";
+        else if (strncmp(argv[i], "+cachemodel=", 12) == 0) cachemodel_spec = argv[i] + 12;
+        else if (strncmp(argv[i], "+model_start=", 13) == 0)
+            model_window.start_pc = (uint32_t)strtoull(argv[i] + 13, nullptr, 0);
+        else if (strncmp(argv[i], "+model_stop=", 12) == 0)
+            model_window.stop_pc = (uint32_t)strtoull(argv[i] + 12, nullptr, 0);
+        else if (strncmp(argv[i], "+model_report=", 14) == 0) model_report_path = argv[i] + 14;
         else hex_path = argv[i];
     }
 
     if (!hex_path) {
-        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+usbdev=type:config] [+audiofile=path] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+pcprof=path [+pcprof_start=addr]] [+irq_at_pc=addr[,period]] [+core=generation]\n");
+        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+usbdev=type:config] [+audiofile=path] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+pcprof=path [+pcprof_start=addr]] [+irq_at_pc=addr[,period]] [+core=generation] [+cachemodel[=list]] [+model_start=addr] [+model_stop=addr] [+model_report=path]\n");
         return 1;
     }
 
@@ -3142,6 +3235,24 @@ int main(int argc, char** argv) {
         for (const CoreGeneration& g : CORE_GENERATIONS) fprintf(stderr, " %s", g.name);
         fprintf(stderr, ")\n");
         return 1;
+    }
+
+    if (cachemodel_spec) {
+        static CacheModel model;
+        std::string err;
+        if (!CacheModel::parse(cachemodel_spec, *core_gen, model, err)) {
+            fprintf(stderr, "+cachemodel: %s\n", err.c_str());
+            return 1;
+        }
+        cache_model = &model;
+    }
+    if (models_active()) {
+        model_window.out = stderr;
+        if (model_report_path && !(model_window.out = fopen(model_report_path, "w"))) {
+            fprintf(stderr, "+model_report: cannot open '%s'\n", model_report_path);
+            return 1;
+        }
+        signal(SIGUSR1, model_window_on_signal);
     }
 
     if (pcprof_path) {
@@ -3218,8 +3329,11 @@ int main(int argc, char** argv) {
             fprintf(stderr, "── Penumbra ISS (Ctrl-C to exit) ──\n\n");
     }
 
+    if (models_active() && !model_window.start_pc) model_window_open("reset");
+
     // Main loop
     while (running && !cpu.halted) {
+        if (models_active()) model_window_step();
         if (max_insns > 0 && cpu.insn_count >= max_insns) {
             fprintf(stderr, "\n[ERROR] Instruction limit reached (%llu)\n", (unsigned long long)max_insns);
             hosted_exit_code = 124; // Standard timeout exit code
@@ -3249,6 +3363,7 @@ int main(int argc, char** argv) {
     // Restore terminal before printing exit summary so \n works normally
     restore_term();
 
+    if (models_active() && model_window.open) model_window_close("exit");
     print_branch_stats();  // no-op unless +branchstats
     if (irq_at_pc_addr != 0)
         fprintf(stderr, "[IRQ_AT_PC] 0x%08X reached %llu times, injected %llu\n",
