@@ -75,6 +75,13 @@ MOD_FIND_PRUNE = -not -path '*/penumbra2_5/*'
 PASM  = python3 sw/tools/pasm.py
 UASM  = python3 hw/tools/uasm.py
 
+# ── Instruction-set simulator ────────────────────────────────
+# Defined ahead of every rule that names it as a prerequisite: make
+# expands a rule's prerequisites as it reads the rule, so a later
+# definition leaves those rules with no dependency on the ISS, and they
+# run whatever binary happens to be built.
+ISS = sw/sim/penumbra-iss
+
 # ── LLVM toolchain (for C boot ROM) ─────────────────────────
 # Override with: make simulate LLVM_PREFIX=/path/to/llvm-build
 LLVM_PREFIX ?= $(CURDIR)/build/llvm
@@ -635,7 +642,6 @@ test-compiler-pic: $(ISS)
 #        make simulate TRACE=build/t.log TRACE_WINDOW=1000000 HALT_ON=DBLFLT
 #        make simulate RAW=1                  (full raw TTY for job control)
 #        make simulate LLVM_PREFIX=/other/llvm/build
-ISS = sw/sim/penumbra-iss
 
 .PHONY: simulate
 simulate: $(ISS)
