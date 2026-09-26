@@ -45,7 +45,7 @@ module nexysvideo_ddr3_test_top (
     logic ctrl_clk, ddr3_clk, ddr3_clk_90, ref_clk;
     logic locked;
 
-    nexysvideo_ddr3_clk u_clk (
+    nexysvideo_ddr3_clk u_ddr3_clk (
         .i_clk_100mhz  (clk),
         .o_ctrl_clk    (ctrl_clk),
         .o_ddr3_clk    (ddr3_clk),

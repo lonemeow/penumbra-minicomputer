@@ -1329,6 +1329,9 @@ SRC_UBERDDR3 = hw/third_party/uberddr3/rtl/ecc/ecc_enc.sv \
                hw/third_party/uberddr3/rtl/ddr3_top.v
 SRC_DDR3_nexysvideo = $(FPGA_RTL)/nexysvideo/nexysvideo_ddr3_clk.sv \
                       $(FPGA_RTL)/nexysvideo/nexysvideo_ddr3.sv
+# Its pins and I/O constraints, which every top carrying it lists after
+# its own XDC.
+XDC_DDR3_nexysvideo = hw/constraints/nexysvideo_ddr3.xdc
 
 # Nexys Video DDR3 bring-up: the controller alone at the machine's
 # configuration, calibrating and self-testing the whole chip in a loop
@@ -1340,7 +1343,7 @@ FPGA_SRC_nexysvideo_ddr3_test_top = hw/rtl/common/build_check.sv \
                                     $(FPGA_RTL)/nexysvideo/nexysvideo_ddr3_selftest.sv \
                                     $(FPGA_RTL)/nexysvideo/nexysvideo_ddr3_test_top.sv \
                                     $(SRC_UBERDDR3)
-XDC_nexysvideo_ddr3_test_top = hw/constraints/nexysvideo_ddr3_test_top.xdc
+XDC_nexysvideo_ddr3_test_top = hw/constraints/nexysvideo_ddr3_test_top.xdc $(XDC_DDR3_nexysvideo)
 
 # The gen2 machine on the Nexys Video, growing one device per bring-up
 # step. Its devices are named rather than taken from SRC_FABRIC, whose

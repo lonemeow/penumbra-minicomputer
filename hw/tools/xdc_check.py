@@ -12,10 +12,11 @@ The masters are board truth, as the manufacturer states it:
   the line `set_property -dict { PACKAGE_PIN <pad> IOSTANDARD <std> }
   [get_ports { <name> }]`.
 
-A top's XDC copies the lines for the pins it uses, uncommented and
-otherwise unchanged, keeping the masters' port names. This fails when a
-top's XDC states a board fact no master states, or leaves out a
-board-wide setting:
+A top's constraints (one XDC, or several, such as a file its board's
+DRAM tops share) copy the lines for the pins it uses, uncommented and
+otherwise unchanged, keeping the masters' port names. This fails when
+one of a top's files states a board fact no master states, or the files
+together leave out a board-wide setting:
 
 - a line setting PACKAGE_PIN or IOSTANDARD, or a create_clock on a
   top-level port, that is not one of the masters' lines;
@@ -27,7 +28,7 @@ schematic comment dropped. Everything else in a top's XDC (generated
 clocks, timing exceptions, CDC constraints, termination and slew) is
 design intent and passes unchecked.
 
-Usage: python3 xdc_check.py --master FILE [--master FILE ...] top.xdc [top.xdc ...]
+Usage: python3 xdc_check.py --master FILE [--master FILE ...] top.xdc [more.xdc ...]
 """
 
 import argparse
@@ -77,20 +78,24 @@ def load_master(path):
     return load_master_prj(path) if path.endswith('.prj') else load_master_xdc(path)
 
 
-def check(masters, top_path, facts, board_wide):
+def check(masters, top_paths, facts, board_wide):
+    """Check one top's constraint files, which together must carry every
+    board-wide line."""
     errors = []
     present = set()
-    with open(top_path) as f:
-        for number, raw in enumerate(f, 1):
-            line = normalize(raw)
-            if not line or line.startswith('#'):
-                continue
-            present.add(line)
-            if BOARD_FACT.search(line) and line not in facts:
-                errors.append(f'{top_path}:{number}: not a board fact of {masters}: {line}')
+    for top_path in top_paths:
+        with open(top_path) as f:
+            for number, raw in enumerate(f, 1):
+                line = normalize(raw)
+                if not line or line.startswith('#'):
+                    continue
+                present.add(line)
+                if BOARD_FACT.search(line) and line not in facts:
+                    errors.append(f'{top_path}:{number}: not a board fact of {masters}: {line}')
+    tops = ', '.join(top_paths)
     for line in board_wide:
         if line not in present:
-            errors.append(f'{top_path}: missing board-wide line from {masters}: {line}')
+            errors.append(f'{tops}: missing board-wide line from {masters}: {line}')
     return errors
 
 
@@ -109,9 +114,7 @@ def main(argv):
         more_facts, more_board_wide = load_master(path)
         facts |= more_facts
         board_wide += more_board_wide
-    errors = []
-    for top_path in args.tops:
-        errors += check(masters, top_path, facts, board_wide)
+    errors = check(masters, args.tops, facts, board_wide)
     for error in errors:
         print(error, file=sys.stderr)
     return 1 if errors else 0

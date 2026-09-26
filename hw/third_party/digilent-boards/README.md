@@ -15,7 +15,8 @@ interface generator (MIG) supplies them from this project file.
 
 These files are never edited. The xc7 flow reads the DDR3 pins in the
 project file as board facts beside the master XDC's
-(`hw/tools/xdc_check.py`), so a top's DDR3 pin lines are checked
-against the manufacturer's the same way its other pins are.
+(`hw/tools/xdc_check.py`), so the DDR3 pin lines
+(`hw/constraints/nexysvideo_ddr3.xdc`) are checked against the
+manufacturer's the same way a top's other pins are.
 
 No local modifications.
