@@ -190,6 +190,9 @@ exposed external bus.
   instance per machine top: OR of the slaves' acks, read data gated by
   each slave's own ack, and the watchdog that faults an access nothing
   answers (`TIMEOUT_CYCLES`).
+- `bus_wait_meter.sv` — the longest wait one slave has made an access
+  take, counted as the watchdog counts it; cleared only by
+  configuration, so a board can show a slave's margin on LEDs.
 - `onchip_ram.sv` — system RAM in block RAM (a simple bus device with
   byte-enabled writes), for a board or bring-up step with no external
   memory.

@@ -323,6 +323,7 @@ MODULE_TESTS = \
     unified_mem \
     uart \
     busctl \
+    bus_wait_meter \
     tlb \
     tlb_pinned \
     tlb_unit \
