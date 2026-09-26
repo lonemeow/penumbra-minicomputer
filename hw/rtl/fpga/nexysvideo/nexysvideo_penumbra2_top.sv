@@ -3,15 +3,26 @@
 // Wires machine_penumbra2 to the board: the shared clocking and power-on
 // reset (nexysvideo_clk_rst), a 64 KB boot ROM, the UART on the UART USB
 // port, the microSD slot over SPI behind autoconfig, and system RAM in
-// block RAM until the DDR3 arrives. The top grows
-// one device per bring-up step; the external Penumbra Bus is assembled
-// here the way the ULX3S top assembles it (device decode, response fabric
-// with its no-device watchdog), so what simulates is what synthesizes.
+// the board's 512 MiB of DDR3. The top grows one device per bring-up
+// step; the external Penumbra Bus is assembled here the way the ULX3S
+// top assembles it (device decode, response fabric with its no-device
+// watchdog), so what simulates is what synthesizes.
+//
+// The DDR3 runs on clocks of its own (nexysvideo_ddr3_clk) behind the
+// line stack (ddr3_stack), which crosses to them. Its controller resets
+// only while those clocks are unlocked: CPU RESET restarts the machine
+// and the stack, never the controller, so it never recalibrates. The
+// controller stalls every access until it has calibrated, longer than
+// the fabric's watchdog waits, so the machine is held in reset until
+// then.
 //
 // The LEDs report the board-level pieces under the machine: led[0] MMCM
 // locked, led[1] reset released, led[2] a 1 Hz heartbeat counted off the
-// CPU clock, led[7] the die above the thermal guard's warning threshold.
-// The console is 115200 8N1.
+// CPU clock, led[3] the DDR3 calibrated, led[7] the die above the
+// thermal guard's warning threshold. led[6:4] read the longest a RAM
+// access has waited since configuration against the fabric's watchdog:
+// led[4] at least an eighth of its limit, led[5] a quarter, led[6] a
+// half. The console is 115200 8N1.
 
 // CPU microarchitecture variant: 0 = gen2 baseline, 1 = gen2.5
 // (forwarding/prediction). Set by the build (sv2v -D) per CORE; the
@@ -31,17 +42,42 @@ module nexysvideo_penumbra2_top (
     output logic       sd_cclk,      // SCK
     output logic       sd_cmd,       // MOSI
     inout  wire  [3:0] sd_d,         // [0] MISO in, [3] CS out, [2:1] held high
-    output logic       sd_reset      // card power: low powers the slot
+    output logic       sd_reset,     // card power: low powers the slot
+
+    // ── DDR3 (MT41K256M16, x16) ───────────────────────────
+    output logic [0:0]  ddr3_ck_p,
+    output logic [0:0]  ddr3_ck_n,
+    output logic        ddr3_reset_n,
+    output logic [0:0]  ddr3_cke,
+    output logic        ddr3_ras_n,
+    output logic        ddr3_cas_n,
+    output logic        ddr3_we_n,
+    output logic [14:0] ddr3_addr,
+    output logic [2:0]  ddr3_ba,
+    inout  wire  [15:0] ddr3_dq,
+    inout  wire  [1:0]  ddr3_dqs_p,
+    inout  wire  [1:0]  ddr3_dqs_n,
+    output logic [1:0]  ddr3_dm,
+    output logic [0:0]  ddr3_odt
 );
     import penumbra_pkg::*;
 
     localparam longint CPU_HZ    = 60_000_000;
-    localparam int     RAM_WORDS = 32768;       // 128 KiB
+    localparam int     RAM_BYTES = 512 * 1024 * 1024;
     localparam int     ROM_WORDS = 16384;       // 64 KiB
+
+    // The memory port's shape, as nexysvideo_ddr3 declares it: 16-byte
+    // bursts over 512 MiB, and the tag each request carries.
+    localparam int DDR3_ADDR_BITS = 25;
+    localparam int DDR3_AUX_WIDTH = 4;
+
+    // The fabric's watchdog limit, which the RAM wait LEDs read against.
+    localparam int BUS_TIMEOUT_CYCLES = 256;
+    localparam int WAIT_W             = $clog2(BUS_TIMEOUT_CYCLES);
 
     logic cpu_clk;
     logic locked;
-    logic rst;
+    logic board_rst;
 
     nexysvideo_clk_rst #(
         .CPU_HZ (CPU_HZ)
@@ -50,8 +86,57 @@ module nexysvideo_penumbra2_top (
         .i_cpu_resetn (cpu_resetn),
         .o_clk        (cpu_clk),
         .o_locked     (locked),
-        .o_rst        (rst)
+        .o_rst        (board_rst)
     );
+
+    // ── DDR3 clocks and resets ──────────────────────────────
+    logic ctrl_clk, ddr3_clk, ddr3_clk_90, ref_clk;
+    logic ddr3_locked;
+
+    nexysvideo_ddr3_clk u_ddr3_clk (
+        .i_clk_100mhz  (clk),
+        .o_ctrl_clk    (ctrl_clk),
+        .o_ddr3_clk    (ddr3_clk),
+        .o_ddr3_clk_90 (ddr3_clk_90),
+        .o_ref_clk     (ref_clk),
+        .o_locked      (ddr3_locked)
+    );
+
+    // The controller's reset: its clocks' lock alone, asynchronous to the
+    // controller clock, through two flops.
+    (* ASYNC_REG = "TRUE" *) logic ddr3_locked_sync1, ddr3_locked_sync2;
+
+    always_ff @(posedge ctrl_clk) begin
+        ddr3_locked_sync1 <= ddr3_locked;
+        ddr3_locked_sync2 <= ddr3_locked_sync1;
+    end
+
+    // The machine's reset: the board's, held on until the memory has
+    // calibrated (calib_complete, in the controller clock's domain).
+    logic calib_complete;
+    (* ASYNC_REG = "TRUE" *) logic calib_sync1, calib_sync2;
+
+    always_ff @(posedge cpu_clk) begin
+        calib_sync1 <= calib_complete;
+        calib_sync2 <= calib_sync1;
+    end
+
+    logic rst;
+    assign rst = board_rst || !calib_sync2;
+
+    // The stack's controller side resets with the machine. The reset
+    // crosses from a flop, since a synchronizer sampling logic can catch
+    // a glitch the logic's inputs never held.
+    logic rst_q;
+    (* ASYNC_REG = "TRUE" *) logic stack_rst_sync1, stack_rst_sync2;
+
+    always_ff @(posedge cpu_clk)
+        rst_q <= rst;
+
+    always_ff @(posedge ctrl_clk) begin
+        stack_rst_sync1 <= rst_q;
+        stack_rst_sync2 <= stack_rst_sync1;
+    end
 
     // Over-temperature shutdown, off the oscillator itself.
     logic thermal_warn;
@@ -128,26 +213,108 @@ module nexysvideo_penumbra2_top (
         /* verilator lint_on PINCONNECTEMPTY */
     );
 
-    // ── System RAM, in block RAM ────────────────────────────
+    // ── System RAM, in DDR3 ─────────────────────────────────
     logic        ram_sel;
     logic [31:0] ram_rdata;
     logic        ram_ack;
 
-    bus_devsel #(.BASE(RAM_BASE), .SIZE(32'(RAM_WORDS * 4)))
+    bus_devsel #(.BASE(RAM_BASE), .SIZE(32'(RAM_BYTES)))
         u_ram_sel (.i_addr(mem_addr), .o_sel(ram_sel));
 
-    onchip_ram #(
-        .WORDS (RAM_WORDS)
+    logic                      wb_cyc, wb_stb, wb_we, wb_stall, wb_ack;
+    logic [DDR3_ADDR_BITS-1:0] wb_addr;
+    logic [127:0]              wb_wdata, wb_rdata;
+    logic [15:0]               wb_sel;
+    logic [DDR3_AUX_WIDTH-1:0] wb_aux_out, wb_aux_in;
+
+    ddr3_stack #(
+        .ADDR_BITS  (DDR3_ADDR_BITS),
+        .AUX_WIDTH  (DDR3_AUX_WIDTH)
     ) u_ram (
-        .i_clk     (cpu_clk),
-        .i_rst     (rst),
-        .i_addr    (mem_addr),
-        .i_wdata   (mem_wdata),
-        .i_byte_en (mem_byte_en),
-        .i_re      (mem_re & ram_sel),
-        .i_we      (mem_we & ram_sel),
-        .o_rdata   (ram_rdata),
-        .o_ack     (ram_ack)
+        .i_sys_clk  (cpu_clk),
+        .i_sys_rst  (rst),
+        .i_ctrl_clk (ctrl_clk),
+        .i_ctrl_rst (stack_rst_sync2),
+        .i_addr     (mem_addr),
+        .i_wdata    (mem_wdata),
+        .i_byte_en  (mem_byte_en),
+        .i_we       (mem_we & ram_sel),
+        .i_re       (mem_re & ram_sel),
+        .o_rdata    (ram_rdata),
+        .o_ack      (ram_ack),
+        .o_wb_cyc   (wb_cyc),
+        .o_wb_stb   (wb_stb),
+        .o_wb_we    (wb_we),
+        .o_wb_addr  (wb_addr),
+        .o_wb_data  (wb_wdata),
+        .o_wb_sel   (wb_sel),
+        .o_wb_aux   (wb_aux_out),
+        .i_wb_stall (wb_stall),
+        .i_wb_ack   (wb_ack),
+        .i_wb_data  (wb_rdata),
+        .i_wb_aux   (wb_aux_in)
+    );
+
+    /* verilator lint_off PINCONNECTEMPTY */
+    nexysvideo_ddr3 #(
+        .BIST_MODE (0)
+    ) u_ddr3 (
+        .i_ctrl_clk       (ctrl_clk),
+        .i_ddr3_clk       (ddr3_clk),
+        .i_ddr3_clk_90    (ddr3_clk_90),
+        .i_ref_clk        (ref_clk),
+        .i_rst_n          (ddr3_locked_sync2),
+
+        .i_cyc            (wb_cyc),
+        .i_stb            (wb_stb),
+        .i_we             (wb_we),
+        .i_addr           (wb_addr),
+        .i_data           (wb_wdata),
+        .i_sel            (wb_sel),
+        .i_aux            (wb_aux_out),
+        .o_stall          (wb_stall),
+        .o_ack            (wb_ack),
+        .o_data           (wb_rdata),
+        .o_aux            (wb_aux_in),
+
+        .i_dbg_stb        (1'b0),
+        .i_dbg_we         (1'b0),
+        .i_dbg_addr       ('0),
+        .i_dbg_data       (32'h0),
+        .o_dbg_stall      (),
+        .o_dbg_ack        (),
+        .o_dbg_data       (),
+
+        .o_calib_complete (calib_complete),
+        .o_calib_state    (),
+
+        .o_ddr3_ck_p      (ddr3_ck_p[0]),
+        .o_ddr3_ck_n      (ddr3_ck_n[0]),
+        .o_ddr3_reset_n   (ddr3_reset_n),
+        .o_ddr3_cke       (ddr3_cke[0]),
+        .o_ddr3_ras_n     (ddr3_ras_n),
+        .o_ddr3_cas_n     (ddr3_cas_n),
+        .o_ddr3_we_n      (ddr3_we_n),
+        .o_ddr3_addr      (ddr3_addr),
+        .o_ddr3_ba        (ddr3_ba),
+        .io_ddr3_dq       (ddr3_dq),
+        .io_ddr3_dqs_p    (ddr3_dqs_p),
+        .io_ddr3_dqs_n    (ddr3_dqs_n),
+        .o_ddr3_dm        (ddr3_dm),
+        .o_ddr3_odt       (ddr3_odt[0])
+    );
+    /* verilator lint_on PINCONNECTEMPTY */
+
+    // The longest a RAM access has waited, for the LEDs.
+    logic [WAIT_W-1:0] ram_wait_max;
+
+    bus_wait_meter #(
+        .WIDTH (WAIT_W)
+    ) u_ram_wait (
+        .i_clk (cpu_clk),
+        .i_req ((mem_re | mem_we) & ram_sel),
+        .i_ack (ram_ack),
+        .o_max (ram_wait_max)
     );
 
     // ── Boot ROM ────────────────────────────────────────────
@@ -309,7 +476,8 @@ module nexysvideo_penumbra2_top (
     assign slv_rdata[SLV_SPI]  = ac_spi_rdata;
 
     bus_response_fabric #(
-        .NUM_SLAVES (NUM_SLV)
+        .NUM_SLAVES     (NUM_SLV),
+        .TIMEOUT_CYCLES (BUS_TIMEOUT_CYCLES)
     ) u_bus_fabric (
         .i_clk   (cpu_clk),
         .i_rst   (rst),
@@ -340,6 +508,14 @@ module nexysvideo_penumbra2_top (
         end
     end
 
-    assign led = {thermal_warn, 4'b0000, beat_q, !rst, locked};
+    // The RAM's longest wait against the watchdog's limit.
+    logic ram_wait_eighth, ram_wait_quarter, ram_wait_half;
+
+    assign ram_wait_eighth  = ram_wait_max >= WAIT_W'(BUS_TIMEOUT_CYCLES / 8);
+    assign ram_wait_quarter = ram_wait_max >= WAIT_W'(BUS_TIMEOUT_CYCLES / 4);
+    assign ram_wait_half    = ram_wait_max >= WAIT_W'(BUS_TIMEOUT_CYCLES / 2);
+
+    assign led = {thermal_warn, ram_wait_half, ram_wait_quarter, ram_wait_eighth,
+                  calib_sync2, beat_q, !rst, locked};
 
 endmodule

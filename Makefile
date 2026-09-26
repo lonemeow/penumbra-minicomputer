@@ -75,11 +75,13 @@ TB   ?= tb_$(MOD)
 PKG_SV = hw/rtl/common/penumbra_pkg.sv hw/rtl/penumbra2/penumbra2_pkg.sv hw/rtl/penumbra3/penumbra3_pkg.sv hw/rtl/io/sdram/sdram_pkg.sv hw/rtl/io/video/video_pkg.sv hw/rtl/io/usb/usb_pkg.sv hw/rtl/fpga/ecp5_pll_pkg.sv hw/rtl/fpga/xc7/xc7_mmcm_pkg.sv
 
 # Resolving a module by name (module sims, test-modules) must not pick up a
-# variant fork, which redefines a base module under the same name in its own
-# directory (e.g. penumbra2_5/). Module tests target the base modules; the
-# variant forks are exercised through the full-machine sim (CORE=penumbra2_5)
-# and their own module tests (test-modules-variant).
-MOD_FIND_PRUNE = -not -path '*/penumbra2_5/*'
+# fork, which redefines a module under the same name in its own directory: a
+# core variant's (penumbra2_5/), or a simulation stand-in's (sim/ddr3/,
+# sim/nexysvideo/). Module tests target the base modules; the variant forks
+# are exercised through the full-machine sim (CORE=penumbra2_5) and their own
+# module tests (test-modules-variant), the stand-ins by the builds that put
+# their directories on the path.
+MOD_FIND_PRUNE = -not -path '*/penumbra2_5/*' -not -path '*/sim/ddr3/*' -not -path '*/sim/nexysvideo/*'
 
 # ── Assembler tools ──────────────────────────────────────────
 PASM  = python3 sw/tools/pasm.py
@@ -101,13 +103,20 @@ LD        = $(LLVM_PREFIX)/bin/ld.lld
 OBJCOPY   = $(LLVM_PREFIX)/bin/llvm-objcopy
 BIN2HEX   = python3 sw/tools/bin2hex.py
 
+# A module sim that needs sources off the module path names their
+# directories here, searched ahead of it: the Nexys machine top's DDR3
+# memory system, its controller's simulation stand-in (shadowing the
+# wrapper), its stack, and the line adapter the stack takes (shadowing
+# the word adapter).
+SIM_DIRS_nexysvideo_penumbra2_top = hw/rtl/sim/nexysvideo hw/rtl/io/ddr3 hw/rtl/io/sdram_line
+
 .PHONY: sim
 sim:
 ifndef MOD
 	$(error Set MOD=<module_name>, e.g. make sim MOD=alu)
 endif
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
-	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_MODULE_FLAGS) \
+	$(DOCKER_RUN) $(DOCKER_IMAGE) $(addprefix -I,$(SIM_DIRS_$(MOD))) $(VERILATOR_MODULE_FLAGS) \
 		--top-module $(MOD) \
 		--Mdir $(BUILD_DIR)/$(MOD).verilator \
 		-o ../V$(MOD) \
@@ -1211,6 +1220,10 @@ SRC_BOARD_nexysvideo = $(FPGA_RTL)/xc7/xc7_mmcm_pkg.sv \
                        $(FPGA_RTL)/nexysvideo/nexysvideo_clk_rst.sv \
                        $(FPGA_RTL)/xc7/xc7_thermal_guard.sv
 
+# Every Nexys machine top's constraints, whatever its core: the board
+# ports the machine tops share, then the DDR3's.
+XDC_MACHINE_nexysvideo = hw/constraints/nexysvideo_machine.xdc $(XDC_DDR3_nexysvideo)
+
 # Each board's device family picks the flow that builds and programs
 # it: ecp5 (yosys, nextpnr-ecp5, ecppack, fujprog) or xc7 (Vivado,
 # openFPGALoader).
@@ -1347,21 +1360,27 @@ XDC_nexysvideo_ddr3_test_top = hw/constraints/nexysvideo_ddr3_test_top.xdc $(XDC
 
 # The gen2 machine on the Nexys Video, growing one device per bring-up
 # step. Its devices are named rather than taken from SRC_FABRIC, whose
-# wildcards bring the ECP5 PHYs.
+# wildcards bring the ECP5 PHYs. Its RAM is the DDR3 behind the line
+# stack's adapter and crossing, with UberDDR3 last (see SRC_UBERDDR3).
 FPGA_SRC_nexysvideo_penumbra2_top = $(SRC_COMMON) $(SRC_CORE) \
                                     $(SRC_MACHINE_penumbra2) \
                                     hw/rtl/soc/bus_devsel.sv \
                                     hw/rtl/soc/bus_device_simple.sv \
                                     hw/rtl/soc/bus_response_fabric.sv \
+                                    hw/rtl/soc/bus_wait_meter.sv \
                                     hw/rtl/soc/boot_rom.sv \
-                                    hw/rtl/soc/onchip_ram.sv \
                                     hw/rtl/soc/autoconfig_dev.sv \
                                     hw/rtl/io/spi_fifo.sv \
                                     hw/rtl/io/uart.sv \
                                     hw/rtl/io/spi.sv \
+                                    hw/rtl/io/sdram/sdram_cdc.sv \
+                                    hw/rtl/io/sdram_line/sdram_bus_adapter.sv \
+                                    hw/rtl/io/ddr3/ddr3_stack.sv \
                                     $(SRC_BOARD_nexysvideo) \
-                                    $(FPGA_RTL)/nexysvideo/nexysvideo_penumbra2_top.sv
-XDC_nexysvideo_penumbra2_top = hw/constraints/nexysvideo_penumbra2_top.xdc
+                                    $(SRC_DDR3_nexysvideo) \
+                                    $(FPGA_RTL)/nexysvideo/nexysvideo_penumbra2_top.sv \
+                                    $(SRC_UBERDDR3)
+XDC_nexysvideo_penumbra2_top = $(XDC_MACHINE_nexysvideo)
 
 # Tops that embed the boot ROM and/or microcode: their hex images are
 # generated before synthesis and inlined by inline_hex.py.
@@ -1484,6 +1503,13 @@ PREPACK = $(if $(PREPACK_$(TOP)),$(PREPACK_$(TOP)),$(PREPACK_$(TOP_MODULE)))
 FPGA_LINT_STUBS     = $(FPGA_RTL)/ecp5_prim.sv
 FPGA_LINT_STUBS_xc7 = $(FPGA_RTL)/xc7/xc7_prim.sv
 
+# A Nexys top's sources as lint sees them: its DDR3 controller wrapper,
+# and UberDDR3 behind it, swapped for the controller's simulation
+# stand-in (the stand-in's file says why).
+FPGA_LINT_DDR3_nexysvideo = hw/rtl/sim/nexysvideo/nexysvideo_ddr3.sv hw/rtl/sim/wb_line_mem.sv
+fpga_lint_src_nexysvideo  = $(filter-out $(SRC_UBERDDR3) $(FPGA_RTL)/nexysvideo/nexysvideo_ddr3.sv,$(1)) \
+                            $(FPGA_LINT_DDR3_nexysvideo)
+
 # Ladder linearity sweep — drives the modulator against a swept model
 # of the board's resistor ladder and reports in-band distortion per
 # configuration. An investigation tool, not a regression test: it prints
@@ -1528,7 +1554,8 @@ fpga-lint: $(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_SRC_ulx3s_penumbra2_probe_top)
 		$(FPGA_SRC_nexysvideo_uart_test_top) $(FPGA_LINT_STUBS_xc7) --top nexysvideo_uart_test_top
 	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall -Wno-fatal \
 		-Wno-PINMISSING -Wno-PINCONNECTEMPTY \
-		$(FPGA_SRC_nexysvideo_penumbra2_top) $(FPGA_LINT_STUBS_xc7) --top nexysvideo_penumbra2_top
+		$(call fpga_lint_src_nexysvideo,$(FPGA_SRC_nexysvideo_penumbra2_top)) \
+		$(FPGA_LINT_STUBS_xc7) --top nexysvideo_penumbra2_top
 
 fpga: $(BUILD_DIR)/$(TOP).bit
 	@echo "Bitstream: $(BUILD_DIR)/$(TOP).bit$(if $(filter ecp5,$(FPGA_FAMILY)), (PHASE_DEG=$(PHASE_DEG)))"

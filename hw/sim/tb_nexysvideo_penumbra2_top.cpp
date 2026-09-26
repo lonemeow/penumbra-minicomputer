@@ -7,13 +7,20 @@
 // testbench clock is one CPU clock; the host end of the serial line runs
 // at exactly 115200 baud (uart_host.h).
 //
+// The DDR3 controller is its simulation stand-in
+// (hw/rtl/sim/nexysvideo/nexysvideo_ddr3.sv): the line-memory model of
+// its port, calibrating before it answers, behind the real stack.
+//
 // Covers the board wiring under the machine, not the core:
-//  - the reset hold, then the ROM's early RAM check passing;
+//  - the reset hold, through the memory's calibration, then the ROM's
+//    early RAM check passing;
 //  - the banner naming the board and its CPU clock;
-//  - RAM detection finding exactly the on-chip RAM, which puts both the
-//    RAM decode and the bus fault past its end on trial;
+//  - RAM detection finding exactly the 512 MiB of DDR3, which puts both
+//    the RAM decode and the bus fault past its end on trial;
 //  - the monitor storing words at both ends of RAM and reading them
 //    back byte by byte;
+//  - the LEDs: calibration reported, and the RAM's longest wait read
+//    out against the bus watchdog's limit;
 //  - the microSD slot: unpowered (sd_reset high) through the reset
 //    hold and powered after it, found by autoconfig, and read over the
 //    real SPI pins by `part sd:0,0` from an image with one partition.
@@ -182,8 +189,9 @@ int main(int argc, char** argv) {
     chk(off_in_reset, "sd_reset low (card powered) during the reset hold");
 
     // ── Boot to the monitor prompt ─────────────────────────────────
-    bool up = wait_prompt(0, 60000000);
-    chk(up, "no monitor prompt within 60M cycles");
+    // RAM detection probes each of the 131072 pages in turn.
+    bool up = wait_prompt(0, 150000000);
+    chk(up, "no monitor prompt within 150M cycles");
     printf("  boot to prompt: %llu cycles (%.1f ms at CPU_HZ)\n",
            (unsigned long long)cycle, cycle * 1000.0 / CPU_HZ);
     const std::string boot = host.text;
@@ -197,7 +205,7 @@ int main(int argc, char** argv) {
     else
         snprintf(banner_mhz, sizeof banner_mhz, "@ %llu MHz", mhz);
     expect(boot, banner_mhz);
-    expect(boot, "Detecting base RAM... 128kB found");
+    expect(boot, "Detecting base RAM... 512MB found");
     expect(boot, "  SD SD @ 0x");
     expect(boot, "1 device(s) found");
     expect(boot, "sd:0,0 ... card present");
@@ -208,15 +216,27 @@ int main(int argc, char** argv) {
         command("w 2000 deadbeef");
         std::string out = command("x 2000 4");
         expect(out, "00002000    ef be ad de");
-        command("w 1fffc 01234567");
-        out = command("x 1fffc 4");
-        expect(out, "0001fffc    67 45 23 01");
+        command("w 1ffffffc 01234567");
+        out = command("x 1ffffffc 4");
+        expect(out, "1ffffffc    67 45 23 01");
 
         // Sector 0 over the SD pins: the MBR's one partition.
         out = command("part sd:0,0");
         expect(out, "MBR partition table on device");
         expect(out, "FAT32-LBA 2048 32MB (bootable)");
     }
+
+    // led[3] the DDR3 calibrated; led[6:4] the RAM's longest wait
+    // against the watchdog's limit, from an eighth up to a half. The wait
+    // is reported, not judged: here it is the stand-in's random latency
+    // with both clock-manager stubs passing the oscillator through, so
+    // controller cycles cost whole CPU cycles, where the board's
+    // controller clock runs faster than its CPU clock. The margin is the
+    // board's to measure.
+    printf("  leds: %02x (RAM wait at least %s of the watchdog's limit)\n", top->led,
+           (top->led >> 6) & 1 ? "a half" : (top->led >> 5) & 1 ? "a quarter"
+           : (top->led >> 4) & 1 ? "an eighth" : "nothing");
+    chk((top->led >> 3) & 1, "led[3] (DDR3 calibrated) dark after boot");
 
     printf("  host: %d framing errors, worst edge %.3f%% off the grid\n",
            host.frame_errors, 100 * host.worst_edge_err);

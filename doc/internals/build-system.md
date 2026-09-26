@@ -297,8 +297,9 @@ differently. nextpnr ignores LPF entries for pins a design lacks, so an
 ecp5 board has one board file shared by every top. Vivado raises a
 critical warning for each constraint naming a missing port, so an xc7
 top's XDC files (`XDC_<top>`) hold only its pins. Constraints a set
-of tops shares sit in one file they all list, such as a board's DRAM
-(`XDC_DDR3_nexysvideo`). Those lines
+of tops shares sit in one file they all list: the ports every machine
+top has, whatever its core (`XDC_MACHINE_nexysvideo`), or a board's
+DRAM (`XDC_DDR3_nexysvideo`). Those lines
 are copied, uncommented and otherwise unchanged, from the board's
 master XDC, which is vendored verbatim under `hw/third_party/` and
 never edited. A board whose DRAM pins the master XDC leaves out has

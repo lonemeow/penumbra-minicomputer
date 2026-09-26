@@ -163,3 +163,70 @@ module XADC #(
     assign MUXADDR      = 5'd0;
     assign OT           = 1'b0;
 endmodule
+
+// ── PLLE2_ADV: phase-locked loop ────────────────────────────
+// For lint, every output follows the input clock and the PLL reports
+// lock at once; the DRP never answers.
+module PLLE2_ADV #(
+    parameter      BANDWIDTH          = "OPTIMIZED",
+    parameter      COMPENSATION       = "ZHOLD",
+    parameter      STARTUP_WAIT       = "FALSE",
+    parameter int  CLKFBOUT_MULT      = 5,
+    parameter real CLKFBOUT_PHASE     = 0.000,
+    parameter real CLKIN1_PERIOD      = 0.000,
+    parameter real CLKIN2_PERIOD      = 0.000,
+    parameter int  CLKOUT0_DIVIDE     = 1,
+    parameter real CLKOUT0_DUTY_CYCLE = 0.500,
+    parameter real CLKOUT0_PHASE      = 0.000,
+    parameter int  CLKOUT1_DIVIDE     = 1,
+    parameter real CLKOUT1_DUTY_CYCLE = 0.500,
+    parameter real CLKOUT1_PHASE      = 0.000,
+    parameter int  CLKOUT2_DIVIDE     = 1,
+    parameter real CLKOUT2_DUTY_CYCLE = 0.500,
+    parameter real CLKOUT2_PHASE      = 0.000,
+    parameter int  CLKOUT3_DIVIDE     = 1,
+    parameter real CLKOUT3_DUTY_CYCLE = 0.500,
+    parameter real CLKOUT3_PHASE      = 0.000,
+    parameter int  CLKOUT4_DIVIDE     = 1,
+    parameter real CLKOUT4_DUTY_CYCLE = 0.500,
+    parameter real CLKOUT4_PHASE      = 0.000,
+    parameter int  CLKOUT5_DIVIDE     = 1,
+    parameter real CLKOUT5_DUTY_CYCLE = 0.500,
+    parameter real CLKOUT5_PHASE      = 0.000,
+    parameter int  DIVCLK_DIVIDE      = 1,
+    parameter real REF_JITTER1        = 0.010,
+    parameter real REF_JITTER2        = 0.010
+) (
+    output        CLKFBOUT,
+    output        CLKOUT0,
+    output        CLKOUT1,
+    output        CLKOUT2,
+    output        CLKOUT3,
+    output        CLKOUT4,
+    output        CLKOUT5,
+    output [15:0] DO,
+    output        DRDY,
+    output        LOCKED,
+    input         CLKFBIN,
+    input         CLKIN1,
+    input         CLKIN2,
+    input         CLKINSEL,
+    input  [6:0]  DADDR,
+    input         DCLK,
+    input         DEN,
+    input  [15:0] DI,
+    input         DWE,
+    input         PWRDWN,
+    input         RST
+);
+    assign CLKFBOUT = CLKIN1;
+    assign CLKOUT0  = CLKIN1;
+    assign CLKOUT1  = CLKIN1;
+    assign CLKOUT2  = CLKIN1;
+    assign CLKOUT3  = CLKIN1;
+    assign CLKOUT4  = CLKIN1;
+    assign CLKOUT5  = CLKIN1;
+    assign DO       = 16'h0000;
+    assign DRDY     = 1'b0;
+    assign LOCKED   = 1'b1;
+endmodule

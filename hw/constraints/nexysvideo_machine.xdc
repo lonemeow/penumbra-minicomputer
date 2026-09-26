@@ -1,4 +1,7 @@
-## nexysvideo_penumbra2_top: board lines from the Nexys Video master XDC
+## The Nexys Video machine tops, whatever their core: board lines from the
+## master XDC (the DDR3's are in nexysvideo_ddr3.xdc). A top's clock
+## managers are u_clk_rst (nexysvideo_clk_rst) and u_ddr3_clk
+## (nexysvideo_ddr3_clk).
 
 ## Clock Signal
 set_property -dict { PACKAGE_PIN R4    IOSTANDARD LVCMOS33 } [get_ports { clk }]; #IO_L13P_T2_MRCC_34 Sch=sysclk
@@ -36,26 +39,31 @@ set_property CFGBVS VCCO [current_design]
 
 ## Design constraints
 
-# The button and the UART line are asynchronous to every clock in the
-# design and enter it through two-flop synchronizers; the LEDs and the
-# UART line out go to a person and to a UART, neither of which samples
-# them against our clock.
+# Asynchronous inputs enter through two-flop synchronizers; the outputs
+# go to a person and a UART, neither timed against our clocks.
 set_false_path -from [get_ports { cpu_resetn uart_tx_in }]
 set_false_path -to [get_ports { led[*] uart_rx_out }]
 
-# The SD card's MISO (DAT0) answers an SCK edge this design launches off
-# the CPU clock, and spi.sv samples it at least two CPU cycles after that
-# edge: SCK is at most 12.5 MHz and the CPU clock above 25 MHz. So it is
-# timed as a synchronous input, arriving at most 25 ns after the
-# launching edge (clock-to-out, board flight both ways, and the card's
-# 14 ns output delay) and captured two cycles on.
+# SD MISO answers an SCK edge launched off the CPU clock, and spi.sv
+# samples it two CPU cycles later. It arrives at most 25 ns after the
+# launching edge: clock-to-out, board flight both ways, and the card's
+# 14 ns output delay.
 set sd_clk [get_clocks -of_objects [get_pins u_clk_rst/u_mmcm/CLKOUT0]]
 set_input_delay -clock $sd_clk -max 25.0 [get_ports { sd_d[0] }]
 set_input_delay -clock $sd_clk -min 0.0 [get_ports { sd_d[0] }]
 set_multicycle_path -setup 2 -from [get_ports { sd_d[0] }]
 set_multicycle_path -hold 1 -from [get_ports { sd_d[0] }]
 
-# SCK, MOSI, chip select and the held-high data lines reach a card that
-# samples them against SCK, which leaves them at least a CPU cycle
-# apart; the card power switch is static.
+# The card samples its inputs against SCK; its power switch is static.
 set_false_path -to [get_ports { sd_cclk sd_cmd sd_d[*] sd_reset }]
+
+# The CPU and DDR3 controller clocks are unrelated, and cross only
+# through synchronizers and the memory stack's CDC FIFO. One period of
+# the faster clock keeps a FIFO slot settled before the pointer that
+# announces it clears its synchronizer, and the pointer's bits within a
+# cycle of each other.
+set cpu_clk  [get_clocks -of_objects [get_pins u_clk_rst/u_mmcm/CLKOUT0]]
+set ctrl_clk [get_clocks -of_objects [get_pins u_ddr3_clk/u_pll/CLKOUT0]]
+set cross_ns [expr {min([get_property PERIOD $cpu_clk], [get_property PERIOD $ctrl_clk])}]
+set_max_delay -datapath_only -from $cpu_clk -to $ctrl_clk $cross_ns
+set_max_delay -datapath_only -from $ctrl_clk -to $cpu_clk $cross_ns

@@ -288,6 +288,11 @@ exposed external bus.
 - `ddr3_stack_test.sv` — `ddr3_stack` on `wb_line_mem`, the memory
   reset apart from the stack (`tb_ddr3_stack_test`, a variant module
   test so it gets the line adapter).
+- `nexysvideo/nexysvideo_ddr3.sv` — simulation stand-in for the Nexys
+  DDR3 controller wrapper, same ports, `wb_line_mem` on its memory
+  port: shadows the wrapper by name for the Nexys top's testbench and
+  `fpga-lint` (UberDDR3 neither simulates here nor elaborates for lint
+  at the board's configuration).
 
 ### FPGA top-levels (`rtl/fpga/`)
 Board tops live under `rtl/fpga/<board>/`, one file per registered
@@ -327,11 +332,14 @@ the shared module.
 - `nexysvideo/nexysvideo_penumbra2_top.sv` — gen2 machine on the Nexys
   Video (`BOARD=nexysvideo CORE=penumbra2[_5]`), growing one device per
   bring-up step: boot ROM, UART, the microSD slot over SPI (autoconfig,
-  card power off during the reset hold), and 128 KiB of `onchip_ram` as
-  system RAM until the DDR3. Its boot testbench
+  card power off during the reset hold), and 512 MiB of DDR3 as system
+  RAM through `ddr3_stack`. The controller resets only with its clocks'
+  lock; the machine is held in reset until it has calibrated, and LEDs
+  show calibration and the RAM's longest wait (`bus_wait_meter`). Its
+  boot testbench
   (`make -C hw/rom && make sim MOD=nexysvideo_penumbra2_top`) runs the
-  ROM to the monitor through the board pins, with a simulated card on
-  the SD pins.
+  ROM to the monitor through the board pins, with the controller's
+  simulation stand-in and a simulated card on the SD pins.
 - `nexysvideo/nexysvideo_uart_test_top.sv` — console bring-up top
   (`make fpga TOP=nexysvideo_uart_test_top`): banner and echo on the
   UART port, LEDs for lock, reset, a 1 Hz heartbeat, RX activity and
