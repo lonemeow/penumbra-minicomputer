@@ -3,16 +3,17 @@
 ;
 ; Tests:
 ;   1. Install bus fault handler at vector 0 (VEC_BUS_FAULT)
-;   2. With MMU disabled (bypass), load from unmapped address 0x02000000
-;      (above 16 MB RAM — no device claims this address)
+;   2. With MMU disabled (bypass), load from unmapped address 0xF0000000
+;      (above any RAM, below config space — no device claims it)
 ;   3. CPU should trap: EPC/ESR saved, dispatch to vector 0 (0x00)
 ;   4. Fault handler verifies FAULT_ADDR and FAULT_STATUS
 ;   5. Also tests store to unmapped address
 ;
 ; Result: R1=1 PASS, R1=0 FAIL
 
-; Unmapped address: 32 MB — above the 16 MB RAM, below I/O space
-.equ UNMAPPED, 0x02000000
+; Unmapped address: in the gap between RAM and config space, above
+; any system RAM a machine probes
+.equ UNMAPPED, 0xF0000000
 
 _start:
     LLI  R1, #0               ; assume fail
@@ -47,7 +48,7 @@ fail:
 bus_fault_handler:
     ; Check FAULT_ADDR == UNMAPPED
     RDSYS R2, #MMU, #FAULT_ADDR
-    LI    R3, #0x02000000
+    LI    R3, #UNMAPPED
     CMP   R2, R3
     BNE   bus_handler_fail
 

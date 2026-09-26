@@ -8,7 +8,7 @@
 ;
 ; Tests:
 ;   1. Map page 0 (vector table + data), ROM page (code)
-;   2. Map VPN 5 (0x5000) → PPN 0x02000 (phys 0x02000000, unmapped)
+;   2. Map VPN 5 (0x5000) → PPN 0xF0000 (phys 0xF0000000, unmapped)
 ;   3. Enable MMU, install bus fault handler
 ;   4. Read from 0x5000 → TLB hit, phys addr unmapped → bus fault
 ;   5. Verify FAULT_ADDR = 0x5000 (virtual, not physical)
@@ -43,13 +43,13 @@ _start:
     LI   R2, #0xFFFF00B9
     WRSYS R2, #MMU, #TLB_PTE
 
-    ; ── Map VPN 5 → PPN 0x02000 (phys 0x02000000, unmapped) ──
+    ; ── Map VPN 5 → PPN 0xF0000 (phys 0xF0000000, unmapped) ──
     ; TLB translates successfully, but physical address hits no device.
     LLI  R2, #5
     WRSYS R2, #MMU, #TLB_INDEX  ; set 5, way 0
     LLI  R2, #0x0500            ; {4'b0, VPN=0x00005, ASID=0x00} → 0x0000_0500
     WRSYS R2, #MMU, #TLB_VPN
-    LI   R2, #0x02000099        ; {PPN=0x02000, SW=0x00, flags=KERN_RW}
+    LI   R2, #0xF0000099        ; {PPN=0xF0000, SW=0x00, flags=KERN_RW}
     WRSYS R2, #MMU, #TLB_PTE
 
     ; ── Enable MMU ──────────────────────────────────────────
@@ -59,14 +59,14 @@ _start:
     ; ── Test 1: Read from mapped-but-unmapped page ──────────
     LLI  R11, #1              ; phase 1 = read probe
     LLI  R5, #PROBE_VA
-    LDW  R6, [R5]             ; TLB hit → phys 0x02000000 → BUS FAULT
+    LDW  R6, [R5]             ; TLB hit → phys 0xF0000000 → BUS FAULT
     CMP  R11, #0
     BNE  fail
 
     ; ── Test 2: Write to mapped-but-unmapped page ───────────
     LLI  R11, #2              ; phase 2 = write probe
     LLI  R5, #PROBE_VA
-    STW  R0, [R5]             ; TLB hit → phys 0x02000000 → BUS FAULT
+    STW  R0, [R5]             ; TLB hit → phys 0xF0000000 → BUS FAULT
     CMP  R11, #0
     BNE  fail
 

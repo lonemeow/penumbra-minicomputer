@@ -29,9 +29,7 @@ module machine_penumbra2_sim
     parameter int          ROM_WORDS = 16384,            // 64 KiB boot ROM
     // 32 MiB SDRAM region (matches the ULX3S W9825 part the sim models). Big
     // enough that conformance programs' data and stacks never fault — the
-    // widest gen2 test walks four pages up to 0x5000. The bus-fault tests pick
-    // 0x0200_0000 as their "no device" address precisely because it sits just
-    // past this region.
+    // widest gen2 test walks four pages up to 0x5000.
     parameter int          RAM_WORDS = 8 * 1024 * 1024
 )(
     input  logic                  i_clk,

@@ -8,7 +8,7 @@
 ;
 ; Result: R1=1 PASS, R1=0 FAIL
 
-.equ UNMAPPED, 0x02000000      ; word-aligned, at the 32 MB RAM top — no device
+.equ UNMAPPED, 0xF0000000      ; word-aligned, above any RAM — no device
 
 _start:
     LLI  R1, #0                ; assume fail

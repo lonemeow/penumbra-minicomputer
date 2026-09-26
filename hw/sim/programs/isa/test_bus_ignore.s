@@ -13,7 +13,7 @@ _start:
     STW  R2, [R0 + #0]        ; vector[0] = bus_ignore
 
     ; Trigger bus fault on store to unmapped address
-    LI   R5, #0x02000000
+    LI   R5, #0xF0000000      ; above any RAM, below config space
     STW  R0, [R5]             ; FAULT — handler ERETs, resumes here:
 
     ; If we get here, the ERET worked
