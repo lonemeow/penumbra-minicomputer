@@ -33,6 +33,10 @@ typedef int (*pattern_fn)(uint32_t begin, uint32_t end);
 struct pattern_entry {
     const char *name;
     pattern_fn  fn;
+    /* Nonzero: the pattern's faults depend on the address and it costs
+     * a pass or so per word, so it runs over all RAM past the program.
+     * Zero: it costs a pass per bit and keeps to the capped window. */
+    int         whole_ram;
 };
 
 extern const struct pattern_entry pattern_table[];

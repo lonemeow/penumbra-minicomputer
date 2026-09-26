@@ -231,12 +231,12 @@ int pat_sub_word(uint32_t begin, uint32_t end) {
  * (address-line) last so a deeper bug masks fewer earlier passes.
  */
 const struct pattern_entry pattern_table[] = {
-    { "round_trip      ", pat_round_trip      },
-    { "walking_one     ", pat_walking_one     },
-    { "walking_zero    ", pat_walking_zero    },
-    { "complement      ", pat_complement      },
-    { "sub_word        ", pat_sub_word        },
-    { "address_as_data ", pat_address_as_data },
+    { "round_trip      ", pat_round_trip,      0 },
+    { "walking_one     ", pat_walking_one,     0 },
+    { "walking_zero    ", pat_walking_zero,    0 },
+    { "complement      ", pat_complement,      1 },
+    { "sub_word        ", pat_sub_word,        1 },
+    { "address_as_data ", pat_address_as_data, 1 },
 };
 
 const unsigned pattern_table_len =

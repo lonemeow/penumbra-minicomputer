@@ -2,8 +2,8 @@
  * entry.c — bench_main wrapper for the memory tester.
  *
  * Walks the bootdata tag list to find the first ACFG_CLASS_MEMORY
- * device, picks a test window that doesn't overlap the program /
- * stack, and runs each pattern over the window.  Each pattern
+ * device, picks test windows that don't overlap the program /
+ * stack, and runs each pattern over its window.  Each pattern
  * reports start/end and pass/fail.  On any failure we keep going
  * (so the user gets the full picture for one pass) and return a
  * non-zero exit count at the end.
@@ -11,9 +11,11 @@
  * Test window policy:
  *   • Start past our own image: code, data and the stack crt0.S puts
  *     in .bss form one block the ROM allocated, ending at _end.
- *   • Cap the window at MEMTEST_MAX_BYTES so we don't spend hours
- *     walking 32 MB on every pattern by default.  Override with
- *     +full=1 plusarg style, or just edit the constant.
+ *   • The patterns whose faults depend on the address (address lines,
+ *     byte masks, byte lanes) cost a pass or so per word and run to
+ *     the end of RAM: an address bit that aliases shows only where it
+ *     changes.  The walking patterns cost a pass per bit and stop at
+ *     MEMTEST_MAX_BYTES.
  *
  * Bootdata: BTAG_DEVICE entries with cls == ACFG_CLASS_MEMORY carry
  * the discovered RAM region (base, dev_size).  See hw/rom/bootdata.h.
@@ -50,13 +52,9 @@ struct btag_device {
 
 /* ── Test window policy ───────────────────────────────────────── */
 /*
- * Default test window — small enough that all six patterns finish
- * in a few seconds, large enough to span multiple SDRAM rows
- * (which is the unit of address-line aliasing for the W9825:
- * row = bits [22:10] of the linear-byte address).
- *
- * Walking-1 / walking-0 are O(N×32) memory ops, so 8 MB is the
- * natural ceiling before they start dominating run time.
+ * The walking patterns' window.  They are O(N×32) memory ops, so 8 MB
+ * is the natural ceiling before they dominate run time; a data-line
+ * fault shows at any address, and 8 MB still spans many DRAM rows.
  */
 #define MEMTEST_MAX_BYTES   (8 * 1024 * 1024)
 
@@ -80,6 +78,15 @@ static void print_size(uint32_t bytes) {
         bench_print_uint(bytes);
         bench_puts(" B");
     }
+}
+
+static void print_window(uint32_t lo, uint32_t hi) {
+    print_hex32(lo);
+    bench_puts("..");
+    print_hex32(hi);
+    bench_puts(" (");
+    print_size(hi - lo);
+    bench_puts(")");
 }
 
 /* ── Bootdata walker ─────────────────────────────────────────── */
@@ -142,25 +149,23 @@ void bench_main(uint32_t bootdata) {
         bench_puts("No RAM past the program to test — abort.\n");
         return;
     }
-    uint32_t hi = ram_end;
-    if (hi - lo > MEMTEST_MAX_BYTES)
-        hi = lo + MEMTEST_MAX_BYTES;
+    uint32_t whole_hi  = ram_end;
+    uint32_t capped_hi = ram_end - lo > MEMTEST_MAX_BYTES ? lo + MEMTEST_MAX_BYTES : ram_end;
 
-    /* Align both ends down to 4 bytes for word-stride patterns. */
-    lo = (lo + 3) & ~3u;
-    hi =  hi      & ~3u;
+    /* Align the ends to 4 bytes for word-stride patterns. */
+    lo         = (lo + 3) & ~3u;
+    whole_hi  &= ~3u;
+    capped_hi &= ~3u;
 
     bench_puts("RAM:    base=");
     print_hex32(ram->base);
     bench_puts(" size=");
     print_size(ram->dev_size);
     bench_puts("\nWindow: ");
-    print_hex32(lo);
-    bench_puts("..");
-    print_hex32(hi);
-    bench_puts(" (");
-    print_size(hi - lo);
-    bench_puts(")\n\n");
+    print_window(lo, capped_hi);
+    bench_puts(" per-bit patterns\n        ");
+    print_window(lo, whole_hi);
+    bench_puts(" per-word patterns\n\n");
 
     unsigned failures = 0;
     for (unsigned i = 0; i < pattern_table_len; i++) {
@@ -171,6 +176,8 @@ void bench_main(uint32_t bootdata) {
         bench_print_uint(pattern_table_len);
         bench_puts("] ");
         bench_puts(p->name);
+        uint32_t hi = p->whole_ram ? whole_hi : capped_hi;
+        print_size(hi - lo);
         bench_puts(" ... ");
 
         bench_timer_start();
