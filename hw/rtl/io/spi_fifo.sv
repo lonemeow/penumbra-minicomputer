@@ -47,6 +47,12 @@ module spi_fifo
     localparam ADDR_WIDTH = $clog2(DEPTH);
     localparam LEVEL_BITS = ADDR_WIDTH + 1;   // 0..DEPTH
 
+    // Block RAM at every depth: the SPI's 512-entry FIFOs need it, one
+    // form keeps every instance mapped alike under both synthesizers, and
+    // on the ECP5, whose fmax is set by fabric routing, a memory in block
+    // RAM is one the fabric never has to route. Vivado notes that the
+    // UART's 16-entry FIFOs would fit LUT RAM better (Synth 8-7082); that
+    // would save one 18 Kb block each.
     (* ram_style = "block" *) logic [7:0] mem [DEPTH];
 
     // Pointers — one extra MSB for full/empty disambiguation
