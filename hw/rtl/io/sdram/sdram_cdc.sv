@@ -124,7 +124,10 @@ module sdram_cdc #(
     // ─────────────────────────────────────────────────────────
     logic [1:0] sys_wptr_bin;
     logic [1:0] sys_rptr_bin;       // local: how many slots have retired
-    logic [1:0] sd_rptr_gray_s1, sd_rptr_gray_s2;
+    // ASYNC_REG on both synchronizers' flops: Vivado places each pair
+    // together, keeps it out of shift-register LUTs, and its
+    // clock-crossing check recognizes it. The ECP5 flow ignores it.
+    (* ASYNC_REG = "TRUE" *) logic [1:0] sd_rptr_gray_s1, sd_rptr_gray_s2;
 
     // Per-slot payload — written by sys, read by SD
     logic        slot_we      [0:1];
@@ -136,7 +139,7 @@ module sdram_cdc #(
     // SD-domain state
     // ─────────────────────────────────────────────────────────
     logic [1:0] sd_rptr_bin;
-    logic [1:0] sys_wptr_gray_s1, sys_wptr_gray_s2;
+    (* ASYNC_REG = "TRUE" *) logic [1:0] sys_wptr_gray_s1, sys_wptr_gray_s2;
 
     typedef enum logic [1:0] {
         SD_IDLE,
