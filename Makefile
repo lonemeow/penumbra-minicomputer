@@ -714,12 +714,13 @@ test-compiler-pic: $(ISS)
 #        make simulate TRACE=build/trace.log
 #        make simulate TRACE=build/t.log TRACE_WINDOW=1000000 HALT_ON=DBLFLT
 #        make simulate RAW=1                  (full raw TTY for job control)
+#        make simulate RAM=512M               (another board's RAM; also benchmark)
 #        make simulate LLVM_PREFIX=/other/llvm/build
 
 .PHONY: simulate
 simulate: $(ISS)
 	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX)
-	@$(ISS) program.hex $(if $(SDCARD),+sdcard=$(SDCARD)) $(if $(USBDEV),+usbdev=$(USBDEV)) $(if $(TRACE),+trace=$(TRACE)) $(if $(TRACE_WINDOW),+trace_window=$(TRACE_WINDOW)) $(if $(HALT_ON),'+halt_on=$(HALT_ON)') $(if $(RAW),+raw)
+	@$(ISS) program.hex $(if $(RAM),+ram=$(RAM)) $(if $(SDCARD),+sdcard=$(SDCARD)) $(if $(USBDEV),+usbdev=$(USBDEV)) $(if $(TRACE),+trace=$(TRACE)) $(if $(TRACE_WINDOW),+trace_window=$(TRACE_WINDOW)) $(if $(HALT_ON),'+halt_on=$(HALT_ON)') $(if $(RAW),+raw)
 
 $(ISS): sw/sim/penumbra_iss.cpp sw/sim/penumbra_cores.h sw/sim/cache_model.h sw/sim/tlb_model.h hw/sim/usb_device_sim.h hw/sim/usb_msc_sim.h
 	@$(MAKE) -C sw/sim
@@ -1005,7 +1006,7 @@ benchmark: sdimage-bench $(ISS)
 	@# and blocks on stdin, so the loop would never reach the next ELF.
 	@for elf in $(BENCH_ELFS); do \
 		echo "═══ Running $$elf on ISS ═══"; \
-		echo "boot sd:0,0/$$elf" | $(ISS) program.hex +sdcard=$(BENCH_IMG) +halt-on-break \
+		echo "boot sd:0,0/$$elf" | $(ISS) program.hex $(if $(RAM),+ram=$(RAM)) +sdcard=$(BENCH_IMG) +halt-on-break \
 			|| echo "*** $$elf FAILED ***"; \
 		echo ""; \
 	done

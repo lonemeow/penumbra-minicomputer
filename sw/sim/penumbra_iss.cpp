@@ -4,7 +4,7 @@
 // No Verilator dependency — compiles with just g++ -O2.
 //
 // Matches the RTL machine_sim memory map and device set:
-//   0x00000000 – 0x01FFFFFF  RAM (32 MB)
+//   0x00000000 – ...         RAM (32 MB, the ULX3S's; +ram= sizes it)
 //   0xFE000000 – 0xFE00001F  Autoconfig space (when cfg_en)
 //   0xFF000000 – 0xFF000FFF  UART (16450-compatible)
 //   0xFFFF0000 – 0xFFFFFFFF  Boot ROM (64 KB)
@@ -14,8 +14,11 @@
 // Trace output format (compatible with RTL tb_interactive):
 //   PC=XXXXXXXX SR=XXXXXXXX [SVNZCV] R1=... R2=... ... R14=...
 //
-// Usage: penumbra-iss [program.hex] [+sdcard=path] [+trace=path] [+raw]
-//                     [+trap-pc0] [+halt-on-break] [+core=generation]
+// Usage: penumbra-iss [program.hex] [+ram=size] [+sdcard=path] [+trace=path]
+//                     [+raw] [+trap-pc0] [+halt-on-break] [+core=generation]
+//
+// +ram= takes a byte count with an optional K, M or G suffix (powers of
+// 1024), e.g. +ram=512M for the Nexys Video's DDR3.
 //
 // +core= names the hardware generation the ISS presents, spelled as
 // `make CORE=` spells it (penumbra_cores.h): its CPU name and the
@@ -38,6 +41,7 @@
 //   Ctrl-A H     — help
 //   Ctrl-A Ctrl-A — send literal Ctrl-A
 
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -442,9 +446,19 @@ static struct {
 enum { MMU_CR=0, MMU_FADDR=1, MMU_FSTAT=2, MMU_TLB_VPN=3, MMU_TLB_PTE=4, MMU_TLB_IDX=5,
        MMU_CFG=15 };
 
-// MMU_CONFIG as this model is built: v1, 8 pinned slots, 32 sets x 2 ways,
-// 4 KB pages, 8-bit ASID.  Software selects its TLB miss handler from this.
-static constexpr uint32_t MMU_CONFIG_VALUE = 0x10C11481u;
+// The MMU as this model is built, and the MMU_CONFIG value that reports
+// it (doc/system/mmu.md): v1, 8 pinned slots, 32 sets x 2 ways, 4 KB
+// pages, 8-bit ASID.  Software selects its TLB miss handler from it.
+static constexpr int         PTLB_ENTRIES  = 8;
+static constexpr TlbGeometry TLB_GEOMETRY  = { 32, 2 };
+static constexpr uint32_t    MMU_VER       = 1;
+static constexpr uint32_t    MMU_PAGE_LOG2 = 12;
+static constexpr uint32_t    MMU_ASID_BITS = 8;
+static constexpr uint32_t MMU_CONFIG_VALUE =
+    MMU_VER | PTLB_ENTRIES << 4 | __builtin_ctz(TLB_GEOMETRY.sets) << 10 |
+    TLB_GEOMETRY.ways << 15 | MMU_PAGE_LOG2 << 20 | MMU_ASID_BITS << 25;
+
+static constexpr uint32_t PAGE_BYTES = 1u << MMU_PAGE_LOG2;
 
 // TLB PTE flag masks (from flag byte in PTE word bits [7:0])
 static constexpr uint32_t TLB_V = 1u << 0;   // Valid
@@ -464,8 +478,8 @@ static inline uint32_t TLB_PTE_GET_PPN(uint32_t pte_word)  { return pte_word >> 
 enum { SPR_ESR=0, SPR_EPC=1, SPR_USP=2, SPR_SR=3, SPR_SCR0=4 };
 constexpr int N_SCR = 4;   // SCR0..SCR(N_SCR-1) at SPR_SCR0..SPR_SCR0+N_SCR-1
 
-// Memory sizes
-static constexpr size_t RAM_SIZE = 32u * 1024 * 1024;  // 32 MB
+// Memory sizes. RAM is the ULX3S's 32 MB unless +ram= sizes it.
+static size_t ram_size = 32u * 1024 * 1024;
 static constexpr size_t ROM_SIZE = 64u * 1024;          // 64 KB
 static constexpr uint32_t RAM_BASE  = 0x00000000;
 static constexpr uint32_t UART_BASE = 0xFF000000;
@@ -494,7 +508,7 @@ static CPU cpu;
 // Memory and Devices
 // ═══════════════════════════════════════════════════════════════
 
-static uint8_t ram[RAM_SIZE];
+static uint8_t* ram;                // ram_size bytes, zeroed (allocated in main)
 static uint8_t rom[ROM_SIZE];
 
 // --- UART (16450-compatible) ---
@@ -1034,14 +1048,12 @@ static struct {
 } display;
 
 // --- TLB (64 entries: 32 sets × 2 ways) ---
-static constexpr TlbGeometry TLB_GEOMETRY = { 32, 2 };
 static struct {
     uint32_t vpn[64];   // {4'b0, VPN[19:0], ASID[7:0]}
     uint32_t pte[64];   // {PPN[19:0], SW[3:0], flags[7:0]}
 } tlb;
 
 // --- Pinned TLB (8 entries, fully associative) ---
-static constexpr int PTLB_ENTRIES = 8;
 static struct {
     uint32_t vpn[PTLB_ENTRIES];
     uint32_t pte[PTLB_ENTRIES];
@@ -1826,8 +1838,8 @@ static void usb_step() {
 static uint32_t phys_read(uint32_t addr, int size, bool& bus_fault) {
     bus_fault = false;
 
-    // RAM: 0x00000000 – 0x00FFFFFF
-    if (addr < RAM_SIZE) {
+    // RAM: from 0x00000000, ram_size bytes
+    if (addr < ram_size) {
         if (size==0) return rd8(&ram[addr]);
         if (size==1) return rd16(&ram[addr & ~1u]);
         return rd32(&ram[addr & ~3u]);
@@ -1889,7 +1901,7 @@ static void phys_write(uint32_t addr, uint32_t data, int size, bool& bus_fault) 
     bus_fault = false;
 
     // RAM
-    if (addr < RAM_SIZE) {
+    if (addr < ram_size) {
         // Debug watchpoint: halt on write to watched PA
         if (dbg.watch_count > 0) {
             uint32_t wa = addr & (size==0 ? ~0u : size==1 ? ~1u : ~3u);
@@ -3188,6 +3200,50 @@ static void print_branch_stats() {
             (unsigned long long)bstats.breg);
 }
 
+// The byte count a +ram= argument names ("512M", "128m", "32768K",
+// "1G", or plain bytes), or 0 if it names no size RAM can have. RAM
+// starts at 0 and the ROM probes it a page at a time, needing the two
+// pages the hardware-to-ROM contract promises it (doc/system/bus.md);
+// it has to end before config space at ACFG_BASE.
+static size_t parse_ram_size(const char* text) {
+    char *endp;
+    unsigned long long val = strtoull(text, &endp, 10);
+
+    if (strlen(endp) > 1)
+        return 0;
+
+    unsigned long long mult;
+
+    switch (tolower(*endp)) {
+        case '\0':
+            mult = 1;
+            break;
+        case 'k':
+            mult = 1024;
+            break;
+        case 'm':
+            mult = 1024 * 1024;
+            break;
+        case 'g':
+            mult = 1024 * 1024 * 1024;
+            break;
+        default:
+            return 0;
+    }
+
+    // Bounded before the multiply, which then cannot wrap; this also
+    // rejects a count strtoull saturated.
+    if (val > ACFG_BASE / mult)
+        return 0;
+
+    val *= mult;
+
+    if (val < 2 * PAGE_BYTES || val % PAGE_BYTES != 0)
+        return 0;
+
+    return (size_t)val;
+}
+
 int main(int argc, char** argv) {
     const char* hex_path = nullptr;
     const char* sd_path = nullptr;
@@ -3200,7 +3256,14 @@ int main(int argc, char** argv) {
     const char* model_report_path = nullptr;
 
     for (int i = 1; i < argc; i++) {
-        if (strncmp(argv[i], "+sdcard=", 8) == 0) sd_path = argv[i] + 8;
+        if (strncmp(argv[i], "+ram=", 5) == 0) {
+            ram_size = parse_ram_size(argv[i] + 5);
+            if (ram_size == 0) {
+                fprintf(stderr, "penumbra-iss: bad +ram= size '%s'\n", argv[i] + 5);
+                return 1;
+            }
+        }
+        else if (strncmp(argv[i], "+sdcard=", 8) == 0) sd_path = argv[i] + 8;
         else if (strncmp(argv[i], "+usbdev=", 8) == 0) usbdev_spec = argv[i] + 8;
         else if (strncmp(argv[i], "+trace=", 7) == 0) trace_path = argv[i] + 7;
         else if (strncmp(argv[i], "+audiofile=", 11) == 0) audio_path = argv[i] + 11;
@@ -3243,7 +3306,7 @@ int main(int argc, char** argv) {
     }
 
     if (!hex_path) {
-        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+usbdev=type:config] [+audiofile=path] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+pcprof=path [+pcprof_start=addr]] [+irq_at_pc=addr[,period]] [+core=generation] [+cachemodel[=list]] [+tlbmodel[=list]] [+model_start=addr] [+model_stop=addr] [+model_report=path]\n");
+        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+ram=size] [+sdcard=path] [+usbdev=type:config] [+audiofile=path] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+pcprof=path [+pcprof_start=addr]] [+irq_at_pc=addr[,period]] [+core=generation] [+cachemodel[=list]] [+tlbmodel[=list]] [+model_start=addr] [+model_stop=addr] [+model_report=path]\n");
         return 1;
     }
 
@@ -3298,12 +3361,18 @@ int main(int argc, char** argv) {
     }
 
     // Initialize
-    memset(ram, 0, sizeof(ram));
+    // calloc: a block this size comes straight from the kernel as
+    // zero pages, so only the RAM the guest touches costs host memory.
+    ram = static_cast<uint8_t*>(calloc(ram_size, 1));
+    if (!ram) {
+        fprintf(stderr, "penumbra-iss: cannot allocate %zu bytes of RAM\n", ram_size);
+        return 1;
+    }
     memset(rom, 0, sizeof(rom));
     cpu_reset();
 
     if (hosted_mode) {
-        if (!load_hex(hex_path, ram, RAM_SIZE, 0x1000)) return 1;
+        if (!load_hex(hex_path, ram, ram_size, 0x1000)) return 1;
         cpu.pc = 0x1000;
     } else {
         if (!load_hex(hex_path, rom, ROM_SIZE)) return 1;
@@ -3414,7 +3483,7 @@ int main(int argc, char** argv) {
             // Dump watched memory values from raw RAM array
             for (int wi = 0; wi < dbg.watch_count; wi++) {
                 uint32_t wpa = dbg.watch_pa[wi];
-                if (wpa < RAM_SIZE - 3) {
+                if (wpa < ram_size - 3) {
                     uint32_t val = rd32(&ram[wpa & ~3u]);
                     fprintf(stderr, "[W%d] PA=0x%08X raw RAM value=0x%08X\n",
                             wi, wpa, val);

@@ -305,8 +305,11 @@ rom.ld ──────────────────┘
 - **ISS** (`sw/sim/penumbra_iss.cpp`) — fast instruction-level
   simulator, single C++ file. Covers full ISA + 8 exceptions +
   software-managed TLB + UART + SPI/SD + bus autoconfig. Run:
-  `sw/sim/penumbra-iss program.hex [+sdcard=img] [+usbdev=disk:img]
-  [+trace=log] [+raw] [+trap-pc0] [+core=gen]`. `+trap-pc0` aborts on PC=0 fetch (catches null-pointer
+  `sw/sim/penumbra-iss program.hex [+ram=size] [+sdcard=img]
+  [+usbdev=disk:img] [+trace=log] [+raw] [+trap-pc0] [+core=gen]`.
+  `+ram=` sizes RAM (32M, the ULX3S's, by default; `+ram=512M` for the
+  Nexys Video; `RAM=` on `make simulate` and `make benchmark`).
+  `+trap-pc0` aborts on PC=0 fetch (catches null-pointer
   jumps; off by default because some OS tests probe address 0).
   `+core=` picks the hardware generation the ISS presents, spelled as
   `make CORE=` spells it (`penumbra1` by default, `penumbra2`,
