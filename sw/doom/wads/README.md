@@ -31,8 +31,35 @@ sw/doom/fetch-freedoom.sh freedm   # freedm.wad, smallest download
 It needs `curl` and `unzip`, and skips anything already downloaded.
 
 The shareware and retail WADs work too — the engine does not care — but
-they are for your own machine, not for an image you pass on. Copy those
-in by hand.
+they are for your own machine, not for an image you pass on. Copy the
+retail ones in by hand.
+
+## The shareware WAD, for period comparisons
+
+Published 386 and 486 frame rates come from `timedemo demo3` on the
+v1.9 shareware WAD, a demo of its E1M7. Freedoom's maps are different
+and more detailed — the E1M6 that `BENCH.lmp` plays has 3.2 times the
+segs of that E1M7 — so a Freedoom demo does not compare with those
+figures.
+`sw/doom/fetch-shareware.sh` downloads id's v1.9 shareware package
+from the idgames archive, extracts `DOOM1.WAD`, and checks it against
+its known SHA256:
+
+```sh
+sw/doom/fetch-shareware.sh
+doom -iwad DOOM1.WAD -timedemo demo3      # on the target
+```
+
+The engine searches for `doom1.wad` before `freedoom1.wad`, so once
+`DOOM1.WAD` is staged, a bare `doom` starts the shareware game. Name
+the IWAD for anything cut from Freedoom:
+
+```sh
+doom -iwad freedoom1.wad -timedemo /usr/local/share/doom/BENCH.lmp
+```
+
+Remove `DOOM1.WAD` from this directory before building an image to
+hand out.
 
 ## Where it ends up
 
