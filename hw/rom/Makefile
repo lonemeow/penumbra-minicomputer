@@ -85,16 +85,22 @@ $(BUILD):
 # ── Host unit tests ───────────────────────────────────────────
 # fat32.c reaches the disk only through its blk_read_fn callback, so
 # it builds and runs natively against a synthesized image — no
-# simulator, no cross toolchain, no SD card.
+# simulator, no cross toolchain, no SD card. util.c's size formatter
+# runs natively as it is.
 HOST_CC  ?= cc
-TEST_BIN := $(BUILD)/fat32_test
+TEST_BINS := $(BUILD)/fat32_test $(BUILD)/util_test
 
-test: $(TEST_BIN)
-	$(TEST_BIN)
+test: $(TEST_BINS)
+	$(BUILD)/fat32_test
+	$(BUILD)/util_test
 
-$(TEST_BIN): tests/fat32_test.c fat32.c util.c fat32.h util.h penumbra.h | $(BUILD)
+$(BUILD)/fat32_test: tests/fat32_test.c fat32.c util.c fat32.h util.h penumbra.h | $(BUILD)
 	$(HOST_CC) -std=gnu11 -Wall -Wextra -O1 -g -o $@ \
 	    tests/fat32_test.c fat32.c util.c
+
+$(BUILD)/util_test: tests/util_test.c util.c util.h penumbra.h | $(BUILD)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -O1 -g -o $@ \
+	    tests/util_test.c util.c
 
 clean:
 	rm -rf $(BUILD) $(OUT_HEX)

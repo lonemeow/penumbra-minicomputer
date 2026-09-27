@@ -17,30 +17,30 @@ uint32_t read_le32(const unsigned char *p) {
 }
 
 /*
- * Format a byte count as a human-readable size (e.g. "1.5GB").
- * Uses the largest unit where the integer part is >= 1, with one
- * decimal digit via integer fixed-point: frac = (rem * 10) / div.
- * No floating point needed.
+ * Format a byte count as a human-readable size (e.g. "1.5GB"): the
+ * largest unit the count has a whole one of, and one decimal digit,
+ * truncated. Unit i is 2^(10 i) bytes, so it divides by shifting: the
+ * ROM has no 64-bit division, and the count is 64 bits because a disk
+ * partition can pass 4 GB.
  */
-void humanize_size(unsigned long bytes, char *buf, unsigned long bufsize) {
+void humanize_size(unsigned long long bytes, char *buf, unsigned long bufsize) {
     static const char * const suffixes[] = {
-        "B", "kB", "MB", "GB"
+        "B", "kB", "MB", "GB", "TB"
     };
-    static const unsigned long divisors[] = {
-        1, 1024, 1024 * 1024, 1024 * 1024 * 1024
-    };
+    enum { LARGEST_UNIT = 4 };
 
-    /* Pick largest unit where whole part >= 1 */
     int idx = 0;
-    for (int i = 3; i >= 1; i--) {
-        if (bytes >= divisors[i]) {
+    for (int i = LARGEST_UNIT; i >= 1; i--) {
+        if (bytes >> (10 * i)) {
             idx = i;
             break;
         }
     }
 
-    unsigned long whole = bytes / divisors[idx];
-    unsigned long frac  = (bytes % divisors[idx]) * 10 / divisors[idx];
+    unsigned int       shift = 10 * idx;
+    unsigned long long whole = bytes >> shift;
+    unsigned long long rem   = bytes - (whole << shift);
+    unsigned long long frac  = (rem * 10) >> shift;
 
     if (idx == 0 || frac == 0)
         snprintf(buf, bufsize, "%u%s", (unsigned int)whole, suffixes[idx]);

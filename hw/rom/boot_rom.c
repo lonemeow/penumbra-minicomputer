@@ -460,7 +460,8 @@ static void cmd_part(const char *args) {
         unsigned long part_sector_count = read_le32(part_data + 12);
 
         char humanized_size[32];
-        humanize_size(part_sector_count * 512, humanized_size, sizeof(humanized_size));
+        humanize_size((unsigned long long)part_sector_count * 512, humanized_size,
+                      sizeof(humanized_size));
 
         console_printf("  %d %10s %d %s %s\r\n", part_idx + 1, part_type_name(part_type),
             part_start_lba, humanized_size, part_status & 0x80 ? "(bootable)" : "");
@@ -1024,7 +1025,7 @@ int main(void) {
     console_puts("Detecting base RAM... ");
     long npages = detect_ram();
     char ram_size_str[32];
-    humanize_size((unsigned long)npages * 4096, ram_size_str, sizeof(ram_size_str));
+    humanize_size((unsigned long long)npages * 4096, ram_size_str, sizeof(ram_size_str));
     console_printf("%s found\r\n", ram_size_str);
     bd_add_device(&bd_cursor, ACFG_CLASS_MEMORY, 0x00000000,
                   (uint32_t)(npages * 4096), 0, "RAM");
