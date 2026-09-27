@@ -44,7 +44,6 @@ __pycache__/
 *.pyc
 *.pyo
 .venv/
-netbsd/sys/machine
 
 # Game data
 # WAD files are never committed: the retail Doom WADs are proprietary, and

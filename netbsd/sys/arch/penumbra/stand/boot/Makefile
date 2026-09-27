@@ -27,8 +27,10 @@ S=		${.CURDIR}/../../../..
 
 .PATH:		${.CURDIR}/../libsa
 
+# <machine/...> resolves through the links bsd.klinks.mk makes in the
+# object directory; libsa and libkern inherit these flags.
 CPPFLAGS+=	-nostdinc -D_STANDALONE -D__NetBSD__ -DHEAP_VARIABLE \
-		-DLIBSA_SLOW_TWIDDLE -I${S} -I${.CURDIR}
+		-DLIBSA_SLOW_TWIDDLE -I${.OBJDIR} -I${S} -I${.CURDIR}
 CFLAGS+=	-O2 -ffreestanding -fPIE
 CWARNFLAGS+=	-Wno-main
 
@@ -74,3 +76,5 @@ ${PROG}.sym: ${OBJS} ${SALIB} ${KERNLIB}
 cleandir: .WAIT cleandirlocal
 cleandirlocal:
 	-rm -rf lib
+
+.include <bsd.klinks.mk>
