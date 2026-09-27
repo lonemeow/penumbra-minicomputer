@@ -11,6 +11,9 @@ Open compiler work is tracked in
 
 - [strength-reduction.md](strength-reduction.md) — constant multiply,
   divide and remainder lowerings, and the arithmetic cost model.
+- [scheduling-models.md](scheduling-models.md) — the per-generation
+  scheduling models, where their figures come from, and which cost
+  decisions read them.
 
 ## Upstream GlobalISel gaps
 

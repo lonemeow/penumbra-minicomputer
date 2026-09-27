@@ -2,7 +2,7 @@
 
 `MUL` and `DIV` execute on the sequential `divmul` peer unit and hold
 the core many times longer than an ALU operation — the per-core figures
-are in [instruction-timing.md](../internals/instruction-timing.md) and in
+are in [instruction-timing.md](../system/instruction-timing.md) and in
 each core's scheduling model — so constant operands decompose into ALU
 operations wherever that is cheaper on the tuned core.  Open gaps are
 tracked in

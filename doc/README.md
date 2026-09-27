@@ -14,6 +14,7 @@ architecture and its standard peripherals.
 *   **[Architecture Overview](./system/architecture.md)** — Design philosophy, registers, and memory model.
 *   **[Instruction Set Guide](./system/instruction-set.md)** — Programmer's reference for all instructions.
 *   **[Instruction Encoding](./system/instruction-encoding.md)** — Bit-level reference for assembler / disassembler / binary-tool authors.
+*   **[Instruction Timing](./system/instruction-timing.md)** — What each instruction costs on each generation, what memory typically costs, and what that means for code.
 *   **[ABI Specification](./system/abi.md)** — Data models, calling conventions, and ELF details.
 *   **[Toolchain Strategy](./system/toolchain.md)** — LLVM backend and compiler considerations.
 *   **[LLVM Backend Notes](./llvm/README.md)** — How the backend's lowerings work, and upstream GlobalISel gap write-ups.
@@ -70,7 +71,7 @@ subdirectory owns its realization.
 *   **[System Bus Implementation](./internals/system-bus.md)** — How the machine tops realise the sync-form Penumbra Bus: device decode, the response fabric, and the simple-device handshake cell.
 *   **[MMU Internals](./internals/mmu-internals.md)** — TLB hardware structure, discrete-logic mapping, and the VIPT L1 alias-free invariant.
 *   **[MUL/DIV Unit (divmul)](./internals/divmul.md)** — The shared multiply/divide peer unit: algorithm, handshake, datapath, and discrete chip-count.
-*   **[Instruction Timing by Core](./internals/instruction-timing.md)** — Measured cycles per instruction on each core, where they go, dependency stalls, and how the compiler's scheduling models use them.
+*   **[Instruction Timing: Mechanism and Measurement](./internals/instruction-timing.md)** — Where each core's cycles come from, and how the figures in the programmer's timing reference are measured.
 *   **[L2 Cache](./internals/l2-cache.md)** — Design plan and phase status for the optional unified L2 cache (currently write-invalidate-on-hit; write-back is a planned phase) between `cpu_core.o_mem_*` and the system bus.
 *   **[SDRAM Controller v2](./internals/sdram-controller.md)** — Design plan for the rewrite (composable, dual-domain, 100 MHz CL2).
 *   **[SDRAM Optimization](./internals/sdram-optimization.md)** — Controller strategies for bandwidth improvement.

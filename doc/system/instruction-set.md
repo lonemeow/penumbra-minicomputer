@@ -168,7 +168,8 @@ DIV  R5, Rs, Rdest       ; R5 = Ra/Rs (discarded), Rdest = Ra % Rs
 If the dividend can be clobbered, the `MOV` is unnecessary.
 
 `MUL` and `DIV` are multi-cycle: they stall the pipeline while the
-divmul peer unit iterates (~33 cycles per operation). See
+divmul peer unit iterates, for a time that depends on the generation
+([instruction-timing.md](./instruction-timing.md)). See
 [datapath.md](../internals/penumbra1/datapath.md) and
 [divmul.md](../internals/divmul.md) for the peer-unit / STALL contract.
 

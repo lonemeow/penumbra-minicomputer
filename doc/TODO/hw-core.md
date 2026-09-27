@@ -319,10 +319,9 @@ per run, each ~20-30 cycles, ~25-37M cycles of write traffic on a
 45M-cycle run.  Phase 2 absorbs writes into L2 entirely until
 eviction.
 
-The per-store figure predates `doc/internals/instruction-timing.md`,
-which measures a write-through `STW` at 8 cycles on penumbra1 and 5
-on penumbra2_5 in steady state; re-measure before sizing the win on
-it.
+The per-store figure predates `doc/system/instruction-timing.md`,
+which puts a write-through store at a typical 8 cycles on penumbra1
+and 6 on penumbra2_5; re-measure before sizing the win on it.
 
 Upper-bound win (from current measurements): the 841K Dhrystone
 write hits become zero-bus-traffic dirty marks (~25M cycles saved

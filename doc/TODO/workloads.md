@@ -197,9 +197,10 @@ hazard 4%, funit 3%; hit rates L1I 97.2%, L1D 82.4%, L2 86.8%.
   files: 6,151 instructions against 9,026, the usual CISC/RISC ratio.
   The pixel loops are within 1.2× — `R_DrawColumn` 10 against 12 per
   pixel, `R_DrawSpan` 15 against 17, the difference being x86's
-  base+index addressing — and with every access hitting, the timing
-  tables put Penumbra ahead per clock: ~19 cycles a column pixel on
-  penumbra2_5 against ~35 for the i386 C loop.  Outliers:
+  base+index addressing — and with every access hitting, Penumbra is
+  ahead per clock: the column loop measures 22 cycles a pixel on
+  penumbra2_5 in RTL simulation, against ~35 for the i386 C loop by its
+  timing tables.  Outliers:
   `R_RenderSegLoop` 201 against 405, 139 of them `lli`/`lui` pairs for
   globals (`LUI` ORs, so there is no `%hi`/`%lo` fold into the load);
   `R_DrawVisSprite` 84 against 242, not yet examined.
@@ -333,7 +334,7 @@ Found in the hot-path code review (2026-09-13).
 - **Span and low-detail drawers reload their globals per pixel.**
   `R_DrawSpan`, `R_DrawSpanLow` and `R_DrawColumnLow` read their
   colormap and source pointers through globals the byte store may
-  alias, so both are reloaded every pixel — 8 cycles on penumbra1, 2
+  alias, so both are reloaded every pixel — 8 cycles on penumbra1, 4
   on penumbra2_5.  `b82fb4b0df29` hoisted them into locals in
   `R_DrawColumn` only.  With the countdown-exit fix as well, the span
   loop goes from 23 instructions to 15.

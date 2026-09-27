@@ -16,6 +16,7 @@ and CLAUDE.md files intentionally do *not* duplicate them.
 | Topic | Read |
 |-------|------|
 | ISA, registers, encoding, instruction set | `doc/system/{architecture,instruction-set,instruction-encoding}.md` |
+| Instruction costs per generation, typical memory costs | `doc/system/instruction-timing.md` |
 | ABI, ELF relocations, calling convention | `doc/system/abi.md` |
 | LLVM backend design notes, upstream gap write-ups | `doc/llvm/` |
 | MMU, sysregs, bus address map, boot protocol | `doc/system/{mmu,sysregs,bus,boot-protocol}.md` |

@@ -315,9 +315,9 @@ Whether an operand is known at compile time decides the cost, because
 constant operands are rewritten into ALU operations and variable ones
 go to the divmul peer unit.
 
-**Variable operands** take the hardware instruction: `MUL` is 10
-cycles on penumbra2_5 and `DIV` 34, against 1 for an ALU operation
-(per-core figures in `doc/internals/instruction-timing.md`). One
+**Variable operands** take the hardware instruction: `MUL` is 11
+cycles on penumbra2_5 and `DIV` 35, against 1 for an ALU operation
+(per-generation figures in `doc/system/instruction-timing.md`). One
 variable multiply per pixel is two thirds of a 30 fps budget, and a
 variable divide per pixel is out entirely — the reciprocal-table form
 is the substitute, for perspective division and voxel projection

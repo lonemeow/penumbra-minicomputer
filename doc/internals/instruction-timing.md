@@ -1,52 +1,10 @@
-# Penumbra CPU — Instruction Timing by Core
+# Penumbra CPU — Instruction Timing: Mechanism and Measurement
 
-> **Applies to:** all generations · reference. How many cycles an
-> instruction holds each core, measured on the RTL testbenches, and
-> where those cycles go. The compiler's scheduling models
-> (`llvm/lib/Target/Penumbra/Penumbra.td`) state these figures; this
-> doc is their source, so a model change starts here.
-
-## What the numbers mean
-
-Every figure is **whole-instruction cycles in steady state**: the
-cycles a program's run grows by for each execution of the
-instruction, fetch included, with every I-cache and D-cache access a
-hit and no interrupts. They are what a cost decision should compare —
-a shift/add sequence pays the fetch on every instruction, a multiply
-pays it once.
-
-On a pipelined core an instruction's figure includes the stall it
-imposes on the pipeline behind it (a divide holding EX), but not the
-stall a *consumer* of its result takes waiting for it. Those
-dependency costs differ between otherwise identical cores and are
-listed separately under
-[Dependency costs](#dependency-costs).
-
-Real code runs at a higher CPI than the ALU figures suggest: loads,
-stores and multi-µop instructions are part of any instruction mix,
-and cache misses, branch flushes and dependency stalls come on top.
-
-## Per-instruction cycles
-
-| Instruction | Penumbra/1 | Penumbra/2 | Penumbra/2.5 |
-|---|---:|---:|---:|
-| ALU, register or immediate operand (`ADD`, `ADDi`, `SHLi`, `LLI`, …) | 2 | 1 | 1 |
-| `LDW`, D-cache hit | 4 | — | 1 |
-| `STW`, write-through | 8 | — | 5 |
-| `MUL` / `MULU` | 37 | — | 10 |
-| `DIV` / `DIVU` | 37 | 35¹ | 34 |
-| `Bcc` not taken | 2 | — | 1 |
-| `Bcc` taken / `B` | 2 | — | 2 predicted, 5 mispredicted² |
-| `JMP Rn` (indirect, including returns) | 2 | — | 5 |
-| `BL` | 3 | — | — |
-
-¹ Measured inside a loop whose divides read one another's results, so
-it includes a small Penumbra/2 dependency stall.
-
-² See [Control transfers](#control-transfers-on-penumbra25) for what
-the BTB predicts.
-
-"—" marks a figure not measured.
+> **Applies to:** all generations · reference. Where each core's cycles
+> come from, and how the figures in the programmer's reference,
+> [`system/instruction-timing.md`](../system/instruction-timing.md),
+> are measured. The figures live only there; this doc explains them
+> and says how to re-measure them after an RTL change.
 
 ## Where the cycles go
 
@@ -75,17 +33,44 @@ fetch cycle plus one cycle per µop.
   register in a µop of its own before loading the PC: **3**. There is
   no prediction, so the figures do not depend on history.
 
+Penumbra/1 is serial, so no instruction ever waits on another beyond
+its own µops, and nothing overlaps a control transfer.
+
 ### Penumbra/2 and Penumbra/2.5
 
-An ALU operation occupies each stage for one cycle: **1**. A multiply
-or divide holds EX for the divmul unit's launch-to-done cycles and
-writes Rd then Rdh through the regfile's single write port on
-consecutive WB cycles
-([hazard-model.md](penumbra2/hazard-model.md#interaction-with-divmul));
-measured end to end, a divide costs **34** cycles, the unit's own
-launch + 32 steps + done count. The multiply retires four bits per
-step, so its 8 steps give **10** — the same whether the high half is
-written to a register or discarded to R0.
+An ALU operation occupies each stage for one cycle: **1**.
+
+**Loads.** The MEM stage holds the pipeline for every access's
+launch cycle, hit or miss (`mem_first` in
+`hw/rtl/penumbra2/penumbra2_mem_stage.sv`), and advances in the cycle
+the access completes, so a hit costs **2**. The loaded value enters
+the forwarding network only from the MEM/WB register, a cycle after
+that: a reader in ID of a load in EX waits one cycle
+(`load_use_stall` in `hw/rtl/penumbra2_5/penumbra2_id_stage.sv`). The
+launch-cycle freeze does not cover that wait — during it the consumer
+makes no progress — so the two costs add. Penumbra/2 has no
+forwarding at all: a reader waits until its producer leaves WB
+([hazard-model.md](penumbra2/hazard-model.md)).
+
+**Stores** take the same launch cycle, then wait in MEM until the
+write-through is accepted below the L1: about three cycles of L1,
+arbiter and MEM hand-offs and about three of the memory system's own
+handshake, which on the ULX3S SDRAM stacks releases a write as soon
+as its clock-domain crossing accepts it
+([memory-performance.md](penumbra3/memory-performance.md#store-latency-below-the-arbiter-chain-b)).
+That second part is why the store figure is typical, not a fact.
+
+**Multiply and divide** hold EX for the divmul unit's launch-to-done
+cycles — a divide's launch, 32 steps and done cycle make 34, and the
+multiply retires four bits per step, so its 8 steps make 10 — on top
+of the instruction's own cycle: **35** and **11**. Rd and Rdh are
+written through the regfile's single write port on consecutive WB
+cycles ([hazard-model.md](penumbra2/hazard-model.md#interaction-with-divmul)),
+which is why a reader of Rdh waits and, on Penumbra/2.5, a reader of
+Rd does not.
+
+**`WRSYS`** serializes: the pipeline drains before the write and
+refetches after it.
 
 ### Control transfers on Penumbra/2.5
 
@@ -116,71 +101,74 @@ falls through, and every indirect jump and return, which the BTB never
 holds. The instructions fetched behind it in IF1, IF2, the fetch
 buffer and ID are discarded: **5**, the branch plus four slots.
 
-## Dependency costs
+### Stalls beside a predicted taken branch
 
-What a consumer waits for a register result of a producer `d`
-instructions ahead:
-
-| Core | ALU producer | Load producer | divmul Rdh |
-|---|---|---|---|
-| Penumbra/1 | none | none | none |
-| Penumbra/2 | stalls until the producer leaves WB: 3 cycles at `d = 1`, fewer further back | same | same |
-| Penumbra/2.5 | none (EX→EX, MEM→EX, WB write-through) | 1 cycle at `d = 1` | stalls until the divmul leaves WB |
-
-Penumbra/1 is serial, so no instruction ever waits on another beyond
-its own µops. On Penumbra/2 a chain of eight `ADD R7, R8` measures 29
-cycles — seven consumers at `d = 1` at 1 + 3 each, and one reading a
-producer further back — against 8 on Penumbra/2.5. The mechanisms are
-in [hazard-model.md](penumbra2/hazard-model.md).
-
-## How the compiler uses these
-
-Each core's scheduling model in `Penumbra.td` states write latencies
-for three instruction classes: `WriteALU` (ALU operations and the
-immediate forms), `WriteMul` and `WriteDiv`. `PenumbraSubtarget` reads
-them back (`getALUCycles`, `getMulCycles`, `getDivCycles`), and
-`PenumbraTTIImpl`, `isIntDivCheap()` and the constant-multiply combine
-weigh operations by them.
-
-The models also state what an ALU instruction waits for a register it
-reads, as a `ReadAdvance` on `ReadALU`: nothing on Penumbra/1 and
-Penumbra/2.5, three cycles on Penumbra/2. The only reader so far is the
-price of a wide constant (`getWideConstantCycles`: `LLI`, the wait for
-its result, then `LUI`), which decides whether the constant is rebuilt
-where it is used or kept live. Loads, stores and branches carry no read
-annotation, so their dependency costs are not modelled, and no model
-states branch costs: the misprediction penalty and the cost of a
-predicted taken branch above are not read by the compiler.
+The fetch buffer keeps fetch running while the back end is held. A
+predicted taken branch's discarded fetch is a bubble in the front
+end; when a load, store, `MUL` or `DIV` one or two instructions ahead
+of the branch holds the back end while that bubble is still in the
+front end, fetch fills the bubble during the stall and the branch's
+second cycle disappears. Three or more instructions ahead, the bubble
+has already passed into ID before the stall begins, and it costs its
+cycle. Penumbra/2 redirects every taken branch from EX, so it has no
+such bubble to hide.
 
 ## Measuring
 
 The figures come from bare-metal programs run on the program
-testbenches (`build/V<core>_tb_cpu_prog` for Penumbra/1,
-`build/V<core>_tb_penumbra2_prog` for Penumbra/2 and /2.5), assembled
-with `pasm.py --org 0xFFFF0000`. Each program:
+testbenches, which simulate a whole machine with its SDRAM clocked at
+four times the CPU: `build/V<core>_tb_cpu_prog` for Penumbra/1 and
+`build/V<core>_tb_penumbra2_prog` for Penumbra/2 and /2.5, each
+program assembled with `pasm.py --org 0xFFFF0000` and passed as
+`+rom_hex=`. Each program:
 
-1. copies a small loop into a RAM page and maps that page cacheable —
-   the ROM page is mapped uncacheable, so code run in place never hits
-   the I-cache;
-2. enables the MMU, the I-cache, and for load/store bodies the D-cache;
-3. runs `ITERS` iterations of the body under test, followed by
-   `SUB R6, #1` / `BNE loop`.
+1. maps its data page and the ROM page cacheable, and enables the MMU
+   and the L1 caches — and the L2, through its own `CACHE_CTRL`, when
+   a miss is being measured;
+2. reads `RDSYS Rn, #CPU, #CPU_CYCLES` around a loop of 64 iterations
+   of the body under test, closed by `SUB`/`BNE`;
+3. runs the whole measurement three times and keeps the last pass, so
+   every fetch and access is warm;
+4. ends with `R1 = 0`, so the testbench dumps the registers the
+   results were left in.
 
-A never-taken branch is `CMP R7, R7` followed by `BNE` to the next
-instruction; an always-taken one is `B` to the next instruction.
-`pasm.py` has no expressions, so an indirect jump's RAM target is
-computed at run time from `LA` of the label, less `LA` of the copied
-routine's start, plus the RAM base. A `BL` body overwrites LR, which
-the copied routine returns through, so save LR before the loop and
-restore it before `RET`.
+**Keep the measured instruction away from the loop branch.** Follow
+the body with two independent ALU operations and time a loop of only
+those two as the baseline; the body's cost is the difference. Without
+that padding, a load, store, `MUL` or `DIV` at the end of the body
+hides the closing branch's bubble on Penumbra/2.5 (see
+[Stalls beside a predicted taken branch](#stalls-beside-a-predicted-taken-branch))
+and reads a cycle low: that is how loads were once recorded as 1
+cycle, stores as 5, `MUL` as 10 and `DIV` as 34. The overlap itself
+is measured by the opposite placement: the instruction directly
+before the `SUB`, or between it and the `BNE`.
 
-Running each program at two iteration counts and dividing the
-difference in cycles by the difference in iterations cancels setup,
-the cold first pass and the halt; subtracting the empty body's
-per-iteration cost leaves the body's.
+**Fillers must depend on nothing.** `ADD R0, R9` writes the zero
+register and reads a constant, so no instruction waits on it. A
+two-address `ADD Rn, Rm` reads its own destination: four in a row are
+a dependency chain, which costs 13 cycles on Penumbra/2 where four
+independent operations cost 4.
 
-The Penumbra/1 testbench reports the total cycle count at halt. The
-Penumbra/2 testbench reports none, so the program reads
-`RDSYS Rn, #CPU, #CPU_CYCLES` immediately before and after the loop,
-leaves the difference in a register, and ends with `R1 = 0` so the
-testbench dumps the registers.
+**Latency** comes from the wait: a producer followed directly by its
+reader, against the same producer followed by an independent filler.
+The difference is how long the reader waited, and the producer's
+issue cycles plus that wait is the latency. A second probe, with one
+filler between producer and reader, checks it: the reader's wait
+should shrink by the filler's issue cycles, down to none.
+
+**Miss costs** come from a dependent pointer chase — each load's
+address is the previous load's result, so nothing overlaps it —
+through a working set larger than every baseline L1 and smaller than
+the L2: 8 KiB, one pointer per 16-byte line. Against a chase that
+keeps hitting one line, the difference is the cost of an L1 miss
+served by the L2; with the L2 disabled, the same chase measures the
+memory path instead. Mapping the extra pages takes `TLB_VPN` values
+of the page number shifted left by 8, as [mmu.md](../system/mmu.md)
+lays the register out, not the page's address.
+
+Store costs and anything past the L2 depend on the machine: the
+testbenches clock the SDRAM at four times the CPU, as the Penumbra/1
+ULX3S board does, while Penumbra/2.5 boards run 2.67 times. The
+programmer's reference records those as typical figures with the
+machine they were measured on. A figure that cannot be measured yet
+is marked there as inferred.

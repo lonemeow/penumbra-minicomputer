@@ -165,9 +165,9 @@ which is what [one uncore pipeline](#one-uncore-pipeline) attacks.
 
 **L2 hit or miss makes no difference.** The SDRAM adapter releases a
 write as soon as its CDC accepts it, so the SDRAM leg of a store is
-already posted. Of the 5 cycles a gen2.5 store costs on hardware, about
-3 are this handshake below the arbiter and about 2 are the L1, arbiter
-and MEM hand-offs above it. A sustained store stream drains at about 3.5
+already posted. Of the 6 cycles a gen2.5 store costs, about 3 are this
+handshake below the arbiter and about 3 are the L1, arbiter and MEM
+hand-offs above it. A sustained store stream drains at about 3.5
 cycles per store at 2:1.
 
 ## Workload profiles (gen2.5 hardware, 37.5 MHz)
@@ -762,7 +762,7 @@ nanoseconds.
   guess, not a finding.
 - **gen3 blocking-store latency.** Once the uncore exists, the Phase-1
   store cost is the baseline the store buffer is measured against;
-  gen3's extra registered hand-offs may put it above gen2.5's 5 cycles.
+  gen3's extra registered hand-offs may put it above gen2.5's 6 cycles.
 - **Refill cost on hardware.** The ~137–170 cycles come from the machine
   trace with a replica handler. Nothing counts refills on hardware yet
   ("Kernel: count TLB refills" in `doc/TODO/kernel.md`); a counter would

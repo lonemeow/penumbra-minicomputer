@@ -21,8 +21,9 @@ project-wide conventions and pointers to architectural specs.
 - ISA-visible behavior (exception priorities, vector numbers, SR bits):
   `doc/system/architecture.md`
 - Sysreg device map: `doc/system/sysregs.md`
-- Per-core instruction cycle counts (measured, with derivations and the
-  measurement method): `doc/internals/instruction-timing.md`
+- Per-generation instruction costs: `doc/system/instruction-timing.md`;
+  where they come from and how they are measured:
+  `doc/internals/instruction-timing.md`
 - RTL coding standards: `doc/internals/coding-standards.md`
 
 ## Directory layout
@@ -334,8 +335,8 @@ trace ports yet, so `+trace=` is ignored). Both are built by
 ## Implementation gotchas
 
 ### Instruction cycle counts feed the compiler
-`doc/internals/instruction-timing.md` records how many cycles each
-instruction holds each core, and the LLVM scheduling models
+`doc/system/instruction-timing.md` records each instruction's issue
+cycles and result latency on each core, and the LLVM scheduling models
 (`llvm/llvm/lib/Target/Penumbra/Penumbra.td`, `WriteRes` latencies)
 state the same figures; the compiler's cost decisions — constant
 multiply/divide strength reduction, the TTI cost model — read them.
@@ -343,9 +344,9 @@ multiply/divide strength reduction, the TTI cost model — read them.
 both in the same change: µop counts in a microcode routine, the fetch
 path or a cache's hit latency, the divmul unit's steps or handshake,
 pipeline stall, forwarding or writeback sequencing. Re-measure with the
-method in that doc's "Measuring" section rather than re-deriving from
-the RTL; if a change can't be measured yet, mark the figure as inferred
-there.
+method in `doc/internals/instruction-timing.md`'s "Measuring" section
+rather than re-deriving from the RTL; if a change can't be measured
+yet, mark the figure as inferred in the reference.
 
 ### Device bus contract (`o_ack`)
 A bus device completes each access with a registered one-cycle

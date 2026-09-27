@@ -169,6 +169,27 @@ targets opt into are silently off.  Status per item:
   SchedMachineModel-per-processor mechanism in that entry below) rather
   than turning it on target-wide.  Revisit for gen1 only if a kernel
   pbench A/B surfaces reducible pressure that Dhrystone lacks.
+
+  **The pipelined-generation condition is met.**  `penumbra2_5` has
+  its own model, and the timing reference
+  (`doc/system/instruction-timing.md`) measures what a scheduler could
+  use there: a load issues in 2 cycles with a latency of 3, so its
+  reader waits a cycle at distance 1 and none at distance 2; `RDSYS`
+  and a multiply's high half also have a latency past their issue.
+  Nothing represents it: loads carry no scheduling class, the shared
+  `LoadLatency = 1` is argued from gen1, and the pass is off.  The
+  reference's two figures map onto a model directly — issue onto the
+  resource cycles an instruction occupies, latency onto its `WriteRes`
+  latency — where today's models state issue as the latency and carry
+  `penumbra2`'s extra wait as a `ReadAdvance`.  Doom's column loop pays the wait twice per
+  pixel, on its texel and colormap loads; unrolling it first
+  (`getUnrollingPreferences` is not implemented) gives a scheduler
+  independent work to place between each load and its use.  The model's
+  `WriteMul`/`WriteDiv` also state 10 and 34 where the reference
+  measures 11 and 35 — the old figures were measured beside a loop's
+  closing branch, which hides a cycle — and `compiler-arith.md`'s
+  penumbra2_5 cycle column, computed at the model's rate, moves with
+  them.
 - **Tail calls**: `PenumbraCallLowering.cpp` hardcodes
   `Info.IsTailCall = false` (`// TODO: tail calls`).  Wrapper-heavy
   kernel code pays a full frame per hop.  Measured opportunity and a
@@ -510,7 +531,7 @@ In order:
    alone, since a `Bcc` costs as much as an ALU operation; penumbra2_5
    adds the misprediction penalty at one named, assumed misprediction
    rate.  That needs branch costs in the scheduling models, which
-   [instruction-timing.md](../internals/instruction-timing.md) already
+   [instruction-timing.md](../system/instruction-timing.md) already
    records.  With today's costs the override answers false on both
    cores, which also removes the branch-plus-arithmetic shapes; the cost
    check pays once a core (gen3) moves the numbers.
@@ -714,14 +735,14 @@ which is little to gain for the cost of enabling the pass.
 ### Branch costs
 
 Measured on the RTL testbenches
-([instruction-timing.md](../internals/instruction-timing.md)):
+([instruction-timing.md](../system/instruction-timing.md)):
 
 | Control transfer | gen1 | gen2.5 |
 |---|---:|---:|
 | `Bcc` not taken | 2 | 1 |
 | `Bcc` taken / `B`, BTB-predicted on gen2.5 | 2 | 2 |
 | mispredicted, or indirect `JMP` / return | 2 | 5 |
-| `BL` | 3 | — |
+| `BL` | 3 | 2 predicted, 5 otherwise |
 
 gen1 has no prediction: a control transfer is one µop like an ALU
 operation.  On gen2.5 the fetch-time BTB (32-entry direct-mapped,
