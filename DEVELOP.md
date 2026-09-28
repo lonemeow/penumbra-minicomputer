@@ -467,7 +467,7 @@ list would split it.
 
 ## 9. FPGA Synthesis (ULX3S)
 
-FPGA synthesis uses the OSS CAD Suite (Yosys + nextpnr-ecp5 + ecppack + fujprog) via Docker. The wrappers in `hw/tools/oss-cad-suite/bin/` make them usable as normal commands:
+FPGA synthesis uses the OSS CAD Suite (Yosys + nextpnr-ecp5 + ecppack) via Docker. The wrappers in `hw/tools/oss-cad-suite/bin/` make them usable as normal commands:
 
 ```sh
 export PATH="$PWD/hw/tools/oss-cad-suite/bin:$PATH"
@@ -478,9 +478,21 @@ export PATH="$PWD/hw/tools/oss-cad-suite/bin:$PATH"
 ```sh
 make fpga BOARD=ulx3s CORE=penumbra1   # Full flow: sv2v → yosys → nextpnr → ecppack
 make fpga BOARD=ulx3s CORE=penumbra2_5 # Same flow for the default gen2.5 core
-make flash BOARD=ulx3s CORE=penumbra1  # Build + flash to ULX3S over USB (fujprog)
+make flash BOARD=ulx3s CORE=penumbra1  # Build + flash to ULX3S over USB (openFPGALoader)
 make fpga-lint                         # Verilator lint check on FPGA sources
 ```
+
+`make flash` programs every board with `openFPGALoader`, built once
+from a pinned upstream commit into its own small image:
+
+```sh
+make openfpgaloader-image
+```
+
+It runs through `hw/tools/openfpgaloader/bin/openFPGALoader` as your
+UID and opens a board's FTDI chip by USB ID alone, so with several
+boards attached it programs only the one named. The chips need the
+udev rules in [Board USB devices](#board-usb-devices).
 
 All three are complete and bootable: `CORE=penumbra2_5` builds the 6-stage
 pipelined core with forwarding and a BTB (the default, 37.5 MHz),
@@ -526,7 +538,7 @@ Valid values: `0, 45, 90, 135, 180, 225, 270, 315`. See `doc/internals/sdram-con
 ### Board USB devices
 
 `hw/tools/udev/99-penumbra-boards.rules` lets the containerized
-programmers open each board's FTDI chip as your UID, and gives each
+programmer open each board's FTDI chip as your UID, and gives each
 board's console a fixed name, whichever `ttyUSB` number it enumerates
 as:
 
@@ -536,7 +548,7 @@ as:
 | `/dev/nexysvideo-console` | Nexys Video UART port (FT232R) |
 
 The names are symlinks next to the kernel's `ttyUSB` nodes. The
-programmers find their chip by USB ID and never open them. The Nexys
+programmer finds a board's chip by USB ID and never opens them. The Nexys
 Video's FT232R is a stock part that only its serial number tells
 apart, so its rule names one board; edit the serial for another. The
 Nexys Video's PROG port also shows up as two `ttyUSB` nodes (its JTAG
@@ -613,19 +625,12 @@ build leaves Vivado's reports beside the bitstream in `build/`
 (`<top>_timing_summary.rpt`, `_utilization.rpt`, `_drc.rpt`) and the
 routed checkpoint `<top>_routed.dcp`.
 
-Xilinx boards are programmed with `openFPGALoader`, not with Vivado.
-It is built from a pinned upstream commit into its own small image,
-because the release in the OSS CAD Suite image cannot parse current
-Vivado bitstreams:
-
-```sh
-make openfpgaloader-image
-```
-
-`make flash` runs it through `hw/tools/openfpgaloader/bin/openFPGALoader`
-as your UID, so the board's JTAG device needs the udev rules in
-[Board USB devices](#board-usb-devices), which also name the
-console `/dev/nexysvideo-console` (115200 8N1).
+Xilinx boards are programmed with `openFPGALoader` like the ULX3S
+([Build & flash](#build--flash)), not with Vivado; its image is
+pinned past the OSS CAD Suite's release, which cannot parse current
+Vivado bitstreams. The udev rules in
+[Board USB devices](#board-usb-devices) also name the console
+`/dev/nexysvideo-console` (115200 8N1).
 
 Under WSL2, attach both of the board's USB ports (PROG and UART) with
 usbipd. The board powers its USB chips itself, so they disappear on

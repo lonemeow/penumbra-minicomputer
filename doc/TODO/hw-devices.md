@@ -34,9 +34,9 @@ the FPGA to drive `FTDI_nCTS` on pin V4, which doubles as
 
 1. Configuring the FTDI's MPSSE/D2XX side so the modem-control
    pins are routed to the UART channel rather than the JTAG channel
-   (`fujprog` and ULX3S board design assume the JTAG mode at boot).
+   (the programmer and ULX3S board design assume the JTAG mode at boot).
 2. Either accepting that you can't reflash over JTAG while the
-   FPGA is driving CTS (probably fine — `fujprog` resets the FTDI
+   FPGA is driving CTS (probably fine — the programmer resets the FTDI
    into JTAG mode before each flash), or wiring the pin tristate so
    the FPGA backs off during JTAG configuration.
 

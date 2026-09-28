@@ -267,13 +267,17 @@ as `DEFAULT_SEED_<top>` and rebuild through the normal `fpga` target.
 ## Device families
 
 Each board belongs to a device family (`FAMILY_<board>` in the
-Makefile), and the family picks the flow behind `make fpga`, `flash`
-and `timing`:
+Makefile), and the family picks the flow behind `make fpga` and
+`timing`:
 
-| Family | Boards | Synthesis to bitstream | Programming | `make timing` reads |
-|--------|--------|------------------------|-------------|---------------------|
-| `ecp5` | `ulx3s` | yosys `synth_ecp5`, nextpnr-ecp5, ecppack | fujprog | nextpnr's JSON report (`hw/tools/timing-report.sh`) |
-| `xc7` | `nexysvideo` | one Vivado batch run (`hw/tools/vivado/build.tcl`) | openFPGALoader | Vivado's timing summary |
+| Family | Boards | Synthesis to bitstream | `make timing` reads |
+|--------|--------|------------------------|---------------------|
+| `ecp5` | `ulx3s` | yosys `synth_ecp5`, nextpnr-ecp5, ecppack | nextpnr's JSON report (`hw/tools/timing-report.sh`) |
+| `xc7` | `nexysvideo` | one Vivado batch run (`hw/tools/vivado/build.tcl`) | Vivado's timing summary |
+
+`make flash` is the same for every family: openFPGALoader, which
+opens a board's FTDI chip by USB ID alone, so with several boards on
+one host it programs only the one named.
 
 Both flows synthesize the same Verilog. The synthesis step is one rule
 whose front half is shared (hex images, sv2v, `inline_hex.py`) and whose
@@ -287,10 +291,10 @@ synthesize a boot ROM with no contents.
 The board is `BOARD`, or under the `TOP=` escape hatch the `<board>_`
 prefix of the top's name. A name with no known board prefix is one of
 the bare `fpga/*.sv` tests, which are all ECP5. Per-board facts sit
-beside the family: `LPF_<board>` for ecp5, and `XDC_MASTER_<board>`,
-`PART_<board>` and `OFL_BOARD_<board>` (openFPGALoader's board name) for
-xc7. Seed pinning and seed sweeps are nextpnr features, so they apply to
-ecp5 boards only.
+beside the family: `LPF_<board>` for ecp5, `XDC_MASTER_<board>` and
+`PART_<board>` for xc7, and for every board `OFL_BOARD_<board>`
+(openFPGALoader's name for it). Seed pinning and seed sweeps are
+nextpnr features, so they apply to ecp5 boards only.
 
 Constraints differ by family because the tools treat unused ones
 differently. nextpnr ignores LPF entries for pins a design lacks, so an

@@ -26,7 +26,7 @@ order of pain:
   loses the FPGA configuration and needs a fresh `make flash` (an
   SRAM load).  The ULX3S SPI configuration flash can hold a
   bitstream the ECP5 loads at power-on; teach the flow to program it
-  (fujprog writes flash with the right flag) — likely as a separate
+  (openFPGALoader writes it with `-f`) — likely as a separate
   `make flash-persistent` target so the fast SRAM load stays the
   development default.
 

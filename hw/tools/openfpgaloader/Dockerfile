@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1
 #
-# openFPGALoader at a pinned upstream commit, for programming Xilinx
-# boards: `make openfpgaloader-image`. Built from source because the
+# openFPGALoader at a pinned upstream commit, the programmer for every
+# board: `make openfpgaloader-image`. Built from source because the
 # release the OSS CAD Suite image ships cannot parse current Vivado
-# bitstreams, and a separate image keeps the ULX3S toolchain unchanged.
+# bitstreams.
 
 FROM ubuntu:22.04 AS build
 

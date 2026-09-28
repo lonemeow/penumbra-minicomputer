@@ -1,13 +1,13 @@
 # udev rules for the Penumbra FPGA boards. Install steps: DEVELOP.md,
 # "Board USB devices".
 #
-# The programmers (fujprog, openFPGALoader) run in containers as the
-# invoking user and reach each board's FTDI chip through /dev/bus/usb.
+# The programmer (openFPGALoader) runs in a container as the invoking
+# user and reaches each board's FTDI chip through /dev/bus/usb.
 SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="6010", MODE="0666", GROUP="plugdev"
 SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="6015", MODE="0666", GROUP="plugdev"
 
 # Each board's console gets a fixed name: a symlink to whichever ttyUSB
-# node it enumerated as. The programmers never open these.
+# node it enumerated as. The programmer never opens these.
 SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6015", ATTRS{product}=="ULX3S*", SYMLINK+="ulx3s-console"
 
 # The Nexys Video's UART port is a stock FT232R, which only its serial

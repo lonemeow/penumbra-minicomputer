@@ -477,7 +477,7 @@ literal addresses).
 
 ## FPGA toolchain (`tools/oss-cad-suite/`)
 
-Tools for synthesis, PnR, bitstream packing, and flashing are
+Tools for synthesis, PnR and bitstream packing are
 containerized in `tools/oss-cad-suite/`, Docker image based on
 Ubuntu 22.04 + OSS CAD Suite release.
 
@@ -489,11 +489,14 @@ simulator rather than Verilator. Container runs as host UID to avoid
 root-owned output. `fujprog` requires USB passthrough
 (`--privileged`, `/dev/bus/usb`).
 
-Xilinx boards are programmed by `tools/openfpgaloader/bin/openFPGALoader`,
+Every board is programmed by `tools/openfpgaloader/bin/openFPGALoader`,
 built from a pinned upstream commit into its own image
 (`make openfpgaloader-image`; the OSS CAD Suite release cannot parse
 current Vivado bitstreams). It needs no `--privileged`: the wrapper
-mounts `/dev/bus/usb` and admits only USB device nodes.
+mounts `/dev/bus/usb` and admits only USB device nodes. It opens a
+board's FTDI chip by USB ID alone. Don't route a board back through
+`fujprog`: when no ULX3S matches by name it falls back to any FT232R,
+a Nexys Video's UART included, and drives JTAG into it.
 
 Vivado (Xilinx 7-series boards) lives in `tools/vivado/`, the same
 multi-call shape (`bin/vivado`) over a locally built image

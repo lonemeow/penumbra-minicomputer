@@ -14,7 +14,7 @@ clock from `SYSDEV_MACH`, the RAM by probing to a bus fault, and the
 devices through autoconfig.
 
 It builds with the open ECP5 flow (yosys, nextpnr, ecppack) and flashes
-with fujprog, all in containers (`DEVELOP.md`, "FPGA Synthesis
+with openFPGALoader, all in containers (`DEVELOP.md`, "FPGA Synthesis
 (ULX3S)"; `doc/internals/build-system.md`, "Device families").
 
 ## Tops
@@ -83,7 +83,7 @@ choice measured per top like a placement seed. The PHY
 ## Devices and connectors
 
 - **Console:** the one FTDI chip (FT231X) on US1 carries both the
-  console and fujprog's JTAG, so flashing and the console share a
+  console and the programmer's JTAG, so flashing and the console share a
   cable. Its lines are named from the FTDI's side: `ftdi_rxd` is the
   FPGA's transmit line.
 - **SD:** the slot is always powered and has no card-detect line. SPI

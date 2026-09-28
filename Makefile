@@ -15,7 +15,7 @@
 #   make flash [same vars]   — fpga + flash to the board via USB
 #   make vivado-image        — build the local Vivado image (needs a token)
 #   make vivado-authenticate — refresh the AMD web installer's login token
-#   make openfpgaloader-image — build the Xilinx-board programmer image
+#   make openfpgaloader-image — build the board programmer image
 #   make clean               — remove build artifacts
 
 # ── Configuration ──────────────────────────────────────────────
@@ -1098,10 +1098,10 @@ vivado-image: $(VIVADO_DIR)/webinstaller/xsetup
 		--output type=image,name=$(VIVADO_IMAGE),compression=zstd \
 		$(VIVADO_TOOLS)
 
-# ── openFPGALoader image (Xilinx boards) ───────────────────────
+# ── openFPGALoader image (every board's programmer) ────────────
 # Built from a pinned upstream commit rather than taken from the OSS
 # CAD Suite image, whose release cannot parse current Vivado
-# bitstreams. A separate image leaves the ULX3S toolchain untouched.
+# bitstreams.
 OFL_TOOLS = hw/tools/openfpgaloader
 include $(OFL_TOOLS)/image.env
 
@@ -1225,15 +1225,17 @@ SRC_BOARD_nexysvideo = $(FPGA_RTL)/xc7/xc7_mmcm_pkg.sv \
 # ports the machine tops share, then the DDR3's.
 XDC_MACHINE_nexysvideo = hw/constraints/nexysvideo_machine.xdc $(XDC_DDR3_nexysvideo)
 
-# Each board's device family picks the flow that builds and programs
-# it: ecp5 (yosys, nextpnr-ecp5, ecppack, fujprog) or xc7 (Vivado,
-# openFPGALoader).
+# Each board's device family picks the flow that builds it: ecp5
+# (yosys, nextpnr-ecp5, ecppack) or xc7 (Vivado). Every board is
+# programmed with openFPGALoader.
 FAMILY_ulx3s      = ecp5
 FAMILY_nexysvideo = xc7
 
-# The Vivado part, and the name openFPGALoader knows the board by.
-PART_nexysvideo      = xc7a200tsbg484-1
+# The name openFPGALoader knows each board by, and a Xilinx board's
+# Vivado part.
+OFL_BOARD_ulx3s      = ulx3s
 OFL_BOARD_nexysvideo = nexysVideo
+PART_nexysvideo      = xc7a200tsbg484-1
 
 # An xc7 board's master XDC holds the vendor's pin constraints, all
 # commented out, and its memory interface generator project the DRAM's
@@ -1738,15 +1740,21 @@ $(BUILD_DIR)/$(TOP).s%.config: $(BUILD_DIR)/$(TOP).json $(LPF) $(LPF_DESIGN) $(P
 print-top:
 	@echo $(TOP)
 
-# Packing, programming and the timing report are per family. An xc7
-# bitstream is the synthesis step's own output (Vivado runs through
-# bitgen), so only ecp5 has a packing rule here.
-ifeq ($(FPGA_FAMILY),xc7)
-
 # The bitstream goes to the FPGA's configuration RAM: it runs until
 # power-off, and the board's flash is left alone.
+#
+# openFPGALoader opens the board's FTDI chip by USB ID alone, so it
+# cannot reach another board attached to the same host. fujprog, the
+# OSS CAD Suite's ULX3S programmer, falls back to any FT232R when it
+# finds no ULX3S by name, and drives JTAG into whatever it opened: a
+# Nexys Video's UART is one.
 flash: $(BUILD_DIR)/$(TOP).bit
 	$(OFL_TOOLS)/bin/openFPGALoader -b $(OFL_BOARD_$(FPGA_BOARD)) $<
+
+# Packing and the timing report are per family. An xc7 bitstream is
+# the synthesis step's own output (Vivado runs through bitgen), so
+# only ecp5 has a packing rule here.
+ifeq ($(FPGA_FAMILY),xc7)
 
 # Vivado's own timing summary: the design totals and the per-clock
 # tables. The worst paths are in full in the report itself.
@@ -1758,9 +1766,6 @@ else
 
 $(BUILD_DIR)/$(TOP).bit: $(BUILD_DIR)/$(TOP).config
 	$(FPGA_TOOLS)/ecppack $< $@
-
-flash: $(BUILD_DIR)/$(TOP).bit
-	$(FPGA_TOOLS)/fujprog $<
 
 # Pretty-print fmax + top critical paths from the nextpnr JSON report
 # produced by the .config rule.  Doesn't trigger a build — operates
