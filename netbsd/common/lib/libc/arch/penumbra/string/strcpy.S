@@ -14,6 +14,12 @@
  * cost regressed the common one.  The strict-alignment peers (mips,
  * m68k) keep strcpy a byte loop; x86 word-stores to an unaligned dst,
  * which Penumbra cannot.
+ *
+ * The copy is software-pipelined across the unrolled steps: a character
+ * is loaded once the one before it has tested non-zero, so the loop
+ * never reads past the terminator, and stored a step later, so the store
+ * never waits for its load (doc/system/instruction-timing.md).  A zero
+ * falls into the add chain that puts the terminator at its offset.
  */
 	.text
 	.globl	strcpy
@@ -21,32 +27,33 @@
 	.p2align 4
 strcpy:
 	mov	r3, r1			/* save original dst (return value) */
+	ldb	r4, [r2]		/* the first character */
 
-	.p2align 4
-.Lloop:
-	ldb	r4, [r2]
+.Lloop:					/* r4 = the character for [r1] */
+	test	r4, r4
+	beq	.Lnul0
+	ldb	r11, [r2 + #1]
 	stb	r4, [r1]
-	test	r4, r4
-	beq	.Ldone
-
-	ldb	r4, [r2 + #1]
-	stb	r4, [r1 + #1]
-	test	r4, r4
-	beq	.Ldone
-
+	test	r11, r11
+	beq	.Lnul1
 	ldb	r4, [r2 + #2]
-	stb	r4, [r1 + #2]
+	stb	r11, [r1 + #1]
 	test	r4, r4
-	beq	.Ldone
-
-	ldb	r4, [r2 + #3]
-	stb	r4, [r1 + #3]
+	beq	.Lnul2
+	ldb	r11, [r2 + #3]
+	stb	r4, [r1 + #2]
+	test	r11, r11
+	beq	.Lnul3
+	ldb	r4, [r2 + #4]
 	add	r1, #4
 	add	r2, #4
-	test	r4, r4
-	bne	.Lloop
+	stb	r11, [r1 + #-1]
+	b	.Lloop
 
-.Ldone:
+.Lnul3:	add	r1, #1
+.Lnul2:	add	r1, #1
+.Lnul1:	add	r1, #1
+.Lnul0:	stb	r0, [r1]		/* the terminator */
 	mov	r1, r3			/* return original dst */
 	ret
 	.size	strcpy, . - strcpy

@@ -237,15 +237,23 @@ copyinstr:
 	mov	r3, r6			/* r3 = kaddr (dst cursor) */
 	lli	r4, #0			/* r4 = count */
 
+	/*
+	 * The cursors advance between the load and the store, so the store
+	 * does not wait for the loaded byte, and the store sits directly
+	 * before the closing branch, where its stall hides the taken
+	 * branch's fetch bubble (doc/system/instruction-timing.md).  A fault
+	 * returns EFAULT without reporting a count, so advancing the count
+	 * ahead of the store changes nothing a caller sees.
+	 */
 _copyinstr_loop:
 	cmp	r4, r7
 	beq	_copyinstr_toolong	/* maxlen reached, no NUL found */
 	ldb	r11, [r2]		/* load byte from user */
-	stb	r11, [r3]		/* store byte to kernel */
 	add	r2, #1
 	add	r3, #1
 	add	r4, #1
-	cmp	r11, r0			/* NUL? */
+	test	r11, r11		/* NUL? */
+	stb	r11, [r3 + #-1]		/* store byte to kernel */
 	bne	_copyinstr_loop
 
 	/* NUL found — success */
@@ -313,15 +321,16 @@ copyoutstr:
 	mov	r2, r1			/* r2 = kaddr (src cursor) */
 	lli	r4, #0			/* count */
 
+	/* Ordered as copyinstr's loop. */
 _copyoutstr_loop:
 	cmp	r4, r7
 	beq	_copyoutstr_toolong
 	ldb	r11, [r2]
-	stb	r11, [r3]
 	add	r2, #1
 	add	r3, #1
 	add	r4, #1
-	cmp	r11, r0
+	test	r11, r11
+	stb	r11, [r3 + #-1]
 	bne	_copyoutstr_loop
 
 	/* Success */

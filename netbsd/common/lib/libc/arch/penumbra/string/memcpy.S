@@ -5,9 +5,16 @@
  *   r1 = dst, r2 = src, r3 = len
  *   Returns original dst in r1
  *
- * Word-aligned fast path: when both src and dst are word-aligned,
- * copies 4 bytes at a time via ldw/stw.  ~4x faster for the
- * bulk ELF segment copies during kernel loading.
+ * Whole words whenever src and dst share their alignment: a byte head
+ * brings both to a word boundary first.  Pointers that differ in
+ * alignment copy a byte at a time.
+ *
+ * The loops are ordered for the pipelined cores
+ * (doc/system/instruction-timing.md): a load's value is first used two
+ * instructions after it, where its reader no longer waits, and a store
+ * sits directly before each loop's closing branch, where its stall
+ * hides the taken branch's fetch bubble.  The word loop moves two words
+ * per iteration through the one scratch register.
  *
  * Available registers (caller-saved): r1 (dst), r2 (src),
  *   r3 (len), r4 (saved dst), r11 (scratch).
@@ -16,44 +23,67 @@
 	.globl	memcpy
 	.type	memcpy, @function
 	/*
-	 * Align the entry and the hot loops to the 16-byte (4-word) L1
-	 * I-cache line.  The L1 is direct-mapped, so a loop straddling a
-	 * line boundary always costs an extra fetch and worsens set
-	 * contention.  .p2align 4 pads with NOPs (ADD R0,R0 = 0x00000000),
-	 * which are safe to execute on the fall-through into each loop.
+	 * Only the entry is aligned to the 16-byte L1 I-cache line.  With a
+	 * 2-way L1 a loop straddling two lines pays the second fetch on its
+	 * first pass only, while padding NOPs ahead of a loop would lengthen
+	 * every call's path through more lines -- cold calls most, and the
+	 * kernel's small ones are mostly cold.
 	 */
 	.p2align 4
 memcpy:
 	mov	r4, r1		/* save original dst */
-	test	r3, r3
-	beq	.Ldone
-	/* Word fast path: both src and dst must be word-aligned */
-	test	r1, #3
-	bne	.Lbyte
-	test	r2, #3
-	bne	.Lbyte
+	cmp	r3, #4
+	blo	.Lbytes		/* too short for a word */
+	mov	r11, r1
+	xor	r11, r2
+	test	r11, #3
+	bne	.Lbytes		/* alignments differ: bytes only */
 
-	cmp	r3, #4
-	blo	.Ltail
-	.p2align 4		/* word-copy bulk loop */
-.Lword:
+	/*
+	 * Head: at most three bytes bring both pointers to a word boundary.
+	 * len >= 4, so at least one byte remains.
+	 */
+.Lhead:
+	test	r1, #3
+	beq	.Lwords
+	ldb	r11, [r2]
+	add	r2, #1
+	add	r1, #1
+	sub	r3, #1
+	stb	r11, [r1 + #-1]
+	b	.Lhead
+
+.Lwords:
+	sub	r3, #8		/* r3 counts down past the next two words */
+	blo	.Lword
+.Lword2:
 	ldw	r11, [r2]
+	add	r2, #8
 	stw	r11, [r1]
-	add	r1, #4
+	ldw	r11, [r2 + #-4]
+	add	r1, #8
+	sub	r3, #8
+	stw	r11, [r1 + #-4]
+	bhs	.Lword2
+.Lword:
+	add	r3, #8		/* 0..7 bytes left */
+	test	r3, #4
+	beq	.Ltail
+	ldw	r11, [r2]
 	add	r2, #4
-	sub	r3, #4
-	cmp	r3, #4
-	bhs	.Lword
+	add	r1, #4
+	stw	r11, [r1 + #-4]
 .Ltail:
+	and	r3, #3
+.Lbytes:
 	test	r3, r3
 	beq	.Ldone
-	.p2align 4		/* byte loop: the whole copy when misaligned, so hot */
 .Lbyte:
 	ldb	r11, [r2]
-	stb	r11, [r1]
-	add	r1, #1
 	add	r2, #1
+	add	r1, #1
 	sub	r3, #1
+	stb	r11, [r1 + #-1]
 	bne	.Lbyte
 
 .Ldone:

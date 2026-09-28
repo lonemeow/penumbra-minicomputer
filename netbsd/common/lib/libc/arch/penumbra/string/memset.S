@@ -45,13 +45,26 @@ memset:
 	or	r2, r11		/* r2 = 0xCCCCCCCC */
 
 	/*
-	 * Align only the word-fill bulk loop to the 16-byte L1 I-cache
-	 * line: it iterates over the whole buffer, so a straddled line
-	 * costs a fetch every pass.  The byte loops (.Lhead/.Ltail_loop)
-	 * run at most 3 times each — not worth the padding NOPs their
-	 * fall-through entry would add.
+	 * The loops are not aligned to the I-cache line, for the reason
+	 * memcpy.S gives.
 	 */
-	.p2align 4
+	cmp	r3, #16
+	blo	.Lword		/* short: the bulk loop's setup would not pay */
+	sub	r3, #16		/* r3 counts down past the next 16 bytes */
+.L4words:
+	stw	r2, [r1]
+	stw	r2, [r1 + #4]
+	stw	r2, [r1 + #8]
+	add	r1, #16
+	sub	r3, #16
+	stw	r2, [r1 + #-4]
+	bhs	.L4words
+	add	r3, #16		/* 0..15 left */
+
+	/* Words the bulk loop leaves, at most three. */
+.Lwords:
+	cmp	r3, #4
+	blo	.Ltail
 .Lword:
 	stw	r2, [r1]
 	add	r1, #4

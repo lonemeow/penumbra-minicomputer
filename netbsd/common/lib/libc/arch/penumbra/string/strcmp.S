@@ -14,47 +14,49 @@
  * strict-alignment peers (mips, m68k, sparc32) all keep strcmp a byte
  * loop for the same reason; only x86, with cheap unaligned access, word-
  * optimizes it.
+ *
+ * Each step tests s1's byte for the terminator before comparing it with
+ * s2's, so s2's byte is not needed until two instructions after its load
+ * and the compare never waits for it (doc/system/instruction-timing.md).
+ * A terminator in s1 goes straight to the difference, which is zero
+ * exactly when s2 ends there too.
  */
 	.text
 	.globl	strcmp
 	.type	strcmp, @function
 	.p2align 4
 strcmp:
-	.p2align 4
 .Lloop:
 	ldb	r3, [r1]
 	ldb	r4, [r2]
+	test	r3, r3
+	beq	.Ldiff
 	cmp	r3, r4
 	bne	.Ldiff
-	test	r3, r3
-	beq	.Lequal
 
 	ldb	r3, [r1 + #1]
 	ldb	r4, [r2 + #1]
+	test	r3, r3
+	beq	.Ldiff
 	cmp	r3, r4
 	bne	.Ldiff
-	test	r3, r3
-	beq	.Lequal
 
 	ldb	r3, [r1 + #2]
 	ldb	r4, [r2 + #2]
+	test	r3, r3
+	beq	.Ldiff
 	cmp	r3, r4
 	bne	.Ldiff
-	test	r3, r3
-	beq	.Lequal
 
 	ldb	r3, [r1 + #3]
 	ldb	r4, [r2 + #3]
-	cmp	r3, r4
-	bne	.Ldiff
 	add	r1, #4
 	add	r2, #4
 	test	r3, r3
-	bne	.Lloop
+	beq	.Ldiff
+	cmp	r3, r4
+	beq	.Lloop
 
-.Lequal:
-	mov	r1, r0			/* equal through the NUL -> 0 */
-	ret
 .Ldiff:
 	sub	r3, r4			/* zero-extended bytes -> signed delta */
 	mov	r1, r3

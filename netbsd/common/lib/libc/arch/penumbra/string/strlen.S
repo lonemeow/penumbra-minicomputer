@@ -19,6 +19,11 @@
  * without ever touching the stack.  Penumbra has no count-leading-zeros,
  * so the terminator's lane is found by shifting its 0x80 to the sign bit
  * (cf. sparc64, which likewise scans the detector mask byte-wise).
+ *
+ * The word loop advances the pointer between the load and the detector,
+ * so the detector's first use of the word does not wait for the load
+ * (doc/system/instruction-timing.md), and the detector's own branch
+ * closes the loop.  The advance is undone once a word holds the NUL.
  */
 	.text
 	.globl	strlen
@@ -44,17 +49,16 @@ strlen:
 	li	r4, #0x01010101
 	li	r5, #0x80808080
 
-	.p2align 4
 .Lword:
 	ldw	r3, [r2]		/* aligned 4-byte chunk */
+	add	r2, #4			/* past it, while the load completes */
 	mov	r11, r3
 	sub	r11, r4			/* w - 0x01010101 */
 	not	r3, r3			/* ~w */
 	and	r11, r3			/* (w - C1) & ~w */
 	and	r11, r5			/* & 0x80808080; Z set iff no NUL byte */
-	bne	.Lhaszero
-	add	r2, #4
-	b	.Lword
+	beq	.Lword
+	sub	r2, #4			/* back to the word holding the NUL */
 
 	/*
 	 * r11 = mask with 0x80 in each NUL byte's lane.  Find the lowest-
