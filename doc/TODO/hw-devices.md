@@ -102,6 +102,28 @@ Realistic: ~2-3× on the pmci term, ~1.5-2× end-to-end (the kernel
 I/O stack + per-command framing is the other ~half of the run).  A
 real SPI read-path + HW project, not a quick fix; gen2-adjacent.
 
+## Hardware: SD card power control and card detect
+
+A card abandoned mid-transaction by a reset can end up in a state
+only removing its power clears (`hw-ulx3s.md`, "Board workflow:
+flashing, reset, and persistence annoyances"). The ULX3S powers its
+slot permanently and has no card-detect line. The Nexys Video switches
+the slot's power from an FPGA pin (`sd_reset`, low powers the card)
+and wires the slot's card-detect switch (`sd_cd`); its machine top
+uses the first only to hold the card unpowered through reset, and
+software sees neither.
+
+Open:
+
+- **The interface.** Card power and card present in the SD device's
+  register map, with capability bits for a board that has neither
+  (`doc/system/devices/spi.md`, before any RTL).
+- **The RTL** on the Nexys Video, and the capability bits reading
+  absent on the ULX3S.
+- **Software.** The ROM and the NetBSD driver power-cycle a card that
+  stops answering instead of giving up, and the driver sees a card
+  inserted or removed.
+
 ## Hardware + kernel: local console (HDMI display + USB keyboard)
 
 Design complete and committed as docs; implementation underway on both
@@ -861,13 +883,17 @@ arrives without a word on the console.
 
 Open:
 
-- **A sensor device on the bus.** Autoconfigured under a new device
-  class, specified in `doc/system/devices/` before any RTL. It reads
-  the XADC's status registers through the guard's DRP port, tied off
-  today: die temperature with its minimum and maximum since
-  configuration, and the VCCINT, VCCAUX and VCCBRAM supplies. The XADC
-  runs off the board oscillator rather than the CPU clock, so the
-  device crosses that domain for each DRP access.
+- **A sensor device class.** Specified in `doc/system/devices/` before
+  any RTL, and board-neutral: a set of readings (temperatures,
+  supplies), each with its unit and limits, and a warning interrupt.
+  What a board measures, and how, is its own; a board without sensors
+  has no such device.
+- **The Nexys Video's implementation.** It reads the XADC's status
+  registers through the guard's DRP port, tied off today: die
+  temperature with its minimum and maximum since configuration, and
+  the VCCINT, VCCAUX and VCCBRAM supplies. The XADC runs off the board
+  oscillator rather than the CPU clock, so the device crosses that
+  domain for each DRP access.
 - **An interrupt on the warning.** The guard's `o_warn` (the XADC's
   temperature alarm, 75 °C rising, 70 °C falling) becomes the device's
   interrupt, synchronized into the CPU clock domain, so the kernel can

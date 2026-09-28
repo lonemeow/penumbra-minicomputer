@@ -116,7 +116,7 @@ Open work lives in `doc/TODO/`, one file per area; the table in
   subsystems goes in `workloads.md`, and the subsystem entries link
   to it. Work bound to one board goes in `hw-<board>.md`, unless it
   also creates a programming interface: then it lives with the
-  interface in `hw-devices.md`, and the board file links to it. Add a
+  interface in `hw-devices.md` and names the boards it serves. Add a
   new file (and a README row) only for a genuinely new area.
 - **Shape:** one `## <Area>: <problem>` entry per item, stating the
   problem, the evidence, and what is still open. Link other entries

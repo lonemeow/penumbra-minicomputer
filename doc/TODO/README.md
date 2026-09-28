@@ -27,7 +27,7 @@ workload profile whose levers span several subsystems lives in
 Work bound to one board lives in that board's file. An item that
 also creates a programming interface (a device class, a register-map
 change) lives with the interface in `hw-devices.md`, since the
-interface is written first, and the board's file links to it.
+interface is written first, and names the boards it serves.
 
 ## Closing an entry
 

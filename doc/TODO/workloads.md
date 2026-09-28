@@ -713,3 +713,18 @@ Open:
 - Drop the page-0 pin and the `0x40` fallbacks.
 - Take the memtest window from the `MEMORY` entry holding the image,
   not the first one.
+
+## Boot: multiuser startup is too slow for daily use
+
+The working SD image boots single-user, because multiuser takes too
+long to reach a login for day-to-day work. Where the time goes is
+unmeasured. One data point: on the ISS, awk costs about 165k
+instructions per `a[NR]=$0` line, since its numbers are doubles and
+every double operation is a soft-float call. rc itself never runs
+awk, though, and only 4 of the 133 `rc.d` scripts do (postfix,
+rtclocaltime, ntpdate, perusertmp), so it explains the boot only if
+one of those dominates.
+
+Open: profile a multiuser boot on the ISS (`+pcprof`, from reset;
+`sw/tools/iss-workloads.py` reaches the login prompt) and attribute
+it by rc script and program before choosing what to speed up.
