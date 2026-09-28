@@ -152,7 +152,7 @@ Three categories of headers:
 
 | File | Purpose |
 |------|---------|
-| `locore.S` | Entry, BSS zero, bootinfo copy, kernel page-table build, real TLB miss handler, per-vector trap entry stubs + `_trap_common` (with double-fault detection), MMU enable, I/D cache enable, TLB invalidation, scratch window, `cpu_switchto`, `lwp_trampoline`, `softint_fast_dispatch`, setjmp/longjmp |
+| `locore.S` | Entry, BSS zero, bootinfo copy, kernel page-table build, real TLB miss handler, per-vector trap entry stubs + `_trap_common` (with double-fault detection), MMU enable, I/D cache enable, scratch window, `cpu_switchto`, `lwp_trampoline`, `softint_fast_dispatch`, setjmp/longjmp |
 | `startup.c` | Early boot: `penumbra_init()` (phase 1 on boot stack — returns new SP), `penumbra_main()` (phase 2 on lwp0 stack — calls main()), bootinfo parsing, early UART console via scratch window, `consinit`, `penumbra_physmem_init`, UART remap via `pmap_map_device` |
 | `machdep.c` | Runtime: `cpu_startup`, `cpu_reboot`, `cpu_lwp_fork`, `setregs`, remaining LWP/process/signal stubs, `kcopy`, `cpu_idle` (spl0 for timer), timer/delay |
 | `mulsi3.c` | `__mulsi3` software 32-bit multiply (LLVM libcall) |
@@ -172,6 +172,7 @@ Three categories of headers:
 | `syscall.c` | Syscall dispatch: `syscall_intern` + `syscall()`. R11=nr (scratch, set by SYSTRAP), R1–R4=args, stack overflow via copyin. Carry-flag error convention (C=0 success, C=1 error). Indirect syscalls rejected with ENOSYS |
 | `pmap.c` | Software TLB: `pmap_bootstrap`, `pmap_steal_memory`/`_page`, `pmap_kenter_pa`/`_kremove`, `pmap_enter` (demand paging), `pmap_create`/`_destroy` (user pmaps), `pmap_activate` (L1 re-pin + MMUCR ASID), generational ASID allocator, `pmap_remove_all`, `pmap_extract`, `pmap_map_device`, scratch-window helpers |
 | `copy.S` | Assembly copyin/copyout/copyinstr/copyoutstr with `pcb_onfault` fault recovery, ufetch/ustore (8/16/32), user-address validation |
+| `tlb_subr.S` | Main-TLB invalidation (`tlb_invalidate_all`/`_asid`/`_addr`), sysregs only — assembled and tested on its own by `make test-kernel` |
 | `db_machdep.c` | DDB MD glue — `Debugger`/`cpu_Debugger`, `db_read_bytes`/`db_write_bytes`, `db_regs[]`, `db_active` |
 | `db_trace.c` | Prologue-scanning stack unwinder — recognizes `SUB r14,#imm` and `STW rN,[r14,#off]` for callee-saved. Termination markers stop the walk at asm boundaries (`cpu_switchto`, `lwp_trampoline`, `_trap_common`, pinned vector page) |
 | `db_disasm.c` | Stub DDB disassembler — `x/i` prints raw 32-bit words, no instruction decode (minimal-useful DDB scope) |

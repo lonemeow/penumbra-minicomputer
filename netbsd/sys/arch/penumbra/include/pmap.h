@@ -242,7 +242,7 @@ paddr_t		pmap_steal_page(void);
 vaddr_t		pmap_map_device(paddr_t, vsize_t);
 vaddr_t		pmap_map_kernel(paddr_t, vsize_t);
 
-/* TLB operations — implemented in locore.S */
+/* TLB operations — implemented in tlb_subr.S */
 void		tlb_invalidate_all(void);
 void		tlb_invalidate_asid(int);
 void		tlb_invalidate_addr(vaddr_t, int);

@@ -1,6 +1,6 @@
 /*
  * hosted_write(fd, buf, len): the ISS's hosted-mode write syscall
- * (R11 = 4), so the string test prints without a libc.
+ * (R11 = 4), so a test built without a libc can still print.
  */
 	.text
 	.globl	hosted_write

@@ -50,7 +50,7 @@ def main():
 
     objs = []
     for src, obj in ((os.path.join(args.harness_dir, "crt0.S"), "crt0.o"),
-                     (os.path.join(here, "hosted.S"), "hosted.o"),
+                     (os.path.join(args.harness_dir, "hosted.S"), "hosted.o"),
                      (os.path.join(here, "string-test.c"), "string-test.o")):
         run(flags + ["-c", src, "-o", out(obj)])
         objs.append(out(obj))

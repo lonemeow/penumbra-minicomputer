@@ -152,6 +152,11 @@ Open work lives in `doc/TODO/`, one file per area; the table in
 - `make test-libc` — the hand-written string routines libc and the
   kernel share (`netbsd/common/lib/libc/arch/penumbra/string/`), on the
   ISS against reference loops at every alignment (`test/libc/`).
+- `make test-kernel` — the kernel's MD routines that touch only
+  registers and sysregs (the TLB invalidation in
+  `netbsd/sys/arch/penumbra/penumbra/tlb_subr.S`), assembled as the
+  kernel build does and run on the ISS against their contracts
+  (`test/kernel/`).
 - `make test-iss-options` — the ISS's own options (`+core=`, …)
   against programs with known answers (`sw/sim/tests/`); expected
   values are written from the hardware's parameters.

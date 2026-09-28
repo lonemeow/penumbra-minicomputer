@@ -558,6 +558,19 @@ test-libc: $(ISS)
 		--src-dir netbsd/common/lib/libc/arch/penumbra/string \
 		--build-dir $(BUILD_DIR)/test-libc
 
+# ── Kernel MD routine tests (fast, no Docker) ─────────────────
+# The port's routines that touch only registers and sysregs, assembled
+# as the kernel build does and run on the ISS against their contracts.
+# See test/kernel/.
+# Usage: make test-kernel
+.PHONY: test-kernel
+test-kernel: $(ISS)
+	@python3 test/kernel/run-kernel-test.py --cc "$(CC)" --objcopy "$(OBJCOPY)" \
+		--iss ./$(ISS) --bin2hex sw/tools/bin2hex.py \
+		--harness-dir $(HARNESS_DIR) \
+		--port-dir netbsd/sys/arch/penumbra \
+		--build-dir $(BUILD_DIR)/test-kernel
+
 # ── Compiler Correctness Tests ─────────────────────────────────
 # Runs curated tests from llvm-test-suite on ISS +hosted mode.
 # Usage: make test-compiler [OPT="-O2"]
