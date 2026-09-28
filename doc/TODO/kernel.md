@@ -825,6 +825,18 @@ mechanics, which are a linker section plus a pin at boot in
 
 ## Ruled out
 
+- **Refill way pick: set bits mixed into the counter bit, or an empty
+  way first.**  The refill handler takes its way from bit 5 of
+  `CPU_CYCLES`.  XOR-ing set bits into it, to spread adjacent sets'
+  misses across both ways, only relabels each set's two ways, so no
+  hit or miss can change; shadow TLBs on the ISS matched the plain
+  pick to the last refill on a fork/exec loop, `pbench kernel` and the
+  Doom timedemo.  Taking an empty way first moved the same workloads
+  by under 0.01%: past boot, a set almost never has one.  What does
+  move refills is replacement that sees hits, which software cannot:
+  on those workloads LRU took 22-31% fewer refills than the kernel's
+  pick.
+
 - **Pinning hot kernel pages.**  Hot text and data were gathered into
   fixed regions, linked first and pinned into the slots the MMU leaves
   spare.  Five hardware runs could not separate it from noise: builds

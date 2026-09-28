@@ -811,12 +811,10 @@ _real_miss_handler:
 	shr	r1, #12
 	and	r1, #0x1F		/* R1 = set (bits 16:12 of VA) */
 
-	/* Pick a way using the free-running cycle counter.
-	 * XOR with the set bits before masking so adjacent-set
-	 * misses spread across both ways even if cycle bit 5
-	 * happens to be locked by a periodic workload. */
+	/* Pick the way from bit 5 of the free-running cycle counter,
+	 * a cheap stand-in for a random choice.  TLB hits never trap,
+	 * so software has no record of use to replace by. */
 	rdsys	r2, #SYSDEV_CPU, #CPU_CYCLES
-	xor	r2, r1
 	and	r2, #0x20		/* isolate the way bit */
 	or	r1, r2			/* R1 = {way, set} */
 	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_INDEX
