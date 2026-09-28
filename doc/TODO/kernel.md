@@ -420,6 +420,41 @@ associativity an order of magnitude ahead of placement.  Placement
 earns its keep because it is free and because a bad roll is expensive,
 not because it can close the gap.
 
+## Kernel: a TLB refill can split a TLB sysreg sequence
+
+Programming a TLB slot is a sequence of sysreg writes — `TLB_INDEX`,
+then `TLB_VPN`, then `TLB_PTE`, which commits the entry — and a lookup
+reads a slot back after selecting it.  The miss handler writes
+`TLB_INDEX` and `TLB_VPN` for its own refill and does not restore them,
+so a miss taken inside a sequence redirects the rest of it.  A
+`pmap_pin_slot()` cut before its `TLB_PTE` write commits the pinned
+mapping into the main-TLB slot the refill just filled, under the
+refilled page's VPN.  `splhigh()` around the sequences masks
+interrupts, but a TLB miss cannot be masked.
+
+Kernel text is mapped through the main TLB and the sequences make no
+data accesses, so the one miss that can land inside a sequence is the
+instruction fetch crossing into the next page.  Whether a sequence
+straddles a page is decided by the link.  A scan of the 2026-09-27
+`GENERIC.DEBUG` kernel found 28 `TLB_INDEX` → `TLB_PTE` sequences in
+`.text` — the inlined `pmap_pin_slot()` in about a dozen pmap
+functions, and `tlb_subr.S` — and none crossing a page, but a change to
+any code linked before one can move it across, and the corruption then
+comes and goes with unrelated changes.  The trap page's handlers are
+not exposed: they run from the pinned vector page.
+
+Open, either of:
+
+- A build-time check that fails the link when a sequence straddles a
+  page: the scan above, over the kernel's disassembly, pairs each
+  `wrsys …, #MMU_TLB_INDEX` with the next `wrsys …, #MMU_TLB_PTE`
+  (about 20 lines of Python).
+- Sequences immune to the refill: the handler saving and restoring
+  `TLB_INDEX` and `TLB_VPN` costs two `RDSYS` and two `WRSYS`, ~17
+  cycles on a ~137-cycle refill, the hottest kernel path; running the
+  sequences from the vector page covers `tlb_subr.S` but not the
+  inlined `pmap_pin_slot()`.
+
 ## Kernel: networking — first NIC through the USB host controller
 
 Decision: the first network adapter is a **USB NIC on the CLASS_USBHC
