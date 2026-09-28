@@ -356,9 +356,16 @@ rom.ld ──────────────────┘
   runs from the pinned vector page at `0xFFFFB080` rather than where it
   was linked. Unattributed PCs are listed by page so the missing image
   is identifiable; a library's base has to be supplied (nothing in the
-  profile records it). NetBSD workloads need prompt-responsive input to
-  reach a shell — feeding a fixed script into stdin drops characters,
-  since the modelled UART holds one byte.
+  profile records it).
+- **Unattended NetBSD runs** (`sw/tools/iss-workloads.py`) — boots an
+  SD image from the ROM monitor, reaches a root shell (multiuser login
+  or the single-user prompt) and runs each workload command in turn,
+  typing each character only after the last one echoes: the modelled
+  UART holds one byte, so a script piped into stdin loses characters.
+  `--windows` gives each workload its own model window (`SIGUSR1`
+  around the command) and says which window is which; ISS options pass
+  through `--iss-arg` (`--iss-arg +core=penumbra2_5 --iss-arg
+  +cachemodel`).  The run writes to the image, so drive a copy.
 - **LLVM toolchain** (`build/llvm/bin/`) — clang, llvm-mc, ld.lld,
   llvm-objcopy. Details in
   `llvm/llvm/lib/Target/Penumbra/CLAUDE.md`.
