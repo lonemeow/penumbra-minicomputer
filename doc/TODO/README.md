@@ -8,7 +8,9 @@ open entries plus the findings that motivate them.
 | [hw-core.md](hw-core.md) | CPU cores (gen3 build, cross-generation ISA work), bus, caches, SDRAM path, fmax and placement |
 | [hw-penumbra2.md](hw-penumbra2.md) | gen2 / gen2.5-specific microarchitecture |
 | [hw-devices.md](hw-devices.md) | UART, SD, display, USB host, audio |
-| [hw-build.md](hw-build.md) | Build/test matrix, HDL frontend, flashing, board workflow |
+| [hw-build.md](hw-build.md) | Build system and test matrix, shared by every board |
+| [hw-ulx3s.md](hw-ulx3s.md) | Work bound to the ULX3S board |
+| [hw-nexysvideo.md](hw-nexysvideo.md) | Work bound to the Nexys Video board |
 | [compiler.md](compiler.md) | LLVM backend: ranked levers and the per-area files below |
 | [compiler-selection.md](compiler-selection.md) | Compares, flags, booleans, extensions |
 | [compiler-addressing.md](compiler-addressing.md) | Global addresses, PIC, constants, rematerialization |
@@ -21,6 +23,11 @@ open entries plus the findings that motivate them.
 An entry lives in the file of the subsystem that owns the fix. A
 workload profile whose levers span several subsystems lives in
 `workloads.md`, and the per-subsystem entries link to it.
+
+Work bound to one board lives in that board's file. An item that
+also creates a programming interface (a device class, a register-map
+change) lives with the interface in `hw-devices.md`, since the
+interface is written first, and the board's file links to it.
 
 ## Closing an entry
 

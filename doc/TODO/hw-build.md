@@ -1,6 +1,7 @@
-# Hardware: build system and board workflow
+# Hardware: build system
 
-Build/test matrix, HDL frontend, flashing and board handling.
+Build system and test matrix, shared by every board. Work bound to
+one board is in that board's file (`hw-<board>.md`).
 
 ## Hardware: build/test restructure to the BOARD×CORE matrix
 
@@ -104,65 +105,3 @@ has no slang plugin (`read_slang` is not a command), so this needs the
 container the wrapper scripts drive rebuilt or updated. The build-time
 defines the flow passes at the sv2v step (`SDRAM_PHASE_DEG`,
 `PENUMBRA_CPU_VARIANT`) need an equivalent on the new frontend.
-
-## Build system: guard flashing against marginal timing
-
-`make flash` packs and flashes whatever nextpnr produced, including a
-build that missed its frequency constraint (`--timing-allow-fail`) or
-one that passed with near-zero margin — and a pinned placement seed
-goes stale the moment the netlist changes, so a routine RTL edit can
-silently produce a 25.07-MHz-on-25 bitstream whose register-tier
-flakiness then masquerades as logic bugs.  Add a guard: after PnR,
-compare the achieved CPU-clock fmax against the constraint plus the
-project's safety floor; refuse to pack/flash below it unless
-explicitly overridden, and print the figure either way.  Pair it with
-the working rule that any RTL change re-runs the seed sweep before
-the pin is trusted.
-
-## Build system: Vivado thread count
-
-Vivado caps itself at 8 threads (`general.maxThreads`), while its
-container sees every host core (16 on the development machine). On
-the Nexys Video gen2.5 machine top, synthesis is effectively serial
-(3:08 of CPU over 3:10 elapsed), so more threads could only speed up
-place, route and the analysis steps. Open: once builds get large (the
-DDR3 machine), time one build at 8 threads against one at 16; if place
-and route shrink noticeably, pass a make variable through to
-`hw/tools/vivado/build.tcl`, kept adjustable so a concurrent LLVM
-build still gets its share of the cores.
-
-## Board workflow: flashing, reset, and persistence annoyances
-
-Four friction points in the daily flash-and-test loop, roughly in
-order of pain:
-
-- **Persistent default bitstream.**  Every power cycle currently
-  loses the FPGA configuration and needs a fresh `make flash` (an
-  SRAM load).  The ULX3S SPI configuration flash can hold a
-  bitstream the ECP5 loads at power-on; teach the flow to program it
-  (fujprog writes flash with the right flag) — likely as a separate
-  `make flash-persistent` target so the fast SRAM load stays the
-  development default.
-
-- **SD card wedged by reset.**  A board reset or reflash that lands
-  mid-SPI-transaction parks the SD card in a state the ROM's init
-  cannot recover — only a power cycle clears it.  Debug the recovery
-  path: the SD-SPI init sequence should be able to rescue a card
-  abandoned mid-transaction (dummy clocks with CS deasserted, CMD0
-  retry discipline, and if need be a longer pre-init clocking burst)
-  instead of forcing the Vcc cycle.
-
-- **Multiple bitstreams in flash, selectable at boot.**  The ECP5
-  supports multiboot configurations in SPI flash (golden/update
-  images with jump records selecting which loads).  Investigate what
-  the open toolchain (ecppack/ecpmulti) supports and whether a
-  button-selected boot image is achievable on the ULX3S — would let
-  a known-good image and an experimental image coexist.
-
-- **Reset-button press needed after flash.**  After an SRAM-load
-  flash the design comes up needing a manual `btn[1]` press before
-  it runs correctly.  Investigate why the post-configuration state
-  differs from the post-reset state — likely something in the top's
-  reset generation (PLL lock vs. release timing, or state the reset
-  clears that configuration does not) — and make configuration
-  come up clean.
