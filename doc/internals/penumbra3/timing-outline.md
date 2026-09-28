@@ -272,6 +272,34 @@ cycles, never critical-path logic.**
   ([memory-performance](./memory-performance.md#tlb-sets-and-a-cheaper-refill)).
   Beyond 32×2 the software interface needs `MMU_CONFIG` version 2 and a wider
   `TLB_INDEX` ([`mmu.md`](../../system/mmu.md)) — doc first.
+- **Invalidate in the MMU, off the lookup path.** Software invalidates by searching
+  slots: `tlb_invalidate_addr` reads a set's ways through `RDSYS`, and
+  `tlb_invalidate_asid` — run on every exit and on every exec that reuses its address
+  space — reads and rewrites every slot. The sweep grows with the TLB: at gen2.5's
+  per-op costs (`WRSYS` ~6.3 cycles, `RDSYS` ~2) it is ~1 k cycles at 32×2 and
+  ~5–8 k at 256×2 (estimated, not measured), and `RDSYS` itself stops being a fast
+  op once a TLB read is a registered BRAM read. Version 2 is the place for two
+  sysreg ops that move the search into the MMU:
+  - **invalidate by address** — `WRSYS` of VA|ASID; an FSM reads the set through
+    each copy's sysreg/write port, compares the valid ways against the written
+    VPN/ASID/G in a registered stage, and writes V=0 into the matches in both copies
+    (~3 cycles). Matching only valid ways also retires a software hazard: an
+    invalidating `TLB_PTE` write commits whatever `TLB_VPN` was last staged, so a
+    dead slot's VPN word can name a live entry in the other way;
+  - **flush all / flush by ASID** — the same FSM stepping through the sets, about one
+    cycle per set to flush all, two (read, then write) to flush by ASID.
+
+  Both are multi-cycle side effects behind the registered post-commit busy
+  ([multi-cycle and serializing
+  instructions](#multi-cycle-and-serializing-instructions-divmul-wrsys-eret)): the
+  `WRSYS` completes when the FSM is done — no poll, no new handshake. The
+  translation read and hit compare never see the FSM; the only new sharing is one
+  more driver on the second port's address and data mux, which already carries refill
+  writes and sysreg reads. A per-line cache invalidate on BRAM tags (`INVAL_LINE`,
+  reserved) is the same read-compare-clear FSM behind the same wait. Without the ASID
+  flush, the kernel can avoid the sweep instead by giving a torn-down pmap's address
+  space a fresh ASID: stale references still fault, since no entry carries a live
+  ASID until the rollover flush, at the cost of one ASID per exec.
 
 ## 6. Bus / uncore — the Amiga decouple
 

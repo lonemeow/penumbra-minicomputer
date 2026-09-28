@@ -638,6 +638,14 @@ than 5 bits collides with `TLB_INDEX`'s way bit (5) and pinned-select
 bit (6), so a larger geometry needs version 2 with a wider `TLB_INDEX`
 — a change to [`mmu.md`](../../system/mmu.md) first.
 
+**Invalidation grows with it.** The kernel invalidates by searching
+slots through `RDSYS`, and sweeps every slot for a torn-down address
+space on each exit and on each exec that reuses one: ~1 k cycles a
+sweep at 32×2, ~5–8 k at 256×2 (estimated from the per-op costs above,
+not measured). Version 2 should carry invalidate-by-address and flush
+ops done in the MMU; how they stay off the lookup path is in the
+[timing outline](./timing-outline.md#5-mmu--tlb).
+
 **Cheaper refills**, independent of layout:
 
 - **The page-table window** is re-pointed on every refill: 3 of the 6
