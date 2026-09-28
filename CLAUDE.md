@@ -299,10 +299,10 @@ rom.ld ──────────────────┘
   `+core=` picks the hardware generation the ISS presents, spelled as
   `make CORE=` spells it (`penumbra1` by default, `penumbra2`,
   `penumbra2_5`): its CPU name and the geometry its caches report.
-  The table is `sw/sim/penumbra_cores.h`; a generation's cache
-  geometry or CPU name changing in RTL has to change there too.
+  The table is `sw/sim/penumbra_cores.h`; a generation's cache or
+  TLB geometry or CPU name changing in RTL has to change there too.
   Measurement options: `+opstats` (instruction-class histogram),
-  `+branchstats`, `+pcprof` and `+cachemodel` — see below.
+  `+branchstats`, `+pcprof`, `+cachemodel` and `+tlbmodel` — see below.
 - **Cache model** (`+cachemodel[=list]`, `sw/sim/cache_model.h`) —
   runs every fetch, load and store through shadow cache hierarchies:
   the `+core=` generation's by default, or a comma-separated list of
@@ -316,6 +316,17 @@ rom.ld ──────────────────┘
   exit; `+model_report=file` writes the reports there instead of
   stderr.  **Counts are architectural** — no wrong-path fetches, no
   timing: multiply by costs measured on RTL or hardware for cycles.
+- **TLB model** (`+tlbmodel[=list]`, `sw/sim/tlb_model.h`) — replays
+  every successful main-TLB translation (pinned slots excluded) through
+  shadow TLBs: the `+core=` generation's by default, or a list of
+  generation names and `SETSxWAYS` layouts, each optionally `/lru`
+  (default random, as a counter-picked refill way is) and `/hash`
+  (VPN XOR-folded into the index): `+tlbmodel=penumbra2_5,64x2,256x2`.
+  Each window, in the same report as the cache model's, gives each
+  shadow's misses beside the refills the running kernel actually took;
+  the built layout's shadow calibrates the rest.  Shadows drop only
+  what software invalidates in the real TLB, so ones larger than it
+  read slightly optimistic.
 - **Execution profiles** (`+pcprof=file` plus
   `sw/tools/pcprof-report.py`) — buckets executed instructions by PC,
   exceptions by vector and TLB misses by faulting page.

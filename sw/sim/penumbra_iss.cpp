@@ -22,8 +22,10 @@
 // geometry its caches report.  The default is penumbra1.
 //
 // +cachemodel[=list] runs every access through shadow cache hierarchies
-// (cache_model.h) and reports what they hit and missed, per measurement
-// window: +model_start= / +model_stop= PCs, SIGUSR1, +model_report=path.
+// (cache_model.h), and +tlbmodel[=list] every main-TLB translation through
+// shadow TLBs (tlb_model.h); both report what they hit and missed, per
+// measurement window: +model_start= / +model_stop= PCs, SIGUSR1,
+// +model_report=path.
 //
 // +raw enables full raw TTY mode: all control characters (Ctrl-C,
 // Ctrl-Z, etc.) pass through to the simulated UART for job control
@@ -54,6 +56,7 @@
 
 #include "penumbra_cores.h"
 #include "cache_model.h"
+#include "tlb_model.h"
 
 // ═══════════════════════════════════════════════════════════════
 // SD Card Emulator (inline — same protocol as hw/sim/sd_card_sim.h
@@ -1031,6 +1034,7 @@ static struct {
 } display;
 
 // --- TLB (64 entries: 32 sets × 2 ways) ---
+static constexpr TlbGeometry TLB_GEOMETRY = { 32, 2 };
 static struct {
     uint32_t vpn[64];   // {4'b0, VPN[19:0], ASID[7:0]}
     uint32_t pte[64];   // {PPN[19:0], SW[3:0], flags[7:0]}
@@ -1118,6 +1122,9 @@ static uint32_t cache_read(int dev, int reg) {
 // +cachemodel: shadow hierarchies fed by every access (cache_model.h).
 static CacheModel* cache_model;
 
+// +tlbmodel: shadow TLBs fed by every main-TLB translation (tlb_model.h).
+static TlbModel* tlb_model;
+
 static CacheEnables cache_enables() {
     return { cache_l1i.enabled, cache_l1d.enabled, cache_l2.enabled };
 }
@@ -1149,10 +1156,11 @@ static struct {
 } model_window;
 static volatile sig_atomic_t model_window_signal = 0;
 
-static bool models_active() { return cache_model != nullptr; }
+static bool models_active() { return cache_model || tlb_model; }
 
 static void model_window_open(const char* why) {
     if (cache_model) cache_model->clear_counts();
+    if (tlb_model) tlb_model->clear_counts();
     model_window.open      = true;
     model_window.opened_by = why;
     model_window.insn0     = cpu.insn_count;
@@ -1162,9 +1170,10 @@ static void model_window_open(const char* why) {
 static void model_window_close(const char* why) {
     FILE* out = model_window.out;
     uint64_t insns = cpu.insn_count - model_window.insn0;
-    fprintf(out, "== cache model window %d: %llu instructions, %s to %s ==\n",
+    fprintf(out, "== model window %d: %llu instructions, %s to %s ==\n",
             model_window.number, (unsigned long long)insns, model_window.opened_by, why);
     if (cache_model) cache_model->report(out, insns);
+    if (tlb_model) tlb_model->report(out, insns, TLB_GEOMETRY);
     fflush(out);
     model_window.open = false;
 }
@@ -1313,11 +1322,11 @@ static void bank_sp(uint32_t old_sr, uint32_t new_sr) {
 
 // Perform a TLB lookup for the given virtual address.
 // access: bit 0=R, bit 1=W, bit 2=X (one-hot, matching TLB flag positions)
-// Returns true on hit (paddr/cacheable valid), false on miss.
+// Returns true on hit (paddr/cacheable/pinned/global valid), false on miss.
 // Sets fault=true if hit but permissions deny access.
 static bool tlb_lookup(uint32_t vaddr, uint8_t asid, uint8_t access,
                        bool user_mode, uint32_t& paddr, bool& cacheable,
-                       bool& fault) {
+                       bool& pinned, bool& global, bool& fault) {
     uint32_t va_vpn = vaddr >> 12;
 
     // Build access permission mask from one-hot access type:
@@ -1337,7 +1346,7 @@ static bool tlb_lookup(uint32_t vaddr, uint8_t asid, uint8_t access,
 
         uint32_t entry_vpn  = TLB_VPN_GET_VPN(ptlb.vpn[i]);
         uint8_t  entry_asid = TLB_VPN_GET_ASID(ptlb.vpn[i]);
-        bool     global     = pte_word & TLB_G;
+        global              = pte_word & TLB_G;
 
         if (entry_vpn != va_vpn) continue;
         if (!global && entry_asid != asid) continue;
@@ -1345,6 +1354,7 @@ static bool tlb_lookup(uint32_t vaddr, uint8_t asid, uint8_t access,
         fault = (pte_word & need_mask) != need_mask;
         paddr = (TLB_PTE_GET_PPN(pte_word) << 12) | (vaddr & 0xFFF);
         cacheable = pte_word & TLB_C;
+        pinned = true;
         return true;
     }
 
@@ -1359,7 +1369,7 @@ static bool tlb_lookup(uint32_t vaddr, uint8_t asid, uint8_t access,
 
         uint32_t entry_vpn  = TLB_VPN_GET_VPN(vpn_word);
         uint8_t  entry_asid = TLB_VPN_GET_ASID(vpn_word);
-        bool     global     = pte_word & TLB_G;
+        global              = pte_word & TLB_G;
 
         if (entry_vpn != va_vpn) continue;
         if (!global && entry_asid != asid) continue;
@@ -1367,6 +1377,7 @@ static bool tlb_lookup(uint32_t vaddr, uint8_t asid, uint8_t access,
         fault = (pte_word & need_mask) != need_mask;
         paddr = (TLB_PTE_GET_PPN(pte_word) << 12) | (vaddr & 0xFFF);
         cacheable = pte_word & TLB_C;
+        pinned = false;
         return true;
     }
 
@@ -1478,10 +1489,11 @@ static int mmu_translate(uint32_t vaddr, uint8_t access, int size,
         return 0;
     }
 
-    bool fault;
+    bool pinned, global, fault;
     bool hit = tlb_lookup(vaddr, mmu.asid(), access, !(cpu.sr & SR_S),
-                          paddr, cacheable, fault);
+                          paddr, cacheable, pinned, global, fault);
     if (!hit) {
+        if (tlb_model) tlb_model->real_miss(supervisor());
         mmu.fault_addr = vaddr;
         mmu.fault_status = (uint32_t)((!(cpu.sr&SR_S))<<11) | ((uint32_t)access<<8) | 0x01;
         return VEC_TLB_MISS;
@@ -1491,6 +1503,7 @@ static int mmu_translate(uint32_t vaddr, uint8_t access, int size,
         mmu.fault_status = (uint32_t)((!(cpu.sr&SR_S))<<11) | ((uint32_t)access<<8) | 0x02;
         return VEC_TLB_PROT;
     }
+    if (tlb_model && !pinned) tlb_model->translate(vaddr >> 12, mmu.asid(), global, supervisor());
     return 0;
 }
 
@@ -2004,6 +2017,8 @@ static void sysreg_write(int dev, int reg, uint32_t val) {
                     ptlb.pte[i] = val;
                 } else {
                     int idx = (mmu.tlb_idx & 0x20 ? 32 : 0) + (mmu.tlb_idx & 0x1F);
+                    if (tlb_model)
+                        tlb_model->real_slot_written(tlb.vpn[idx], tlb.pte[idx], val);
                     tlb.vpn[idx] = mmu.tlb_vpn_reg;
                     tlb.pte[idx] = val;
                 }
@@ -3181,6 +3196,7 @@ int main(int argc, char** argv) {
     const char* audio_path = nullptr;
     const char* core_name = DEFAULT_CORE_GENERATION;
     const char* cachemodel_spec = nullptr;
+    const char* tlbmodel_spec = nullptr;
     const char* model_report_path = nullptr;
 
     for (int i = 1; i < argc; i++) {
@@ -3216,6 +3232,8 @@ int main(int argc, char** argv) {
         else if (strncmp(argv[i], "+core=", 6) == 0) core_name = argv[i] + 6;
         else if (strcmp(argv[i], "+cachemodel") == 0) cachemodel_spec = "";
         else if (strncmp(argv[i], "+cachemodel=", 12) == 0) cachemodel_spec = argv[i] + 12;
+        else if (strcmp(argv[i], "+tlbmodel") == 0) tlbmodel_spec = "";
+        else if (strncmp(argv[i], "+tlbmodel=", 10) == 0) tlbmodel_spec = argv[i] + 10;
         else if (strncmp(argv[i], "+model_start=", 13) == 0)
             model_window.start_pc = (uint32_t)strtoull(argv[i] + 13, nullptr, 0);
         else if (strncmp(argv[i], "+model_stop=", 12) == 0)
@@ -3225,7 +3243,7 @@ int main(int argc, char** argv) {
     }
 
     if (!hex_path) {
-        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+usbdev=type:config] [+audiofile=path] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+pcprof=path [+pcprof_start=addr]] [+irq_at_pc=addr[,period]] [+core=generation] [+cachemodel[=list]] [+model_start=addr] [+model_stop=addr] [+model_report=path]\n");
+        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+sdcard=path] [+usbdev=type:config] [+audiofile=path] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+pcprof=path [+pcprof_start=addr]] [+irq_at_pc=addr[,period]] [+core=generation] [+cachemodel[=list]] [+tlbmodel[=list]] [+model_start=addr] [+model_stop=addr] [+model_report=path]\n");
         return 1;
     }
 
@@ -3234,6 +3252,14 @@ int main(int argc, char** argv) {
         fprintf(stderr, "unknown +core generation '%s' (available:", core_name);
         for (const CoreGeneration& g : CORE_GENERATIONS) fprintf(stderr, " %s", g.name);
         fprintf(stderr, ")\n");
+        return 1;
+    }
+    // The main TLB is one fixed array; a generation built with another
+    // geometry would report one TLB through MMU_CONFIG and run another.
+    if (core_gen->tlb.sets != TLB_GEOMETRY.sets || core_gen->tlb.ways != TLB_GEOMETRY.ways) {
+        fprintf(stderr, "+core=%s has a %ux%u main TLB; the ISS implements %ux%u\n",
+                core_gen->name, core_gen->tlb.sets, core_gen->tlb.ways,
+                TLB_GEOMETRY.sets, TLB_GEOMETRY.ways);
         return 1;
     }
 
@@ -3245,6 +3271,15 @@ int main(int argc, char** argv) {
             return 1;
         }
         cache_model = &model;
+    }
+    if (tlbmodel_spec) {
+        static TlbModel model;
+        std::string err;
+        if (!TlbModel::parse(tlbmodel_spec, *core_gen, model, err)) {
+            fprintf(stderr, "+tlbmodel: %s\n", err.c_str());
+            return 1;
+        }
+        tlb_model = &model;
     }
     if (models_active()) {
         model_window.out = stderr;

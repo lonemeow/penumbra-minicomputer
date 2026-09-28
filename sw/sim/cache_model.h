@@ -213,7 +213,7 @@ public:
 
     void report(FILE* out, uint64_t insns) const {
         auto kib = [](const CacheGeometry& g) { return g.bytes() / 1024; };
-        fprintf(out, "-- %s: L1I %u KiB %u-way, L1D %u KiB %u-way, L2 %u KiB %u-way, %u B lines\n",
+        fprintf(out, "-- cache %s: L1I %u KiB %u-way, L1D %u KiB %u-way, L2 %u KiB %u-way, %u B lines\n",
                 label_.c_str(), kib(geom_[L1I]), geom_[L1I].ways, kib(geom_[L1D]),
                 geom_[L1D].ways, kib(geom_[L2]), geom_[L2].ways, geom_[L2].line_bytes);
         fprintf(out, "         read hits  read misses   write hits write misses  hit rate\n");

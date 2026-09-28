@@ -81,12 +81,27 @@ WINDOW_PENUMBRA1 = hierarchy(
     l1d=(16, 16, 0, 0), l2=(16 * 3, 16, 0, 0), fills={("D", "user"): (0, 16)})
 
 
+def tlb_misses(user=0, supervisor=0):
+    """A shadow TLB's expected misses over one window, or with the label
+    "real" the refills the program's own miss handler took."""
+    return {"tlb": (user, supervisor)}
+
+
+# tlb_basic.s: the same in every layout, and what the real TLB takes.
+TLB_BASIC = tlb_misses(user=2, supervisor=6)
+TLB_BASIC_LAYOUTS = ["penumbra1", "penumbra2_5", "32x2/lru", "64x2/hash", "16x4", "1x64/lru"]
+# tlb_assoc.s, whose real TLB conflicts on every set it shares.
+TLB_ASSOC_LAYOUTS = ["32x4/lru", "64x2/lru", "16x4/lru", "1x64/lru"]
+
+
 class Case:
     """One ISS run.  `regs` maps register number to its expected final
-    value; `windows` lists the cache-model windows expected in the report,
-    each as (how it opened and closed, {config label: hierarchy(...)});
-    `error` instead expects the ISS to refuse the options with a message
-    matching the pattern."""
+    value; `windows` lists the model windows expected in the report, each
+    as (how it opened and closed, {label: expected counts}), a cache
+    model's labelled by its hierarchy with hierarchy(...) and a TLB
+    model's by "tlb <shadow>" with tlb_misses(...); `error` instead
+    expects the ISS to refuse the options with a message matching the
+    pattern."""
 
     def __init__(self, name, program, plusargs, regs=None, windows=None, error=None):
         self.name, self.program, self.plusargs = name, program, plusargs
@@ -116,6 +131,24 @@ CASES = [
     Case("model window", "cache_window.s",
          ["+cachemodel", "+model_start=0xFFFF0800", "+model_stop=0xFFFF0900"],
          windows=[("start PC to stop PC", {"penumbra1": WINDOW_PENUMBRA1})]),
+    Case("tlbmodel layouts", "tlb_basic.s", ["+tlbmodel=" + ",".join(TLB_BASIC_LAYOUTS)],
+         windows=[("reset to exit", {f"tlb {label}": TLB_BASIC
+                                     for label in ["real"] + TLB_BASIC_LAYOUTS})]),
+    Case("tlbmodel follows +core", "tlb_basic.s", ["+core=penumbra2", "+tlbmodel"],
+         windows=[("reset to exit", {"tlb real": TLB_BASIC, "tlb penumbra2": TLB_BASIC})]),
+    Case("tlbmodel associativity", "tlb_assoc.s",
+         ["+tlbmodel=32x2/lru," + ",".join(TLB_ASSOC_LAYOUTS)],
+         windows=[("reset to exit", {
+             "tlb real": tlb_misses(supervisor=15), "tlb 32x2/lru": tlb_misses(supervisor=13),
+             **{f"tlb {label}": tlb_misses(supervisor=10) for label in TLB_ASSOC_LAYOUTS}})]),
+    Case("both models, one window", "cache_window.s",
+         ["+cachemodel", "+tlbmodel", "+model_start=0xFFFF0800", "+model_stop=0xFFFF0900"],
+         windows=[("start PC to stop PC", {"penumbra1": WINDOW_PENUMBRA1,
+                                           "tlb real": tlb_misses(), "tlb penumbra1": tlb_misses()})]),
+    Case("tlbmodel bad sets", "tlb_basic.s", ["+tlbmodel=48x2"],
+         error=r"sets must be a power of two"),
+    Case("tlbmodel unknown option", "tlb_basic.s", ["+tlbmodel=64x2/fifo"],
+         error=r"unknown option '/fifo'"),
     Case("cachemodel bad ways", "cache_data.s", ["+cachemodel=4k/3:4k/2:64k/4"],
          error=r"ways must be a power of two"),
     Case("cachemodel unknown item", "cache_data.s", ["+cachemodel=penumbra7"],
@@ -132,16 +165,23 @@ def final_registers(stderr):
 
 
 def parse_report(text):
-    """The cache model's windows: [(span, {label: counts})]."""
+    """The models' windows: [(span, {label: counts})]."""
     windows, counts = [], None
     for line in text.splitlines():
-        m = re.match(r"== cache model window \d+: \d+ instructions, (.+) ==$", line)
+        m = re.match(r"== model window \d+: \d+ instructions, (.+) ==$", line)
         if m:
             windows.append((m.group(1), {}))
             continue
-        m = re.match(r"-- (\S+): ", line)
+        m = re.match(r"-- cache (\S+): ", line)
         if m:
             counts = windows[-1][1].setdefault(m.group(1), {"fills": {}})
+            continue
+        if line.startswith("-- tlb: "):
+            counts = None
+            continue
+        m = re.match(r"\s+(\S+)\s+\d+x\d+/\S+\s+\d+\s+(\d+)\s+(\d+)\s", line)
+        if m and counts is None:
+            windows[-1][1][f"tlb {m.group(1)}"] = {"tlb": (int(m.group(2)), int(m.group(3)))}
             continue
         m = re.match(r"\s+(L1I|L1D|L2)\s+(\d+)\s+(\d+)\s+(\d+|-)\s+(\d+|-)", line)
         if m:
@@ -162,6 +202,11 @@ def compare_windows(expected, got):
             have = got_cfgs.get(label)
             if have is None:
                 problems.append(f"{span}: no report for {label}")
+                continue
+            if "tlb" in want:
+                if have.get("tlb") != want["tlb"]:
+                    problems.append(f"{label} misses (user, supervisor) {have.get('tlb')}, "
+                                    f"expected {want['tlb']}")
                 continue
             for level in ("L1I", "L1D", "L2"):
                 if have.get(level) != want[level]:

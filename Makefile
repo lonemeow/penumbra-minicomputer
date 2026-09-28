@@ -662,7 +662,7 @@ simulate: $(ISS)
 	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX) CFLAGS=$(CFLAGS)
 	@$(ISS) program.hex $(if $(SDCARD),+sdcard=$(SDCARD)) $(if $(USBDEV),+usbdev=$(USBDEV)) $(if $(TRACE),+trace=$(TRACE)) $(if $(TRACE_WINDOW),+trace_window=$(TRACE_WINDOW)) $(if $(HALT_ON),'+halt_on=$(HALT_ON)') $(if $(RAW),+raw)
 
-$(ISS): sw/sim/penumbra_iss.cpp sw/sim/penumbra_cores.h sw/sim/cache_model.h hw/sim/usb_device_sim.h hw/sim/usb_msc_sim.h
+$(ISS): sw/sim/penumbra_iss.cpp sw/sim/penumbra_cores.h sw/sim/cache_model.h sw/sim/tlb_model.h hw/sim/usb_device_sim.h hw/sim/usb_msc_sim.h
 	@$(MAKE) -C sw/sim
 
 # ── RTL simulation (Verilator — cycle-accurate, slow) ─────────

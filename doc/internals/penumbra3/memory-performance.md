@@ -772,13 +772,13 @@ nanoseconds.
   fills-by-kind split on hardware directly
   ([reading the printed L2 rate](#reading-the-printed-l2-rate)), in place
   of the shadow model's.
-- **Reproducible chains and models.** The cache shadow model is the
-  ISS's `+cachemodel`. The scratch version behind the tables above
-  replaced with LRU where the hardware uses tree-PLRU, and treated every
-  level as enabled once translation was on, so the 4-way L2 may
-  re-measure slightly differently. Chains A and B, the
-  machine-trace probe and the TLB shadow model were scratch tools;
-  landing the probe as a characterization test, alongside
-  `tb_l2_cache`'s back-to-back read-throughput test, and the TLB model
-  as an ISS option, would let the rest be re-measured after each
-  change.
+- **Reproducible chains and models.** The shadow models are the ISS's
+  `+cachemodel` and `+tlbmodel`. The scratch cache model behind the
+  tables above replaced with LRU where the hardware uses tree-PLRU, and
+  treated every level as enabled once translation was on, so the 4-way
+  L2 may re-measure slightly differently; the scratch TLB model hashed
+  the index by 5-bit shifts whatever the set count, where `/hash` folds
+  in index-width chunks. Chains A and B and the machine-trace probe
+  were scratch tools; landing the probe as a characterization test,
+  alongside `tb_l2_cache`'s back-to-back read-throughput test, would
+  let the rest be re-measured after each change.
