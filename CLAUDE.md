@@ -405,9 +405,9 @@ but are exhibit material rather than measurements.
   both (along with `penmon` and `exhibit-launcher`) into the rootfs
   `/usr/local/bin`.
 - Override `BENCH_ITERS=`, `COPT="-Os"`, etc.
-- Latest baseline numbers per snapshot (with HEAD SHA) live in
-  `benchmark/netbsd-bench/BASELINE.md` — do not quote DMIPS/CPI/fmax
-  from CLAUDE.md; numbers move and CLAUDE.md lags.
+- The repo keeps no reference numbers: measure on the FPGA, running the
+  build you compare against in the same session.  A DMIPS/CPI/fmax
+  figure quoted in any doc, CLAUDE.md included, is a dated sample.
 
 Harness details (cache enable, soft-float stubs, perfctr helpers) and
 per-benchmark notes are documented inside each `benchmark/*/`

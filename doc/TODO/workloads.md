@@ -629,8 +629,8 @@ about at current CPU speeds.
 
 **Trademark caveat.**  EEMBC owns the *"CoreMark"* mark; Apache covers
 the code, not the name.  Internal scores must be labeled "unverified,
-not an EEMBC-submitted score" in `BASELINE.md` and benchmark output
-to stay clean of trademark misuse.
+not an EEMBC-submitted score" wherever they are reported and in
+benchmark output to stay clean of trademark misuse.
 
 **Implementation sketch:**
 1. Vendor upstream under `benchmark/coremark-pro/`, preserve LICENSE
@@ -645,8 +645,6 @@ to stay clean of trademark misuse.
 4. Extend the image overlay (or wherever the pbench bundling lives) to
    copy the 9 workload binaries plus their input data files (cjpeg,
    parser, zip) into `/usr/local/bin/coremark-pro/`.
-5. Capture baseline in `benchmark/coremark-pro/BASELINE.md`, dated
-   snapshot + HEAD SHA, following the pbench precedent.
 
 **Prerequisites / risks:**
 - libpthread is currently minimal stubs.  Need to verify single-

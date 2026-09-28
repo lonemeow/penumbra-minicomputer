@@ -127,11 +127,11 @@ miss in the trap handler.
 ## Kernel: fork() is unreasonably slow
 
 `pbench kernel fork_exit` reports **~670 ms per fork+exit+wait round
-trip** on the ULX3S FPGA at 25 MHz (see
-`benchmark/netbsd-bench/BASELINE.md`).  That's two orders of magnitude
-beyond what the workload should cost, and it makes the system painful
-to use: `/etc/rc` runs many short commands sequentially, single-user
-boot stalls visibly, and any shell pipeline is sluggish.  For
+trip** on the ULX3S FPGA at 25 MHz (measured 2026-05-15).  That's two
+orders of magnitude beyond what the workload should cost, and it makes
+the system painful to use: `/etc/rc` runs many short commands
+sequentially, single-user boot stalls visibly, and any shell pipeline
+is sluggish.  For
 comparison, `pipe_pingpong` (which exercises 2 context switches + 4
 syscalls per round trip) reports ~19 ms — so context-switch cost
 alone is ~30× cheaper than a fork.  The bulk of the 670 ms is

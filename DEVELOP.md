@@ -213,7 +213,7 @@ make benchmark BENCH_ITERS=100 # Override Dhrystone iteration count
 make benchmark COPT="-Os"      # Override benchmark optimization level
 ```
 
-> **Real numbers come from the FPGA**, not the ISS or Verilator. Use the sim runs to validate that benchmarks build and execute correctly; flash to the ULX3S (§ 9) and re-run for the numbers that go in `benchmark/.../BASELINE.md`.
+> **Real numbers come from the FPGA**, not the ISS or Verilator. Use the sim runs to validate that benchmarks build and execute correctly; flash to the ULX3S (§ 9) and re-run for real numbers, with the build you compare against measured in the same session.
 
 **NetBSD-hosted** (`pbench` — runs under the real userland against libc, dynamic + static):
 
@@ -226,8 +226,7 @@ make simulate SDCARD=build/boot.img                # Boot, log in, run pbench
 `make image` automatically builds and overlays the benchmark suite and
 the graphics demos into `/usr/local/bin/` (see § 8). Inside the running
 NetBSD: `pbench list`, `pbench libc memcpy`, etc. Use `pbench -o FILE`
-to dump machine-readable `RESULT key=value` lines. Baseline numbers in
-`benchmark/netbsd-bench/BASELINE.md`. The demos are under `sw/demos/`
+to dump machine-readable `RESULT key=value` lines. The demos are under `sw/demos/`
 and build with `make demos`.
 
 ---
