@@ -27,6 +27,7 @@ and CLAUDE.md files intentionally do *not* duplicate them.
 | MMU internals, L2 cache, CPU-internal bus, system-bus implementation | `doc/internals/{mmu-internals,l2-cache,cpu-bus,system-bus}.md` |
 | Penumbra/2 (gen2) pipelined-core design | `doc/internals/penumbra2/` |
 | SDRAM controller / optimization | `doc/internals/sdram-{controller,optimization}.md` |
+| A board's own realization (tops, clocking, memory, constraints) | `doc/internals/<board>/` |
 | RTL coding standards | `doc/internals/coding-standards.md` |
 | Current TODO / roadmap | `doc/TODO/` (index: `doc/TODO/README.md`) |
 

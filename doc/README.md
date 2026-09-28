@@ -81,6 +81,15 @@ subdirectory owns its realization.
 *   **[Build & Test Structure](./internals/build-system.md)** — The BOARD×CORE build matrix, the machine integration layer, and the `isa/` conformance split for test programs.
 *   **[Development Setup](./internals/setup.md)** — How to build and simulate the RTL.
 
+### Boards
+
+Where a board's realization differs in ways that matter, its own
+directory holds it; the shared internals above state what every board
+honors.
+
+*   **[Nexys Video](./internals/nexysvideo/overview.md)** — The Artix-7 board: tops, clocking and reset, LEDs, console and SD, I/O standards and constraints, the thermal guard.
+*   **[Nexys Video DDR3 Memory](./internals/nexysvideo/ddr3.md)** — 512 MiB of DDR3 behind UberDDR3 and the line stack: the glue, the controller's configuration and license boundary, the crossing, calibration and reset.
+
 ### Penumbra/1 (microcoded core)
 
 *   **[Datapath Design](./internals/penumbra1/datapath.md)** — The three-bus architecture and signal flow.
@@ -91,7 +100,8 @@ subdirectory owns its realization.
 ### Penumbra/2 (gen2 / gen2.5 — abandoned; superseded by gen3)
 
 > **⚠️ Abandoned.** gen2/2.5 was built and boots NetBSD, but tops out at
-> 37.5 MHz with no headroom for the remaining gen2.5 features — a
+> 37.5 MHz on the ULX3S's ECP5 with no headroom for the remaining
+> gen2.5 features — a
 > fundamental in-order pure-stall floor. The docs below are retained as the
 > **historical record**; gen3 is a fresh redo of the same in-order pipeline
 > to clear that floor. See the abandonment note in

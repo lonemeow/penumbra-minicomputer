@@ -115,7 +115,7 @@ hw/rtl/sim/
 |-------|-------------|-----------------|
 | `sdram_bus_adapter` | system bus protocol | system bus changes |
 | `sdram_cdc` | only carries an opaque payload | rarely (or never) |
-| `sdram_ctrl` | SDR command set + timing parameters | swap to DDR/DDR3 → different controller core |
+| `sdram_ctrl` | SDR command set + timing parameters | swap to DDR/DDR3 → different controller core ([Nexys Video DDR3](nexysvideo/ddr3.md)) |
 | `sdram_phy_*` | I/O cells, clock forwarding, tristate | swap FPGA family or simulation |
 
 ## Clocking on ECP5
