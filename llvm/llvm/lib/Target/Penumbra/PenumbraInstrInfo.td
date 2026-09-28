@@ -233,8 +233,9 @@ def AddrRegImm : ComplexPattern<iPTR, 2, "SelectAddrRegImm">;
 //===----------------------------------------------------------------------===//
 
 // Each core's scheduling model (Penumbra.td) states a latency for these: the
-// cycles an instruction of the class holds that core.  The figures and their
-// derivation are in doc/internals/instruction-timing.md.
+// cycles an instruction of the class holds that core.  The figures are in
+// doc/system/instruction-timing.md, and how they are measured in
+// doc/internals/instruction-timing.md.
 def WriteALU : SchedWrite;
 def WriteMul : SchedWrite;
 def WriteDiv : SchedWrite;

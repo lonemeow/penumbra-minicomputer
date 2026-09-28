@@ -55,14 +55,18 @@ define i32 @mul_80(i32 %x) {
   ret i32 %r
 }
 
-; 100 = ((3x << 3) + x) << 2: six instructions, enough to decompose on penumbra1
-; but not against penumbra2_5's faster multiply.
+; 100 = ((3x << 3) + x) << 2: six instructions, the longest penumbra2_5 accepts
+; for a constant that fits LLI.
 define i32 @mul_100(i32 %x) {
 ; FASTMUL-LABEL: mul_100:
 ; FASTMUL:         .cfi_startproc
 ; FASTMUL-NEXT:  // %bb.0:
-; FASTMUL-NEXT:    lli r2, 100
-; FASTMUL-NEXT:    mul r1, r2
+; FASTMUL-NEXT:    mov r2, r1
+; FASTMUL-NEXT:    shl r2, 1
+; FASTMUL-NEXT:    add r2, r1
+; FASTMUL-NEXT:    shl r2, 3
+; FASTMUL-NEXT:    add r1, r2
+; FASTMUL-NEXT:    shl r1, 2
 ; FASTMUL-NEXT:    jmp lr
 ;
 ; SLOWMUL-LABEL: mul_100:
@@ -76,6 +80,31 @@ define i32 @mul_100(i32 %x) {
 ; SLOWMUL-NEXT:    shl r1, 2
 ; SLOWMUL-NEXT:    jmp lr
   %r = mul i32 %x, 100
+  ret i32 %r
+}
+
+; 109 = (((7x << 2) - x) << 2) + x: seven instructions, enough to decompose on
+; penumbra1 but not against penumbra2_5's faster multiply.
+define i32 @mul_109(i32 %x) {
+; FASTMUL-LABEL: mul_109:
+; FASTMUL:         .cfi_startproc
+; FASTMUL-NEXT:  // %bb.0:
+; FASTMUL-NEXT:    lli r2, 109
+; FASTMUL-NEXT:    mul r1, r2
+; FASTMUL-NEXT:    jmp lr
+;
+; SLOWMUL-LABEL: mul_109:
+; SLOWMUL:         .cfi_startproc
+; SLOWMUL-NEXT:  // %bb.0:
+; SLOWMUL-NEXT:    mov r2, r1
+; SLOWMUL-NEXT:    shl r2, 3
+; SLOWMUL-NEXT:    sub r2, r1
+; SLOWMUL-NEXT:    shl r2, 2
+; SLOWMUL-NEXT:    sub r2, r1
+; SLOWMUL-NEXT:    shl r2, 2
+; SLOWMUL-NEXT:    add r1, r2
+; SLOWMUL-NEXT:    jmp lr
+  %r = mul i32 %x, 109
   ret i32 %r
 }
 

@@ -177,11 +177,15 @@ define i8 @sdiv_i8_minus_3(i8 %x) {
 ; FASTMUL-LABEL: sdiv_i8_minus_3:
 ; FASTMUL:         .cfi_startproc
 ; FASTMUL-NEXT:  // %bb.0:
-; FASTMUL-NEXT:    lli r3, 85
 ; FASTMUL-NEXT:    mov r2, r1
 ; FASTMUL-NEXT:    shl r2, 24
 ; FASTMUL-NEXT:    sar r2, 24
-; FASTMUL-NEXT:    mul r2, r3
+; FASTMUL-NEXT:    mov r3, r2
+; FASTMUL-NEXT:    shl r3, 4
+; FASTMUL-NEXT:    add r3, r2
+; FASTMUL-NEXT:    mov r2, r3
+; FASTMUL-NEXT:    shl r2, 2
+; FASTMUL-NEXT:    add r2, r3
 ; FASTMUL-NEXT:    shl r2, 16
 ; FASTMUL-NEXT:    sar r2, 16
 ; FASTMUL-NEXT:    sar r2, 8

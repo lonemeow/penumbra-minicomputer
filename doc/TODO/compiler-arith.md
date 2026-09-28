@@ -62,12 +62,12 @@ The gaps below are open; none of them produces wrong code.
 
   | `uint64_t` product | Now | Decomposed | penumbra1 cycles | penumbra2_5 cycles |
   |---|---:|---:|---:|---:|
-  | `x * 3` | 6, one `MULU` | 6 | 47 → 12 | 15 → 6 |
-  | `x * 10` | 7, one `MULU` | 10 | 49 → 20 | 16 → 10 |
-  | `(uint64_t)u * 10`, `u` 32-bit | 2, one `MULU` | 8 | 39 → 16 | 11 → 8 |
+  | `x * 3` | 6, one `MULU` | 6 | 47 → 12 | 16 → 6 |
+  | `x * 10` | 7, one `MULU` | 10 | 49 → 20 | 17 → 10 |
+  | `(uint64_t)u * 10`, `u` 32-bit | 2, one `MULU` | 8 | 39 → 16 | 12 → 8 |
 
   The last pays only on penumbra1: six added instructions save
-  penumbra2_5 three cycles.  Planning it needs the high word known
+  penumbra2_5 four cycles.  Planning it needs the high word known
   zero (a `G_ZEXT` operand), where a shifted term's high word is one
   `SHR` of the low word and an add's is `ADC` of zero.
 

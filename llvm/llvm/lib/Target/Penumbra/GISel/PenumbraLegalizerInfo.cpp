@@ -318,7 +318,7 @@ PenumbraLegalizerInfo::PenumbraLegalizerInfo(const PenumbraSubtarget &ST) {
       .narrowScalarIf(scalarWiderThan(0, 32), changeTo(0, s32));
 
   // Unsigned division/remainder: custom-lower s32 to catch power-of-2 constants
-  // (SHR for udiv, AND for urem — cheaper than a 34-cycle divide); the custom
+  // (SHR for udiv, AND for urem — cheaper than the hardware divide); the custom
   // handler leaves the variable case in place as a legal s32 op, which the
   // selector maps onto the hardware DIVU/DIVU_P peer unit.
   // s64 goes straight to libcall (__udivdi3/__umoddi3).

@@ -76,10 +76,10 @@ class PenumbraSchedModel : SchedMachineModel {
   let CompleteModel = 0;         // Don't require itineraries for every opcode
 }
 
-// Each model states the whole-instruction cycles an ALU operation, a multiply
-// and a divide hold its core, as measured on the RTL
-// (doc/internals/instruction-timing.md).  PenumbraSubtarget reads them back
-// for cost decisions, so every model must state all three.
+// Each model states the issue cycles of an ALU operation, a multiply and a
+// divide -- how long an instruction holds its core -- from the timing
+// reference (doc/system/instruction-timing.md).  PenumbraSubtarget reads them
+// back for cost decisions, so every model must state all three.
 def Penumbra1Model : PenumbraSchedModel;
 let SchedModel = Penumbra1Model in {
   def : WriteRes<WriteALU, []> { let Latency = 2; }
@@ -92,12 +92,12 @@ let SchedModel = Penumbra1Model in {
 // instruction.  They differ in how long a consumer waits for its producer:
 // Penumbra/2 has no forwarding, so an ALU instruction reads a register only
 // once the producer has left WB, three cycles later at distance one;
-// Penumbra/2.5 forwards it (doc/internals/instruction-timing.md,
-// "Dependency costs").
+// Penumbra/2.5 forwards it (doc/system/instruction-timing.md, "Issue and
+// latency").
 multiclass Penumbra2InstrCycles {
   def : WriteRes<WriteALU, []> { let Latency = 1; }
-  def : WriteRes<WriteMul, []> { let Latency = 10; }
-  def : WriteRes<WriteDiv, []> { let Latency = 34; }
+  def : WriteRes<WriteMul, []> { let Latency = 11; }
+  def : WriteRes<WriteDiv, []> { let Latency = 35; }
 }
 
 def Penumbra2Model : PenumbraSchedModel;
