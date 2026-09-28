@@ -8,10 +8,12 @@ CONTAINER_WORK_DIR="/work"
 SCRIPT_DIR=$(dirname "$0")/..
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 
-# Get the name the script was called as (e.g., 'yosys' or 'fujprog')
+# Get the name the script was called as (e.g., 'yosys' or 'ecppack')
 TOOL_NAME=$(basename "$0")
 
-MY_UID=$(id -u)
+# Your UID and GID: given only a UID, Docker runs the tool in the root
+# group, with that group's access to anything group-owned by root.
+MY_USER="$(id -u):$(id -g)"
 
 # Compose passes no signal through to the tool, so stopping this wrapper -- a
 # `timeout`, a Ctrl-C -- would leave the tool running with nothing attached.
@@ -24,6 +26,6 @@ trap 'docker kill "$CONTAINER_NAME" >/dev/null 2>&1 || true; exit 143' TERM INT 
 
 # Backgrounded, because a trap does not run while the shell waits on a
 # foreground child.
-docker compose -f "$COMPOSE_FILE" run -u "$MY_UID" --rm --name "$CONTAINER_NAME" \
+docker compose -f "$COMPOSE_FILE" run -u "$MY_USER" --rm --name "$CONTAINER_NAME" \
     -v "$PWD:$CONTAINER_WORK_DIR" $SERVICE_NAME "$TOOL_NAME" "$@" &
 wait $!

@@ -220,7 +220,7 @@ Open work lives in `doc/TODO/`, one file per area; the table in
 
 ### FPGA synthesis (OSS CAD Suite via Docker)
 Wrapper scripts in `hw/tools/oss-cad-suite/bin/` make Yosys,
-nextpnr-ecp5, ecppack, fujprog usable as normal commands:
+nextpnr-ecp5 and ecppack usable as normal commands:
 `export PATH="$PWD/hw/tools/oss-cad-suite/bin:$PATH"`.
 
 - `make fpga BOARD=ulx3s CORE=penumbra1` — sv2v → fix → yosys →

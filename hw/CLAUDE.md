@@ -483,11 +483,10 @@ Ubuntu 22.04 + OSS CAD Suite release.
 
 Wrapper symlinks in `tools/oss-cad-suite/bin/` (all resolve to
 `docker-wrapper.sh` — multi-call pattern): `yosys`, `nextpnr-ecp5`,
-`ecppack`, `fujprog`, `iverilog`, `vvp`.  The `iverilog`/`vvp` pair
+`ecppack`, `iverilog`, `vvp`.  The `iverilog`/`vvp` pair
 serves the gate-level harness in `sim/gate/`, which needs an event
-simulator rather than Verilator. Container runs as host UID to avoid
-root-owned output. `fujprog` requires USB passthrough
-(`--privileged`, `/dev/bus/usb`).
+simulator rather than Verilator. Container runs as host UID and GID
+to avoid root-owned output, and has no USB access.
 
 Every board is programmed by `tools/openfpgaloader/bin/openFPGALoader`,
 built from a pinned upstream commit into its own image
