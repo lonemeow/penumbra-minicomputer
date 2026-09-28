@@ -130,6 +130,44 @@ static void test_addr(void)
 	check(!slot_valid(MAIN_SLOT(SET_AB, 1)), "addr: a global kernel entry is dropped by ASID 0");
 }
 
+/*
+ * A dead slot's VPN word is never a match.  Invalidating a slot writes
+ * only TLB_PTE, which commits the entry with whatever TLB_VPN was last
+ * staged, so a dead slot keeps an arbitrary word -- and it can name the
+ * live entry in the other way of its set.  The kernel gets there when
+ * the last word staged belongs to a page in the set it invalidates in:
+ *
+ *   1. a refill installs page Z in way 1, staging Z's word;
+ *   2. before anything else stages a word, the kernel invalidates page
+ *      X in way 0 of the same set, which commits {Z, V=0} there;
+ *   3. unmapping Z later, tlb_invalidate_addr(Z) meets the dead way-0
+ *      copy before the live one.
+ *
+ * pmap.c seldom lines this up: looking up a PTE maps the scratch window,
+ * which stages that window's word just before the invalidation.  A
+ * refill between the lookup and the invalidation can, and so can
+ * tlb_invalidate_all() at ASID rollover, which leaves every slot holding
+ * the last word staged.  The first case builds the dead copy directly;
+ * the second reaches it through steps 1-3, install() staging each word
+ * as the refill does.
+ */
+static void test_dead_slot(void)
+{
+	clear_all();
+	install(0, VA_A, 3, USER_FLAGS & ~PTE_V);
+	install(1, VA_A, 3, USER_FLAGS);
+	tlb_invalidate_addr(VA_A, 3);
+	check(!slot_valid(MAIN_SLOT(SET_AB, 1)), "dead_slot: did not invalidate way-1");
+
+	clear_all();
+	install(0, VA_B, 3, USER_FLAGS);	/* X */
+	install(1, VA_A, 3, USER_FLAGS);	/* Z, staged last */
+	tlb_invalidate_addr(VA_B, 3);
+	tlb_invalidate_addr(VA_A, 3);
+	check(!slot_valid(MAIN_SLOT(SET_AB, 1)),
+	    "dead_slot: an invalidation's leftover word does not hide way 1");
+}
+
 static void test_asid(void)
 {
 	clear_all();
@@ -162,6 +200,7 @@ static void test_all(void)
 int main(void)
 {
 	test_addr();
+	test_dead_slot();
 	test_asid();
 	test_all();
 	if (failures)

@@ -73,6 +73,11 @@ tlb_invalidate_asid:
  * Works correctly for G=1 entries because the TLB miss handler
  * always installs G=1 entries with ASID=0, and kernel code
  * always calls tlb_invalidate_addr(va, 0) for kernel VAs.
+ *
+ * A way-0 match counts only if the slot is valid.  Invalidating a
+ * slot commits whatever TLB_VPN was last staged, so a dead slot can
+ * carry any VPN word -- including that of a live entry in way 1,
+ * which stopping at the dead match would leave in place.
  */
 	.globl	tlb_invalidate_addr
 	.type	tlb_invalidate_addr, @function
@@ -94,6 +99,9 @@ tlb_invalidate_addr:
 	rdsys	r1, #SYSDEV_MMU, #MMU_TLB_VPN
 	cmp	r1, r3
 	bne	.Ltia_w1
+	rdsys	r1, #SYSDEV_MMU, #MMU_TLB_PTE
+	test	r1, #PTE_V
+	beq	.Ltia_w1		/* dead slot: its VPN word is stale */
 	wrsys	r0, #SYSDEV_MMU, #MMU_TLB_PTE	/* invalidate way 0 */
 	ret
 
