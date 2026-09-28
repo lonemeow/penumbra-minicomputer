@@ -1422,9 +1422,9 @@ FPGA_AUDIO_TOPS = ulx3s_audio_test_top
 # AUDIO_CHANNELS, or a new CPU_HZ, whose target reweights nextpnr's
 # per-domain criticality and whose CLK_FREQ retunes every derived
 # divider.
-DEFAULT_SEED_ulx3s_penumbra1_top   := 0
-DEFAULT_SEED_ulx3s_penumbra2_top   := 7
-DEFAULT_SEED_ulx3s_penumbra2_5_top := 2
+DEFAULT_SEED_ulx3s_penumbra1_top   := 1
+DEFAULT_SEED_ulx3s_penumbra2_top   := 8
+DEFAULT_SEED_ulx3s_penumbra2_5_top := 10
 
 # Per-top default SDRAM stack (see SDRAM_STACK above).  Which stack a
 # top closes timing under is a placement question rather than a logical
