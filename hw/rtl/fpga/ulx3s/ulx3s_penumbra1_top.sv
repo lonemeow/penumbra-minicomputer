@@ -1,17 +1,21 @@
 // ULX3S Board Top (Penumbra/1) — gen1 CPU system on ECP5-85F
 //
-// Wires the Penumbra CPU to BRAM (boot ROM + working RAM) and a
-// real NS16450 UART on the FTDI serial port. Runs at 25 MHz from
-// the on-board crystal oscillator (no PLL).
+// Wires the Penumbra/1 CPU and its L2 to the board: 32 MB SDRAM via the
+// v2 controller stack, a 64 KB boot ROM, an NS16550A-compatible UART on
+// the FTDI serial port, and an SPI/SD card, a USB host port, a GPDI
+// display adapter and the audio device behind the autoconfig daisy
+// chain. The CPU runs at CPU_HZ off the system PLL; the SDRAM runs
+// decoupled at 100 MHz across the CDC.
 //
 // This is the board-specific integration module. It handles:
 //   - Pin mapping (FPGA I/O to board peripherals)
-//   - Reset generation (power-on counter)
+//   - Clocking (system and video PLLs) and reset generation (PLL lock,
+//     FIRE1, power-on counter)
 //   - ESP32 disable (free the UART)
 //   - LED indicators
-//   - Machine wiring (same pattern as machine_sim.sv)
-//
-// For other boards, copy this file and adjust pins/clocking/RAM.
+//   - Machine wiring (same pattern as machine_sim.sv), including the
+//     sysreg devices gen2 keeps inside its machine: the bus controller,
+//     the timer and the board identity
 
 // ── SDRAM clock-out phase shift (CLKOS2) ──────────────────────────
 // The SDRAM-clock pin is forwarded via ODDRX1F clocked from CLKOS2,

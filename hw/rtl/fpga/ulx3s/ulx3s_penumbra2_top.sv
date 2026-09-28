@@ -2,10 +2,11 @@
 //
 // Wires machine_penumbra2 (core + MMU + split VIPT L1s + I/D arbiter +
 // fill sequencer + L2 + sysreg complex) to the board: 32 MB SDRAM via the
-// v2 controller stack, a 64 KB boot ROM, a real NS16450 UART on the FTDI
-// serial port, and an SPI/SD card, a USB host port and a GPDI display
-// adapter behind the autoconfig daisy chain. The CPU runs at 25 MHz; the
-// SDRAM runs decoupled at 100 MHz across the CDC.
+// v2 controller stack, a 64 KB boot ROM, an NS16550A-compatible UART on
+// the FTDI serial port, and an SPI/SD card, a USB host port, a GPDI
+// display adapter and the audio device behind the autoconfig daisy
+// chain. The CPU runs at CPU_HZ off the system PLL; the SDRAM runs
+// decoupled at 100 MHz across the CDC.
 //
 // The machine owns the programmable timer and the bus controller
 // internally, so the board attaches only the memory/peripheral devices on
@@ -14,8 +15,6 @@
 // decode and the response fabric, with its no-device watchdog, are
 // assembled here — the same bus shape machine_penumbra2_sim presents, so
 // what simulates is what synthesizes.
-//
-// For other boards, copy this file and adjust pins/clocking/RAM.
 
 // ── SDRAM clock-out phase shift (CLKOS2) ──────────────────────────
 // The SDRAM-clock pin is forwarded via ODDRX1F clocked from CLKOS2, which
@@ -224,8 +223,9 @@ module ulx3s_penumbra2_top (
     ) u_check_usb_div ();
 
     // ── Reset: PLL lock + btn[1] (FIRE1) manual reset ──────────
-    // Hold reset until PLL locks, then count 2^19 clocks (~21 ms at
-    // 25 MHz). Pressing btn[1] reasserts reset (input synchronizer).
+    // Hold reset until PLL locks, then count 2^19 CPU clocks, which
+    // covers the bus's 10 ms reset minimum for any CPU_HZ up to 52 MHz.
+    // Pressing btn[1] reasserts reset (input synchronizer).
     logic btn1_sync1, btn1_sync2;
     always_ff @(posedge clk) begin
         btn1_sync1 <= btn[1];
@@ -363,7 +363,7 @@ module ulx3s_penumbra2_top (
         else     hb_cnt <= hb_cnt + 1;
     end
 
-    assign led[0]   = hb_cnt[24]; // ~0.75 Hz heartbeat
+    assign led[0]   = hb_cnt[24]; // heartbeat: a 2^25-cycle period
     assign led[1]   = pll_lock;   // PLL locked
     assign led[7:2] = '0;         // unused
 
