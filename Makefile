@@ -544,6 +544,20 @@ test-iss-options: $(ISS)
 	@python3 sw/sim/tests/run_iss_tests.py --iss ./$(ISS) \
 		--asm "$(PASM) --org 0xFFFF0000" --outdir $(BUILD_DIR)/iss-tests
 
+# ── libc string routine tests (fast, no Docker) ───────────────
+# The hand-written routines libc and the kernel share
+# (netbsd/common/lib/libc/arch/penumbra/string/), checked on the ISS
+# against reference loops at every alignment, with guard bytes around
+# each destination.  See test/libc/.
+# Usage: make test-libc
+.PHONY: test-libc
+test-libc: $(ISS)
+	@python3 test/libc/run-string-test.py --cc "$(CC)" --objcopy "$(OBJCOPY)" \
+		--iss ./$(ISS) --bin2hex sw/tools/bin2hex.py \
+		--harness-dir $(HARNESS_DIR) \
+		--src-dir netbsd/common/lib/libc/arch/penumbra/string \
+		--build-dir $(BUILD_DIR)/test-libc
+
 # ── Compiler Correctness Tests ─────────────────────────────────
 # Runs curated tests from llvm-test-suite on ISS +hosted mode.
 # Usage: make test-compiler [OPT="-O2"]

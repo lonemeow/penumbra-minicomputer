@@ -149,6 +149,9 @@ Open work lives in `doc/TODO/`, one file per area; the table in
   input. Same `SDCARD`/`TRACE` options.
 - `make test-iss` — the `hw/sim/programs/isa/` conformance suite on
   the ISS (no Docker).
+- `make test-libc` — the hand-written string routines libc and the
+  kernel share (`netbsd/common/lib/libc/arch/penumbra/string/`), on the
+  ISS against reference loops at every alignment (`test/libc/`).
 - `make test-iss-options` — the ISS's own options (`+core=`, …)
   against programs with known answers (`sw/sim/tests/`); expected
   values are written from the hardware's parameters.
