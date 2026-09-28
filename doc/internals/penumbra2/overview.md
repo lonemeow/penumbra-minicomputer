@@ -5,8 +5,9 @@
 > **⚠️ ABANDONED — superseded by gen3.**
 >
 > Penumbra/2 and /2.5 are abandoned. gen2 can *just barely* reach
-> **37.5 MHz** on the ULX3S ECP5-85F — the only clock step the PLL allows
-> above its 25 MHz starting point — and only after the fmax-closure round
+> **37.5 MHz** on the ULX3S ECP5-85F — the CPU clock divides the PLL's
+> 600 MHz VCO, which the SDRAM's 100 MHz fixes, so the next step up is
+> 40 MHz — and only after the fmax-closure round
 > stripped it back (L1 to 2-way, the L2 read verdict and the line-fill
 > stream registered, the gen2.5 ID-stage predictor removed). That leaves
 > **no headroom** for the remaining gen2.5 optimizations (the store buffer,
