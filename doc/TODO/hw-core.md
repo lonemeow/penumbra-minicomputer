@@ -719,7 +719,49 @@ same. The gen2 caches, the gate and the declarations landed in
   resets `valid_q`: the old L2 tags' shape, which Vivado builds from
   flip-flops. gen3's L1 and L2, next on its build list (this file,
   "gen3 (Penumbra/3) Phase-1 build status"), are cheaper written in
-  the portable forms from the start than recoded after.
+  the portable forms from the start than recoded after. The same
+  rewrite removes the store's read-during-write bypass (this file,
+  "gen3 sysreg accesses act on their target at a fixed cycle").
+
+## Hardware: gen3 sysreg accesses act on their target at a fixed cycle
+
+A gen3 `WRSYS` lands in its device on the cycle it commits from EX,
+and an `RDSYS` takes its response from the device in MEM2. Neither
+lets the target say when it can take the access, so whatever the
+target is doing in that cycle has to be reconciled in logic.
+
+The main-TLB install shows the cost. A `TLB_PTE` commit writes both
+copies of `penumbra3_tlb_store` while their read ports keep reading;
+the I-copy is serving the fetches behind the `WRSYS`. yosys cannot
+prove that the write and a read never meet on one set, so it keeps
+the RTL's read-first result with a read-during-write bypass: the
+write delayed a cycle through flip-flops, and a compare and mux on
+the block RAM outputs, inside the verdict cone after the EBR
+(`doc/internals/penumbra3/mem-stage.md`, "The MEM2 verdict cone").
+`synth_ecp5` puts it at 134 LUTs and 137 flip-flops per copy: 313
+LUTs and 203 flip-flops against 179 and 66 without it.
+
+No overlapping lookup is consumed today. The `WRSYS` commits with
+the pipe drained behind it, and the resync re-fetches its successor
+the next cycle, discarding every lookup the install overlapped.
+Gating each copy's read off in the install cycle states that, and
+yosys then drops the bypass. It stays free only while TLB installs
+serialize, and the refill path wants them not to
+(`doc/internals/penumbra3/timing-outline.md`, "Multi-cycle and
+serializing instructions (div/mul, WRSYS, ERET)"). A non-serializing
+install makes the I-copy's overlapping lookup live, and that lookup
+then has to wait a cycle rather than read the block RAM mid-write.
+
+`RDSYS` has the mirror problem: the response is taken from the
+device in a fixed cycle, so a device whose status is not already
+registered puts its status logic in the core's result path.
+
+Open: a sysreg access the target paces. The target accepts a write
+in a cycle of its choosing and answers a read from a register once
+it is ready, so an install lands in a cycle with no lookup launched
+and a status read leaves the device registered. This fits the gen3
+rule that rare and slow operations pay cycles, never critical-path
+logic.
 
 ## Hardware: an L2 INVAL_ALL write is dropped or drops a strobe
 
