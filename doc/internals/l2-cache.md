@@ -355,16 +355,29 @@ Multi-cycle operations (`INVAL_ALL`, eventually `FLUSH_ALL`) signal
 completion via `STATUS.busy`; the sysreg interface itself stays
 single-cycle.
 
+**When a CTRL write takes effect.**  `CTRL` reads back the value
+written at once, but the cache starts running with it only at an
+edge ending a cycle in which the front side presents no access.  A
+bus master holds its strobe and address through the ack
+(`doc/hardware/bus-protocol.md`), and the enable picks the path of a
+cacheable read, so changing it while one waits on the bus would drop
+that strobe.  Idle, the cache drives the bus only with copies of the
+front side's strobes, and a line fill holds the front side's read to
+its end, so a cycle with no access presented has nothing in flight
+that the enable steers.  Fills and walks drive the bus from the
+cache's own state and never consult the enable.  No status bit
+reports the wait; software only ever sees the value it wrote.
+
 **Post-reset auto-INVAL walker.**  BRAM has no clear at reset, so
 `l2_cache` runs an automatic INVAL_ALL walk after `i_rst` deasserts
-to zero every valid bit before any line lookup can hit.  During the
-walk, `STATUS.busy=1` and an internal `ready` flag (`l2_cache.sv:150-163`)
-forces the cache to act as a pass-through regardless of `CTRL.enable`.
-Software bring-up that writes `CTRL.enable=1` immediately after reset
-must therefore poll `STATUS.busy=0` before relying on hit traffic — at
-4096-cycle worst case (`NUM_SETS × NUM_WAYS`) this is rarely a race in
-practice but is worth knowing when writing `crt0.S` / `locore.S`
-sequences that probe the cache right at boot.
+to zero every valid bit before any line lookup can hit.  The walk
+clears one set per cycle in every way at once, `NUM_SETS` (1024)
+cycles in all.  During it `STATUS.busy=1`, and an internal `ready`
+flag keeps the cache in pass-through whatever `CTRL.enable` holds.
+The walk's end is itself the point where cacheable reads leave
+pass-through, so an enable written during the walk waits for it to
+end as well: software may write `CTRL.enable=1` at any time after
+reset without polling `STATUS.busy`.
 
 **`INVAL_LINE` is reserved-not-implemented** in current RTL across
 all cache levels.  Rationale: L1 full-flush is a single-cycle valid-

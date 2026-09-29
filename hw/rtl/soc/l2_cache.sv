@@ -39,7 +39,9 @@
 //   reg 0 INFO       (R)  unified cache INFO encoding (see penumbra_pkg.sv);
 //                          INFO=0 means "no L2 present" (only a
 //                          future variant that drops this instance)
-//   reg 1 CTRL       (RW) {31'b0, enable}; reset value 0 (disabled)
+//   reg 1 CTRL       (RW) {31'b0, enable}; reset value 0 (disabled);
+//                          reads back as written, takes effect once no
+//                          access it would re-route is in flight
 //   reg 2 INVAL_ALL  (W)  write triggers multi-cycle valid-bit walk
 //   reg 6 STATUS     (R)  {31'b0, busy}; busy=1 while INVAL_ALL walks
 //
@@ -143,18 +145,19 @@ module l2_cache
     // ══════════════════════════════════════════════════════════
     // Sysreg state
     // ══════════════════════════════════════════════════════════
-    logic l2_enable;
+    logic ctrl_enable;      // CTRL.enable as software last wrote it
+    logic l2_enable;        // the enable the cache is running with
     logic inval_all_req;
 
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
-            l2_enable     <= 1'b0;
+            ctrl_enable   <= 1'b0;
             inval_all_req <= 1'b0;
         end else begin
             inval_all_req <= 1'b0;  // 1-cycle pulse
             if (i_sys_we) begin
                 case (i_sys_reg)
-                    SYSREG_CACHE_CTRL:      l2_enable     <= i_sys_wdata[0];
+                    SYSREG_CACHE_CTRL:      ctrl_enable   <= i_sys_wdata[0];
                     SYSREG_CACHE_INVAL_ALL: inval_all_req <= 1'b1;
                     default: ;
                 endcase
@@ -169,6 +172,28 @@ module l2_cache
     // Pass-through (l2_active==0) is unaffected and works
     // immediately after reset.
     logic ready;
+
+    // The enable decides which path a cacheable read takes, and a bus
+    // master holds its strobe and address through the ack
+    // (doc/hardware/bus-protocol.md).  A change landing while an access
+    // is in flight would move it between paths mid-access, so
+    // l2_enable takes CTRL's value only at an edge where no access is:
+    //   - in S_IDLE the bus carries only copies of the front side's
+    //     strobes (see the memory port output mux), and a line fill
+    //     holds the front side's read until the whole line is in;
+    //   - the walk's end is a path change of its own (l2_active reads
+    //     `ready`), so an enable must not have landed before it.
+    // The condition reads registered state and the front side's
+    // strobes only: the same inputs that already load stage 0.
+    logic enable_apply;
+    assign enable_apply = ready && !(i_re || i_we);
+
+    always_ff @(posedge i_clk) begin
+        if (i_rst)
+            l2_enable <= 1'b0;
+        else if (enable_apply)
+            l2_enable <= ctrl_enable;
+    end
 
     // l2_active: combinational gate for "this access uses the
     // cache pipeline" (vs straight pass-through).  Gated on
@@ -723,7 +748,7 @@ module l2_cache
         o_sys_rdata = 32'b0;
         case (i_sys_reg)
             SYSREG_CACHE_INFO:   o_sys_rdata = INFO_VALUE;
-            SYSREG_CACHE_CTRL:   o_sys_rdata = {31'b0, l2_enable};
+            SYSREG_CACHE_CTRL:   o_sys_rdata = {31'b0, ctrl_enable};
             // STATUS.busy: either software-requested INVAL_ALL is
             // walking, or the post-reset auto-INVAL hasn't finished
             // (ready still 0).  Both make the cache unsafe to
@@ -904,6 +929,23 @@ module l2_cache
     // ══════════════════════════════════════════════════════════
     // Simulation assertions
     // ══════════════════════════════════════════════════════════
+
+    // The bus master's hold (doc/hardware/bus-protocol.md): a strobe
+    // not yet acked is presented again next cycle at the same address,
+    // whatever a sysreg write did meanwhile.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (o_mem_re && !i_mem_ack) |=> (o_mem_re && $stable(o_mem_addr)))
+        else $error("l2_cache: read strobe dropped or moved before its ack");
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (o_mem_we && !i_mem_ack) |=> (o_mem_we && $stable(o_mem_addr)))
+        else $error("l2_cache: write strobe dropped or moved before its ack");
+
+    // The enable changes only after a cycle in which this cache drove
+    // no strobe, so it moves no access between paths (see enable_apply).
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (l2_enable != $past(l2_enable)) |->
+            (!$past(o_mem_re) && !$past(o_mem_we)))
+        else $error("l2_cache: enable changed with an access on the bus");
 
     // The downstream bus may be driven during S_INVAL_ALL only
     // by pass-through (l2_active==0) — cached accesses don't

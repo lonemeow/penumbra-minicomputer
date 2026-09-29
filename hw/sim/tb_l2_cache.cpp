@@ -21,6 +21,9 @@
 //   - Post-reset auto-INVAL walks all sets to initialise valid
 //     BRAMs (undefined at power-on on real HW); the cache stays
 //     in pass-through mode until `ready` asserts
+//   - A CTRL write takes effect only at an edge where it re-routes
+//     no access in flight (the memory mock fails a dropped or moved
+//     strobe)
 //
 // The "memory" mock is a registered bus slave: it latches a request at
 // a clock edge and acks it `latency` cycles later with its read data.
@@ -46,10 +49,8 @@ static void reset(Vl2_cache* d) {
     d->i_rst = 0;
     // Post-reset auto-INVAL walks all NUM_SETS=1024 sets clearing
     // valid bits in BRAM (which power up undefined on real HW).
-    // Cached operations are gated on STATUS.busy=0 / `ready` flag;
-    // tick past the walk so subsequent tests start with a ready
-    // cache.  Matches what real software does after boot: poll
-    // STATUS.busy before enabling/using L2.
+    // Cached operations are gated on the `ready` flag; tick past
+    // the walk so subsequent tests start with a ready cache.
     for (int i = 0; i < 1100; i++) tick(d);
 }
 
@@ -77,6 +78,7 @@ static void check_bool(const char* name, bool got, bool exp) {
 struct MemMock {
     int      wait_remaining = 0;
     uint32_t pending_rdata  = 0;
+    uint32_t req_addr       = 0;
     bool     have_request   = false;
     bool     req_was_write  = false;
     bool     acking         = false;
@@ -88,8 +90,9 @@ struct MemMock {
                 uint32_t (*rdata_fn)(uint32_t)) {
         bool strobe = d->o_mem_re || d->o_mem_we;
         if (have_request) {
-            // Contract enforcement: the master holds re/we until the
-            // ack.  See doc/hardware/bus-protocol.md "Sync-Bus Mapping".
+            // Contract enforcement: the master holds re/we and the
+            // address until the ack.  See doc/hardware/bus-protocol.md
+            // "Sync-Bus Mapping".
             bool live = req_was_write ? (bool)d->o_mem_we
                                       : (bool)d->o_mem_re;
             if (!live) {
@@ -99,10 +102,18 @@ struct MemMock {
                         req_was_write ? "o_mem_we" : "o_mem_re");
                 violations++;
                 errors++;
+            } else if (d->o_mem_addr != req_addr) {
+                fprintf(stderr,
+                        "MemMock: contract violation — master moved the "
+                        "address from 0x%08X to 0x%08X before the ack\n",
+                        req_addr, d->o_mem_addr);
+                violations++;
+                errors++;
             }
         } else if (strobe && !acking) {
             have_request   = true;
             req_was_write  = d->o_mem_we;
+            req_addr       = d->o_mem_addr;
             wait_remaining = latency;
             pending_rdata  = rdata_fn(d->o_mem_addr);
         }
@@ -164,6 +175,29 @@ static uint32_t rdsys(Vl2_cache* d, uint8_t reg) {
     return d->o_sys_rdata;
 }
 
+// A sysreg write landing while bus traffic is in flight: the memory
+// mock samples the write's cycle too, so an access the write re-routes
+// shows up as a contract violation.
+static void wrsys_with_mem(Vl2_cache* d, MemMock& mem, int lat,
+                           uint32_t (*rdata_fn)(uint32_t),
+                           uint8_t reg, uint32_t val) {
+    d->i_sys_reg   = reg;
+    d->i_sys_wdata = val;
+    d->i_sys_we    = 1;
+    d->eval();
+    tick_with_mem(d, mem, lat, rdata_fn);
+    d->i_sys_we    = 0;
+    d->eval();
+}
+
+// Enables the cache with nothing in flight.  The enable takes effect
+// at the first edge after the write with no access presented, so one
+// idle cycle follows the write before the test presents an access.
+static void enable_l2(Vl2_cache* d) {
+    wrsys(d, 1, 1);
+    tick(d);
+}
+
 // ══════════════════════════════════════════════════════════════
 // Tests
 // ══════════════════════════════════════════════════════════════
@@ -217,7 +251,7 @@ static void test_passthrough_when_disabled(Vl2_cache* d) {
 static void test_cached_read_miss_then_hit(Vl2_cache* d) {
     printf("── Cached read: first miss installs, second hit serves from L2 ──\n");
     reset(d);
-    wrsys(d, 1, 1);   // CTRL.enable = 1
+    enable_l2(d);
     MemMock mem;
 
     // ── First access: miss → fill → eventually serve ──
@@ -254,7 +288,7 @@ static uint32_t rdata_zero(uint32_t a) { (void)a; return 0; }
 static void test_write_updates_line(Vl2_cache* d) {
     printf("── Cached write hit updates L2 line (WT-WnA) ──\n");
     reset(d);
-    wrsys(d, 1, 1);
+    enable_l2(d);
     MemMock mem;
 
     // Prime the cache with a read to install line 0x5000.  After
@@ -344,7 +378,7 @@ static void test_write_updates_line(Vl2_cache* d) {
 static void test_inval_all(Vl2_cache* d) {
     printf("── INVAL_ALL drops every line ──\n");
     reset(d);
-    wrsys(d, 1, 1);
+    enable_l2(d);
     MemMock mem;
 
     // Install line 0x6000.
@@ -387,7 +421,7 @@ static void test_inval_all(Vl2_cache* d) {
 static void test_inval_all_implicit_fence(Vl2_cache* d) {
     printf("── INVAL_ALL implicit fence: next access stalls until done ──\n");
     reset(d);
-    wrsys(d, 1, 1);  // CTRL.enable = 1
+    enable_l2(d);
     MemMock mem;
 
     // Trigger INVAL_ALL.
@@ -429,10 +463,146 @@ static void test_inval_all_implicit_fence(Vl2_cache* d) {
     release_after_completion(d, mem, rdata_addr_complement);
 }
 
+// ══════════════════════════════════════════════════════════════
+// CTRL writes against accesses in flight.  Each write lands while an
+// access it could re-route is on the bus or in the lookup; the memory
+// mock fails the test if the access loses its strobe or address
+// before the ack.
+// ══════════════════════════════════════════════════════════════
+
+static void test_enable_during_passthrough_read(Vl2_cache* d) {
+    printf("── CTRL enable held while a pass-through read awaits its ack ──\n");
+    reset(d);
+    MemMock mem;
+    const int LAT = 4;
+
+    // With the cache off, a cacheable read is a pass-through beat.
+    d->i_addr      = 0x3004;
+    d->i_cacheable = 1;
+    d->i_re        = 1;
+    d->eval();
+    tick_with_mem(d, mem, LAT, rdata_addr_complement);
+    wrsys_with_mem(d, mem, LAT, rdata_addr_complement, 1, 1);
+    check("enable_mid_read.ctrl_reads_written", rdsys(d, 1) & 1, 1u);
+
+    int safety = 0;
+    while (d->o_busy && safety++ < 50)
+        tick_with_mem(d, mem, LAT, rdata_addr_complement);
+    check("enable_mid_read.rdata", d->o_rdata,
+          rdata_addr_complement(0x3004));
+    check("enable_mid_read.single_beat", mem.served_count, 1u);
+    check("enable_mid_read.no_violation", (uint32_t)mem.violations, 0u);
+    release_after_completion(d, mem, rdata_addr_complement);
+
+    // The enable has taken effect: the same read now fills its line.
+    d->i_re = 1;
+    d->eval();
+    safety = 0;
+    while (d->o_busy && safety++ < 100)
+        tick_with_mem(d, mem, LAT, rdata_addr_complement);
+    check("enable_mid_read.next_read_fills_line", mem.served_count, 5u);
+    release_after_completion(d, mem, rdata_addr_complement);
+}
+
+static void test_disable_during_lookup(Vl2_cache* d) {
+    printf("── CTRL disable held while a cached read is in the lookup ──\n");
+    reset(d);
+    enable_l2(d);
+    MemMock mem;
+    const int LAT = 2;
+
+    // The disable lands on the edge that takes the read into the
+    // lookup.  The read misses, so it must finish as the line fill it
+    // started, without a pass-through beat appearing beside it.
+    d->i_addr      = 0x5008;
+    d->i_cacheable = 1;
+    d->i_re        = 1;
+    d->eval();
+    wrsys_with_mem(d, mem, LAT, rdata_addr_complement, 1, 0);
+    check("disable_in_lookup.ctrl_reads_written", rdsys(d, 1) & 1, 0u);
+
+    int safety = 0;
+    while (d->o_busy && safety++ < 100)
+        tick_with_mem(d, mem, LAT, rdata_addr_complement);
+    check("disable_in_lookup.rdata", d->o_rdata,
+          rdata_addr_complement(0x5008));
+    check("disable_in_lookup.line_filled", mem.served_count, 4u);
+    check("disable_in_lookup.no_violation", (uint32_t)mem.violations, 0u);
+    release_after_completion(d, mem, rdata_addr_complement);
+
+    // The disable has taken effect: a cacheable read is one beat.
+    uint32_t before = mem.served_count;
+    d->i_addr = 0x5004;
+    d->i_re   = 1;
+    d->eval();
+    safety = 0;
+    while (d->o_busy && safety++ < 20)
+        tick_with_mem(d, mem, LAT, rdata_addr_complement);
+    check("disable_in_lookup.next_read_single_beat",
+          mem.served_count, before + 1);
+    release_after_completion(d, mem, rdata_addr_complement);
+}
+
+// Releases reset and returns with the post-reset walk still running
+// (reset() ticks past it).
+static void reset_into_walk(Vl2_cache* d) {
+    d->i_rst = 1;
+    d->i_addr = 0; d->i_wdata = 0; d->i_byte_en = 0;
+    d->i_re = 0; d->i_we = 0; d->i_cacheable = 0;
+    d->i_mem_rdata = 0; d->i_mem_ack = 0;
+    d->i_sys_reg = 0; d->i_sys_wdata = 0; d->i_sys_we = 0;
+    tick(d); tick(d);
+    d->i_rst = 0;
+    tick(d);
+}
+
+static void test_enable_across_post_reset_walk(Vl2_cache* d) {
+    printf("── CTRL enable written during the post-reset walk ──\n");
+    reset_into_walk(d);
+    wrsys(d, 1, 1);
+    MemMock mem;
+
+    // Slow cacheable reads back to back, with an idle cycle between
+    // them, so the enable has edges to land on during the walk and a
+    // read is likely waiting for its ack when the walk ends.
+    const int LAT = 40;
+    bool rdata_ok = true;
+    int reads = 0;
+    while ((rdsys(d, 6) & 1) && reads < 100) {
+        uint32_t a = 0x9000u + 16u * (uint32_t)reads;
+        d->i_addr      = a;
+        d->i_cacheable = 1;
+        d->i_re        = 1;
+        d->eval();
+        int safety = 0;
+        while (d->o_busy && safety++ < 400)
+            tick_with_mem(d, mem, LAT, rdata_addr_complement);
+        if (d->o_rdata != rdata_addr_complement(a))
+            rdata_ok = false;
+        release_after_completion(d, mem, rdata_addr_complement);
+        reads++;
+    }
+    check_bool("walk_end_enable.rdata", rdata_ok, true);
+    check("walk_end_enable.no_violation", (uint32_t)mem.violations, 0u);
+    check_bool("walk_end_enable.walk_completed",
+               (rdsys(d, 6) & 1) == 0u, true);
+
+    // The enable has taken effect: a new line fills.
+    uint32_t before = mem.served_count;
+    d->i_addr = 0xA000;
+    d->i_re   = 1;
+    d->eval();
+    int safety = 0;
+    while (d->o_busy && safety++ < 400)
+        tick_with_mem(d, mem, 2, rdata_addr_complement);
+    check("walk_end_enable.cache_on_after", mem.served_count, before + 4);
+    release_after_completion(d, mem, rdata_addr_complement);
+}
+
 static void test_uncached_skips_cache(Vl2_cache* d) {
     printf("── Uncacheable access skips the cache pipeline ──\n");
     reset(d);
-    wrsys(d, 1, 1);
+    enable_l2(d);
     MemMock mem;
 
     // Uncacheable read.  Drives o_mem_re immediately, no 2-cycle
@@ -464,7 +634,7 @@ static void test_uncached_skips_cache(Vl2_cache* d) {
 static void test_perfctrs(Vl2_cache* d) {
     printf("── Performance counters (regs 10-13) ──\n");
     reset(d);
-    wrsys(d, 1, 1);                // CTRL.enable = 1
+    enable_l2(d);
     MemMock mem;
 
     // Counters start at 0 after reset.
@@ -603,7 +773,7 @@ static void test_perfctrs(Vl2_cache* d) {
 static void test_multi_set_independence(Vl2_cache* d) {
     printf("── Multi-set independence: distinct sets stay distinct ──\n");
     reset(d);
-    wrsys(d, 1, 1);
+    enable_l2(d);
     MemMock mem;
 
     // With LINE_BYTES=16 and NUM_SETS=1024, addr_set = addr[13:4].
@@ -666,7 +836,7 @@ static void test_multi_set_independence(Vl2_cache* d) {
 static void test_byte_en_accumulation(Vl2_cache* d) {
     printf("── Byte-en writes accumulate within a cached line ──\n");
     reset(d);
-    wrsys(d, 1, 1);
+    enable_l2(d);
     MemMock mem;
 
     // Helper to drive one cacheable write and let it drain.
@@ -736,7 +906,7 @@ static void test_byte_en_accumulation(Vl2_cache* d) {
 static void test_perfctrs_inval_all(Vl2_cache* d) {
     printf("── Perfctrs survive INVAL_ALL (free-running, not reset) ──\n");
     reset(d);
-    wrsys(d, 1, 1);
+    enable_l2(d);
     MemMock mem;
 
     // Generate some traffic so the counters are non-zero, giving
@@ -842,6 +1012,9 @@ static void test_perfctrs_during_post_reset_walk(Vl2_cache* d) {
         tick_with_mem(d, mem, 2, rdata_addr_complement);
     check_bool("post_reset.walker_completed",
                (rdsys(d, 6) & 1) == 0u, true);
+    // The enable written during the walk takes effect at the first
+    // edge after it with no access presented.
+    tick_with_mem(d, mem, 2, rdata_addr_complement);
 
     // After the walker is done, ready=1.  A fresh cacheable access
     // now goes through the cache pipeline and counts as a normal
@@ -887,7 +1060,7 @@ static void test_perfctrs_during_post_reset_walk(Vl2_cache* d) {
 static void test_back_to_back_read_throughput(Vl2_cache* d) {
     printf("── Back-to-back read-hit throughput (initiation interval) ──\n");
     reset(d);
-    wrsys(d, 1, 1);            // CTRL.enable = 1
+    enable_l2(d);
     MemMock mem;
 
     const uint32_t base   = 0x4000;
@@ -970,7 +1143,7 @@ static uint32_t cached_read_cost(Vl2_cache* d, MemMock& mem,
 static void test_plru_replacement_order(Vl2_cache* d) {
     printf("── Tree-PLRU evicts the least-recently-used way ──\n");
     reset(d);
-    wrsys(d, 1, 1);   // CTRL.enable = 1
+    enable_l2(d);
     MemMock mem;
 
     // Five distinct tags that all index set 0x10 (addr[13:4]), so the
@@ -1020,6 +1193,9 @@ int main() {
     test_write_updates_line(d);
     test_inval_all(d);
     test_inval_all_implicit_fence(d);
+    test_enable_during_passthrough_read(d);
+    test_disable_during_lookup(d);
+    test_enable_across_post_reset_walk(d);
     test_uncached_skips_cache(d);
     test_perfctrs(d);
     test_multi_set_independence(d);
