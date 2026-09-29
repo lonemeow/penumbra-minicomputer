@@ -30,7 +30,6 @@ architecture and its standard peripherals.
 *   **[UART](./system/devices/uart.md)** — Word-strided NS16550A console.
 *   **[SPI / SD Card](./system/devices/spi.md)** — Register map and driver flow for storage.
 *   **[USB host controller](./system/devices/usb-host.md)** — register interface and transaction contract; carries storage, HID, hubs, and the `ure(4)` Ethernet adapter that gives the machine its network.
-*   **[ESP32 WiFi NIC](./system/devices/esp32-nic.md)** — Ethernet-over-SLIP network adapter interface (an alternative path, not the one in use).
 *   **[Display Adapter](./system/devices/display.md)** — Character-cell console + optional framebuffer (`CLASS_DISPLAY`).
 *   **[Audio Device](./system/devices/audio.md)** — Pushed-PCM output with optional mixing channels (`CLASS_AUDIO`).
 *   **[USB Host Controller](./system/devices/usb-host.md)** — Transaction-level USB host (`CLASS_USBHC`).
@@ -50,7 +49,6 @@ forms) and related hardware interfaces.
 *   **[Bus Protocol](./hardware/bus-protocol.md)** — Penumbra Bus terminology, async 4-phase handshake, sync-form mapping, signal timing.
 *   **[Autoconfig Hardware](./hardware/autoconfig-hardware.md)** — Electrical implementation of the `cfg` daisy-chain.
 *   **[SPI Hardware](./hardware/spi-hardware.md)** — Internal state machines and 74xx feasibility.
-*   **[WiFi NIC Hardware](./hardware/esp32-nic-hw.md)** — Physical pinouts and UART bridge design.
 
 ---
 

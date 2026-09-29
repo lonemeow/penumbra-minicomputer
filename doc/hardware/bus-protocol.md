@@ -120,9 +120,9 @@ purpose memory-like slave should implement.
 An individual device's documentation MAY narrow the contract. The
 most common restriction in Penumbra today is *word-strided access
 only* — the device's registers occupy word slots in the address
-map and the device handles only 32-bit transactions. The current
-UART, SPI, ESP32 NIC and autoconfig config-space window are all of
-this kind; see the per-device docs and the autoconfig section of
+map and the device handles only 32-bit transactions. The UART,
+SPI and autoconfig config-space window are all of this kind; see
+the per-device docs and the autoconfig section of
 [bus.md](../system/bus.md) for the specifics.
 
 When a device documents a restriction, software is responsible for

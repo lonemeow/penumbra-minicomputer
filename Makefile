@@ -341,8 +341,6 @@ MODULE_TESTS = \
     mmu \
     penumbra2_mmu \
     cpu_bus_arbiter \
-    slip_rx \
-    slip_tx \
     spi_fifo \
     video_timing \
     audio_sigma_delta_test \

@@ -898,9 +898,8 @@ place of the fixed low range.
   the handle by value (`9ddfcf4aa941`).
 
 - **The ESP32 bridge as a NIC.**  The ESP32 carries Ethernet frames
-  to and from WiFi over a SLIP-framed UART
-  ([`system/devices/esp32-nic.md`](../system/devices/esp32-nic.md)).
-  It needs custom firmware built and flashed onto the ESP32, and the
-  kernel sees the WiFi link only through a private protocol and its
-  own configuration tool.  USB Ethernet and a MAC for an onboard PHY
-  each give a standard Ethernet interface under stock drivers.
+  to and from WiFi over a SLIP-framed UART.  It needs custom firmware
+  built and flashed onto the ESP32, and the kernel sees the WiFi link
+  only through a private protocol and its own configuration tool.
+  USB Ethernet and a MAC for an onboard PHY each give a standard
+  Ethernet interface under stock drivers.

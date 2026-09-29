@@ -89,7 +89,7 @@ RAM-region space for memory-class devices).
 |--------------|------|----------|:--------------:|------------------------------|
 | `0xFF00_0000`| 4 KB | UART     | HW             | Console — see [devices/uart.md](./devices/uart.md) |
 | *(assigned)* | 4 KB | SPI      | AC             | SD card, flash               |
-| *(assigned)* |64 KB | Ethernet | AC             | Wiznet / ESP32 NIC           |
+| *(assigned)* |64 KB | Ethernet | AC             | Network adapter              |
 | *(assigned)* | 4 KB | GPIO     | AC             | General-purpose I/O          |
 
 HW = hardwired (fixed address). AC = autoconfigured at boot.
@@ -181,7 +181,7 @@ protocol it understands, with no device-specific driver needed.
 | 2     | `CLASS_UART`     | NS16450 register layout        | Boot ROM can use as console       |
 | 3     | `CLASS_SPI`      | Penumbra SPI master            | Generic SPI controller            |
 | 4     | `CLASS_SD`       | Penumbra SPI master, SD wired  | SD card attached via SPI          |
-| 5     | `CLASS_NIC`      | Penumbra NIC protocol          | ESP32 / Wiznet network adapter    |
+| 5     | `CLASS_NIC`      | Penumbra NIC protocol          | Network adapter                   |
 | 6     | `CLASS_DISPLAY`     | Penumbra display registers     | Character-cell console + optional framebuffer |
 | 7     | `CLASS_AUDIO`       | Penumbra audio registers       | PCM output; optional extra mixing channels |
 | 8     | `CLASS_USBHC`       | Penumbra USB host-controller   | Local USB host (low / full speed) |

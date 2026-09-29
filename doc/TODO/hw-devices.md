@@ -984,9 +984,8 @@ Open:
   buffers and their ownership, link and interrupt status, address
   filtering, and PHY management over MDIO, so NetBSD's `mii(4)` and
   its PHY drivers manage the link (`rgephy(4)` covers the RTL8211
-  family). `CLASS_NIC` is allocated to the ESP32 bridge's protocol
-  (`doc/system/bus.md`), which no machine implements (`kernel.md`,
-  "Ruled out"); this device can take the class over.
+  family). `CLASS_NIC` (`doc/system/bus.md`) names a NIC protocol
+  with no document yet; this device's interface becomes it.
 - **The Nexys Video's RTL**: the RGMII stages (DDR input and output
   registers, and the receive clock's alignment, which depends on how
   the PHY's RGMII delays are strapped), the PHY's reset and interrupt,

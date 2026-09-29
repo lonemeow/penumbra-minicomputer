@@ -20,7 +20,7 @@ and CLAUDE.md files intentionally do *not* duplicate them.
 | ABI, ELF relocations, calling convention | `doc/system/abi.md` |
 | LLVM backend design notes, upstream gap write-ups | `doc/llvm/` |
 | MMU, sysregs, bus address map, boot protocol | `doc/system/{mmu,sysregs,bus,boot-protocol}.md` |
-| Device register maps (SPI/SD, ESP32 NIC) | `doc/system/devices/` |
+| Device register maps, one per device class | `doc/system/devices/` |
 | NetBSD port — current status, kernel design | `doc/system/netbsd/{porting-status,design-notes}.md` |
 | Bus signal-level protocol (hardware) | `doc/hardware/bus-protocol.md` |
 | Penumbra/1 datapath, microcode, L1 cache | `doc/internals/penumbra1/` |

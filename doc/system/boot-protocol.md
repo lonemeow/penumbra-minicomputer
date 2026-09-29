@@ -306,7 +306,7 @@ Target layout for the ULX3S SD card:
 └─────────────────────────────────────┘
 ```
 
-**Why FAT32 for the boot partition?** The ULX3S has a WiFi module (ESP32) that can mount FAT32 and serve files. This allows updating the kernel remotely without needing a NetBSD-aware tool — just copy a new kernel image to the FAT32 partition.
+**Why FAT32 for the boot partition?** Any host can write it, so a new kernel or loader is copied onto the card without a NetBSD-aware tool.
 
 ## Resolved Decisions
 

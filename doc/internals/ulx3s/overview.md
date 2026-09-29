@@ -96,8 +96,7 @@ choice measured per top like a placement seed. The PHY
   (`doc/internals/display.md`).
 - **Audio:** a four-bit resistor ladder per channel into the 3.5 mm
   jack, driven by the audio device's sigma-delta output.
-- **ESP32:** held in reset (`wifi_en` low). The ESP32 NIC
-  (`doc/hardware/esp32-nic-hw.md`) is the design that would use it.
+- **ESP32:** held in reset (`wifi_en` low).
 
 ## Timing and placement
 
