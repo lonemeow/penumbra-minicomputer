@@ -93,7 +93,16 @@ module penumbra2_alu
 
     // ── Outputs and flags ───────────────────────────────────────
     assign o_result = result_mux;
-    assign o_flag_z = ~|o_result;
+
+    // Z reduces the result through a tree of 4-bit partial ORs held as kept
+    // nets. Left to itself, ABC skews the 32-input NOR into a serial chain
+    // that follows the adder's carry arrival, about nine LUTs deep behind
+    // the sum, where the tree is two; the kept nets fix the tree's shape.
+    (* keep *) logic [7:0] z_part;
+    for (genvar g = 0; g < 8; g++) begin : g_z_part
+        assign z_part[g] = |o_result[4*g +: 4];
+    end
+    assign o_flag_z = ~|z_part;
     assign o_flag_n = o_result[31];
     assign o_flag_c = carry_mux;
     // V — signed overflow. Only the add/subtract family produces a
