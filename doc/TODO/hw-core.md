@@ -809,3 +809,27 @@ fill and during a pass-through read.
   crossing would go unverified.  Worth ~1–1.5 % of Doom and the kernel
   paths.  Analysis in `doc/internals/penumbra3/memory-performance.md`
   ("Synchronous CPU/SDRAM clocking — ruled out").
+- **Read/write exclusivity in gen2.5's block RAMs.**  Stating in the
+  RTL that the L1s', the L2's and the SPI/UART FIFOs' reads never meet
+  their writes lets yosys drop its read-during-write emulation: 434–553
+  LUTs and 882 flip-flops on the gen2.5 ULX3S top.  Over seeds 0–29 on
+  4e91777 the CPU clock fell from a 36.84 MHz mean, with 8 of 29 seeds
+  closing, to 36.38 MHz and 4 of 30 with the L1s gated on the write
+  side, and to 36.11 MHz and 2 of 30 gated on the read side.  The
+  emulation delays each write through flip-flops, and in the caches
+  those flops were registering the write enables that depend on the
+  tag compare; without them the L2's tag, hit and array write-enable
+  path became the worst on up to 9 of 30 seeds.  A design that plans
+  its writes around the rule, as gen3's does
+  (`doc/internals/penumbra3/timing-outline.md`, "4. Caches"), registers
+  them on purpose; retrofitting the rule onto gen2.5 did not.
+- **Flattening gen2.5's core hierarchy.**  Dropping `keep_hierarchy`
+  from IF1, IF2, the spine, the MEM stage, the perfctr and the four
+  translate-cone modules lets ABC merge logic across their boundaries:
+  356 fewer LUTs and 160 fewer flip-flops, and the median CPU-clock
+  critical path fell from 24 LUT hops to 19.  Routing per hop rose
+  from 0.84 to 1.15 ns, leaving the ~20.4 ns of routing unchanged, and
+  over seeds 0–29 on 4e91777 with 458fd30's Z-flag tree the CPU clock
+  averaged 37.17 MHz with 13 seeds closing, against 37.73 MHz and 18
+  without the change.  A merged LUT draws its inputs from modules
+  placed apart, so the saved levels come back as longer wires.
