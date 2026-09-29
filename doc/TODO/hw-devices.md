@@ -460,6 +460,29 @@ pixel aperture so a mapped client cannot reach the control registers).
   glyphs once that class lands) and a USB boot-keyboard reader, behind a
   putc/getc abstraction the monitor selects at autoconfig.
 
+## Hardware: USB full speed unreliable on the ULX3S
+
+On the ULX3S, a low-speed keyboard attached directly to the port is
+the one USB device that works reliably. Full-speed devices are not,
+although mass storage, an RTL8152 Ethernet adapter and a cascaded hub
+have each enumerated and carried traffic on the port (`kernel.md`,
+"Kernel: networking — first NIC through the USB host controller").
+A low-speed device behind a hub is a separate, known gap (PRE, in
+"Hardware: USBHC v2 — multi-transaction transfers, NAK pacing,
+PRE"). Suspects:
+
+- **Receive clock recovery** in `usb_phy_ecp5`: at full speed the
+  oversampler has 5 samples per bit against 40 at low speed, so a
+  marginal recovery shows only there.
+- **Missing debounce.**
+
+Which one matters beyond the ULX3S: a ULPI PHY on the Nexys Video
+(`hw-nexysvideo.md`, "Devices: no USB host, so no keyboard or USB
+storage") replaces the clock recovery but not the controller above
+the seam. Open: capture a failing full-speed session with the
+controller's line-capture instrument (`CAP.CAPTURE`,
+`doc/system/devices/usb-host.md`) and tell the two apart.
+
 ## Hardware: USBHC v2 — multi-transaction transfers, NAK pacing, PRE
 
 Three planned upgrades to the transaction engine.  The first two target
@@ -474,8 +497,9 @@ wire-OR'd line).  Both features remove interrupts rather than add
 wire bandwidth.
 
 - **Multi-transaction transfers.**  Grow the DATA buffer (one 18 Kb
-  BRAM covers 2 KB; the CAP register already advertises the size and
-  the driver honors it) and let the engine chain max-packet
+  BRAM covers 2 KB; the driver honors the size CAP reports, but CAP's
+  8-bit byte count and the DATA window stop short of it, "Hardware:
+  USB high speed") and let the engine chain max-packet
   transactions within one transfer: keep issuing tokens while ACKs
   continue and buffer remains; stop on buffer-full, short packet,
   NAK, or error.  One completion interrupt per transfer chunk — a
@@ -511,6 +535,34 @@ wire bandwidth.
 Both must ride the device contract compatibly: new capability bits
 and control fields that old kernels never set, with the existing
 single-transaction register behavior as the default.
+
+## Hardware: USB high speed
+
+The controller's contract (`doc/system/devices/usb-host.md`) covers
+low and full speed. The ULPI PHYs on the fmc-usb2 card
+(`hw-nexysvideo.md`, "Devices: no USB host, so no keyboard or USB
+storage") also signal at 480 Mbit/s, and the contract lacks what that
+needs:
+
+- `PORT_STATUS.SPEED` has no high-speed value; 3 is free.
+- `CAP[15:8]` gives the `DATA` buffer size in bytes in 8 bits, and
+  the `DATA` window spans 0x40–0x7C, 64 bytes, while a high-speed
+  bulk endpoint's packets are exactly 512. Multi-transaction
+  transfers ("Hardware: USBHC v2 — multi-transaction transfers, NAK
+  pacing, PRE") need a larger buffer too, so one new size encoding
+  and window serve both.
+- The port reset carries the chirp handshake that settles high
+  speed, and frames become 125 µs microframes, eight times the rate
+  the driver's SOF-gated scheduling sees at full speed.
+
+Throughput comes from the multi-transaction engine over the
+controller's own block RAM, the CPU copying payload in and out: the
+bus has one master, so no device reads or writes system RAM.
+`usb-host.md` still lists "a DMA transfer-descriptor engine" among a
+controller's optional capabilities, which that rules out.
+
+Open: the contract changes, in `usb-host.md` before any RTL; the RTL
+after the card's full-speed bring-up.
 
 ## Hardware: audio device (`CLASS_AUDIO`)
 
@@ -904,3 +956,40 @@ Open:
   can log, or shut the system down cleanly ahead of the hardware.
 - **Supply alarms**, if they earn their place: they need thresholds in
   the guard's configuration, and nothing acts on them yet.
+
+## Hardware + kernel: Ethernet MAC for an onboard PHY
+
+A board with an Ethernet PHY of its own gets its network from a MAC
+device in the FPGA, the preferred path there; the Nexys Video's
+RTL8211E, on RGMII, is the first. USB Ethernet (`ure(4)`, as on the
+ULX3S) stays available wherever a USB host is: on the Nexys once the
+fmc-usb2 card arrives (`hw-nexysvideo.md`, "Devices: no USB host, so
+no keyboard or USB storage").
+
+The bus has one master, so the device reaches no system RAM: it holds
+received and outgoing frames in its own block RAM, which the CPU reads
+and writes over the bus, as it does the USB controller's `DATA`
+buffer. The block RAM's two ports also cross the clock domains: the
+MAC side runs on the PHY's clocks (125 MHz at gigabit, 25 at 100
+Mbit/s, 2.5 at 10), and only buffer indices and status pass through
+synchronizers. At about 4 cycles per uncached access (`kernel.md`,
+"Ruled out", "Uncached MMIO `STW` as a hardware write-path
+asymmetry"), a full frame's words cost the CPU some 1,500 cycles,
+25 µs at 60 MHz: inside a 100 Mbit/s frame time (120 µs), so there
+the link is not the limit; at gigabit the CPU is.
+
+Open:
+
+- **The interface**, in `doc/system/devices/` before any RTL: frame
+  buffers and their ownership, link and interrupt status, address
+  filtering, and PHY management over MDIO, so NetBSD's `mii(4)` and
+  its PHY drivers manage the link (`rgephy(4)` covers the RTL8211
+  family). `CLASS_NIC` is allocated to the ESP32 bridge's protocol
+  (`doc/system/bus.md`), which no machine implements (`kernel.md`,
+  "Ruled out"); this device can take the class over.
+- **The Nexys Video's RTL**: the RGMII stages (DDR input and output
+  registers, and the receive clock's alignment, which depends on how
+  the PHY's RGMII delays are strapped), the PHY's reset and interrupt,
+  and where the board's MAC address comes from.
+- **The driver**: an `ifnet` driver over the frame buffers, attaching
+  `mii(4)`.

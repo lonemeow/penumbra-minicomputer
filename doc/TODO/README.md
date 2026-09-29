@@ -7,7 +7,7 @@ open entries plus the findings that motivate them.
 |------|--------|
 | [hw-core.md](hw-core.md) | CPU cores (gen3 build, cross-generation ISA work), bus, caches, SDRAM path, fmax and placement |
 | [hw-penumbra2.md](hw-penumbra2.md) | gen2 / gen2.5-specific microarchitecture |
-| [hw-devices.md](hw-devices.md) | UART, SD, display, USB host, audio |
+| [hw-devices.md](hw-devices.md) | Devices and their programming interfaces, on any board |
 | [hw-build.md](hw-build.md) | Build system and test matrix, shared by every board |
 | [hw-ulx3s.md](hw-ulx3s.md) | Work bound to the ULX3S board |
 | [hw-nexysvideo.md](hw-nexysvideo.md) | Work bound to the Nexys Video board |

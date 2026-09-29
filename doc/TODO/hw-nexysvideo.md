@@ -38,26 +38,37 @@ board needs is its output stage, the counterpart of the ULX3S's
 ULX3S gives video its own PLL, so the pixel clocks never constrain
 the CPU clock.
 
-## Devices: no USB host, so no keyboard, network or USB storage
+## Devices: no USB host, so no keyboard or USB storage
 
 On the ULX3S the USB host controller (`CLASS_USBHC`) carries the
-keyboard, USB storage and the `ure(4)` Ethernet adapter that gives the
-machine its network. The Nexys Video has no USB port the FPGA drives:
-its USB host socket belongs to the PIC24, which presents a keyboard or
-mouse as PS/2 (`ps2_clk`, `ps2_data`). Options:
+keyboard and USB storage. The Nexys Video has no USB port the FPGA
+drives: its USB host socket belongs to the PIC24, which presents a
+keyboard or mouse as PS/2 (`ps2_clk`, `ps2_data`).
 
-- **USB host on a Pmod:** a USB-A socket with the host's pull-downs and
-  series resistors, driven by the same `usbhc` and PHY
-  (`usb_phy_ecp5` is plain RTL behind the top's pin buffers, its name
-  notwithstanding) from a 60 MHz clock. Everything the ULX3S does over
-  USB then works unchanged, the network included.
-- **The board's own parts:** a PS/2 device for the PIC24's keyboard
-  bridge, and an RGMII MAC for the RTL8211E Ethernet PHY. Each is a new
-  device class and driver, and needs no Pmod hardware.
-- **Network only:** the ESP32 NIC (`doc/system/devices/esp32-nic.md`)
-  on a Pmod UART, with its existing firmware and `pnicctl`.
+USB comes to the board on an FPGA Mezzanine Card made for it,
+fmc-usb2 (a repository of its own): two USB 2.0 ports on USB3320
+ULPI PHYs, which recover the receive clock, code the line and drive
+it in silicon, where the ULX3S does all three in fabric. The card is
+in design and will take a while. The machine's side of it:
 
-Open: which. The Pmod gives the most for the least new RTL.
+- **The PHY:** `usb_phy_ulpi`, the controller's planned ULPI PHY
+  (`doc/internals/usb-host-controller.md`), behind the existing
+  UTMI-shaped seam, with the controller above it unchanged. Full
+  speed comes up first, on the controller and driver the ULX3S runs,
+  so a failure points at the card or the timing rather than the
+  protocol; high speed follows (`hw-devices.md`, "Hardware: USB high
+  speed").
+- **VADJ:** the PHYs' I/O supply follows it, so the top drives it to
+  1.8 V or above through `set_vadj` and `vadj_en`. Banks 15 and 16
+  carry the FMC's LA pins and also the buttons and switches, which
+  the master XDC gives LVCMOS12. The machine top uses none of them; a
+  top that did would need `xdc_check.py` to accept the I/O standard
+  the bank's VADJ implies.
+
+Until the card, the machine has no keyboard: the only one that needs
+no card is a PS/2 device behind the PIC24's bridge. The network does
+not wait for USB (`hw-devices.md`, "Hardware + kernel: Ethernet MAC
+for an onboard PHY").
 
 ## Devices: no audio
 
@@ -101,3 +112,9 @@ the RAM wait LEDs at each step against the 256-cycle bus watchdog.
 - **openXC7 for the Xilinx flow.** nextpnr-xilinx does no static timing
   analysis, and no bitstream is flashed without signoff; Vivado runs
   in a container instead (`DEVELOP.md`, "Vivado (Xilinx boards)").
+- **USB host on a Pmod, through the ULX3S's fabric PHY.** A USB-A
+  socket on a Pmod, driven by `usb_phy_ecp5` as the ULX3S drives its
+  port. On the ULX3S that path is unreliable at full speed
+  (`hw-devices.md`, "Hardware: USB full speed unreliable on the
+  ULX3S"), with the fabric's receive clock recovery a leading suspect;
+  a PHY chip takes that into silicon, and fmc-usb2 carries two.

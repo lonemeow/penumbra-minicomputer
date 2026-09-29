@@ -106,13 +106,15 @@ container the wrapper scripts drive rebuilt or updated. The build-time
 defines the flow passes at the sv2v step (`SDRAM_PHASE_DEG`,
 `PENUMBRA_CPU_VARIANT`) need an equivalent on the new frontend.
 
-## Hardware: each board top builds its own device complex
+## Ruled out
 
-Every machine top wires the devices around the machine by hand: the
-address decode, the autoconfig chain, the response fabric and the
-interrupt lines. The ULX3S and Nexys Video tops share none of it, so
-a new device is wired twice, and the two can drift apart. Open: once
-both boards carry the same devices (`hw-nexysvideo.md`), extract the
-shared complex into one module both tops instantiate, as a change
-with no function of its own, proven on both boards. Extracting it
-sooner guesses the seam from tops that still differ.
+- **One device module shared by the board tops.** Extracting the
+  devices the ULX3S and Nexys Video tops both carry into one module
+  both instantiate, so a device is wired once. Each top composes the
+  devices its board has, and boards differ in what they have (HDMI,
+  an Ethernet PHY, USB on a mezzanine card); a shared module would
+  lose a device for every board without it, and would split apart as
+  boards were added. The logic that must not drift between tops is
+  already shared as modules (`autoconfig_dev`, `bus_devsel`,
+  `bus_response_fabric`, the devices themselves); what each top
+  repeats is the instance wiring, which is where boards differ.

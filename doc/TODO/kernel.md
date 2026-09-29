@@ -462,12 +462,12 @@ port**, not a dedicated NIC device. Rationale: the HCD is already owed
 for the local-console keyboard, and once it exists the whole MI USB
 stack plus every in-tree USB Ethernet driver (`axe`, `aue`, `cdce`, …)
 comes along — no new RTL, no device firmware, no from-scratch NIC
-driver. The alternatives stay viable later: the ESP32 SLIP bridge
-([`system/devices/esp32-nic.md`](../system/devices/esp32-nic.md), needs
-RTL + ESP-IDF firmware, adds WiFi) and a Wiznet W5500 on the existing
-SPI class (driver-only, needs external hardware). Both have a lower
-throughput ceiling than software-driven full-speed bulk, so USB-first
-costs nothing on performance either.
+driver. A board with an Ethernet PHY of its own takes a MAC device
+instead, the preferred path there (`hw-devices.md`, "Hardware +
+kernel: Ethernet MAC for an onboard PHY"). A Wiznet W5500 on the
+existing SPI class stays possible (driver-only, needs external
+hardware), with a lower throughput ceiling than software-driven
+full-speed bulk. The ESP32 bridge is ruled out ("Ruled out").
 
 Facts the plan leans on:
 
@@ -896,3 +896,11 @@ place of the fixed low range.
   `bus_space_handle_t`, so it reloads the handle before every write.
   Drivers avoid it with the `bus_space_*_multi` primitives, which take
   the handle by value (`9ddfcf4aa941`).
+
+- **The ESP32 bridge as a NIC.**  The ESP32 carries Ethernet frames
+  to and from WiFi over a SLIP-framed UART
+  ([`system/devices/esp32-nic.md`](../system/devices/esp32-nic.md)).
+  It needs custom firmware built and flashed onto the ESP32, and the
+  kernel sees the WiFi link only through a private protocol and its
+  own configuration tool.  USB Ethernet and a MAC for an onboard PHY
+  each give a standard Ethernet interface under stock drivers.
