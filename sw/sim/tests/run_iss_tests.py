@@ -46,13 +46,18 @@ CORE_IDENTITY = {
 CTRL_READBACK = {6: 0, 7: 1}
 
 
-def hierarchy(l1i=(0, 0), l1d=(0, 0, 0, 0), l2=(0, 0, 0, 0), fills=None):
+def hierarchy(l1i=(0, 0), l1d=(0, 0, 0, 0), l2=(0, 0, 0, 0), fills=None, prediction=None):
     """A cache model's expected counts for one hierarchy over one window:
     L1I (read hits, read misses), L1D and L2 (read hits, read misses,
     write hits, write misses), and the L1 fills by (kind, mode) as
-    (from L2, from memory).  Fills not listed must be zero."""
-    return {"L1I": tuple(l1i) + (0, 0), "L1D": tuple(l1d), "L2": tuple(l2),
+    (from L2, from memory).  Fills not listed must be zero.  `prediction`,
+    when given, is the next-line buffer's (served once, served continue,
+    look-ups, missing L2, unused)."""
+    want = {"L1I": tuple(l1i) + (0, 0), "L1D": tuple(l1d), "L2": tuple(l2),
             "fills": fills or {}}
+    if prediction is not None:
+        want["prediction"] = tuple(prediction)
+    return want
 
 
 # cache_data.s, phase by phase (see the program's header).  A 16-byte line
@@ -74,6 +79,18 @@ IFETCH_PENUMBRA1 = hierarchy(
     l1i=(10 + 3, 20), l2=(2 * 3 + 18 * 4, 2, 0, 0), fills={("I", "super"): (18, 2)})
 IFETCH_PENUMBRA2 = hierarchy(
     l1i=(31, 2), l2=(2 * 3, 2, 0, 0), fills={("I", "super"): (0, 2)})
+
+# cache_nextline.s, step by step (see the program's header).  Each pass
+# of the 8-line run fetches 29 instructions and misses 8 times; each
+# one-instruction snippet misses once.  Misses: run 8 + r1 + run 8 + r0 +
+# r1 + last; the passes' other 21 fetches hit.  Look-ups follow every
+# miss but last's (19), missing L2 in pass 1 (8), after r1 twice and
+# after the warm run's final line; the one r0 loads is invalidated unused.
+NEXTLINE = hierarchy(
+    l1i=(2 * 21, 8 + 1 + 8 + 1 + 1 + 1),
+    l2=(8 * 3 + 3 + 8 * 4 + 3 + 4 + 3, 8 + 1 + 1 + 1, 0, 0),
+    fills={("I", "super"): (8 + 1, 8 + 1 + 1 + 1)},
+    prediction=(4, 7, 8 + 1 + 8 + 1 + 1, 8 + 1 + 1 + 1, 1))
 
 # cache_window.s: inside the window, 16 re-loaded lines hit and 16 new
 # ones miss in both levels.
@@ -128,6 +145,9 @@ CASES = [
     Case("cachemodel ifetch", "cache_ifetch.s", ["+cachemodel=penumbra1,penumbra2"],
          windows=[("reset to exit", {"penumbra1": IFETCH_PENUMBRA1,
                                      "penumbra2": IFETCH_PENUMBRA2})]),
+    Case("cachemodel next-line prediction", "cache_nextline.s",
+         ["+cachemodel=penumbra1,penumbra2_5"],
+         windows=[("reset to exit", {"penumbra1": NEXTLINE, "penumbra2_5": NEXTLINE})]),
     Case("model window", "cache_window.s",
          ["+cachemodel", "+model_start=0xFFFF0800", "+model_stop=0xFFFF0900"],
          windows=[("start PC to stop PC", {"penumbra1": WINDOW_PENUMBRA1})]),
@@ -190,6 +210,11 @@ def parse_report(text):
         m = re.match(r"\s+([ID]) (user|super)\s+(\d+)\s+(\d+)", line)
         if m:
             counts["fills"][(m.group(1), m.group(2))] = (int(m.group(3)), int(m.group(4)))
+            continue
+        m = re.match(r"\s+next-line\s+buffer serves (\d+) \(once\) and (\d+) \(continue\)"
+                     r".* looks up (\d+), (\d+) missing L2, (\d+) unused", line)
+        if m:
+            counts["prediction"] = tuple(int(v) for v in m.groups())
     return windows
 
 
@@ -215,6 +240,9 @@ def compare_windows(expected, got):
                 w, h = want["fills"].get(key, (0, 0)), have["fills"].get(key, (0, 0))
                 if w != h:
                     problems.append(f"{label} fills {key[0]} {key[1]} {h}, expected {w}")
+            if "prediction" in want and have.get("prediction") != want["prediction"]:
+                problems.append(f"{label} next-line {have.get('prediction')}, "
+                                f"expected {want['prediction']}")
     return problems
 
 

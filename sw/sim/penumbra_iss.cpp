@@ -3329,7 +3329,7 @@ int main(int argc, char** argv) {
     if (cachemodel_spec) {
         static CacheModel model;
         std::string err;
-        if (!CacheModel::parse(cachemodel_spec, *core_gen, model, err)) {
+        if (!CacheModel::parse(cachemodel_spec, *core_gen, PAGE_BYTES, model, err)) {
             fprintf(stderr, "+cachemodel: %s\n", err.c_str());
             return 1;
         }

@@ -328,12 +328,14 @@ rom.ld ──────────────────┘
   (`8k/2:8k/2:64k/4`; 16-byte lines).  Each level follows the RTL's
   replacement, write and enable behaviour, and each window reports the
   counts the cache perfctrs keep plus L1 fills by kind, served from L2
-  or from memory.  A window opens at reset or at `+model_start=ADDR`
-  and closes at `+model_stop=ADDR` (both first user-mode execution,
-  as `+pcprof_start`), on `SIGUSR1` (which opens the next), or at
-  exit; `+model_report=file` writes the reports there instead of
-  stderr.  **Counts are architectural** — no wrong-path fetches, no
-  timing: multiply by costs measured on RTL or hardware for cycles.
+  or from memory, and the L1-I misses a next-line prediction buffer
+  (proposed for gen3) would have served.  A window opens at reset or at
+  `+model_start=ADDR` and closes at `+model_stop=ADDR` (both first
+  user-mode execution, as `+pcprof_start`), on `SIGUSR1` (which opens
+  the next), or at exit; `+model_report=file` writes the reports there
+  instead of stderr.  **Counts are architectural** — no wrong-path
+  fetches, no timing: multiply by costs measured on RTL or hardware for
+  cycles.
 - **TLB model** (`+tlbmodel[=list]`, `sw/sim/tlb_model.h`) — replays
   every successful main-TLB translation (pinned slots excluded) through
   shadow TLBs: the `+core=` generation's by default, or a list of

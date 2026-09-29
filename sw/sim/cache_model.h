@@ -25,6 +25,16 @@
 //    cacheable.  A disabled L1 forwards reads to L2 as uncacheable; a
 //    write-through carries the PTE's C bit whatever L1 did with it.
 //
+// Beside each L1-I runs a next-line prediction buffer that no generation
+// builds (doc/internals/penumbra3/memory-performance.md, "Next-line
+// prediction buffer for L1-I"), counting which L1-I misses it would have
+// served.  An L1-I miss to line N looks N+1 up in L2 and holds it if L2
+// has it and it lies in the same page; a later L1-I miss to the held line
+// is served by the buffer.  Two policies run side by side: "once" looks
+// up the next line only after a miss the buffer did not serve, "continue"
+// after every miss.  The buffer never changes what the caches hold or
+// count, and an L1-I INVAL_ALL clears it.
+//
 // The model sees the architectural stream only: no wrong-path fetches,
 // and nothing that needs time — fill latency, prefetch, overlap.  Its
 // counts are exact for that stream; cycles are not modelled.  It indexes
@@ -114,6 +124,9 @@ public:
         return true;
     }
 
+    // A lookup that leaves the replacement state alone.
+    bool contains(uint32_t line) const { return find(line) >= 0; }
+
     // A write-through: true on a hit.  Never allocates.
     bool write(uint32_t line) {
         int w = find(line);
@@ -170,12 +183,13 @@ struct CacheCounts {
 class CacheHierarchy {
 public:
     CacheHierarchy(std::string label, const CacheGeometry& l1i,
-                   const CacheGeometry& l1d, const CacheGeometry& l2)
+                   const CacheGeometry& l1d, const CacheGeometry& l2,
+                   uint32_t page_bytes)
         : label_(std::move(label)), geom_{l1i, l1d, l2},
           l1i_(l1i, ModelCache::Victim::InvalidFirst, true),
           l1d_(l1d, ModelCache::Victim::InvalidFirst, true),
           l2_(l2, ModelCache::Victim::TreeOnly, false),
-          line_words_(l2.line_bytes / 4) {}
+          line_words_(l2.line_bytes / 4), page_lines_(page_bytes / l1i.line_bytes) {}
 
     void fetch(uint32_t pa, bool cacheable, bool super, const CacheEnables& en) {
         read(Kind::I, l1i_, counts_[L1I], pa, cacheable && en.l1i, en.l2, super);
@@ -202,6 +216,10 @@ public:
     void invalidate(CacheLevel level) {
         (level == CacheLevel::L1I ? l1i_ : level == CacheLevel::L1D ? l1d_ : l2_)
             .invalidate_all();
+        if (level == CacheLevel::L1I) {
+            if (continue_.valid) predicted_.unused++;
+            once_.valid = continue_.valid = false;
+        }
     }
 
     void clear_counts() {
@@ -209,6 +227,7 @@ public:
         for (auto& m : fills_) for (auto& k : m) k[0] = k[1] = 0;
         for (auto& m : uncached_) for (auto& k : m) k[0] = k[1] = 0;
         i_misses_ = i_next_line_ = memory_fills_ = memory_next_line_ = 0;
+        predicted_ = PredictionCounts();
     }
 
     void report(FILE* out, uint64_t insns) const {
@@ -250,6 +269,15 @@ public:
                      " %.1f %% of memory fills continue one of the last two\n",
                 i_misses_ ? 100.0 * i_next_line_ / i_misses_ : 0.0,
                 memory_fills_ ? 100.0 * memory_next_line_ / memory_fills_ : 0.0);
+        const PredictionCounts& p = predicted_;
+        fprintf(out, "  next-line     buffer serves %llu (once) and %llu (continue) L1-I misses;"
+                     " continue looks up %llu, %llu missing L2, %llu unused\n",
+                (unsigned long long)p.once_served, (unsigned long long)p.continue_served,
+                (unsigned long long)p.lookups, (unsigned long long)p.missing_l2,
+                (unsigned long long)p.unused);
+        fprintf(out, "                per 1000 instructions: %.2f, %.2f; %.2f, %.2f, %.2f\n",
+                k ? p.once_served / k : 0.0, k ? p.continue_served / k : 0.0,
+                k ? p.lookups / k : 0.0, k ? p.missing_l2 / k : 0.0, k ? p.unused / k : 0.0);
     }
 
 private:
@@ -289,6 +317,38 @@ private:
         }
         fills_[super][int(kind)][from_l2 ? 0 : 1]++;
         l1.fill(line);
+        if (kind == Kind::I) next_line_miss(line, l2_enabled);
+    }
+
+    // The prediction buffers at an L1-I miss to `line`: count whether each
+    // held it, then look up the line after it as the policy says.
+    void next_line_miss(uint32_t line, bool l2_enabled) {
+        bool once_hit = once_.valid && once_.line == line;
+        bool continue_hit = continue_.valid && continue_.line == line;
+        if (once_hit) predicted_.once_served++;
+        if (continue_hit) predicted_.continue_served++;
+        else if (continue_.valid) predicted_.unused++;
+        once_.valid = continue_.valid = false;
+        if (!l2_enabled) return;
+
+        Prediction next = predict(line + 1);
+        if (next != Prediction::OtherPage) predicted_.lookups++;
+        if (next == Prediction::MissesL2) predicted_.missing_l2++;
+        continue_ = { next == Prediction::Loaded, line + 1 };
+        if (!once_hit) once_ = continue_;
+    }
+
+    // Whether the buffer can hold `next_line`, the line after an L1-I miss:
+    // the buffer is filled from L2 only, never across a page.
+    enum class Prediction { OtherPage, MissesL2, Loaded };
+    Prediction predict(uint32_t next_line) const {
+        if ((next_line & (page_lines_ - 1)) == 0)
+            return Prediction::OtherPage;
+
+        if (!l2_.contains(next_line))
+            return Prediction::MissesL2;
+
+        return Prediction::Loaded;
     }
 
     std::string   label_;
@@ -301,6 +361,17 @@ private:
     uint64_t    uncached_[2][2][2] = {};  // [super][kind][store]
     uint64_t    i_misses_ = 0, i_next_line_ = 0, memory_fills_ = 0, memory_next_line_ = 0;
     uint32_t    last_i_miss_ = 0, stream_[2] = {0, 0};
+
+    struct NextLine { bool valid = false; uint32_t line = 0; };
+    // A prediction counts as unused when it is replaced or invalidated
+    // without serving a miss.
+    struct PredictionCounts {
+        uint64_t once_served = 0, continue_served = 0;
+        uint64_t lookups = 0, missing_l2 = 0, unused = 0;   // continue's
+    };
+    uint32_t         page_lines_;
+    NextLine         once_, continue_;
+    PredictionCounts predicted_;
 };
 
 // ── The model: every hierarchy +cachemodel names ─────────────────
@@ -309,9 +380,11 @@ public:
     // Parse the +cachemodel value: empty for the presented generation, or
     // a comma-separated list of generation names and explicit hierarchies
     // "L1I:L1D:L2", each level SIZE/WAYS (SIZE in bytes, or with a k or m
-    // suffix).  Lines are 16 bytes, as every generation's are.
+    // suffix).  Lines are 16 bytes, as every generation's are; pages are
+    // the MMU's.
     static bool parse(const char* spec, const CoreGeneration& presented,
-                      CacheModel& model, std::string& err) {
+                      uint32_t page_bytes, CacheModel& model, std::string& err) {
+        model.page_bytes_ = page_bytes;
         std::string s(spec);
         if (s.empty()) {
             model.add(presented.name, presented.l1i, presented.l1d, presented.l2);
@@ -338,7 +411,7 @@ public:
 private:
     void add(std::string label, const CacheGeometry& l1i, const CacheGeometry& l1d,
              const CacheGeometry& l2) {
-        h_.emplace_back(std::move(label), l1i, l1d, l2);
+        h_.emplace_back(std::move(label), l1i, l1d, l2, page_bytes_);
     }
 
     static bool add_item(const std::string& item, CacheModel& model, std::string& err) {
@@ -392,5 +465,6 @@ private:
         return true;
     }
 
+    uint32_t page_bytes_ = 0;
     std::vector<CacheHierarchy> h_;
 };
