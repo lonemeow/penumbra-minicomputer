@@ -41,7 +41,7 @@ whole line and holds it, and add three instruments:
 |---|---|---|
 | Machine trace | `machine_penumbra2_sim`, gen2.5 core, line stack, clocks at the hardware ratio (37.5 : 100 MHz); a probe program reads `CPU_CYCLES` or `STALL_LOAD` around one dependent load, and the testbench logs every memory-side FSM each cycle | the cost of one miss and which layer owns each cycle |
 | Hardware membench | `benchmark/membench` on the ULX3S at 37.5 MHz, both stacks | `STALL_LOAD` cycles per L2 read miss |
-| Shadow models | a scratch ISS patch feeding every fetch, load and store (physical address, PTE `C`) and every main-TLB translation into parallel cache and TLB models while NetBSD runs real workloads | miss counts by kind, for geometries that were never built |
+| Shadow models | the ISS's `+cachemodel` and `+tlbmodel`, fed every fetch, load and store (physical address, PTE `C`) and every main-TLB translation while NetBSD runs real workloads | miss counts by kind, for geometries that were never built |
 
 The shadow models count accesses the way the RTL perfctrs do. Run over
 the same window as Doom's own perfctr snapshot (`perf_demo_track` to
@@ -50,7 +50,9 @@ rates: L1I 97.2 % (hardware 97.3 %), L1D 80.5 % (79.7 %), L2 85.3 %
 (86.0 %), over 570 M instructions against the hardware's 579 M. Its
 TLB model reproduces the real refill count within 3 %. That calibration
 is what lets the split by kind below stand in for counters the hardware
-does not print.
+does not print. It was made with the models' first version, which used
+LRU where the caches use tree-PLRU and treated every level as enabled
+once translation was on; the ISS's models follow the RTL in both.
 
 ## SDRAM line fill (chain A)
 
@@ -270,55 +272,129 @@ on the 2026-09-22 build ("Kernel: count TLB refills" in
 
 ## Miss profiles from the shadow models
 
-The shadow models run NetBSD workloads under the calibrated ISS: Doom
-over its perfctr window, a shell loop (ten rounds of `ls -l /usr/bin |
-sort | tail` and a `grep` over `/etc/rc.subr`), and `pbench kernel`. A
-fill's cost is taken at the machine trace's 16 cycles (L2 hit) and 37
-(L2 miss), and at the ~6 and ~24 the line-wide transfer is estimated at
-([one uncore pipeline](#one-uncore-pipeline)). Kernel paths dominate
-the fetch misses: 67–96 % of L1-I misses are taken in supervisor mode,
-and nearly all of them hit L2.
+Measured 2026-09-28 with the ISS's cache model on the multiuser image
+(`GENERIC.DEBUG` kernel), booted and driven by
+`sw/tools/iss-workloads.py` with `+core=penumbra2_5`:
+
+- **Doom:** the 150-tic `BENCH.lmp` timedemo from the first
+  `R_RenderPlayerView` to `G_CheckDemoStatus` (`+model_start`,
+  `+model_stop`), 149 frames and 449 M instructions. The window needs
+  no `PERFCTR` build.
+- **Shell loop:** `for i in 1 2 3 4 5 6 7 8 9 10; do ls -l /usr/bin |
+  sort | tail; grep -c run_rc_command /etc/rc.subr; done`, one window.
+- **`pbench kernel`** and **`pbench libc`**, one window each.
+  `pbench` sizes its iteration counts from timing, so two runs differ
+  by about 1 %.
+
+A fill's cost is taken at the machine trace's 16 cycles (L2 hit) and 37
+(L2 miss), and at the ~5 and ~24 the
+[line-wide transfer](#the-line-wide-transfer) is estimated at. On the
+shell loop and `pbench kernel`, 67 % and 97 % of L1-I misses are taken
+in supervisor mode, nearly all of them hitting L2; Doom's are 88 % user
+mode.
+
+**The streams carry gen2.5's TLB refills.** The ISS runs the 32×2 TLB,
+so the refill handler runs 2.5 (Doom), 6.3 (shell loop) and 5.0
+(`pbench kernel`) times per 1000 instructions, and 14.5 % of Doom's
+instructions execute from its page. A gen3 TLB large enough to remove
+most refills takes those instructions and their fills out of the
+stream, so rates per 1000 instructions will move. Doom's per-frame
+figures keep their denominator but still include the handler's own
+fills.
 
 ### L1 geometry
 
 Stall cycles from L1 fills, as today's fill cost → the line-wide
-transfer's, with the same geometry for L1-I and L1-D:
+transfer's, with the same geometry for L1-I and L1-D over a 64 KB 4-way
+L2:
 
 | L1 | Doom, M cycles a frame | shell loop, cycles / 1000 insns | `pbench kernel`, cycles / 1000 insns |
 |---|---|---|---|
-| 4 KB 2-way (gen2) | 3.15 → 1.50 | 1762 → 781 | 1335 → 553 |
-| 8 KB 2-way | 2.02 → 1.07 | 1347 → 621 | 919 → 397 |
-| 16 KB 4-way | 1.34 → 0.81 | 906 → 446 | 536 → 251 |
+| 4 KB 2-way (gen2) | 2.36 → 1.10 | 1729 → 683 | 1398 → 509 |
+| 8 KB 2-way | 1.69 → 0.89 | 1290 → 542 | 1082 → 410 |
+| 16 KB 4-way | 1.18 → 0.72 | 889 → 407 | 606 → 257 |
+| 32 KB 8-way | 1.00 → 0.64 | 612 → 303 | 450 → 204 |
 
-- 8 KB 2-way halves Doom's L1-I misses (15.8 M → 7.0 M over the run):
-  the renderer's hot loops fit 8 KB and not 4 KB. 16 KB 4-way removes
-  86 % of them.
-- Cache size and associativity are coupled: a VIPT L1 indexes within
-  the 4 KB page, so anything above 8 KB needs at least 4 ways, and every
-  way adds a physical-tag compare to the IF2 and MEM2 cones (see
-  [`mem-stage.md`](./mem-stage.md#the-mem2-verdict-cone)).
+**A larger L1 is worth the L2-hit fills it removes, times the cost of
+an L2-hit fill.** An L1 of 8–32 KB is far smaller than the L2, so a line
+a larger L1 would keep is almost always in L2 already: 4 KB → 8 KB
+removes 13.8 L2-hit fills per 1000 instructions on Doom and 0.03 L2-miss
+fills. Two consequences:
+
+- A cheaper L2-hit fill shrinks every L1 step by the same factor. At the
+  line-wide transfer's cost, each step up to 16 KB keeps 31–34 % of
+  what it saves at today's, close to the 5/16 ratio of the two L2-hit
+  costs. The line-wide transfer and a larger L1 buy the same cycles.
+- L1 and L2 capacity remove different fills, so their gains add
+  ([L2 capacity](#l2-capacity)).
+
+**Hit logic grows with ways, not with size.** A VIPT L1 indexes within
+the 4 KB page, so a way holds at most 4 KB. 8 KB 2-way keeps the two
+physical-tag compares of 4 KB 2-way, each one bit narrower; every
+doubling past it doubles the ways, and each way is a compare in the IF2
+and MEM2 cones (see
+[`mem-stage.md`](./mem-stage.md#the-mem2-verdict-cone)).
+
+**The step past 8 KB is mostly the fetch side.** 8 KB 2-way → 16 KB
+4-way at the line-wide transfer's cost, in cycles per 1000
+instructions:
+
+| Saved on | Doom | shell loop | `pbench kernel` |
+|---|---|---|---|
+| L1-I | 44 | 110 | 139 |
+| L1-D | 14 | 25 | 13 |
+
+A 4-way L1 bought for the kernel paths is an L1-I; MEM2's verdict can
+keep 2 ways at a cost of 13–25 cycles per 1000.
+
+- 8 KB halves Doom's L1-I misses (9.6 M → 5.0 M over the window): the
+  renderer's hot loops fit 8 KB and not 4 KB. 16 KB 4-way removes 86 %
+  of them.
+- The shell loop's footprint outgrows 16 KB: 16 → 32 KB still saves 104
+  cycles per 1000 there, against 26 on Doom and 53 on
+  `pbench kernel`.
 
 ### L2 capacity
 
-With a 16 KB 4-way L1, at line-wide fill costs:
+At line-wide fill costs:
 
-| L2 | Doom, M cycles a frame | Doom data L2 misses a frame | `pbench kernel`, cycles / 1000 insns |
-|---|---|---|---|
-| 64 KB 4-way | 0.81 | 23.8 K | 251 |
-| 128 KB 4-way | 0.73 | 20.8 K | 222 |
-| 256 KB 8-way | 0.64 | 17.3 K | 192 |
-| 512 KB 8-way | 0.34 | 3.7 K | 175 |
+| L1 | L2 | Doom, M cycles a frame | Doom data L2 misses a frame | `pbench kernel`, cycles / 1000 insns |
+|---|---|---|---|---|
+| 8 KB 2-way | 64 KB 4-way | 0.89 | 23.3 K | 415 |
+| | 128 KB 4-way | 0.80 | 20.3 K | 377 |
+| | 128 KB 8-way | 0.80 | 20.2 K | 372 |
+| | 256 KB 8-way | 0.69 | 15.8 K | 338 |
+| | 512 KB 8-way | 0.41 | 3.2 K | 319 |
+| 16 KB 4-way | 64 KB 4-way | 0.72 | 22.8 K | 257 |
+| | 128 KB 4-way | 0.65 | 20.2 K | 224 |
+| | 128 KB 8-way | 0.64 | 20.0 K | 220 |
+| | 256 KB 8-way | 0.54 | 16.0 K | 186 |
+| | 512 KB 8-way | 0.25 | 3.1 K | 167 |
 
-Doom's data working set fits at 512 KB. That is affordable in block RAM
-on an Artix-7 board and not on the ECP5, whose 208 EBRs are 142 used by
-the gen2.5 full top.
+- **L2 capacity does not stand in for L1 capacity.** 8 KB → 16 KB of
+  L1 saves 50–58 cycles per 1000 on Doom and 152–158 on
+  `pbench kernel` at every L2 size from 64 KB to 512 KB. A larger L2
+  turns L2-miss fills into hits; the kernel paths' cost is L1-I misses
+  that already hit, which only L1-I size or a cheaper fill reaches.
+- **Doom's data working set fits at 512 KB.** That is affordable in
+  block RAM on an Artix-7 board and not on the ECP5, whose 208 EBRs are
+  142 used by the gen2.5 full top. 128 KB fits, at about 35 EBRs more
+  than 64 KB ([`l2-cache.md`](../l2-cache.md)), and saves 28 (Doom) and
+  38 (`pbench kernel`) cycles per 1000 behind an 8 KB L1.
+- **Ways past 4 buy nothing** at 128 KB: 2–5 cycles per 1000.
+- **Every cycle of L2 lookup is paid per L1 fill,** hit or miss: 22
+  (Doom) and 60 (`pbench kernel`) cycles per 1000 behind an 8 KB L1, 12
+  and 31 behind 16 KB. Behind 8 KB one cycle takes back most of what
+  128 KB saves Doom and more than it saves `pbench kernel`, so a larger
+  L2 pays only at the same lookup latency.
 
 ### Next-line structure
 
-- 69–78 % of L1-I misses are to the line after the previous L1-I miss
-  (Doom 78 %, shell loop 69 %, `pbench kernel` 72 %).
+- 66–76 % of L1-I misses are to the line after the previous L1-I miss
+  (Doom 76 %, shell loop 67 %, `pbench kernel` 66 %) at 4 KB, and
+  67–72 % at 8 KB.
 - L2 misses that continue one of the two most recent miss streams: Doom
-  47 %, shell loop 51 %, `pbench kernel` 54 %, `pbench libc` 85 %.
+  47 %, shell loop 50 %, `pbench kernel` 54 %, `pbench libc` 95 %.
 
 ### Reading the printed L2 rate
 
@@ -327,7 +403,7 @@ hits, one that misses is one read miss and three read hits (the words
 re-served after the install), and every write-through store is one
 write event. A larger L1 therefore *lowers* the printed rate — fewer
 easy word hits — while L2 line misses barely move: Doom at 8 KB 2-way
-prints 76 % against 85 % at 4 KB with 4.66 M line misses against 4.68 M.
+prints 75 % against 82 % at 4 KB with 4.32 M line misses against 4.33 M.
 The rate cannot judge an L1 change. The raw counts can: L2 line misses
 are the read misses, and fills that hit L2 are (read hits − 3 × read
 misses) / 4.
@@ -457,10 +533,11 @@ checked by synthesis (yosys `synth_ecp5`):
 
 With the line in one register at the L2's output, the fill sequencer's
 word walk disappears; the arbiter routes a line and a done strobe.
-Every registered hop left on the fill path costs one cycle per fill, and
-with a 4 KB L1 fills run at about 40 per 1000 instructions in Doom and
-75–95 on the kernel paths, so each hop is worth several percent of
-cycles and the hops are worth budgeting explicitly. At 37.5 MHz: an L2-hit
+Every registered hop left on the fill path costs one cycle per fill.
+Fills run at 36 per 1000 instructions in Doom and 80–93 on the kernel
+paths with a 4 KB L1, and at 22 and 60–66 with 8 KB, so each hop is
+worth several percent of cycles and the hops are worth budgeting
+explicitly ([L2 capacity](#l2-capacity)). At 37.5 MHz: an L2-hit
 fill of about 5 cycles, an L2-miss fill of about 24, of which the bus,
 the clock crossings and the DRAM own about 19.
 
@@ -543,8 +620,8 @@ adapter as a small line buffer, needing no change above the bus. It
 comes after the latency fixes, which also shrink its worst case.
 
 **Measured reach** ([next-line structure](#next-line-structure)). Two
-stream buffers could catch 47 % of Doom's L2 misses, 51–54 % on the
-kernel paths and 85 % in `pbench libc`. At about 10 cycles saved per
+stream buffers could catch 47 % of Doom's L2 misses, 50–54 % on the
+kernel paths and 95 % in `pbench libc`. At about 10 cycles saved per
 caught miss that is roughly 1 % of Doom's cycles: worth it for the
 streaming demos and bulk copies, not a lever for Doom.
 
@@ -780,13 +857,13 @@ nanoseconds.
   fills-by-kind split on hardware directly
   ([reading the printed L2 rate](#reading-the-printed-l2-rate)), in place
   of the shadow model's.
-- **Reproducible chains and models.** The shadow models are the ISS's
-  `+cachemodel` and `+tlbmodel`. The scratch cache model behind the
-  tables above replaced with LRU where the hardware uses tree-PLRU, and
-  treated every level as enabled once translation was on, so the 4-way
-  L2 may re-measure slightly differently; the scratch TLB model hashed
-  the index by 5-bit shifts whatever the set count, where `/hash` folds
-  in index-width chunks. Chains A and B and the machine-trace probe
-  were scratch tools; landing the probe as a characterization test,
-  alongside `tb_l2_cache`'s back-to-back read-throughput test, would
-  let the rest be re-measured after each change.
+- **Reproducible chains and models.** The miss profiles come from the
+  ISS's `+cachemodel` and can be re-run as they stand. The Doom
+  workload profile and the TLB layout table still come from the
+  models' first version: its LRU L2 may re-measure slightly
+  differently, and its TLB index hash shifted by 5 bits whatever the
+  set count, where `/hash` folds in index-width chunks. Chains A and B
+  and the machine-trace probe were scratch tools; landing the probe as
+  a characterization test, alongside `tb_l2_cache`'s back-to-back
+  read-throughput test, would let the rest be re-measured after each
+  change.
