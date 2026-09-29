@@ -557,9 +557,8 @@ needs:
 
 Throughput comes from the multi-transaction engine over the
 controller's own block RAM, the CPU copying payload in and out: the
-bus has one master, so no device reads or writes system RAM.
-`usb-host.md` still lists "a DMA transfer-descriptor engine" among a
-controller's optional capabilities, which that rules out.
+bus has one master (`doc/hardware/bus-protocol.md`, "One Master"),
+so no device reads or writes system RAM.
 
 Open: the contract changes, in `usb-host.md` before any RTL; the RTL
 after the card's full-speed bring-up.
@@ -966,17 +965,18 @@ ULX3S) stays available wherever a USB host is: on the Nexys once the
 fmc-usb2 card arrives (`hw-nexysvideo.md`, "Devices: no USB host, so
 no keyboard or USB storage").
 
-The bus has one master, so the device reaches no system RAM: it holds
-received and outgoing frames in its own block RAM, which the CPU reads
-and writes over the bus, as it does the USB controller's `DATA`
-buffer. The block RAM's two ports also cross the clock domains: the
-MAC side runs on the PHY's clocks (125 MHz at gigabit, 25 at 100
-Mbit/s, 2.5 at 10), and only buffer indices and status pass through
-synchronizers. At about 4 cycles per uncached access (`kernel.md`,
-"Ruled out", "Uncached MMIO `STW` as a hardware write-path
-asymmetry"), a full frame's words cost the CPU some 1,500 cycles,
-25 µs at 60 MHz: inside a 100 Mbit/s frame time (120 µs), so there
-the link is not the limit; at gigabit the CPU is.
+The bus has one master (`doc/hardware/bus-protocol.md`, "One Master"),
+so the device reaches no system RAM: it holds received and outgoing
+frames in its own block RAM, which the CPU reads and writes over the
+bus, as it does the USB controller's `DATA` buffer. The block RAM's
+two ports also cross the clock domains: the MAC side runs on the PHY's
+clocks (125 MHz at gigabit, 25 at 100 Mbit/s, 2.5 at 10), and only
+buffer indices and status pass through synchronizers. At about 4
+cycles per uncached access (`kernel.md`, "Ruled out", "Uncached MMIO
+`STW` as a hardware write-path asymmetry"), a full frame's words cost
+the CPU some 1,500 cycles, 25 µs at 60 MHz: inside a 100 Mbit/s frame
+time (120 µs), so there the link is not the limit; at gigabit the CPU
+is.
 
 Open:
 

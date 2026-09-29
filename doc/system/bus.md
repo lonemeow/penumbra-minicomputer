@@ -188,7 +188,7 @@ protocol it understands, with no device-specific driver needed.
 | 9–255 | —                   | —                              | Reserved for future protocols     |
 
 **Extended devices.** A device with extra capabilities (e.g., an SPI
-controller with a DMA engine) still reports the base class and
+controller with word-wide FIFO access) still reports the base class and
 implements the base registers. The boot ROM uses only the base
 registers. Later, the OS driver reads `CFG_ID` to detect the specific
 variant and enables extended features. Any `CLASS_SPI`/`CLASS_SD`

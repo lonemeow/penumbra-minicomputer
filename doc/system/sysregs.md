@@ -155,7 +155,7 @@ TLB_PTE:
 | Bit | Name | Hex  | Description                                    |
 |:---:|------|------|------------------------------------------------|
 | 0   | V    | 0x01 | Valid — entry participates in lookup           |
-| 2   | C    | 0x04 | Cacheable (0 for MMIO / DMA buffers)           |
+| 2   | C    | 0x04 | Cacheable (0 for MMIO)                         |
 | 3   | R    | 0x08 | Read permission                                |
 | 4   | W    | 0x10 | Write permission                               |
 | 5   | X    | 0x20 | Execute permission                             |
@@ -573,10 +573,10 @@ dynamic linking, JIT), the kernel must invalidate the I-cache before
 executing it. The D-cache write-through policy ensures data reaches
 RAM immediately, so only the I-cache needs invalidation.
 
-**DMA coherence.** Before a DMA read (device → memory), invalidate
-D-cache lines covering the buffer so the CPU reads fresh data from
-RAM. Alternatively, map DMA buffers with `C=0` (uncached) and avoid
-the problem entirely.
+**Coherence with other hardware.** Before the CPU reads memory that
+other hardware has modified, invalidate the D-cache lines covering it
+so the CPU reads fresh data. Alternatively, map such memory with `C=0`
+(uncached) and avoid the problem entirely.
 
 ---
 

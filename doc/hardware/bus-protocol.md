@@ -46,6 +46,21 @@ to the arbiter (which merges the I- and D-cache back-sides into the
 CPU memory port).  L2's front-side talks to the CPU memory port;
 L2's back-side talks to the system bus.
 
+## One Master
+
+The bus has exactly one master, on the CPU's side: the port below the
+CPU's memory hierarchy. Every device, memory included, only responds.
+A device never starts a transaction, so it never reads or writes RAM
+or another device. The protocol carries no request or grant, so
+nothing could arbitrate ownership of the bus between two masters.
+
+Hardware that moves data does so from one of two places. A device
+that moves data in bulk holds it in its own memory, which the CPU
+reads and writes as device accesses. Anything that needs to reach RAM
+itself, such as a copy engine, sits on the master's side and issues
+its transactions through the same port, in turn with the CPU's, one
+transaction at a time.
+
 ## Bus Signals (async form)
 
 These are the signal names of the async / 4-phase form documented in

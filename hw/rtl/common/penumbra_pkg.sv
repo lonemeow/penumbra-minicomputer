@@ -262,9 +262,9 @@ package penumbra_pkg;
     // The class code identifies the base register protocol the device
     // implements. Generic firmware (boot ROM, stage 1) can use any
     // device whose class it understands without a device-specific driver.
-    // Devices with extended features (e.g. DMA-capable SPI) still report
-    // the base class and implement the base registers; OS drivers detect
-    // extra capabilities via CFG_ID.
+    // Devices with extended features (e.g. an SPI controller with
+    // word-wide FIFO access) still report the base class and implement
+    // the base registers; OS drivers detect extra capabilities via CFG_ID.
     localparam logic [31:0] ACFG_CLASS_UNKNOWN  = 32'd0;  // No standard protocol — needs device-specific driver
     localparam logic [31:0] ACFG_CLASS_MEMORY   = 32'd1;  // Plain memory (RAM/ROM) — no registers, just address space
     localparam logic [31:0] ACFG_CLASS_UART     = 32'd2;  // NS16450-compatible UART register interface

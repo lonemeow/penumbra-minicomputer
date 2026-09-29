@@ -10,8 +10,8 @@ job, not the controller's.
 
 This document defines the **`CLASS_USBHC` minimum protocol**: the
 transaction-level register interface every device of the class implements
-after reset. A device may add richer capabilities (a DMA
-transfer-descriptor engine, downstream-hub support) advertised via
+after reset. A device may add richer capabilities (multi-transaction
+transfers, downstream-hub support) advertised via
 `CFG_ID`, but must always present this interface after reset — so generic
 firmware and a single class-bound OS driver work against any conformant
 controller.
@@ -223,8 +223,8 @@ switch. A controller without PRE reaches low-speed devices only
 when they are directly attached.
 
 Isochronous transfers — which are unhandshaken and must launch
-synchronized to the frame — PRE handling, and DMA descriptor
-engines, where present, are richer features behind `CFG_ID`.
+synchronized to the frame — PRE handling, and multi-transaction
+transfers, where present, are richer features behind `CFG_ID`.
 
 ## Relationship to Host Software
 

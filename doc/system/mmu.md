@@ -178,7 +178,7 @@ reporting fewer cannot run that translation scheme.
 | X    | TLB_PTE  | 5     | 0x20 | Execute permission. |
 | W    | TLB_PTE  | 4     | 0x10 | Write permission. |
 | R    | TLB_PTE  | 3     | 0x08 | Read permission. |
-| C    | TLB_PTE  | 2     | 0x04 | Cacheable. 0 = bypass cache (MMIO, DMA buffers). |
+| C    | TLB_PTE  | 2     | 0x04 | Cacheable. 0 = bypass cache (MMIO). |
 | —    | TLB_PTE  | 1     | 0x02 | Reserved; software writes 0. Tentatively earmarked for a future *speculatable* attribute — see [Reserved bits](#reserved-bits). |
 | V    | TLB_PTE  | 0     | 0x01 | Valid. Entry participates in lookup only when `V=1`. |
 
@@ -576,8 +576,8 @@ safe.
 
 ### Uncached Access
 
-MMIO and DMA regions must bypass the cache. Set `C=0` in the TLB entry
-for these pages. Penumbra uses VIPT caches sized at most one page
+MMIO regions must bypass the cache. Set `C=0` in the TLB entry for
+these pages. Penumbra uses VIPT caches sized at most one page
 (1 KiB direct-mapped, ≤ 4 KiB page), so the cache RAM index runs in
 parallel with TLB translation. The `C` bit and physical tag arrive
 together at the end of the cycle and gate the hit/commit decision —
@@ -604,10 +604,10 @@ load TLB entries for the new code pages, then write `DCACHE.INVAL_ALL`
 (for modified data) followed by `ICACHE.INVAL_ALL`. See
 [sysregs.md](./sysregs.md#cache-devices-2--dcache-3--icache-9--l2).
 
-### DMA Coherence
+### Coherence With Other Hardware
 
-There is no hardware cache snooping. DMA buffers must be mapped with
-`C=0` (uncached), or the kernel must invalidate the D-cache around DMA
-transfers. The pragmatic rule: use uncached mappings for DMA buffers
-(or bounce buffers for user ↔ device transfers) and avoid the problem
-entirely.
+There is no hardware cache snooping. Memory that hardware other than
+the CPU reads or modifies must be mapped with `C=0` (uncached), or the
+kernel must invalidate the D-cache around that hardware's accesses.
+The pragmatic rule: use uncached mappings for such memory and avoid
+the problem entirely.

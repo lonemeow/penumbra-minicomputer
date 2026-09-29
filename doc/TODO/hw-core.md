@@ -342,7 +342,7 @@ Implementation outline (full design in
 - Stage-1 write hit sets dirty (no bus traffic)
 - Eviction of dirty line writes back before installing new line
 - `FLUSH_LINE` / `FLUSH_ALL` sysreg ops for software-managed
-  coherence (DMA-out preparation, etc.)
+  coherence (before other hardware reads memory, etc.)
 - WA path: write miss allocates the line, then dirty-marks it
 - Optional phase 3: 1-deep writeback buffer to overlap eviction
   drain with the new line fill
@@ -369,7 +369,7 @@ buffer at the L2's downstream port.  Hides write latency (CPU
 stops stalling on the SDRAM round-trip) without reducing SDRAM
 write traffic.
 
-For the current single-master system (no DMA contending for SDRAM
+For the single-master system (nothing else contending for SDRAM
 bandwidth) latency hiding and traffic elimination are nearly
 equivalent in CPU-visible cost.  The write buffer is materially
 cheaper to implement (~30-50 lines vs ~250-300 for WB+WA), and
@@ -382,14 +382,15 @@ without needing to consult the buffer.
 When to pick this over phase 2:
 
 - Lower complexity budget / faster-landing intermediate
-- Single-master system stays single-master
+- Nothing shares the bus with the CPU (no copy engine on the
+  master's side)
 - Want to confirm the CPU-side latency-hiding hypothesis cleanly
   before committing to the larger WB engineering effort
 
 When phase 2 is required instead:
 
-- Future DMA needs SDRAM bandwidth (writes from CPU starve other
-  masters)
+- A copy engine on the master's side needs SDRAM bandwidth (CPU
+  writes starve it)
 - Sustained write rate exceeds SDRAM drain rate (buffer fills up,
   CPU stalls again)
 - Power/thermal sensitivity to SDRAM utilisation

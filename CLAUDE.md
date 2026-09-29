@@ -1,8 +1,8 @@
 # Penumbra Minicomputer — Claude Code Context
 
 Penumbra is a 32-bit RISC-like minicomputer designed from scratch and
-implemented on a Radiona ULX3S (Lattice ECP5) FPGA — CPU, MMU, DMA, I/O,
-and system bus. It boots NetBSD to userland on the FPGA today; the
+implemented on a Radiona ULX3S (Lattice ECP5) FPGA — CPU, MMU, I/O and
+system bus. It boots NetBSD to userland on the FPGA today; the
 remaining long-term goal is to re-implement the gen1 design (and the ISA
 it proves) in discrete 74xx logic.
 

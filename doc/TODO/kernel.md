@@ -476,7 +476,7 @@ Facts the plan leans on:
   transaction primitives (token / data / handshake, 64-byte buffer)
   are identical. Done: `usb-host.md`'s scope now says so — the three
   handshaken transfer types are the minimum; isochronous / hubs /
-  DMA stay behind `CFG_ID`.
+  multi-transaction transfers stay behind `CFG_ID`.
 - NetBSD's `slhci` (`dev/ic/sl811hs.c`) proves the whole MI stack —
   bulk endpoints included — over exactly this controller shape:
   FS/LS, one software-driven transaction at a time. It is the

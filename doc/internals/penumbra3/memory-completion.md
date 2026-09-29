@@ -238,12 +238,13 @@ Two invariants every policy must preserve — they are what keep the doors open:
   transaction, so the precise-fault property for loads and uncached stores is
   unchanged.
 
-Only one knob reaches beyond the bus side: **write-back changes DMA coherence.**
-Write-through keeps memory current, so DMA-from-memory needs no help; write-back
-leaves dirty lines off-memory, so the kernel must flush before a DMA read and
-invalidate before a DMA write — the per-line cache-maintenance and full-flush
-hooks the platform reserves for exactly this case. That cost is a property of
-the *policy*, not of this completion contract.
+Only one knob reaches beyond the bus side: **write-back changes coherence with
+other hardware.** Write-through keeps memory current, so hardware that reads
+memory needs no help; write-back leaves dirty lines off-memory, so the kernel
+must flush before other hardware reads memory and invalidate before it writes —
+the per-line cache-maintenance and full-flush hooks the platform reserves for
+exactly this case. That cost is a property of the *policy*, not of this
+completion contract.
 
 The phased rollout that exercises these knobs — write-through with a store
 buffer first, write-back only if measurement asks for it — is the

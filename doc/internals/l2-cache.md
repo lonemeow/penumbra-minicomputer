@@ -86,7 +86,8 @@ benchmark output, not from this doc.
 
 Explicitly **not goals** (see also "Future Work" below):
 
-- Multicore / cache-coherent DMA.  Single-core only; DMA coherence is
+- Multicore, or coherence with other hardware.  Single-core only;
+  coherence with anything else that reads or modifies memory is
   software-managed via cache-maintenance sysregs.
 - Inclusivity guarantees with L1.  Non-inclusive non-exclusive (NINE)
   is sufficient for single-core and minimises bookkeeping.
@@ -126,8 +127,8 @@ L2 must precede `bus_devsel` (not sit underneath it) because:
   it.  Sitting in front of the decoder serialises all RAM-bound
   traffic through the same cache.
 - The address-cacheable decision is per-page (PTE.C), not per-device.
-  A DMA buffer in RAM marked uncacheable must reach the SDRAM
-  controller without L2 caching it.
+  RAM that a page marks uncacheable must reach the SDRAM controller
+  without L2 caching it.
 
 ## Bus Interface
 
@@ -384,15 +385,15 @@ all cache levels.  Rationale: L1 full-flush is a single-cycle valid-
 bit clear (cache holds 64 lines max, smaller than any realistic
 invalidate range); L2 is PIPT + uncached-MMIO project convention
 means no current code path needs it.  Defer until a workload
-(e.g. a future cached-DMA path or a JIT that keeps code lines
-warm in L2) actually wants it.
+(e.g. cacheable memory that other hardware reads or writes, or a
+JIT that keeps code lines warm in L2) actually wants it.
 
 The `INVAL`/`FLUSH` distinction follows ARM's c7 ops:
 
 - **Invalidate** = drop without writeback.  Dangerous if dirty.  Use
-  before reading a buffer that DMA just wrote.
+  before reading memory that other hardware just wrote.
 - **Flush** (a.k.a. clean) = writeback dirty, line stays valid.  Use
-  before starting a DMA-out so the device sees current data.
+  before other hardware reads memory, so it sees current data.
 
 `STATUS.busy` lets the kernel poll completion of bulk ops without
 blocking the sysreg bus.  The sysreg interface itself is single-cycle
@@ -406,13 +407,13 @@ genuinely cannot complete in one cycle, expose status separately").
 Software-managed coherence flows from `WRSYS SYSDEV_L2_CACHE, *`.  Three
 canonical patterns:
 
-**DMA-out (CPU prepares a buffer, device reads RAM):**
+**Other hardware reads what the CPU wrote:**
 ```
 for line in buffer: WRSYS SYSDEV_L2_CACHE, FLUSH_LINE, line_addr
 WRSYS device, START
 ```
 
-**DMA-in (device writes RAM, CPU reads):**
+**The CPU reads what other hardware wrote:**
 ```
 WRSYS device, START
 … wait completion …
@@ -427,9 +428,8 @@ for line in code: WRSYS SYSDEV_L2_CACHE, FLUSH_LINE, line_addr
                   WRSYS SYSDEV_L1_ICACHE, INVAL  (already exists)
 ```
 
-NetBSD's `pmap` and bus-DMA layer already invoke architecture-
-specific cache hooks; the L2 ops slot in alongside the existing L1
-hooks.
+NetBSD's `pmap` already invokes architecture-specific cache hooks; the
+L2 ops slot in alongside the existing L1 hooks.
 
 ## Runtime Bypass
 

@@ -196,15 +196,17 @@ That sets the order:
   posted write-through it replaces, so it does little for store latency.
   It reduces SDRAM write traffic, which matters only if stores prove
   throughput-bound, and it adds dirty/eviction logic in the L2 miss path
-  plus kernel flush/invalidate work around DMA.
+  plus kernel flush/invalidate work around other hardware's memory
+  accesses.
 - **L1-D write-allocate stays off the table for now.** Its allocation logic
   is complex and sits in the most critical timing cones, so it is a real
   fmax risk; investigate only once the basic design closes. Keep WT-WnA.
 
 Whatever store path lands, the ordering contract is unchanged and rides
-existing ops: uncached stores are ordered (a DMA kickoff is an uncached MMIO
-store, and the store buffer drains ahead of it), so no new ISA barrier is
-introduced.
+existing ops: an uncached store, to a device or any other memory with side
+effects, is ordered after every earlier store (the store buffer drains ahead
+of it), so no new ISA barrier is introduced. Sysreg writes stay outside that
+ordering, so a sysreg-driven copy engine would need an explicit drain.
 
 ## Performance targets
 

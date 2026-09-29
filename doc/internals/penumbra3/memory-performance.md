@@ -436,12 +436,17 @@ graph LR
   finds L2 current. Misses are rare (476 in all of Dhrystone), so the
   drains cost almost nothing. This replaces the disambiguation search
   that made the gen2.5 store-buffer plan its most structural feature.
-- **No software change.** A DMA kickoff is an uncached MMIO store, so it
-  publishes every earlier cacheable store. Refetching modified code is an
-  I-fill, so it drains too. Entries hold physical addresses, so MMU and
-  cache-maintenance sysreg writes need no drain. Every drain is a side
-  effect of an operation software already issues, and it blocks rather
-  than requiring a poll.
+- **No software change.** An uncached store, to a device or any other
+  memory with side effects, drains the buffer first, so it is ordered
+  after every earlier cacheable store. That matters little in practice,
+  since memory with side effects is mapped uncached, but the strong
+  guarantee is cheap and kept. Refetching modified code is an I-fill, so
+  it drains too. Sysreg writes stay outside the buffer's ordering:
+  entries hold physical addresses, so MMU and cache-maintenance writes
+  need no drain, and TLB refills should not pay for one. A sysreg-driven
+  copy engine would therefore need an explicit drain before it starts.
+  Every other drain is a side effect of an operation software already
+  issues, and it blocks rather than requiring a poll.
 - **Faults.** A cacheable-store bus fault is already asynchronous (a
   sticky bit) under the
   [fault-precision contract](./memory-completion.md#fault-precision),
@@ -467,13 +472,14 @@ place.
 
 What it does add is less SDRAM write traffic. That matters only when
 stores are throughput-bound: bulk fills and copies, page zeroing, or a
-future DMA master competing for SDRAM bandwidth. Against that it costs
-dirty bits, eviction-then-fill sequencing and flush operations, fmax
-risk in the L2 miss path, and kernel-visible work: flush before a DMA
-read and invalidate before a DMA write, including per-line operations
-(`INVAL_LINE` is reserved but not implemented). Write-allocate is weaker
-still for streaming writes, since it reads each line before overwriting
-it. It stays a measure-driven option behind the store buffer.
+copy engine on the master's side sharing the bus with the CPU. Against
+that it costs dirty bits, eviction-then-fill sequencing and flush
+operations, fmax risk in the L2 miss path, and kernel-visible work:
+flush before other hardware reads memory and invalidate before it
+writes, including per-line operations (`INVAL_LINE` is reserved but not
+implemented). Write-allocate is weaker still for streaming writes, since
+it reads each line before overwriting it. It stays a measure-driven
+option behind the store buffer.
 
 ### One uncore pipeline
 
@@ -494,7 +500,6 @@ request).
 | Fill-through: bus words written into L2 and streamed to L1 at once | yes | ~12 of the 14-cycle re-serve tail |
 | L2 walks a hit line itself at 1 word per cycle, or reads it line-wide | yes | L2-hit fill ~14 → ~7, ~4 line-wide |
 | Starting the bus read in parallel with the tag lookup | no — the bus contract holds `re` until the `ack`, so a read cannot be abandoned; every L2 hit would cost an SDRAM read and orphan the adapter's speculation | 1–2 cycles per miss |
-| Requesting the *external* bus during the lookup and withdrawing on a hit (once DMA masters exist) | yes — hidden arbitration, as in PCI and VME: a bus request can be withdrawn, a bus cycle cannot | hides grant latency |
 
 Estimated from the chain-B numbers with the SDRAM side unchanged: an
 L2-miss fill of about 46–55 cycles becomes about 33–42. Against the
