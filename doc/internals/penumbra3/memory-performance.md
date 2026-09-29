@@ -266,7 +266,7 @@ on the 2026-09-22 build ("Kernel: count TLB refills" in
 | Workload | Binding cost | Lever |
 |---|---|---|
 | Dhrystone | store latency | [store buffer](#store-buffer-at-the-core-boundary) |
-| fork / exec / pipe | L2-hit fill | [one uncore pipeline](#one-uncore-pipeline) with a line-wide or 1-word-per-cycle L2 read |
+| fork / exec / pipe | L2-hit fill | [one uncore pipeline](#one-uncore-pipeline) with a line-wide or 1-word-per-cycle L2 read, [next-line prediction buffer](#next-line-prediction-buffer-for-l1-i) |
 | plasma | L2-miss fill | [whole-line SDRAM fetch](#sdram-side-whole-line-fetch), [fill-through](#one-uncore-pipeline), [stream prefetch](#next-line-prefetch-into-stream-buffers) |
 | Doom | TLB refills; then L2-hit fetch fills and L2-miss data fills | [TLB sets](#tlb-sets-and-a-cheaper-refill), [one uncore pipeline](#one-uncore-pipeline), [L1 size](#l1-geometry) |
 
@@ -630,19 +630,87 @@ kernel paths and 95 % in `pbench libc`. At about 10 cycles saved per
 caught miss that is roughly 1 % of Doom's cycles: worth it for the
 streaming demos and bulk copies, not a lever for Doom.
 
-**The fetch side has more structure.** 69–78 % of L1-I misses are to
-the line after the previous one. Under a blocking, single-outstanding
-uncore a next-line fetch prefetch roughly breaks even — the extra L2
-read costs about what the avoided miss saves. It pays once it overlaps
-execution: after the store buffer puts background traffic on the
-uncore, a one-line stream buffer beside L1-I, filled from L2 while the
-core runs the current line, is the same kind of work and sits outside
-the core's timing cones.
+**The fetch side** is served by a
+[next-line prediction buffer](#next-line-prediction-buffer-for-l1-i)
+beside L1-I rather than a stream buffer beside L2: its misses are L2
+hits, not SDRAM reads.
 
 For scale: the 386 and 486 had no hardware data prefetch at all. Their
 only spatial prefetch was the 486's burst line fill, bounded by the line
 that already missed. Commodity hardware prefetchers arrived around 2000
 (Pentium 4, POWER4), confidence-gated and page-bounded as above.
+
+### Next-line prediction buffer for L1-I
+
+A one-line buffer beside L1-I holds a prediction of the next fetch
+miss: line N+1, looked up in L2 while line N fills. It goes after the
+fills a larger L1-I would remove — L2-hit fetch fills, two thirds or
+more of them to the line after the previous miss
+([next-line structure](#next-line-structure)) — without adding a way
+to the IF2 hit logic.
+
+- **Filled from L2 only.** On an L1-I miss to line N the L2 looks up
+  N+1 as well, the cycle after N, in the same transaction. A hit loads
+  the buffer. A miss drops the prediction rather than reading memory:
+  a bus read cannot be abandoned, and one would hold the
+  single-outstanding path for an SDRAM round trip. No prediction
+  crosses a 4 KB page. A lookup is an L2 read like any other and waits
+  for the store buffer to drain, so it sees every earlier store.
+- **Installed only by a demand miss.** A fetch that misses L1-I and
+  matches the buffer installs the line from it and refetches. L1-I
+  never holds a line no fetch asked for, so a wrong prediction evicts
+  nothing, and the installed line cannot already be in L1-I, so no
+  duplicate check reads L1-I's tags. A new prediction replaces an
+  unused one.
+- **Off the hit path.** The buffer's tag is compared beside the miss
+  verdict and the match registered with it; a buffer hit completes as
+  a short miss, install then refetch, in about 2 cycles against about
+  5 for an L2 hit. Feeding the buffer into the fetch-word mux instead
+  would add a third source,
+  `(hit0 & d0) | (hit1 & d1) | (hitB & dB)`, one LUT level more than
+  2 ways: the same depth step as 4 ways.
+- **Physical, and cleared with L1-I.** The buffer is physically
+  tagged, so translation changes do not touch it. L1-I does not snoop
+  stores — software invalidates it after writing code
+  ([`sysregs.md`](../../system/sysregs.md)) — so the buffer needs no
+  snoop either, only clearing by the same invalidation.
+
+Two policies differ in what a buffer hit does:
+
+- **Once:** only a demand fill looks up N+1. Every lookup rides a
+  demand transaction; no request stands alone.
+- **Continue:** a buffer hit on line M also looks up M+1, which keeps a
+  sequential run in the buffer. That lookup is a request of its own,
+  carried on the fetch side's request with a prefetch flag rather than
+  as a third requester in the uncore's select, and a data miss wins
+  over it. A fetch miss to a line whose lookup is still in flight waits
+  for it instead of issuing its own.
+
+Counted by the ISS cache model, whose report gives both policies on a
+`next-line` line, with an 8 KB 2-way L1 and a 64 KB L2, per 1000
+instructions:
+
+| | Doom | shell loop | `pbench kernel` |
+|---|---|---|---|
+| L1-I misses | 11.1 | 57.8 | 55.3 |
+| served by the buffer, once | 3.9 | 20.6 | 20.4 |
+| served by the buffer, continue | 6.6 | 33.6 | 34.2 |
+| lookups never used, continue | 2.0 | 9.4 | 10.5 |
+| cycles saved, continue, at ~3 a hit | ~20 | ~101 | ~102 |
+| cycles 8 KB → 16 KB 4-way L1-I saves | 44 | 110 | 139 |
+
+The counts are exact for the architectural stream, since the buffer
+changes which misses are cheap but not what L1-I holds; the cycles are
+estimates. An unused lookup costs anything only when a demand request
+lands while it occupies the L2, at most about 3 cycles: 31 cycles per
+1000 on `pbench kernel` if every one collided.
+
+On the kernel paths the continue policy recovers 73–92 % of what a
+16 KB 4-way L1-I saves, with no change to the hit logic; on Doom it
+recovers 45 %. It needs one property of the uncore: an L2 whose first
+stage accepts a new lookup every cycle, so the N+1 lookup follows N
+without a gap and a standalone lookup delays a data miss by at most a
+cycle.
 
 ### Framebuffer stores and the cacheable-only rule
 
@@ -872,3 +940,6 @@ nanoseconds.
   a characterization test, alongside `tb_l2_cache`'s back-to-back
   read-throughput test, would let the rest be re-measured after each
   change.
+- **Prediction-buffer costs.** The buffer-hit and look-up cycles are
+  estimates until the uncore exists; the counts they multiply are
+  `+cachemodel`'s.

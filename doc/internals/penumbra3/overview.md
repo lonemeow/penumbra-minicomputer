@@ -314,7 +314,7 @@ with margin.
    - [`memory-performance.md`](./memory-performance.md) — measured
      memory-path costs, gen2.5 workload profiles, and the uncore levers
      they point to (store buffer, one uncore pipeline, whole-line SDRAM
-     fetch, stream prefetch).
+     fetch, stream prefetch, next-line prediction for L1-I).
 4. Further per-area gen3 specs — *to be written as each subsystem is
    designed* (design-decisions, pipeline-stages, hazard-model,
    memory-interface), following the gen2 doc layout under `penumbra2/`.
