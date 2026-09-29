@@ -833,3 +833,14 @@ fill and during a pass-through read.
   averaged 37.17 MHz with 13 seeds closing, against 37.73 MHz and 18
   without the change.  A merged LUT draws its inputs from modules
   placed apart, so the saved levels come back as longer wires.
+- **Hit under miss in the L2.**  Serving an L2 hit while an L2 miss
+  waits on SDRAM, or overlapping a fetch fill and a data fill, was
+  analysed and declined.  A core that holds the pipe on a miss uses at
+  most the shorter of two overlapped fills, and its in-flight
+  instructions hide most of that: the one case that saves anything, a
+  data fill finished under a fetch fill from SDRAM, is worth ~0.2–0.7
+  cycles per 1000 instructions, and contention of any kind at most
+  11–25.  It pays only with stall-on-use loads or out-of-order issue,
+  which `doc/internals/penumbra3/memory-completion.md` rules out.
+  Analysis in `doc/internals/penumbra3/memory-performance.md` ("Hit
+  under miss in the L2 — ruled out").

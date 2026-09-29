@@ -845,6 +845,44 @@ a wide margin: gen2.5's worst CPU↔SDRAM crossing delay is 6.2 ns, the
 reset fan-out. Vivado does time clocks derived from one MMCM, so this
 conclusion belongs to the ECP5 flow, not to an Artix-7 board.
 
+## Hit under miss in the L2 — ruled out
+
+When L1-I and L1-D both miss, the single-outstanding L2 serves one
+after the other. Serving an L2 hit while an L2 miss waits on SDRAM, or
+overlapping two lookups, was analysed 2026-09-28 and declined:
+
+- **A core that holds on a miss cannot use the overlap.** Overlap saves
+  at most the shorter of the two fills, and the pipeline hides most of
+  that. A fetch fill finished under a data miss only replaces bubbles
+  that the instructions already between fetch and MEM2 cover once the
+  data returns. A data fill finished under a fetch miss moves the
+  load's stall inside the fetch bubble and saves the data fill's ~5
+  cycles, but only when a fetch fill goes to SDRAM while an older load
+  misses L1-D and hits L2: about 0.2–0.7 cycles per 1000 instructions
+  on Doom, the shell loop and `pbench kernel`.
+- **Contention is rare.** Fetch misses within 7 instructions after a
+  data miss, a generous bound on the two being in flight together, run
+  2.1 (Doom), 5.0 (shell loop) and 3.3 (`pbench kernel`) per 1000
+  instructions with an 8 KB L1, counted once with a scratch patch to
+  the cache model. At ~5 cycles each that is at most 11–25 cycles per
+  1000.
+- **The logic is the expensive kind:** a parked miss so the L2 can
+  serve hits during it, fills steered back to the right L1, installs
+  ordered against hits on the L2's block RAMs, and every L2 read still
+  waiting for the store buffer to drain.
+- **Two memory misses at once are not available.** The SDRAM path takes
+  one request at a time, and the bus cannot abandon a read.
+
+Overlap pays when the core can work past a miss: loads that stall on
+use rather than on miss (in-order cores that mark the destination busy
+and keep issuing, such as ARM's Cortex-A53), or out-of-order issue.
+[`memory-completion.md`](./memory-completion.md#load-miss--hold-and-complete)
+rules out non-blocking loads for gen3 to keep the issue cone shallow
+and faults precise. An L2 that accepts a lookup every cycle is still
+wanted, for the
+[prediction buffer](#next-line-prediction-buffer-for-l1-i), not for
+concurrency.
+
 ## Estimated effect at 37.5 MHz
 
 Estimates, not measurements. They assume every stall class not named
