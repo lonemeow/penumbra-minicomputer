@@ -216,7 +216,7 @@ runs on hardware.
 | Fmax | reliable 50 MHz w/ margin; reliable 37.5 fallback | gen2 topped at barely-37.5 |
 | CPI, cache-hot tight loop | ~1.1–1.3 (forwarding from day one) | gen2 ~2.5–3.0 unforwarded |
 | CMP+Bcc heavy | ~1.0–1.1 (flags forwarded, BTB) | — |
-| L1 size | per board: ECP5 4–8 KB, Artix-7 ≥16 KB ([geometry data](./memory-performance.md#l1-geometry)) | gen2 4 KB (then 2-way) |
+| L1 size | per board: ECP5 8 KB 2-way (gen2's hit logic); Artix-7 16 KB, with 4 ways on the fetch side if MEM2 cannot take them ([geometry data](./memory-performance.md#l1-geometry)) | gen2 4 KB (then 2-way) |
 | Main TLB | 256×2 in BRAM ([refill data](./memory-performance.md#tlb-sets-and-a-cheaper-refill)) | gen2 32×2 |
 | L2-miss fill | ~20–25 cycles ([design target](./memory-performance.md#design-target-memory-latency-in-cpu-cycles)) | gen2.5 38 with the line stack |
 | Load-use stall | 1 (forwarded) | gen2 4 |

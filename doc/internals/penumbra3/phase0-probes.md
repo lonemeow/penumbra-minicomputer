@@ -241,8 +241,9 @@ decode-on-enqueue FIFO write in the cycle.
 **Build.**
 - The P0.3 translate path unchanged: registered BRAM TLB output, 2-way
   match, pinned override.
-- The L1's per-way tag BRAMs, registered, at the target way count (4 for a
-  16 KB L1, 2 for 8 KB), and the per-way data BRAMs.
+- The L1's per-way tag BRAMs, registered, at each side's target way count
+  (4 for a 16 KB L1, 2 for 8 KB; IF2 may take 4 where MEM2 keeps 2), and
+  the per-way data BRAMs.
 - The compare in the shape the design intends — each cache way against
   every candidate frame (both TLB ways and the pinned result), the TLB
   match selecting — then the way mux into the registered load result; for
@@ -254,9 +255,11 @@ decode-on-enqueue FIFO write in the cycle.
 way select → data way mux → result flop (MEM2) or FIFO write (IF2).
 
 **Pass.** BRAM-cone bar. **On fail:** take the associativity down with the
-L1 size (8 KB 2-way keeps roughly half the benefit of 16 KB 4-way), or
-move the way select a cycle later — a structural choice for the board's
-L1, made before the L1 is written.
+L1 size (at the line-wide fill's cost 8 KB 2-way keeps 39–55 % of what
+16 KB 4-way saves over 4 KB, and most of the remainder is on the fetch
+side, so MEM2 fails more cheaply than IF2), or move the way select a
+cycle later — a structural choice for the board's L1, made before the
+L1 is written.
 
 ## Recommended order — fail fast
 

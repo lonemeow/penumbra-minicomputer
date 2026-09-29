@@ -228,12 +228,14 @@ cycles, never critical-path logic.**
   registered/deferred (gen2's L1 already does this — keep it).
 - **L1: write-through**, keep the timing-critical level simple.
 - **Size the L1 per board, and read size and ways together.** A VIPT L1 indexes
-  within the 4 KB page, so anything above 8 KB needs at least 4 ways, and each way
-  is one more physical-tag compare fed by the TLB verdict in the same cycle (IF2 and
-  MEM2). Measured miss profiles: 8 KB 2-way cuts L1 fill stall 24–36 % against
-  gen2's 4 KB, 16 KB 4-way 49–60 %
-  ([memory-performance](./memory-performance.md#l1-geometry)). The ECP5 is expected
-  to hold 4–8 KB; an Artix-7 board has the block RAM and timing room for 16 KB+.
+  within the 4 KB page, so a way holds at most 4 KB: 8 KB 2-way keeps the compares
+  of 4 KB 2-way, and anything above 8 KB needs at least 4 ways, each one more
+  physical-tag compare fed by the TLB verdict in the same cycle (IF2 and MEM2). At
+  the line-wide fill's cost, 8 KB 2-way cuts L1 fill stall 19–21 % against 4 KB and
+  16 KB 4-way 35–49 %, most of the step past 8 KB on the fetch side
+  ([memory-performance](./memory-performance.md#l1-geometry)). The ECP5 takes 8 KB
+  2-way; an Artix-7 board has the block RAM and timing room for 16 KB, and the two
+  sides need not match: IF2 can take 4 ways while MEM2 keeps 2.
 - **State BRAM read/write exclusivity in the RTL.** Where a BRAM's read and write
   could coincide, yosys adds a bypass that returns the old data — flops capturing
   the write and a mux on the EBR output, i.e. logic after the Tco that the

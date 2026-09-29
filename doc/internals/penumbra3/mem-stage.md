@@ -156,8 +156,11 @@ select rather than the sum of the two.
 
 The cache's way count sets the width of that compare, and the size target
 sets the way count: a VIPT L1 above 8 KB needs at least 4 ways with 4 KB
-pages. P0.3 measured the TLB verdict alone; the chained compare at the
-L1's intended associativity is [P0.5](./phase0-probes.md#p05--physical-tag-compare-behind-the-tlb-verdict-proposed).
+pages. The two sides need not match. The step past 8 KB is worth little
+on the data side ([L1 geometry](./memory-performance.md#l1-geometry)),
+so MEM2 can keep 2 ways where IF2 takes 4. P0.3 measured the TLB verdict
+alone; the chained compare at the L1's intended associativity is
+[P0.5](./phase0-probes.md#p05--physical-tag-compare-behind-the-tlb-verdict-proposed).
 
 ## Fault contract (commit-time)
 

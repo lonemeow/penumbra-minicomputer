@@ -136,8 +136,10 @@ path is unbuilt -- `mem2_stage` writes the L1 copy (`o_dcache_we`) but issues no
 write-through to L2/memory and does not block (stores retire via `mem2_commits`).
 **Before the L1 is written:** run the proposed P0.5 probe
 (`doc/internals/penumbra3/phase0-probes.md`, "P0.5 -- physical-tag compare
-behind the TLB verdict") at the associativity each board's L1 size needs --
-P0.3 timed the TLB verdict alone, not the L1 compare chained behind it.
+behind the TLB verdict") at the associativity each board's L1 size needs,
+per side -- IF2 may take 4 ways where MEM2 keeps 2 (evidence:
+`doc/internals/penumbra3/memory-performance.md`, "L1 geometry"). P0.3
+timed the TLB verdict alone, not the L1 compare chained behind it.
 **Before the TLB store's geometry is fixed:** the proposed 256x2 needs
 `MMU_CONFIG` version 2 and a wider `TLB_INDEX` in `doc/system/mmu.md`
 (evidence: `doc/internals/penumbra3/memory-performance.md`, "TLB: sets, and a
