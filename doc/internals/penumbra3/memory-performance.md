@@ -35,13 +35,14 @@ real gen2 miss costs somewhat more than chain B shows.
 Chains A and B ran on the word stack (`hw/rtl/io/sdram/`), whose adapter
 speculates one word ahead. The later measurements below (2026-09-25) use
 the line stack (`hw/rtl/io/sdram_line/`), which answers a read with the
-whole line and holds it, and add three instruments:
+whole line and holds it, and add four instruments:
 
 | Instrument | What it is | What it gives |
 |---|---|---|
 | Machine trace | `machine_penumbra2_sim`, gen2.5 core, line stack, clocks at the hardware ratio (37.5 : 100 MHz); a probe program reads `CPU_CYCLES` or `STALL_LOAD` around one dependent load, and the testbench logs every memory-side FSM each cycle | the cost of one miss and which layer owns each cycle |
 | Hardware membench | `benchmark/membench` on the ULX3S at 37.5 MHz, both stacks | `STALL_LOAD` cycles per L2 read miss |
 | Shadow models | the ISS's `+cachemodel` and `+tlbmodel`, fed every fetch, load and store (physical address, PTE `C`) and every main-TLB translation while NetBSD runs real workloads | miss counts by kind, for geometries that were never built |
+| Store-buffer model | the ISS's `+sbmodel`: shadow store buffers on an estimated clock, fed every store and the first cache model's fills | the cycles a buffer's shape and drain rules make the core wait |
 
 The shadow models count accesses the way the RTL perfctrs do. Run over
 the same window as Doom's own perfctr snapshot (`perf_demo_track` to
@@ -309,10 +310,15 @@ Measured 2026-09-28 with the ISS's cache model on the multiuser image
 (`GENERIC.DEBUG` kernel), booted and driven by
 `sw/tools/iss-workloads.py` with `+core=penumbra2_5`:
 
-- **Doom:** the 150-tic `BENCH.lmp` timedemo from the first
+- **Doom:** Freedoom's 150-tic `BENCH.lmp` timedemo from the first
   `R_RenderPlayerView` to `G_CheckDemoStatus` (`+model_start`,
   `+model_stop`), 149 frames and 449 M instructions. The window needs
   no `PERFCTR` build.
+- **Doom `demo3`:** the shareware `DOOM1.WAD`'s `demo3`
+  (`doom -iwad DOOM1.WAD -timedemo demo3`) over the same window, 2,134
+  gametics and 2.92 G instructions, measured 2026-09-30. Freedoom's WAD
+  is far larger and behaves differently, so the two are separate
+  workloads; the measurements from 2026-09-30 on use `demo3`.
 - **Shell loop:** `for i in 1 2 3 4 5 6 7 8 9 10; do ls -l /usr/bin |
   sort | tail; grep -c run_rc_command /etc/rc.subr; done`, one window.
 - **`pbench kernel`** and **`pbench libc`**, one window each.
@@ -474,6 +480,36 @@ stay open at once, so an interrupt's stack pushes do not split a copy.
   of the SPI controller's byte-wide data register, one byte a store.
   That is a question for the device, not the RAM path.
 
+### Fills and refills at gen3's geometries
+
+Measured 2026-09-30 in one run per workload, every hierarchy and TLB
+layout side by side, with the models' current versions. Per 1000
+instructions:
+
+| | shell loop | `pbench kernel` | Doom `demo3` |
+|---|---|---|---|
+| L1 fills from L2 / from memory, 4 KB 2-way L1s, 64 KB L2 | 81.3 / 11.7 | 77.9 / 6.1 | 14.9 / 11.9 |
+| … 8 KB 2-way L1s | 54.6 / 11.3 | 56.7 / 6.1 | 7.0 / 11.9 |
+| … 16 KB 4-way L1s | 31.5 / 10.5 | 26.8 / 5.9 | 1.9 / 11.7 |
+| … 8 KB 2-way L1s, 128 KB L2 | 59.3 / 6.6 | 58.7 / 4.1 | 8.7 / 10.2 |
+| L1-I misses the prediction buffer serves, continue, 8 KB | 33.6 | 35.6 | 3.3 |
+| Memory fills that continue one of the last two | 50 % | 56 % | 54 % |
+| Stores | 83 | 117 | 76 |
+| TLB refills, 32×2 as built (the kernel's own count) | 6.26 | 4.44 | 2.62 |
+| … shadow 64×2 / 128×2 / 256×2 | 2.57 / 0.98 / 0.35 | 2.08 / 1.15 / 0.29 | 0.74 / 0.28 / 0.05 |
+
+- **`demo3` is not Freedoom.** It refills the TLB 2.6 times per 1000
+  instructions against Freedoom's 4.4, and its code fits an 8 KB L1-I
+  (7 fills per 1000). Its cost is data streaming through L2: 8.7 data
+  fills per 1000 come from memory, a larger L1 barely moves them, and
+  54 % of memory fills continue a stream.
+- **The kernel paths are fetch-bound.** Their L2-hit fills are nearly
+  all L1-I misses, which is what the line-wide transfer, a larger L1-I
+  and the prediction buffer each reach.
+- **The as-built shadow undercounts Doom's refills** — 1.87 per 1000
+  against the kernel's 2.62 — though it matches the kernel paths within
+  4 %, so the larger layouts may read optimistic on Doom.
+
 ## Levers for the gen3 uncore
 
 ### Store buffer at the core boundary
@@ -481,33 +517,57 @@ stay open at once, so an interrupt's stack pushes do not split a copy.
 A small FIFO of cacheable stores between the completion unit and the
 uncore. A cacheable store completes when it enters the buffer instead
 of when its write-through is acknowledged; the buffer drains through the
-uncore in the background.
+uncore in the background. Its shape comes from the
+[store-buffer model](#the-store-buffer-in-the-model): eight line
+entries, a fill that waits only for the entries up to its own line, and
+an L2 that posts its write-through.
 
 ```mermaid
 graph LR
-    M2["MEM2 / completion unit"] -->|cacheable store| SB["store buffer<br/>(cacheable only)"]
-    M2 -->|"miss, uncached access<br/>(waits for SB empty)"| UC
+    M2["MEM2 / completion unit"] -->|cacheable store| SB["store buffer<br/>(8 line entries)"]
+    M2 -->|"fill (waits for entries<br/>up to its line)"| UC
+    M2 -->|"uncached access<br/>(waits for SB empty)"| UC
     SB -->|drain| UC["uncore<br/>(L2 + I/D select + fill)"]
-    UC --> BM["bus master"]
+    UC -->|posted write-through| BM["bus master"]
     SB -. "full (registered)" .-> M2
 ```
 
 - **Placement.** It must sit in front of the arbiter to hide the whole
   on-chip path. A buffer after L2 would hide only the SDRAM leg, which
   the adapter already posts.
-- **No load search.** L1-D is updated in place at commit on a hit, so a
-  load that hits L1 already sees every older store. Every access that
-  goes to L2 — an I-fill, a D-fill, an uncached load — and every uncached
-  store waits until the buffer has drained, so a load that misses L1
-  finds L2 current. Misses are rare (476 in all of Dhrystone), so the
-  drains cost almost nothing. This replaces the disambiguation search
-  that made the gen2.5 store-buffer plan its most structural feature.
+- **Entries are lines.** Each holds a line and a byte mask, and stores
+  to its line merge into it until it starts draining. A kernel frame
+  save of about 21 words fits in eight entries where it would overflow
+  eight words ([store streams](#store-streams)). An entry drains as one
+  bus burst, over the words from the first it wrote to the last.
+- **A fill searches the buffer by line; a load hit never does.** L1-D
+  is updated in place at commit on a hit, so a load that hits L1
+  already sees every older store. A fill — an I-fill or a D-fill —
+  waits for the entries up to the youngest holding its line, so L2 is
+  current for that line when the fill reads it. The search compares the
+  entries' line tags against the registered miss address in the
+  uncore, off the core's cones. Uncached loads and stores wait until
+  the buffer has drained. Draining everything before every fill instead
+  keeps 60–82 % of what the buffer saves on the measured workloads,
+  against 92–98 % with the search and posting below. This replaces the
+  disambiguation search that made the gen2.5 store-buffer plan its most
+  structural feature: the compare runs on misses, never in the load-hit
+  path.
+- **L2 posts its write-through.** L2 takes a drained entry's write in
+  its pipeline, and the entry waits in the buffer for its bus write,
+  which frees it. A fill L2 serves goes ahead while a write is on the
+  bus; a fill from memory and an uncached access wait for the bus. The
+  buffer is the posting queue, so L2 needs no write buffer of its own.
+  This is L2 serving a hit while its bus port is busy with a write, not
+  the [hit under miss](#hit-under-miss-in-the-l2--ruled-out) ruled out
+  below: a write returns nothing to steer back.
 - **No software change.** An uncached store, to a device or any other
   memory with side effects, drains the buffer first, so it is ordered
   after every earlier cacheable store. That matters little in practice,
   since memory with side effects is mapped uncached, but the strong
-  guarantee is cheap and kept. Refetching modified code is an I-fill, so
-  it drains too. Sysreg writes stay outside the buffer's ordering:
+  guarantee is cheap and kept. Refetching modified code is an I-fill,
+  which waits for the entries holding its line. Sysreg writes stay
+  outside the buffer's ordering:
   entries hold physical addresses, so MMU and cache-maintenance writes
   need no drain, and TLB refills should not pay for one. A sysreg-driven
   copy engine would therefore need an explicit drain before it starts.
@@ -519,14 +579,71 @@ graph LR
   written with a deferring store path in mind. Uncached accesses stay
   unbuffered and precise.
 - **Timing.** The core sees only registered signals: `full` joins the
-  launch-side freeze, and `empty` gates reads at the uncore. No new
-  combinational cone reaches issue or the MMU.
-- **Depth.** Dhrystone's store bursts (struct copies of about 12 stores
-  at one per 2 cycles, register saves at one per cycle) against a drain of
-  about 3.5 cycles per store peak at 5–7 entries; 8 is enough.
-- **Later: coalescing.** Merging same-line stores into one entry lets a
-  full line drain as one write burst. That serves memset/copy-heavy code,
-  not Dhrystone.
+  launch-side freeze, and the line compare and `empty` gate accesses at
+  the uncore. No new combinational cone reaches issue or the MMU.
+- **Depth.** Eight line entries. Four lose up to 3 cycles per 1000
+  instructions at CPI 1, and sixteen gain nothing.
+- **Merging from the buffer: measured, not worth it.** A fill could
+  take its line's buffered bytes instead of waiting for them, at the
+  cost of an entry read and a byte merge on the fill path. Over the
+  line search it saves under 0.5 cycles per 1000 instructions on every
+  workload measured: a fill whose line is still buffered is rare, and
+  its entry has usually started draining.
+- **Write combining** in the SDRAM adapter drains an entry's burst as
+  one controller request
+  ([write combining](#sdram-side-write-combining)): 4–6 cycles per 1000
+  on the kernel paths once L2 posts, 12–14 without; 1–7 on Doom.
+
+#### The store buffer in the model
+
+Measured 2026-09-30 with the ISS's `+sbmodel` (`sw/sim/sb_model.h`)
+over the ECP5's planned 8 KB 2-way L1s and 64 KB L2
+(`+cachemodel=8k/2:8k/2:64k/4`), on the shell loop, `pbench kernel`
+and Doom `demo3` ([workloads](#miss-profiles-from-the-shadow-models)).
+Each buffer runs its own estimated clock: 1 or 2 cycles an instruction,
+L1 fills at the line-wide transfer's 5 (L2) and 24 (memory) cycles,
+uncached accesses at the bus master's 5, L2 taking a posted write in
+2, and drains at the costs [measured](#sustained-writes-on-the-sdram-stack)
+for 1–4 words: 5, 7, 11, 13 cycles, or 5, 7, 9, 11 with write
+combining. Nothing else stalls, so the waits are an upper bound; CPI 2
+is nearer a pipeline with its other stalls.
+
+Cycles per 1000 instructions the core waits on the buffer, CPI 1 /
+CPI 2, eight line entries unless stated:
+
+| Fill rule and uncore | shell loop | `pbench kernel` | Doom `demo3` |
+|---|---|---|---|
+| Wait for every entry | 168 / 145 | 167 / 140 | 70 / 64 |
+| … L2 posts write-through | 81 / 67 | 67 / 56 | 58 / 52 |
+| Wait for entries up to the fill's line | 99 / 67 | 93 / 58 | 21 / 7.6 |
+| … L2 posts write-through | 41 / 25 | 29 / 17 | 16 / 4.1 |
+| … and the adapter combines writes | 35 / 22 | 25 / 15 | 9.2 / 3.7 |
+| Merge buffered bytes into the fill, posted, combined | 34 / 22 | 25 / 15 | 9.1 / 3.6 |
+| Eight word entries, wait for every entry | 159 / 88 | 200 / 89 | 41 / 15 |
+
+For scale, the model's clock runs 1,330–1,720 cycles per 1000
+instructions at CPI 1 and 2,325–2,700 at CPI 2. A blocking store
+costing gen2.5's 5 stall cycles would cost 415, 585 and 380 per 1000:
+83, 117 and 76 stores per 1000 instructions.
+
+- **The fill rule decides how much of the buffer's win survives.**
+  Against those blocking costs, waiting for every entry keeps 60–82 %
+  of the saving, and the line search with posting 92–98 %.
+- **The line search leaves fills stuck behind a drain in flight,**
+  mostly I-fills on the kernel paths: 72 of the shell loop's 99 cycles
+  at CPI 1. Posting lets the ones L2 serves through, taking I-fill
+  waits to 16 there and from 74 to 13 on `pbench kernel`.
+- **Doom's waits are D-fills,** 54 of its 70 under the every-entry
+  rule. It stores about 76 times per 1000 instructions, mostly missing
+  L1-D into the buffer, so a load miss usually finds entries ahead of
+  it. The line search removes nearly all of them at CPI 2.
+- **Word entries overflow on bursts:** 31–73 cycles per 1000 of
+  full-buffer stalls at CPI 1 on the kernel paths. They wait less at
+  fills than line entries under the every-entry rule, since nothing
+  holds an entry open, but more than line entries under the line
+  search.
+- `pbench kernel` sizes its iterations from timing, and its runs
+  differ by up to 4 %. L2's 2-cycle posted write is an assumption.
 
 ### Write-back L2: what it does and does not buy
 

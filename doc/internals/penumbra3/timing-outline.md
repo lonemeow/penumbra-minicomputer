@@ -257,9 +257,13 @@ cycles, never critical-path logic.**
   prove the collision cannot happen and drop it. Never `no_rw_check`: it assumes
   what synthesis cannot check, so a broken invariant would diverge hardware from
   simulation silently.
-- **L2: write-through; write-back / write-allocate only if stores prove
-  throughput-bound.** Store latency, the measured binding cost, is a store-buffer
-  problem ([memory-performance](./memory-performance.md)). If write-back lands, its
+- **L2: write-through, posted; write-back / write-allocate only if stores prove
+  throughput-bound.** L2 takes a store-buffer entry's write in its pipeline and
+  serves hits while its bus port carries the write-through, so a fill L2 serves
+  never waits for the bus
+  ([memory-performance](./memory-performance.md#store-buffer-at-the-core-boundary)).
+  Store latency, the measured binding cost, is a store-buffer problem
+  ([memory-performance](./memory-performance.md)). If write-back lands, its
   complexity (dirty + eviction-writeback FSM) lives in the L2 **miss path** — off
   the hit path and off critical routing.
 - **Do not** go direct-mapped for timing — it wrecks IPC (conflict misses) and

@@ -161,7 +161,10 @@ the Phase-1 memory hierarchy:
   to ~24 ([the line-wide
   transfer](./memory-performance.md#the-line-wide-transfer)). The L2's
   first stage accepts a lookup every cycle, which the L1-I prediction
-  buffer below depends on.
+  buffer below depends on, and it serves a hit while its bus port
+  carries a posted write-through, which the store buffer's drains
+  depend on
+  ([store buffer](./memory-performance.md#store-buffer-at-the-core-boundary)).
 - **The main TLB at 256×2.** It removes 92–98 % of refills, the
   largest single cost measured, and costs no block RAM over 32×2
   ([TLB sets](./memory-performance.md#tlb-sets-and-a-cheaper-refill)).
@@ -175,32 +178,32 @@ the Phase-1 memory hierarchy:
   output carries a synthesized bypass.
 
 **Staged — additive, outside the core cones,** in the order the
-measurements rank them. None reshapes the core's critical cones, so
-each follows the booting skeleton:
+[measured benefits](#levers-ranked-by-measured-benefit) rank them.
+None reshapes the core's critical cones, so each follows the booting
+skeleton:
 
 1. **Store buffer** — the store-traffic strategy below.
-2. **Next-line prediction buffer for L1-I** — most of what a 16 KB
-   4-way L1-I would save on the kernel paths, with no change to the
-   hit logic
-   ([prediction buffer](./memory-performance.md#next-line-prediction-buffer-for-l1-i)).
-3. **Return and direction prediction** — a RAS from the IF2
+2. **Return and direction prediction** — a RAS from the IF2
    pre-decode, and a direction table beside the BTB, each chosen by a
    predictor model in the ISS before it is built. Branches resolve in
    EX as on gen2, so a misprediction costs about what it did there,
    but its share of the cycles grows as the base CPI falls.
-4. **Selective `WRSYS` serialization,** re-measured once the TLB has
-   grown: a 256×2 TLB removes most of the refills whose `WRSYS`es make
-   it pay ([timing outline](./timing-outline.md#multi-cycle-and-serializing-instructions-divmul-wrsys-eret)).
-5. **Stream prefetch beside the L2,** for the streaming demos and bulk
-   copies
+3. **Next-line prediction buffer for L1-I** — most of what a 16 KB
+   4-way L1-I would save on the kernel paths, with no change to the
+   hit logic
+   ([prediction buffer](./memory-performance.md#next-line-prediction-buffer-for-l1-i)).
+4. **Stream prefetch beside the L2,** for data streaming through it —
+   Doom, the streaming demos and bulk copies
    ([stream buffers](./memory-performance.md#next-line-prefetch-into-stream-buffers)).
-6. **Write combining in the SDRAM adapter** — whole lines drained as
+5. **A 128 KB L2,** where block RAM allows.
+6. **Selective `WRSYS` serialization:** a 256×2 TLB leaves too few
+   refills for it to pay much
+   ([timing outline](./timing-outline.md#multi-cycle-and-serializing-instructions-divmul-wrsys-eret)).
+7. **Write combining in the SDRAM adapter** — whole lines drained as
    one burst, inside the bus contract
    ([write combining](./memory-performance.md#sdram-side-write-combining)).
-7. **Write-back L2,** only if stores prove throughput-bound.
-8. **A native port for on-board RAM** — stretch: over write combining
-   it adds an estimated ~3 cycles per 1000 instructions on the profiled
-   workloads.
+8. **Write-back L2,** only if stores prove throughput-bound.
+9. **A native port for on-board RAM** — stretch.
 
 The store buffer needs no reserved seam in the core's cones: it sits
 between the completion unit and the uncore and reaches the core only
@@ -236,9 +239,14 @@ That sets the order:
 - **A store buffer is the primary store-traffic fix.** Cacheable stores
   retire into a small FIFO between the completion unit and the uncore
   and drain in the background. It needs no load disambiguation: L1-D is
-  updated in place at commit on a hit, and every access that goes to L2
-  (a fill, an uncached load) and every uncached store waits for the
-  buffer to drain. It meets the core only through registered signals
+  updated in place at commit on a hit, so only a fill searches the
+  buffer, waiting for the entries up to the youngest holding its line,
+  and every uncached access waits for the buffer to drain. L2 posts its
+  write-through, so a fill L2 serves never waits for the bus. Draining
+  everything before every fill instead would give back up to 40 % of
+  the buffer's win
+  ([measured](./memory-performance.md#the-store-buffer-in-the-model)).
+  It meets the core only through registered signals
   (`full` into the freeze), so it lives outside the core timing cones and
   is *safe to defer* (see the [deferral principle](#build-plan)). Its
   entries are lines with a byte mask: stores to one line merge, a
@@ -263,6 +271,75 @@ existing ops: an uncached store, to a device or any other memory with side
 effects, is ordered after every earlier store (the store buffer drains ahead
 of it), so no new ISA barrier is introduced. Sysreg writes stay outside that
 ordering, so a sysreg-driven copy engine would need an explicit drain.
+
+## Levers ranked by measured benefit
+
+The ECP5 cannot take every lever. It is routing-bound far below its LUT
+count, its 208 block RAMs are shared with the peripherals (gen2.5's
+full top uses 142), and every block added is a timing cost somewhere on
+the full top. So the levers are ranked by what they save, measured on
+the same three workloads, beside what each costs the ECP5.
+
+Cycles saved per 1000 instructions on the shell loop / `pbench kernel`
+/ Doom `demo3`. The counts come from the ISS's shadow models at gen3's
+geometries
+([fills and refills](./memory-performance.md#fills-and-refills-at-gen3s-geometries),
+[store buffer](./memory-performance.md#the-store-buffer-in-the-model));
+the costs they are priced at are listed below the table. The levers
+overlap, so they do not add.
+
+| Lever | Saves | ECP5 cost | When |
+|---|---|---|---|
+| Main TLB 32×2 → 256×2 | 810–1000 / 570–700 / 350–440 | no block RAM; invalidation in the MMU; `MMU_CONFIG` version 2 | shape |
+| Line-wide L2→L1 transfer, fill-through, one uncore pipeline | ~750 / ~700 / ~230 | block RAM as word-wide; a 128-bit fill path in place of the word walk | shape |
+| Store buffer: line entries, line search, L2 posting | ~380 / ~560 / ~370 | ~1.4 kbit of entries, 8 line-tag compares; outside the core cones | staged 1; posting is an L2 shape |
+| Return and direction prediction | pool of ~350–500, unmeasured split | a block RAM for a direction table; IF2 pre-decode for a RAS | staged 2, after a predictor model |
+| L1 4 KB → 8 KB 2-way | ~140 / ~110 / ~40 | none in the line-wide shape | shape |
+| L1 8 KB → 16 KB 4-way | ~135 / ~155 / ~30 | ~10 more block RAMs; two more tag compares in IF2 | Artix-7 |
+| Next-line prediction buffer, L1-I | ~100 / ~105 / ~10 | a line register, a tag compare, a second L2 look-up per fill | staged 3 |
+| Stream prefetch beside L2 | ~55 / ~35 / ~65 | two line buffers and stream detection | staged 4 |
+| L2 64 KB → 128 KB | ~90 / ~40 / ~30 | ~35 more block RAMs | staged 5, if block RAM allows |
+| Selective `WRSYS`, behind a 256×2 TLB | ~15 / ~10 / ~2 | a serialize bit on the MMU's responses | staged 6 |
+| Write combining, L2 posting | ~6 / ~4 / ~7 | a line buffer in the SDRAM adapter and a wider CDC, where placement is tight | staged 7 |
+| Native port for on-board RAM | ~3 | a second memory port and stack front end | stretch |
+| Merging from the store buffer | under 0.5 | an entry read and byte merge on the fill path | ruled out |
+
+- **Fills** are priced at gen2.5's measured 16 cycles from L2 and 37
+  from memory against the line-wide transfer's estimated ~5 and ~24;
+  L1 and L2 sizes at the line-wide costs, over the 8 KB L1 where it
+  matters.
+- **Refills** at the 137–170 cycles gen2.5's handler takes, its own
+  fills included. On Doom the as-built shadow undercounts refills, so
+  its larger layouts may read optimistic.
+- **The store buffer** against a blocking store at gen2.5's 5 cycles,
+  less the model's waits at 1 cycle an instruction — an upper bound on
+  the waits, so the saving is a floor.
+- **The prediction buffer** at ~3 cycles a served miss; unused
+  look-ups can take back up to ~30 on the kernel paths.
+- **Stream prefetch** at an estimated ~10 cycles for each memory fill
+  that continues a stream.
+- **Selective `WRSYS`** at the ~38 cycles of serialization in each
+  refill a 256×2 TLB still takes.
+- **Prediction's pool** is gen2.5's hardware `flush` share, 12–18 % of
+  its ~3 cycles an instruction with its BTB, but no model yet splits it
+  between returns, direction and the BTB's own misses.
+
+What that means for the ECP5:
+
+1. **The three shapes lead and cost almost no block RAM:** the 256×2
+   TLB, the line-wide transfer with fill-through and posting, and the
+   8 KB L1. They come with the Phase-1 memory hierarchy.
+2. **The store buffer is the largest staged lever.**
+3. **Prediction's pool rivals the store buffer's but is unmeasured.**
+   Build the ISS predictor model before giving fabric to a direction
+   table or a RAS.
+4. **Everything else saves about 150 per 1000 or less,** and the
+   workloads disagree on the order: the prediction buffer serves the
+   kernel paths, stream prefetch serves Doom's data, and a 128 KB L2
+   costs a sixth of the block RAM. A 16 KB L1 is an Artix-7 lever.
+5. **Take the levers in order, reading a full-top seed sweep after
+   each,** and stop adding when the sweep stops closing 37.5 MHz with
+   margin.
 
 ## Performance targets
 
