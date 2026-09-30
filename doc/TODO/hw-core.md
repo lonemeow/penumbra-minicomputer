@@ -55,6 +55,44 @@ A top's stack is pinned beside its placement seed, so which tops this
 entry covers follows `SDRAM_STACK_<top>` in the Makefile rather than
 being listed here.
 
+## Hardware: the SDRAM controller waits out `T_WR` after every write
+
+`sdram_ctrl` issues a write's second half-word in `S_RW`, then counts
+`T_WR` down in `S_RECOVER` before returning to `S_IDLE`, which takes
+one more cycle to accept the next request: six SDRAM clocks for each
+word written to the open row. `T_WR` is the wait between a write's
+last data and a `PRECHARGE`. A `WRITE` or `READ` to the open row may
+follow at once, so only a precharge — for a row change or a refresh —
+needs to wait it out.
+
+Measured, it binds nowhere yet. An isolated store never sees it: the
+adapter releases a write once its CDC accepts it. In a stream of word
+writes the CDC's two slots recycle one every ~3 CPU cycles at
+37.5 MHz, and the controller's 2.25 fit under that
+(`doc/internals/penumbra3/memory-performance.md`, "Sustained writes on
+the SDRAM stack"). A line written as one request takes 12 SDRAM
+clocks, 3 of them this wait, but through the bus the line's four
+words take 8 CPU cycles to arrive and the controller's 4.5 fit under
+those too.
+
+It binds on a native port for on-board RAM, where the controller paces
+a line write: ~4.5 CPU cycles a line, ~3.4 without the wait (same
+file, "SDRAM side: write combining"). A deeper CDC would expose it on
+word streams as well. The controller is shared by both SDRAM stacks
+and every top.
+
+Open:
+
+- Count the write recovery separately, return to idle straight after
+  the write, and have the precharge paths wait for the count. Worth
+  doing with the native port or a deeper CDC, not before.
+- The idle cycle that accepts each request is a smaller, separate cost
+  per request.
+- Regression: `sdram_model` checks command legality but no timing
+  parameter. It needs a write-to-`PRECHARGE` check, and
+  `tb_sdram_test` a stream of writes to the open row that asserts the
+  commands follow back to back.
+
 ## Hardware: gen3 (Penumbra/3) Phase-1 build status
 
 Phase 0 (the four structural probes) passed; see

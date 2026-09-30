@@ -172,6 +172,39 @@ handshake below the arbiter and about 3 are the L1, arbiter and MEM
 hand-offs above it. A sustained store stream drains at about 3.5
 cycles per store at 2:1.
 
+## Sustained writes on the SDRAM stack
+
+Measured 2026-09-29 in Verilator with scratch wrappers around
+unmodified RTL: the bus port of `sdram_sim` driven as a registered
+master (held strobe, address advanced after each `ack`), and
+`penumbra3_bus_master` issuing each transaction the cycle it is ready
+again. The word and line stacks share the write path and measure the
+same. CPU cycles; the middle column runs the clocks at the hardware's
+37.5 : 100 MHz.
+
+| Transaction | 4:1 | 37.5 : 100 | 2:1 |
+|---|---|---|---|
+| Write burst on the bus, sequential, per word | 2.53 | 3.04 | 3.56 |
+| … per 16-byte line | 10.1 | 12.2 | 14.2 |
+| Write burst, a new row every word, per word | 3.00 | 3.65 | 4.56 |
+| Separate writes, strobe dropped between, per word | 4.0 | 4.0 | 4.0 |
+| Line writes through `penumbra3_bus_master`, per line | 12.1 | 13.1 | 15.2 |
+| Single-beat writes through `penumbra3_bus_master`, per store | 5.0 | 5.0 | 5.0 |
+| Line read (line stack) behind 1–16 posted writes, cycles added | 0–1 | 0–1 | 2 |
+
+- **The CDC paces a word stream.** Acknowledgements come in pairs
+  (gaps of 2, 4, 2, 4 at 37.5 MHz): its two slots fill, then wait for
+  the read pointer to cross back to the system clock. The controller's
+  own time for a word written to the open row, six SDRAM clocks or
+  2.25 CPU cycles, sits under that; a row change on every word adds
+  only 0.6.
+- **The bus master's transaction is its own floor.** A single-beat
+  write through `penumbra3_bus_master` takes 5 cycles at every clock
+  ratio: accept, presentation, `ack` and completion, one registered
+  step each. The stack alone takes one every 3–4.
+- **Posted writes barely delay a read.** The CDC holds at most two,
+  and the controller finishes them while the read is crossing.
+
 ## Workload profiles (gen2.5 hardware, 37.5 MHz)
 
 Measured 2026-09-21. Cycles equal instructions retired plus stall cycles
@@ -408,6 +441,39 @@ The rate cannot judge an L1 change. The raw counts can: L2 line misses
 are the read misses, and fills that hit L2 are (read hits − 3 × read
 misses) / 4.
 
+### Store streams
+
+Measured 2026-09-29 on the same image and workloads, each in its own
+window, counted once with a scratch patch to the ISS: cacheable stores
+to RAM, grouped into streams of consecutive addresses. A few streams
+stay open at once, so an interrupt's stack pushes do not split a copy.
+
+| | shell loop | `pbench kernel` |
+|---|---|---|
+| Cacheable RAM stores per 1000 instructions | 83 | 117 |
+| In streams shorter than 16 B | 73 % | 65 % |
+| In streams of 16–255 B | 16 % | 30 % |
+| In streams of 256 B or more | 12 % | 5.5 % |
+| Instructions those long streams span | 3.8 % | 2.0 % |
+| Long-stream stores in `memset` / `memcpy` / `pmci_burst` / user mode | 55 / 29 / 10 / 6 % | 42 / 50 / 5 / 2 % |
+
+- **Bulk writes are page operations.** About 4,000 page-sized streams
+  a window, nearly all in supervisor mode: `memset` zeroing pages, and
+  `memcpy` copying them or copying out to user space. `memset` stores
+  a line every 7 instructions.
+- **Most stores are isolated.** Two thirds or more fall in streams
+  shorter than a line. They cost latency, which a store buffer hides,
+  and combining merges few of them.
+- **Short bursts are frequent on the kernel paths.** `pbench kernel`
+  writes about one 64–255 B stream per 1000 instructions, 21 words on
+  average at one store per 1.8 instructions, 98 % of them in
+  supervisor mode. Frame saves are the likely source; they were not
+  attributed. One such burst overflows eight word-sized buffer entries
+  and fits in eight line-sized ones.
+- **`pmci_burst` stores bytes.** The SD driver copies each block out
+  of the SPI controller's byte-wide data register, one byte a store.
+  That is a question for the device, not the RAM path.
+
 ## Levers for the gen3 uncore
 
 ### Store buffer at the core boundary
@@ -599,6 +665,70 @@ at 37.5 MHz against the 16–19 estimated
 The line stack keeps one request outstanding and speculates on nothing,
 so the gapped-read deadlock recorded in `doc/TODO/hw-core.md` belongs
 to the word stack alone.
+
+### SDRAM side: write combining
+
+A stream of stores is paced by what the SDRAM stack spends on each
+request, not by the latency of one store on an idle stack. Every word
+is a request of its own: the CDC's two slots recycle one every ~3
+cycles at 37.5 MHz, and the controller takes 2.25 more cycles of its
+own under that. A stream of word writes drains at 12.2 cycles a line
+on the bus, and at 13.1 through `penumbra3_bus_master`
+([sustained writes](#sustained-writes-on-the-sdram-stack)).
+
+That rate binds only on long streams, which are 2–4 % of the
+instructions on the kernel paths ([store streams](#store-streams)).
+Elsewhere a store buffer that drains faster than the core fills it
+never makes the core wait.
+
+**Combining inside the bus contract** takes one change at each layer:
+
+- **The store buffer drains a line as one burst.** Entries are lines
+  with a byte mask, and a drain holds the strobe across the line's
+  words ([sync burst](../../hardware/bus-protocol.md#sync-burst)),
+  each beat carrying its own `byte_en`. A beat with no lane set
+  commits nothing under the bus's default contract, so a line with
+  holes still drains as one burst. `penumbra3_bus_master` already
+  drives write bursts; it needs a `byte_en` per beat.
+- **The adapter gathers the burst and hands the controller one line
+  write.** It acknowledges each word as it takes it and pushes the
+  line when the line is complete or the burst ends. A read pushes any
+  gathered words ahead of itself, so the CDC's ordering keeps every
+  later access behind them. That is what the bus contract asks of a
+  committed write, and every access to the RAM passes through the
+  adapter.
+- **The controller writes the line as one request:** back-to-back
+  single-location `WRITE`s for the enabled half-words, then one `T_WR`
+  wait, about 12 SDRAM clocks for a full line on the open row.
+
+The CDC then carries one request a line and the controller spends
+~4.5 cycles on it, so the bus paces the line at its floor: four words
+at two cycles each. Estimated: a page-sized stream drains at ~9 cycles
+a line through the bus master instead of 13.1, and `memset`, at 7
+instructions a line, runs close to the speed of the core.
+
+- Both SDRAM stacks serve the gen2 tops, whose stores are single
+  beats. They would carry the gathering logic for nothing, so it
+  belongs in a gen3 variant of the line stack.
+- The CDC's write payload widens to a line and its mask, which goes
+  with the rework of its slot arrays (`doc/TODO/hw-core.md`, "memories
+  must map the same way under yosys and Vivado").
+- An isolated store reaches the adapter as a one-word burst and gains
+  nothing. Through `penumbra3_bus_master` it costs the master's own
+  5-cycle transaction, which the stack could take in 3–4; that is the
+  master's registered hand-offs
+  ([one uncore pipeline](#one-uncore-pipeline)), not the SDRAM's.
+
+**A native port for on-board RAM** — a burst path from the uncore
+beside the bus, with RAM on the bus still reachable through it — would
+drain a line at the controller's ~4.5 cycles rather than the bus's 8,
+and at ~3.4 if the controller waited out `T_WR` only before a
+precharge (`doc/TODO/hw-core.md`, "the SDRAM controller waits out
+`T_WR` after every write"). Over the combined burst that is worth ~3
+cycles per 1000 instructions on the shell loop and `pbench kernel`.
+On reads it removes the six cycles of word walk after the line lands
+([whole-line fetch](#sdram-side-whole-line-fetch)), which stream
+prefetch mostly hides.
 
 ### Next-line prefetch into stream buffers
 
