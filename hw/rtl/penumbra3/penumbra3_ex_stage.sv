@@ -136,9 +136,12 @@ module penumbra3_ex_stage
     // A write-first regfile covers the four-deep distance, so no fourth slot.
     localparam int FWD_N = 3;
 
-    logic [SB_IDX_W-1:0] fwd_dst   [FWD_N];
-    logic                fwd_valid [FWD_N];
-    logic [31:0]         fwd_data  [FWD_N];
+    // Packed: fwd_lookup reads them whole, and sv2v lists what a function
+    // reads in the calling block's sensitivity, which yosys rejects for an
+    // unpacked array.
+    logic [FWD_N-1:0][SB_IDX_W-1:0] fwd_dst;
+    logic [FWD_N-1:0]               fwd_valid;
+    logic [FWD_N-1:0][31:0]         fwd_data;
 
     // [0] EX/MEM1 self-feedback. mem1_result_ready gates off the producers
     // whose value is not yet computed at MEM1 (loads, sysreg reads).
