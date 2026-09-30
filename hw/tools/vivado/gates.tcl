@@ -189,19 +189,50 @@ proc severe_by_rule {kind violations} {
     return $lines
 }
 
-# Each clock with timed paths: its period, worst setup slack, and the
-# frequency its worst path would allow.
+# Each clock with timed paths: its period, the worst setup slack of its
+# own paths and the frequency that path would allow, then the worst
+# setup slack of the paths other clocks launch into it. An own path's
+# requirement is the period or a multiple or half of it, so the fmax
+# scales that requirement with the period. A crossing's requirement
+# comes from its constraint or from the two clocks' edges instead, so
+# it gets a slack and no fmax.
 proc clock_fmax_lines {} {
     set lines {}
     foreach c [get_clocks] {
-        set path [get_timing_paths -quiet -delay_type max -max_paths 1 -group $c]
-        if {[llength $path] == 0} {
+        set own [worst_timed_path -from $c -to $c]
+        set others [get_clocks -quiet -filter "NAME != [get_property NAME $c]"]
+        set into {}
+        if {[llength $others] > 0} {
+            set into [worst_timed_path -from $others -to $c]
+        }
+        if {[llength $own] == 0 && [llength $into] == 0} {
             continue
         }
         set period [get_property PERIOD $c]
-        set wns [get_property SLACK $path]
-        lappend lines [format "%s: period %.3f ns, WNS %.3f ns, fmax %.1f MHz" \
-                           $c $period $wns [expr {1000.0 / ($period - $wns)}]]
+        set line [format "%s: period %.3f ns" $c $period]
+        if {[llength $own] > 0} {
+            set wns [get_property SLACK $own]
+            set req [get_property REQUIREMENT $own]
+            append line [format ", WNS %.3f ns, fmax %.1f MHz" $wns \
+                             [expr {1000.0 * $req / ($period * ($req - $wns))}]]
+        }
+        if {[llength $into] > 0} {
+            append line [format "; from other clocks WNS %.3f ns" \
+                             [get_property SLACK $into]]
+        }
+        lappend lines $line
     }
     return $lines
+}
+
+# The worst setup path between the given startpoints and endpoints, or
+# nothing when every such path is untimed: with no timed path to
+# offer, get_timing_paths can return an unconstrained one, which has
+# no slack.
+proc worst_timed_path {args} {
+    set path [get_timing_paths -quiet -delay_type max -max_paths 1 {*}$args]
+    if {[llength $path] == 0 || [get_property SLACK $path] eq ""} {
+        return {}
+    }
+    return $path
 }
