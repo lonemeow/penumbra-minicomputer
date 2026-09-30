@@ -764,14 +764,6 @@ same. The gen2 caches, the gate and the declarations landed in
 - The SDRAM CDC's slot arrays stay undeclared on purpose while the
   ECP5-side crossing is being reworked; `slot_we` maps to flip-flops
   under yosys and LUT RAM under Vivado.
-- gen3's `penumbra3_tlb_store` declares `vpn_mem` and `pte_mem` as
-  `[WAYS][SETS]` arrays written at `[i_wr_way]` from the process that
-  resets `valid_q`: the old L2 tags' shape, which Vivado builds from
-  flip-flops. gen3's L1 and L2, next on its build list (this file,
-  "gen3 (Penumbra/3) Phase-1 build status"), are cheaper written in
-  the portable forms from the start than recoded after. The same
-  rewrite removes the store's read-during-write bypass (this file,
-  "gen3 sysreg accesses act on their target at a fixed cycle").
 
 ## Hardware: gen3 sysreg accesses act on their target at a fixed cycle
 
@@ -791,13 +783,13 @@ the block RAM outputs, inside the verdict cone after the EBR
 `synth_ecp5` puts it at 134 LUTs and 137 flip-flops per copy: 313
 LUTs and 203 flip-flops against 179 and 66 without it.
 
-No overlapping lookup is consumed today. The `WRSYS` commits with
-the pipe drained behind it, and the resync re-fetches its successor
-the next cycle, discarding every lookup the install overlapped.
-Gating each copy's read off in the install cycle states that, and
-yosys then drops the bypass. It stays free only while TLB installs
-serialize, and the refill path wants them not to
-(`doc/internals/penumbra3/timing-outline.md`, "Multi-cycle and
+`penumbra3_tlb_store` now gates each copy's read off in the install
+cycle, and yosys drops the bypass. That is free only because no
+overlapping lookup is consumed today: the `WRSYS` commits with the
+pipe drained behind it, and the resync re-fetches its successor the
+next cycle, discarding every lookup the install overlapped. It stays
+free only while TLB installs serialize, and the refill path wants them
+not to (`doc/internals/penumbra3/timing-outline.md`, "Multi-cycle and
 serializing instructions (div/mul, WRSYS, ERET)"). A non-serializing
 install makes the I-copy's overlapping lookup live, and that lookup
 then has to wait a cycle rather than read the block RAM mid-write.

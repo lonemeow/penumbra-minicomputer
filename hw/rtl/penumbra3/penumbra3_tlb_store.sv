@@ -13,6 +13,12 @@
 //   pte_word = {PPN[19:0], SW[7:0], flags}
 // One write port serves miss refill and sysreg install; the gen3 MMU drives
 // it on both the I- and D-copies in the same cycle to keep them coherent.
+//
+// A write suppresses that cycle's read, so the RTL itself says the two
+// ports never meet at one address and synthesis adds no read-during-write
+// bypass after the EBR. Nothing is lost: every write is a WRSYS, which
+// commits only once the back end has drained and then resyncs the front
+// end, so neither copy has a live lookup launching in that cycle.
 module penumbra3_tlb_store #(
     parameter int SETS = 32,
     parameter int WAYS = 2
@@ -38,30 +44,43 @@ module penumbra3_tlb_store #(
     input  logic [31:0]             i_wr_pte_word
 );
 
-    // VPN/PTE words: BRAM (sync read, registered output lands in MEM2). The
+    // Registered read output, held on a pipe stall so a frozen MEM2 slot
+    // keeps its own set (the read clock-enable; the write port is never
+    // gated, so an install in flight is not dropped).
+    logic rd_en;
+    assign rd_en = !i_hold && !i_wr_en;
+
+    // VPN/PTE words: BRAM (sync read, registered output lands in MEM2), one
+    // memory per way so both synthesis tools build each as a block RAM. The
     // block attribute forces EBR so the probe measures the real Tco floor.
-    (* ram_style = "block" *) logic [31:0] vpn_mem [WAYS][SETS];
-    (* ram_style = "block" *) logic [31:0] pte_mem [WAYS][SETS];
+    for (genvar gw = 0; gw < WAYS; gw++) begin : g_way
+        (* ram_style = "block" *) logic [31:0] vpn_mem [SETS];
+        (* ram_style = "block" *) logic [31:0] pte_mem [SETS];
+        logic [31:0] vpn_q, pte_q;
+
+        logic way_we;
+        assign way_we = i_wr_en && (i_wr_way == $clog2(WAYS)'(gw));
+
+        always_ff @(posedge i_clk) begin
+            if (rd_en) begin
+                vpn_q <= vpn_mem[i_rd_set];
+                pte_q <= pte_mem[i_rd_set];
+            end
+            if (way_we) begin
+                vpn_mem[i_wr_set] <= i_wr_vpn_word;
+                pte_mem[i_wr_set] <= i_wr_pte_word;
+            end
+        end
+        assign o_rd_vpn_word[gw] = vpn_q;
+        assign o_rd_pte_word[gw] = pte_q;
+    end
 
     // Valid bits: resettable flops (BRAM is indeterminate out of reset).
     logic [WAYS-1:0][SETS-1:0] valid_q;
-
     always_ff @(posedge i_clk) begin
-        // Registered read output, held on a pipe stall so a frozen MEM2 slot
-        // keeps its own set (the read clock-enable; the write port is never
-        // gated, so an install in flight is not dropped).
-        if (!i_hold) begin
-            for (int w = 0; w < WAYS; w++) begin
-                o_rd_vpn_word[w] <= vpn_mem[w][i_rd_set];
-                o_rd_pte_word[w] <= pte_mem[w][i_rd_set];
-                o_rd_valid[w]    <= valid_q[w][i_rd_set];
-            end
-        end
-
-        if (i_wr_en) begin
-            vpn_mem[i_wr_way][i_wr_set] <= i_wr_vpn_word;
-            pte_mem[i_wr_way][i_wr_set] <= i_wr_pte_word;
-        end
+        if (rd_en)
+            for (int w = 0; w < WAYS; w++)
+                o_rd_valid[w] <= valid_q[w][i_rd_set];
 
         if (i_rst)
             valid_q <= '0;
