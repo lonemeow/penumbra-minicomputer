@@ -134,8 +134,9 @@ proc xadc_celsius {code} {
 # declares. Vivado
 # only warns and falls back to another kind of storage (Synth 8-6849,
 # an infeasible style; 8-7186, a style ignored because the array was not
-# inferred as a memory), where yosys fails the build, so the same RTL
-# is held to the same mapping by both flows.
+# inferred as a memory; 8-4767, a memory it could not build as RAM at
+# all and built from registers), where yosys fails the build, so the
+# same RTL is held to the same mapping by both flows.
 proc log_failures {log} {
     set critical [dict create]
     set style [dict create]
@@ -149,6 +150,9 @@ proc log_failures {log} {
         } elseif {[regexp {\[Synth 8-7186\] Applying attribute ((?:ram|rom)_style = "[a-z]+") is ignored, object '([^'\[]+)} \
                        $line -> attr mem]} {
             dict set style $mem "$attr was ignored: not inferred as a memory"
+        } elseif {[regexp {\[Synth 8-4767\] Trying to implement RAM '([^']+)' in registers} \
+                       $line -> mem]} {
+            dict set style $mem "built from registers: not mappable as a RAM"
         }
     }
     close $f
