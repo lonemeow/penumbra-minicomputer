@@ -1120,15 +1120,19 @@ openfpgaloader-image:
 SRC_COMMON = hw/rtl/common/penumbra_pkg.sv \
              $(filter-out %/penumbra_pkg.sv, $(wildcard hw/rtl/common/*.sv))
 
-# The audio device and the board-side stage that converts its frames.
-# The probe's tone and clip sources are deliberately absent: they belong
-# to the bring-up top, and audio_sample_rom would want a hex image no
-# machine build produces.
+# The audio device, board-neutral down to the frames it hands an output
+# stage and the frame requests it takes back.
 SRC_AUDIO = hw/rtl/io/audio/audio.sv \
             hw/rtl/io/audio/audio_chan_fifo.sv \
-            hw/rtl/io/audio/audio_mixer.sv \
-            hw/rtl/io/audio/audio_sigma_delta.sv \
-            hw/rtl/io/audio/audio_ladder_out.sv
+            hw/rtl/io/audio/audio_mixer.sv
+
+# The ULX3S's output stage: frames requested off a fixed clock, the
+# modulator and the resistor ladder. The probe's tone and clip sources
+# are deliberately absent: they belong to the bring-up top, and
+# audio_sample_rom would want a hex image no machine build produces.
+SRC_AUDIO_LADDER = hw/rtl/io/audio/audio_rate_divider.sv \
+                   hw/rtl/io/audio/audio_sigma_delta.sv \
+                   hw/rtl/io/audio/audio_ladder_out.sv
 
 # ── SDRAM stack selection ───────────────────────────────────────
 # Which shape of SDRAM stack a top builds:
@@ -1164,6 +1168,7 @@ SRC_VIDEO = hw/rtl/io/video/video_pkg.sv \
 
 SRC_FABRIC = hw/rtl/io/sdram/sdram_pkg.sv \
              $(SRC_AUDIO) \
+             $(SRC_AUDIO_LADDER) \
              hw/rtl/io/usb/usb_pkg.sv \
              hw/rtl/io/video/video_pkg.sv \
              $(wildcard hw/rtl/soc/*.sv) \
@@ -1430,9 +1435,9 @@ FPGA_AUDIO_TOPS = ulx3s_audio_test_top
 # AUDIO_CHANNELS, or a new CPU_HZ, whose target reweights nextpnr's
 # per-domain criticality and whose CLK_FREQ retunes every derived
 # divider.
-DEFAULT_SEED_ulx3s_penumbra1_top   := 6
+DEFAULT_SEED_ulx3s_penumbra1_top   := 9
 DEFAULT_SEED_ulx3s_penumbra2_top   := 5
-DEFAULT_SEED_ulx3s_penumbra2_5_top := 29
+DEFAULT_SEED_ulx3s_penumbra2_5_top := 16
 
 # Per-top default SDRAM stack (see SDRAM_STACK above).  Which stack a
 # top closes timing under is a placement question rather than a logical

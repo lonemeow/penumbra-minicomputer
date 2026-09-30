@@ -9,8 +9,14 @@
 // them is the board's business, whether that is a resistor ladder or a
 // codec behind a serial link.
 //
+// The device does not pace itself: the output stage requests each frame
+// (i_frame_req), because what sets the sample rate belongs to the
+// converter — a divider off a fixed clock for a modulator, the frame
+// clock a codec drives for a serial link. RATE reports SAMPLE_HZ, so
+// the requests have to arrive at that rate.
+//
 // Two clock domains meet here. Registers and queue writes are on i_clk;
-// the rate divider, the mixer and the queue reads are on i_aclk. Only
+// the frame requests, the mixer and the queue reads are on i_aclk. Only
 // pointers and a few slow-changing control values cross, so the mixer
 // never waits on the register side and the register side never waits on
 // a frame.
@@ -35,8 +41,7 @@ module audio
 #(
     parameter int CHANNELS  = 1,
     parameter int DEPTH     = 1024,        // per channel, in frames
-    parameter int SAMPLE_HZ = 48_000,
-    parameter int AUDIO_HZ  = 60_000_000
+    parameter int SAMPLE_HZ = 48_000
 )(
     // ── Register domain ──────────────────────────────────────
     input  logic        i_clk,
@@ -54,6 +59,7 @@ module audio
     // ── Output domain ────────────────────────────────────────
     input  logic               i_aclk,
     input  logic               i_arst,
+    input  logic               i_frame_req, // one i_aclk pulse per frame wanted
     output logic signed [15:0] o_frame_l,
     output logic signed [15:0] o_frame_r,
     output logic               o_frame_en   // one i_aclk pulse per frame
@@ -61,7 +67,6 @@ module audio
 
     localparam int CH_W    = (CHANNELS > 1) ? $clog2(CHANNELS) : 1;
     localparam int LVL_W   = $clog2(DEPTH) + 1;
-    localparam int TICK_DIV = AUDIO_HZ / SAMPLE_HZ;
 
     // Version 1, rate and gain implemented.
     localparam logic [31:0] CAP_VALUE =
@@ -114,22 +119,17 @@ module audio
     logic [CHANNELS-1:0] push;
     logic [CHANNELS-1:0] flush;
 
-    // ── Output domain: rate tick and enable ──────────────────
+    // ── Output domain: frame requests and enable ─────────────
     logic run_a1, run_a2;
-    logic [$clog2(TICK_DIV)-1:0] tick_q;
-    logic tick, frame;
+    logic frame;
 
-    assign tick  = (tick_q == ($clog2(TICK_DIV))'(TICK_DIV - 1));
-    assign frame = tick & run_a2;
+    assign frame = i_frame_req & run_a2;
 
     always_ff @(posedge i_aclk) begin
-        if (i_arst) begin
+        if (i_arst)
             {run_a2, run_a1} <= 2'b00;
-            tick_q           <= '0;
-        end else begin
+        else
             {run_a2, run_a1} <= {run_a1, enable_q};
-            tick_q           <= tick ? '0 : tick_q + 1'b1;
-        end
     end
 
     // ── Control values into the output domain ────────────────

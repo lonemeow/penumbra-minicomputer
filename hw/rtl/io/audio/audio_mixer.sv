@@ -1,11 +1,11 @@
 // Channel mixing datapath: rate, gain and sum, sequenced over channels.
 //
-// Runs in the output clock domain — the same clock the rate divider and
-// the modulator use. On the ULX3S that is the 60 MHz net which also
+// Runs in the output clock domain, the clock the output stage's frame
+// requests arrive on. On the ULX3S that is the 60 MHz net which also
 // serves USB, which is an availability accident and not a dependency;
 // nothing here knows about USB.
 //
-// One output frame arrives every rate-divider tick, some 1250 clocks at
+// One output frame is requested per sample period, some 1250 clocks at
 // 60 MHz and 48 kHz, so the channels are walked through a single
 // datapath rather than replicated. A channel then costs registers and
 // walk cycles, never combinational depth — the class ceiling of 32
@@ -28,11 +28,11 @@
 //
 // which for four channels at 4x is 34 cycles against a frame period of
 // some 1250, and 258 at the class ceiling of 32 channels. It still has
-// to finish inside that period or a tick lands on a walk in progress,
-// dropping an output frame and leaving every channel's phase behind the
-// rate; the assertion at the foot is what says so rather than leaving
-// it assumed, since the number that shrinks the budget is the divider
-// and that is set elsewhere.
+// to finish inside that period or a request lands on a walk in
+// progress, dropping an output frame and leaving every channel's phase
+// behind the rate; the assertion at the foot is what says so rather
+// than leaving it assumed, since what shrinks the budget is this
+// clock's ratio to the sample rate, and that is set elsewhere.
 //
 // Per frame, per channel: work out how far the source advances, take
 // that many frames from the queue, scale what lands by VOL, and add it
@@ -69,7 +69,7 @@ module audio_mixer #(
     input  logic i_clk,
     input  logic i_rst,
 
-    input  logic i_frame,                       // rate-divider tick
+    input  logic i_frame,                       // one pulse per output frame
 
     // One pulse per channel whose queue was discarded, raised in this
     // domain by the queue itself so the phase clears on the same cycle
@@ -337,7 +337,7 @@ module audio_mixer #(
 
         if (!i_rst && i_frame)
             assert (state_q == S_IDLE)
-                else $error("audio_mixer: rate tick arrived before the walk finished");
+                else $error("audio_mixer: frame requested before the walk finished");
 
         // The pair is read combinationally out of a two-stage
         // synchroniser, so the select must predate the read by both

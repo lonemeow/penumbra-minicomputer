@@ -1012,11 +1012,23 @@ module ulx3s_penumbra1_top (
     logic               audio_frame_en;
     /* verilator lint_on UNUSEDSIGNAL */
 
+    localparam int AUDIO_SAMPLE_HZ = 48_000;
+
+    logic audio_frame_req;
+
+    audio_rate_divider #(
+        .CLK_HZ    (int'(CLK60_HZ)),
+        .SAMPLE_HZ (AUDIO_SAMPLE_HZ)
+    ) u_audio_rate (
+        .i_clk       (clk_60mhz),
+        .i_rst       (rst_60mhz),
+        .o_frame_req (audio_frame_req)
+    );
+
     audio #(
         .CHANNELS  (`AUDIO_CHANNELS),
         .DEPTH     (1024),
-        .SAMPLE_HZ (48_000),
-        .AUDIO_HZ  (int'(CLK60_HZ))
+        .SAMPLE_HZ (AUDIO_SAMPLE_HZ)
     ) u_audio (
         .i_clk      (clk),
         .i_rst      (rst),
@@ -1029,6 +1041,7 @@ module ulx3s_penumbra1_top (
         .o_irq      (audio_irq),
         .i_aclk     (clk_60mhz),
         .i_arst     (rst_60mhz),
+        .i_frame_req(audio_frame_req),
         .o_frame_l  (audio_frame_l),
         .o_frame_r  (audio_frame_r),
         .o_frame_en (audio_frame_en)

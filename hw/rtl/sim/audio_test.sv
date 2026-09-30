@@ -25,10 +25,22 @@ module audio_test (
     output logic               o_frame_en
 );
 
+    localparam int SAMPLE_HZ = 48_000;
+
+    logic frame_req;
+
+    audio_rate_divider #(
+        .CLK_HZ    (3_072_000),  // 64 output clocks per frame
+        .SAMPLE_HZ (SAMPLE_HZ)
+    ) u_rate (
+        .i_clk       (i_aclk),
+        .i_rst       (i_arst),
+        .o_frame_req (frame_req)
+    );
+
     audio #(
         .DEPTH     (16),
-        .SAMPLE_HZ (48_000),
-        .AUDIO_HZ  (3_072_000)   // 64 output clocks per frame
+        .SAMPLE_HZ (SAMPLE_HZ)
     ) u_audio (
         .i_clk      (i_clk),
         .i_rst      (i_rst),
@@ -41,6 +53,7 @@ module audio_test (
         .o_irq      (o_irq),
         .i_aclk     (i_aclk),
         .i_arst     (i_arst),
+        .i_frame_req(frame_req),
         .o_frame_l  (o_frame_l),
         .o_frame_r  (o_frame_r),
         .o_frame_en (o_frame_en)
