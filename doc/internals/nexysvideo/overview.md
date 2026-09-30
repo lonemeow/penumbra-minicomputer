@@ -59,6 +59,17 @@ while the machine does or while that MMCM is unlocked. The reset is
 formed in the pixel domain, so the serial domain, related to it at
 5x, takes it on a timed path.
 
+All three clock managers take the oscillator straight from its pin
+(R4, in bank 34 and clock region X1Y2), and that region's clock
+management tile holds one MMCM and one PLL. The CPU's MMCM and the
+DDR3's PLL fill it, and Vivado places the display's MMCM in the tile
+one region down (X1Y1), which the pin reaches over the tiles' vertical
+backbone. It does so by itself: the constraints set no
+`CLOCK_DEDICATED_ROUTE`, and placement raises no warning. Where a
+further clock manager on the oscillator fits is its build's to find
+out; one fed through a global buffer (`BUFG`) instead can take the
+tile of any clock region.
+
 ## LEDs
 
 The machine top's LEDs report what the machine cannot print:

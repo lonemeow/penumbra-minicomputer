@@ -460,6 +460,58 @@ pixel aperture so a mapped client cannot reach the control registers).
   glyphs once that class lands) and a USB boot-keyboard reader, behind a
   putc/getc abstraction the monitor selects at autoconfig.
 
+## Hardware + kernel: direct-color framebuffer format
+
+The display class defines one framebuffer format, 8-bit indexed
+through `FB_PALETTE`, and reserves the rest of `FB_FORMAT` for deeper
+indexed and direct-color formats (`doc/system/devices/display.md`,
+"FB_FORMAT (0x020)"). A direct-color framebuffer at the current 320x240 would
+give true color at the resolution existing software already targets.
+Serves the Nexys Video: at 300 KiB it takes the storage a 640x480
+8 bpp framebuffer does (`hw-nexysvideo.md`, "Devices: the framebuffer
+at the display's full resolution"), which the ULX3S cannot hold beside
+the rest of its machine (150 of its 208 EBRs, at 2 KiB a block
+byte-wide, where the 8 bpp framebuffer takes 40).
+
+The format: 32 bits a pixel, `0x00RRGGBB`, the slot format `PALETTE`
+and `FB_PALETTE` already use, so the class keeps one color layout.
+Packed 24-bit pixels would straddle words; a word a pixel keeps every
+pixel one aligned `STW`, and on this device it costs no storage, since
+it fills the same 300 KiB the 8 bpp framebuffer at full resolution
+would.
+
+What the contract has to settle before any RTL:
+
+- **Packing.** `FB` states its layout for 8 bpp only (pixel (x, y) at
+  byte `y * WIDTH + x`). A 32 bpp format needs its own: the word at
+  byte `(y * WIDTH + x) * 4`, rows still unpadded, so a line is
+  `WIDTH * BPP / 8` bytes and no pitch register is needed.
+- **The pad byte.** Stored, the aperture stays plain memory, as `FB`
+  promises at every access width, and it costs nothing when the
+  storage is shared with the 8 bpp framebuffer. Reading as 0 would
+  save a quarter of a direct-color-only store, at the price of an
+  aperture that no longer reads back what was written.
+- **`FB_PALETTE` under direct color:** present, since
+  `CAP.FRAMEBUFFER` implies it, but not consulted; the contract should
+  say so.
+- **One format or a choice.** `FB_GEOM` and `FB_FORMAT` are read-only,
+  so a device has exactly one framebuffer. A device that serves both
+  640x480 at 8 bpp and 320x240 at 32 bpp from one store needs software
+  to pick: a writable select, contents undefined across a switch and
+  the output free to re-time, as the contract already lets `FB_SEL`
+  do. A board that fixes one format needs no new register.
+
+Device side: the scan-out takes a word a pixel, one read per two pixel
+clocks with pixel doubling, and bypasses the palette; everything past
+the parallel-RGB seam stays as it is. Kernel side: `pdisplay` accepts
+only 8 bpp by design; it would report depth 32 through `GINFO`, the
+channel layout through `GET_FBINFO`'s RGB masks, `LINEBYTES` as
+`WIDTH * 4`, and refuse `PUTCMAP`. Every existing consumer (the demos'
+`demo.c`, Doom's `i_video_netbsd.c`) refuses anything but 8 bpp
+`WSFB_CI`, so direct color's users are new software, or a palette
+lookup in an 8-bit renderer's blit at four times the store bytes.
+Open: the contract text, then the scan-out and the driver.
+
 ## Hardware: USB full speed unreliable on the ULX3S
 
 On the ULX3S, a low-speed keyboard attached directly to the port is

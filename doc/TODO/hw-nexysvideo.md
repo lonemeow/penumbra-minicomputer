@@ -27,6 +27,50 @@ separate `make flash-persistent` target keeps the JTAG load as the
 development default. The ULX3S has the same gap (`hw-ulx3s.md`,
 "Board workflow: flashing, reset, and persistence annoyances").
 
+## Devices: the framebuffer at the display's full resolution
+
+The display's framebuffer is 320x240 at 8 bpp, pixel-doubled onto the
+640x480 raster, because that is what the ULX3S's block RAM holds (42
+of its 208 EBRs; `hw-devices.md`, "Hardware + kernel: local console
+(HDMI display + USB keyboard)"). The Nexys Video carries the same
+device, and its XC7A200T has room for more. The machine with the
+display uses 70 of its 365 block RAM tiles (the build of d507a6711f6b),
+32 of them the framebuffer: eight a byte bank, where a bank's 19,200
+bytes would fit in five at 4 KiB each, so Vivado rounds its depth up
+as the ULX3S flow does. A framebuffer at the raster's own 640x480 at
+8 bpp is 300 KiB, 76,800 bytes a bank: 19 blocks a bank at the ideal
+packing, 76 in all, and about 96 at the packing this build shows,
+which brings the machine to about 134 of the 365.
+
+The class needs nothing new: `FB_GEOM` is read from the device, and
+`pdisplay` sizes its framebuffer and its `mmap` from it. The device
+does:
+
+- storage for 300 KiB, and a device window of 512 KiB in place of
+  256 KiB, since the pixel aperture at `0x20000` then ends at
+  `0x6B000`;
+- a scan-out that walks each line once, with no doubling: a word
+  serves four pixel clocks instead of eight, and no line is replayed;
+- the ULX3S keeping its 320x240 device, so the two boards' displays
+  differ in geometry, which the contract allows and software reads.
+
+The same 300 KiB holds 320x240 at 32 bpp (`hw-devices.md`,
+"Hardware + kernel: direct-color framebuffer format"), so whether the
+Nexys device offers one of the two, or both over one store, is
+decided with that entry.
+
+The cost is on the software side. A full-frame redraw writes four
+times the bytes it does now, and framebuffer stores already cost:
+Doom's 64 KB blit is 5% of a frame (`workloads.md`, "Doom: where a
+frame goes"), and the stores' cache attribute is itself open
+(`kernel.md`, "Kernel: `bus_space_mmap()` maps device memory
+cacheable"). The consumers adapt without changes but gain little:
+Doom copies its 320x200 frame row by row into whatever stride
+`GET_FBINFO` reports, so it would fill a quarter of the screen
+unless its blit doubles pixels, and the demos size their work from
+the geometry, so each frame costs them four times the pixels. Open:
+the storage and scan-out, and a consumer that wants the resolution.
+
 ## Devices: no USB host, so no keyboard or USB storage
 
 On the ULX3S the USB host controller (`CLASS_USBHC`) carries the
