@@ -184,12 +184,14 @@ module video_display #(
     // ── Control crossing into the pixel domain ──────────────────
     // Quasi-static: 2-FF per bit, no handshake. The cursor position
     // crosses as independent bits; a mid-change sample misplaces the
-    // cursor for at most a frame.
-    logic       en_s1_q, en_s2_q;
-    logic       cen_s1_q, cen_s2_q;
-    logic       fbs_s1_q, fbs_s2_q;
-    logic [7:0] col_s1_q, col_s2_q;
-    logic [5:0] row_s1_q, row_s2_q;
+    // cursor for at most a frame. ASYNC_REG on every synchronizer flop:
+    // Vivado places each pair together and its clock-crossing check
+    // recognizes it. The ECP5 flow ignores it.
+    (* ASYNC_REG = "TRUE" *) logic       en_s1_q, en_s2_q;
+    (* ASYNC_REG = "TRUE" *) logic       cen_s1_q, cen_s2_q;
+    (* ASYNC_REG = "TRUE" *) logic       fbs_s1_q, fbs_s2_q;
+    (* ASYNC_REG = "TRUE" *) logic [7:0] col_s1_q, col_s2_q;
+    (* ASYNC_REG = "TRUE" *) logic [5:0] row_s1_q, row_s2_q;
 
     always_ff @(posedge i_pclk) begin
         en_s1_q  <= ctrl_enable_q;

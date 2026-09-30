@@ -5,9 +5,10 @@
 > document, [ddr3.md](ddr3.md).
 
 The Nexys Video is the machine's second board: an Artix-7 200T, a
-100 MHz oscillator, 512 MiB of DDR3, a microSD slot and a USB UART, plus
-HDMI, Gigabit Ethernet, an audio codec, an OLED and Pmod headers the
-machine does not use yet (`doc/TODO/hw-nexysvideo.md`). It runs the
+100 MHz oscillator, 512 MiB of DDR3, a microSD slot, a USB UART and an
+HDMI output, plus an HDMI input, Gigabit Ethernet, an audio codec, an
+OLED and Pmod headers the machine does not use yet
+(`doc/TODO/hw-nexysvideo.md`). It runs the
 gen2 machine from the same boot ROM and NetBSD as the ULX3S. The CPU
 behaves functionally the same on both boards, and what differs,
 software discovers: the machine's name and clock from `SYSDEV_MACH`,
@@ -27,8 +28,8 @@ every build passes its signoff gates before it can be flashed.
 | `nexysvideo_ddr3_test_top` | `make fpga TOP=nexysvideo_ddr3_test_top` | the DDR3 controller and its whole-chip self-test, no CPU |
 
 The machine top carries a 64 KiB boot ROM, the UART, the microSD slot
-over SPI behind autoconfig, and system RAM in DDR3, and names itself
-"Nexys Video". It assembles the external bus around the machine as
+over SPI and the display adapter on the HDMI output behind
+autoconfig, and system RAM in DDR3, and names itself "Nexys Video". It assembles the external bus around the machine as
 the ULX3S top does: the device decode, and the response fabric with
 its 256-cycle watchdog.
 
@@ -49,6 +50,14 @@ reset is tied off, so its lock reports the MMCM alone. CPU RESET
 (`cpu_resetn`) is active-low and sits in the DDR3 bank at 1.5 V. The
 machine top also holds the machine in reset until the DDR3 has
 calibrated.
+
+The display has an MMCM of its own (`nexysvideo_video_clk`): 25 MHz
+for the pixel clock and 125 MHz for the TMDS serial clock, both off a
+1000 MHz VCO, the one frequency in the MMCM's band that also divides
+to the second display mode's 40 and 200 MHz. Its output chain resets
+while the machine does or while that MMCM is unlocked. The reset is
+formed in the pixel domain, so the serial domain, related to it at
+5x, takes it on a timed path.
 
 ## LEDs
 
@@ -90,6 +99,23 @@ its worst arrival, 25 ns after the edge (clock-to-out, the board's
 flight both ways and the card's 14 ns output delay), as a two-cycle
 path. The slot's card-detect switch is not used.
 
+## Display
+
+The display adapter (`CLASS_DISPLAY`, [display.md](../display.md))
+sends DVI to the HDMI output: 640x480 at 60 Hz, from a 25 MHz pixel
+clock 0.7% under VESA's, which monitors lock to. Each of the four TMDS
+pairs leaves through an `ODDR` in its I/O cell into an `OBUFDS` at
+`TMDS_33`, a current-mode driver that the monitor's termination to
+3.3 V completes; with no monitor attached the pairs carry nothing. The
+connector's hot-plug detect, DDC and CEC lines are unused.
+
+Every clock manager on the board runs off the one oscillator, so
+Vivado treats the CPU and pixel clocks as related and would time the
+display's crossing between them at their closest edges. The crossing
+is quasi-static control state through synchronizers, and memories in
+dual-clock block RAM, so the constraints bound it the way they bound
+the DDR3's, to one period of the faster clock.
+
 ## I/O standards and constraints
 
 The board's banks run at four voltages, and a top copies each pin's
@@ -97,14 +123,15 @@ I/O standard from Digilent's master XDC unchanged: LVCMOS12 for the
 buttons and switches (the VADJ bank; with `set_vadj` and `vadj_en`
 undriven, the board's pull resistors set it to 1.2 V), LVCMOS15 for CPU
 RESET (the DDR3 bank), LVCMOS25 for the LEDs and Ethernet, LVCMOS33
-for the UART, SD and Pmods.
+for the UART, SD and Pmods, and TMDS_33 for the HDMI output's pairs.
 
 A top's constraints can span several files:
 
 - `hw/constraints/nexysvideo_machine.xdc`: the board lines every
   machine top uses, whatever its core, and the design's timing
-  intent (false paths on the asynchronous pins, the SD input timing,
-  the bound on the CPU/DDR3 crossing);
+  intent (false paths on the asynchronous pins and the HDMI pairs,
+  the SD input timing, the bounds on the CPU/DDR3 and CPU/pixel-clock
+  crossings);
 - `hw/constraints/nexysvideo_ddr3.xdc`: the DDR3 pins, taken from
   Digilent's memory-interface project, shared by every top with the
   memory;

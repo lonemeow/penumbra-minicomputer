@@ -1,11 +1,14 @@
 // tb_nexysvideo_penumbra2_top — the Nexys Video machine top booting its
 // boot ROM, driven and watched at the board pins.
 //
-// Runs the real boot ROM, so build its image first:
-//   make -C hw/rom && make sim MOD=nexysvideo_penumbra2_top
+// Runs the real boot ROM and the display's font, so build both images
+// first:
+//   make -C hw/rom && make font8x16.hex && make sim MOD=nexysvideo_penumbra2_top
 // The MMCM lint stub passes the oscillator straight through, so one
 // testbench clock is one CPU clock; the host end of the serial line runs
-// at exactly 115200 baud (uart_host.h).
+// at exactly 115200 baud (uart_host.h). The display's clocks are their
+// simulation stand-in (hw/rtl/sim/nexysvideo/nexysvideo_video_clk.sv):
+// the serial clock is the oscillator, the pixel clock a fifth of it.
 //
 // The DDR3 controller is its simulation stand-in
 // (hw/rtl/sim/nexysvideo/nexysvideo_ddr3.sv): the line-memory model of
@@ -25,7 +28,13 @@
 //    hold and powered after it, found by autoconfig, and read over the
 //    real SPI pins by `part sd:0,0` from an image with one partition.
 //    The card is sd_card_sim.h behind a mode-0 SPI pin shim, which
-//    answers each byte one byte late, as a card is free to.
+//    answers each byte one byte late, as a card is free to;
+//  - the display: found by autoconfig after the SD slot, and DVI on the
+//    HDMI pins over a whole frame of mode 0 — the clock pair carrying
+//    the pixel clock, every pair's N the inverse of its P, the syncs in
+//    blue's control tokens and green and red idle in theirs, each token
+//    exactly as often as the raster's blanking makes it. A swapped lane,
+//    pair, bit pair or bit order each breaks one of those.
 #include "Vnexysvideo_penumbra2_top.h"
 #include "sd_card_sim.h"
 #include "uart_host.h"
@@ -33,6 +42,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 // The top's CPU_HZ, the console's baud rate, and its RAM size.
 static const uint64_t CPU_HZ = 60000000;
@@ -115,6 +125,28 @@ struct SdPins {
 
 static SdPins sd;
 
+// The HDMI pins, sampled once per half of the serial clock: one TMDS
+// bit on every pair per sample. Bit i of a sample is pair i's P in the
+// display's lane order — hdmi_tx_p[0] blue, [1] green, [2] red, then
+// the clock pair.
+static const int CLOCK_PAIR = 3;
+
+struct HdmiPins {
+    bool capturing = false;
+    bool complementary = true;   // every N the inverse of its P, so far
+    std::vector<uint8_t> samples;
+
+    void sample() {
+        uint8_t p = (top->hdmi_tx_p & 7) | (top->hdmi_tx_clk_p << CLOCK_PAIR);
+        uint8_t n = (top->hdmi_tx_n & 7) | (top->hdmi_tx_clk_n << CLOCK_PAIR);
+        complementary &= (p ^ n) == 0xF;
+        if (capturing)
+            samples.push_back(p);
+    }
+};
+
+static HdmiPins hdmi;
+
 static void chk(bool ok, const char* what) {
     checks++;
     if (!ok) {
@@ -129,8 +161,10 @@ static void tick() {
     top->sd_d = (top->sd_d & ~1u) | (sd.miso(powered) ? 1u : 0u);
     top->clk = 0;
     top->eval();
+    hdmi.sample();
     top->clk = 1;
     top->eval();
+    hdmi.sample();
     cycle++;
     host.step(top->uart_rx_out, cycle);
     sd.step(!top->sd_reset, (top->sd_d >> 3) & 1, top->sd_cclk, top->sd_cmd);
@@ -170,6 +204,80 @@ static void expect(const std::string& out, const std::string& needle) {
     chk(contains(out, needle), ("console output lacks '" + needle + "'").c_str());
 }
 
+// Mode 0's raster (video_pkg): words per line and lines per frame, the
+// active area, and the sync pulses' lengths.
+static const long H_TOTAL = 800, V_TOTAL = 525;
+static const long H_ACTIVE = 640, V_ACTIVE = 480;
+static const long H_SYNC = 96, V_SYNC = 2;
+static const int WORD_BITS = 10;
+
+// DVI's four control tokens, as 10-bit words, indexed by {c1, c0}.
+// Blue carries {vsync, hsync}, both active-low in mode 0; green and red
+// tie theirs to 00.
+static const uint16_t CTRL_TOKEN[4] = {0x354, 0x0AB, 0x154, 0x2AB};
+// The clock pair's word: five 1s then five 0s, LSB first.
+static const uint16_t CLOCK_WORD = 0x01F;
+
+// Capture one frame's worth of words from the HDMI pins and check the
+// link carries mode 0. Counting over any window one frame long gives
+// the per-frame counts, so the capture need not start on a frame.
+static void check_hdmi_frame() {
+    const long words = H_TOTAL * V_TOTAL;
+    hdmi.samples.clear();
+    hdmi.samples.reserve((words + 2) * WORD_BITS);
+    hdmi.capturing = true;
+    while (hdmi.samples.size() < (size_t)(words + 2) * WORD_BITS)
+        tick();
+    hdmi.capturing = false;
+    const std::vector<uint8_t>& s = hdmi.samples;
+
+    // A word starts where the clock pair rises.
+    auto clock_bit = [&](size_t i) { return (s[i] >> CLOCK_PAIR) & 1; };
+    size_t start = 1;
+    while (start <= (size_t)WORD_BITS && !(clock_bit(start) && !clock_bit(start - 1)))
+        start++;
+    chk(start <= (size_t)WORD_BITS, "the HDMI clock pair never rises");
+    if (start > (size_t)WORD_BITS)
+        return;
+
+    long clock_bad = 0;
+    long tokens[3][4] = {};
+    for (long w = 0; w < words; w++) {
+        uint16_t word[4] = {};
+        for (int b = 0; b < WORD_BITS; b++) {
+            uint8_t x = s[start + w * WORD_BITS + b];
+            for (int pair = 0; pair < 4; pair++)
+                word[pair] |= ((x >> pair) & 1) << b;
+        }
+        clock_bad += word[CLOCK_PAIR] != CLOCK_WORD;
+        for (int lane = 0; lane < 3; lane++)
+            for (int t = 0; t < 4; t++)
+                tokens[lane][t] += word[lane] == CTRL_TOKEN[t];
+    }
+
+    // Blanking is every word outside the active area, and the sync
+    // pulses lie within it: hsync every line, vsync over whole lines.
+    const long blank = words - H_ACTIVE * V_ACTIVE;
+    const long both = H_SYNC * V_SYNC;
+    const long hsync_only = H_SYNC * V_TOTAL - both;
+    const long vsync_only = H_TOTAL * V_SYNC - both;
+    const long blue[4] = {both, vsync_only, hsync_only,
+                          blank - both - hsync_only - vsync_only};
+    const long idle[4] = {blank, 0, 0, 0};
+
+    printf("  hdmi: blue tokens {vs,hs} 00/01/10/11: %ld/%ld/%ld/%ld; "
+           "green/red idle: %ld/%ld\n",
+           tokens[0][0], tokens[0][1], tokens[0][2], tokens[0][3],
+           tokens[1][0], tokens[2][0]);
+    chk(clock_bad == 0, "the HDMI clock pair does not carry the pixel clock");
+    chk(hdmi.complementary, "an HDMI pair's N is not the inverse of its P");
+    for (int t = 0; t < 4; t++) {
+        chk(tokens[0][t] == blue[t], "blue's control tokens do not carry mode 0's syncs");
+        chk(tokens[1][t] == idle[t], "green's control tokens are not idle blanking");
+        chk(tokens[2][t] == idle[t], "red's control tokens are not idle blanking");
+    }
+}
+
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
     make_sd_image();
@@ -207,7 +315,8 @@ int main(int argc, char** argv) {
     expect(boot, banner_mhz);
     expect(boot, "Detecting base RAM... 512MB found");
     expect(boot, "  SD SD @ 0x");
-    expect(boot, "1 device(s) found");
+    expect(boot, "  DISPLAY Display @ 0x");
+    expect(boot, "2 device(s) found");
     expect(boot, "sd:0,0 ... card present");
     chk(!top->sd_reset, "sd_reset still high (card unpowered) after the reset hold");
 
@@ -224,6 +333,9 @@ int main(int argc, char** argv) {
         out = command("part sd:0,0");
         expect(out, "MBR partition table on device");
         expect(out, "FAT32-LBA 2048 32MB (bootable)");
+
+        // The ROM has drawn its splash and enabled the display by now.
+        check_hdmi_frame();
     }
 
     // led[3] the DDR3 calibrated; led[6:4] the RAM's longest wait

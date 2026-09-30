@@ -293,6 +293,12 @@ exposed external bus.
   port: shadows the wrapper by name for the Nexys top's testbench and
   `fpga-lint` (UberDDR3 neither simulates here nor elaborates for lint
   at the board's configuration).
+- `nexysvideo/nexysvideo_video_clk.sv` — simulation stand-in for the
+  Nexys display clocks, same ports: the serial clock the oscillator,
+  the pixel clock a fifth of it, so the serializers keep their 5x
+  contract where the MMCM stub would pass one rate through. Shadows
+  the MMCM wrapper for the Nexys top's testbench only; `fpga-lint`
+  takes the wrapper.
 
 ### FPGA top-levels (`rtl/fpga/`)
 Board tops live under `rtl/fpga/<board>/`, one file per registered
@@ -332,14 +338,17 @@ the shared module.
 - `nexysvideo/nexysvideo_penumbra2_top.sv` — gen2 machine on the Nexys
   Video (`BOARD=nexysvideo CORE=penumbra2[_5]`), growing one device per
   bring-up step: boot ROM, UART, the microSD slot over SPI (autoconfig,
-  card power off during the reset hold), and 512 MiB of DDR3 as system
-  RAM through `ddr3_stack`. The controller resets only with its clocks'
-  lock; the machine is held in reset until it has calibrated, and LEDs
-  show calibration and the RAM's longest wait (`bus_wait_meter`). Its
-  boot testbench
-  (`make -C hw/rom && make sim MOD=nexysvideo_penumbra2_top`) runs the
-  ROM to the monitor through the board pins, with the controller's
-  simulation stand-in and a simulated card on the SD pins.
+  card power off during the reset hold), the display adapter on the
+  HDMI output (autoconfig; its own MMCM, an ODDR and a TMDS_33 OBUFDS
+  per pair), and 512 MiB of DDR3 as system RAM through `ddr3_stack`.
+  The controller resets only with its clocks' lock; the machine is held
+  in reset until it has calibrated, and LEDs show calibration and the
+  RAM's longest wait (`bus_wait_meter`). Its boot testbench
+  (`make -C hw/rom && make font8x16.hex && make sim
+  MOD=nexysvideo_penumbra2_top`) runs the ROM to the monitor through
+  the board pins, with the controller's and display clocks' simulation
+  stand-ins and a simulated card on the SD pins, and reads a frame of
+  DVI off the HDMI pins.
 - `nexysvideo/nexysvideo_uart_test_top.sv` — console bring-up top
   (`make fpga TOP=nexysvideo_uart_test_top`): banner and echo on the
   UART port, LEDs for lock, reset, a 1 Hz heartbeat, RX activity and
@@ -352,6 +361,9 @@ the shared module.
   `ddr3_top`, so the one licensed GPL-3.0-or-later.
 - `nexysvideo/nexysvideo_ddr3_clk.sv` — the DDR3 controller's four
   clocks (83.33, 333.33, 333.33 at 90 degrees, 200 MHz) from one PLL.
+- `nexysvideo/nexysvideo_video_clk.sv` — the display's pixel and TMDS
+  serial clocks (25 and 125 MHz) from an MMCM of their own, off a
+  1000 MHz VCO.
 - `nexysvideo/nexysvideo_ddr3_selftest.sv` — runs the controller's
   calibration and full-chip self-test over and over, one line per run
   on the console (verdict, reads checked, mismatches, calibration

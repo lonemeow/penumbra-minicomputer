@@ -2,11 +2,17 @@
 //
 // Wires machine_penumbra2 to the board: the shared clocking and power-on
 // reset (nexysvideo_clk_rst), a 64 KB boot ROM, the UART on the UART USB
-// port, the microSD slot over SPI behind autoconfig, and system RAM in
-// the board's 512 MiB of DDR3. The top grows one device per bring-up
-// step; the external Penumbra Bus is assembled here the way the ULX3S
-// top assembles it (device decode, response fabric with its no-device
-// watchdog), so what simulates is what synthesizes.
+// port, the microSD slot over SPI and the display adapter on the HDMI
+// output behind autoconfig, and system RAM in the board's 512 MiB of
+// DDR3. The top grows one device per bring-up step; the external
+// Penumbra Bus is assembled here the way the ULX3S top assembles it
+// (device decode, response fabric with its no-device watchdog), so what
+// simulates is what synthesizes.
+//
+// The display runs its output chain on clocks of its own
+// (nexysvideo_video_clk), and resets with the machine or while they are
+// unlocked. Its four lanes leave through a DDR register in each pair's
+// I/O cell into a TMDS_33 differential buffer.
 //
 // The DDR3 runs on clocks of its own (nexysvideo_ddr3_clk) behind the
 // line stack (ddr3_stack), which crosses to them. Its controller resets
@@ -43,6 +49,12 @@ module nexysvideo_penumbra2_top (
     output logic       sd_cmd,       // MOSI
     inout  wire  [3:0] sd_d,         // [0] MISO in, [3] CS out, [2:1] held high
     output logic       sd_reset,     // card power: low powers the slot
+
+    // ── HDMI output (TX), DVI signalling ───────────────────
+    output logic [2:0] hdmi_tx_p,    // TMDS lanes: [0] blue, [1] green, [2] red
+    output logic [2:0] hdmi_tx_n,
+    output logic       hdmi_tx_clk_p,
+    output logic       hdmi_tx_clk_n,
 
     // ── DDR3 (MT41K256M16, x16) ───────────────────────────
     output logic [0:0]  ddr3_ck_p,
@@ -124,9 +136,10 @@ module nexysvideo_penumbra2_top (
     logic rst;
     assign rst = board_rst || !calib_sync2;
 
-    // The stack's controller side resets with the machine. The reset
-    // crosses from a flop, since a synchronizer sampling logic can catch
-    // a glitch the logic's inputs never held.
+    // The stack's controller side, and the display's output chain below,
+    // reset with the machine. The reset crosses from a flop, since a
+    // synchronizer sampling logic can catch a glitch the logic's inputs
+    // never held.
     logic rst_q;
     (* ASYNC_REG = "TRUE" *) logic stack_rst_sync1, stack_rst_sync2;
 
@@ -136,6 +149,34 @@ module nexysvideo_penumbra2_top (
     always_ff @(posedge ctrl_clk) begin
         stack_rst_sync1 <= rst_q;
         stack_rst_sync2 <= stack_rst_sync1;
+    end
+
+    // ── Display clocks and reset ────────────────────────────
+    logic pixel_clk, serial_clk;
+    logic video_locked;
+
+    nexysvideo_video_clk u_video_clk (
+        .i_clk_100mhz (clk),
+        .o_pixel_clk  (pixel_clk),
+        .o_serial_clk (serial_clk),
+        .o_locked     (video_locked)
+    );
+
+    // The output chain's reset, in the pixel domain: the machine's, or
+    // the chain's clocks out of lock. Each reaches the domain through its
+    // own two flops, and they combine after, into the one flop that
+    // drives both of the chain's domains; the chain absorbs the release's
+    // skew between them by design (video_serializer).
+    (* ASYNC_REG = "TRUE" *) logic video_rst_sync1, video_rst_sync2;
+    (* ASYNC_REG = "TRUE" *) logic video_locked_sync1, video_locked_sync2;
+    logic video_rst_q;
+
+    always_ff @(posedge pixel_clk) begin
+        video_rst_sync1    <= rst_q;
+        video_rst_sync2    <= video_rst_sync1;
+        video_locked_sync1 <= video_locked;
+        video_locked_sync2 <= video_locked_sync1;
+        video_rst_q        <= video_rst_sync2 || !video_locked_sync2;
     end
 
     // Over-temperature shutdown, off the oscillator itself.
@@ -373,8 +414,9 @@ module nexysvideo_penumbra2_top (
     logic [31:0] spi_dev_addr, spi_dev_wdata;
     /* verilator lint_off UNUSEDSIGNAL */
     logic [3:0]  spi_dev_byte_en;
-    logic        ac_spi_cfg_out;       // the chain's next link, when it has one
     /* verilator lint_on UNUSEDSIGNAL */
+    // cfg_out is the daisy-chain to the next autoconfig device (display).
+    logic        ac_spi_cfg_out;
     logic        spi_dev_we, spi_dev_re;
     logic [31:0] spi_dev_rdata;
     logic        spi_dev_ack;
@@ -448,12 +490,123 @@ module nexysvideo_penumbra2_top (
     // to its power-on state, the one reset a card cannot be denied.
     assign sd_reset = rst;
 
+    // ── Display adapter (second in chain) ───────────────────
+    // The character console and framebuffer on the HDMI output:
+    // video_display behind the autoconfig wrapper, as on the ULX3S. No
+    // cell preload and CTRL.ENABLE resets clear, so the screen stays
+    // black until the boot ROM draws it — a reset never shows stale
+    // cell memory.
+    logic [31:0] disp_dev_addr, disp_dev_wdata;
+    // The pixel aperture commits individual lanes, so the display is
+    // the one autoconfig device here that consumes byte enables.
+    logic [3:0]  disp_dev_byte_en;
+    logic        disp_dev_we, disp_dev_re;
+    logic [31:0] disp_dev_rdata;
+    logic        disp_dev_ack;
+
+    logic [31:0] ac_disp_rdata;
+    logic        ac_disp_ack, ac_disp_sel;
+    // Last device in the chain: the dangling cfg_out is the
+    // "no more devices" end the ROM's autoconfig loop probes.
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic        ac_disp_cfg_out;
+    /* verilator lint_on UNUSEDSIGNAL */
+
+    autoconfig_dev #(
+        .DEV_CLASS (ACFG_CLASS_DISPLAY),
+        .DEV_SIZE  (32'd262144),
+        .DEV_ID    (32'd0),
+        .DEV_NAME0 (32'h50534944),     // "DISP" packed LE
+        .DEV_NAME1 (32'h0059414C)      // "LAY\0"
+    ) u_ac_disp (
+        .i_clk        (cpu_clk),
+        .i_rst        (rst),
+        .i_bus_rst    (busctl_bus_rst),
+        .i_cfg_en     (busctl_cfg_en),
+        .i_cfg_in     (ac_spi_cfg_out),
+        .o_cfg_out    (ac_disp_cfg_out),
+        .i_addr       (mem_addr),
+        .i_wdata      (mem_wdata),
+        .i_byte_en    (mem_byte_en),
+        .i_we         (mem_we),
+        .i_re         (mem_re),
+        .o_rdata      (ac_disp_rdata),
+        .o_ack        (ac_disp_ack),
+        .o_sel        (ac_disp_sel),
+        .o_dev_addr   (disp_dev_addr),
+        .o_dev_wdata  (disp_dev_wdata),
+        .o_dev_byte_en(disp_dev_byte_en),
+        .o_dev_we     (disp_dev_we),
+        .o_dev_re     (disp_dev_re),
+        .i_dev_rdata  (disp_dev_rdata),
+        .i_dev_ack    (disp_dev_ack)
+    );
+
+    // The DDR bit pairs per lane, in the display's lane order: [0] blue,
+    // [1] green, [2] red, [3] the clock. Bit 2n of a TMDS word rides
+    // hdmi_lane_d0 and bit 2n+1 hdmi_lane_d1, both changing on the
+    // serial clock's rising edge (video_serializer).
+    logic [3:0] hdmi_lane_d0, hdmi_lane_d1;
+
+    video_display u_display (
+        .i_clk     (cpu_clk),
+        .i_rst     (rst),
+        .i_addr    (disp_dev_addr),
+        .i_wdata   (disp_dev_wdata),
+        .i_byte_en (disp_dev_byte_en),
+        .i_we      (disp_dev_we),
+        .i_re      (disp_dev_re),
+        .o_rdata   (disp_dev_rdata),
+        .o_ack     (disp_dev_ack),
+        .i_pclk    (pixel_clk),
+        .i_sclk    (serial_clk),
+        .i_vrst    (video_rst_q),
+        .o_d0      (hdmi_lane_d0),
+        .o_d1      (hdmi_lane_d1)
+    );
+
+    // HDMI pads: per lane, an ODDR, the bit stream's last register, in
+    // the pair's I/O cell — no fabric routing on the bit stream — into
+    // an OBUFDS, whose TMDS_33 standard the constraints set. SAME_EDGE
+    // takes both halves of a pair on the rising edge that ends it, as
+    // the ULX3S's ODDRX1F does; OPPOSITE_EDGE would sample D2 on the
+    // falling edge, after the serializer has moved on to the next pair.
+    logic [3:0] hdmi_pad_p, hdmi_pad_n;
+
+    for (genvar i = 0; i < 4; i++) begin : g_hdmi
+        logic serial_data;
+
+        ODDR #(
+            .DDR_CLK_EDGE ("SAME_EDGE")
+        ) u_hdmi_oddr (
+            .D1 (hdmi_lane_d0[i]),
+            .D2 (hdmi_lane_d1[i]),
+            .Q  (serial_data),
+            .C  (serial_clk),
+            .CE (1'b1),
+            .R  (1'b0),
+            .S  (1'b0)
+        );
+
+        OBUFDS u_hdmi_obufds (
+            .I  (serial_data),
+            .O  (hdmi_pad_p[i]),
+            .OB (hdmi_pad_n[i])
+        );
+    end
+
+    assign hdmi_tx_p     = hdmi_pad_p[2:0];
+    assign hdmi_tx_n     = hdmi_pad_n[2:0];
+    assign hdmi_tx_clk_p = hdmi_pad_p[3];
+    assign hdmi_tx_clk_n = hdmi_pad_n[3];
+
     // ── Response fabric ─────────────────────────────────────
     localparam int SLV_RAM  = 0;
     localparam int SLV_ROM  = 1;
     localparam int SLV_UART = 2;
     localparam int SLV_SPI  = 3;
-    localparam int NUM_SLV  = 4;
+    localparam int SLV_DISP = 4;
+    localparam int NUM_SLV  = 5;
 
     logic [NUM_SLV-1:0]       slv_sel;
     logic [NUM_SLV-1:0]       slv_ack;
@@ -474,6 +627,10 @@ module nexysvideo_penumbra2_top (
     assign slv_sel[SLV_SPI]    = ac_spi_sel;
     assign slv_ack[SLV_SPI]    = ac_spi_ack;
     assign slv_rdata[SLV_SPI]  = ac_spi_rdata;
+
+    assign slv_sel[SLV_DISP]   = ac_disp_sel;
+    assign slv_ack[SLV_DISP]   = ac_disp_ack;
+    assign slv_rdata[SLV_DISP] = ac_disp_rdata;
 
     bus_response_fabric #(
         .NUM_SLAVES     (NUM_SLV),

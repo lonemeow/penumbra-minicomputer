@@ -105,9 +105,9 @@ BIN2HEX   = python3 sw/tools/bin2hex.py
 
 # A module sim that needs sources off the module path names their
 # directories here, searched ahead of it: the Nexys machine top's DDR3
-# memory system, its controller's simulation stand-in (shadowing the
-# wrapper), its stack, and the line adapter the stack takes (shadowing
-# the word adapter).
+# memory system, its controller's and display clocks' simulation
+# stand-ins (shadowing their wrappers), its stack, and the line adapter
+# the stack takes (shadowing the word adapter).
 SIM_DIRS_nexysvideo_penumbra2_top = hw/rtl/sim/nexysvideo hw/rtl/io/ddr3 hw/rtl/io/sdram_line
 
 .PHONY: sim
@@ -1157,6 +1157,11 @@ SRC_SDRAM_line = $(filter-out $(SDRAM_LINE_FORKED:%=hw/rtl/io/sdram/%.sv),$(SRC_
 SRC_SDRAM = $(or $(SRC_SDRAM_$(SDRAM_STACK)),\
                  $(error SDRAM_STACK must be `word` or `line`, got `$(SDRAM_STACK)`))
 
+# The display adapter, board-neutral down to the DDR bit pairs a board
+# top's output cells take.
+SRC_VIDEO = hw/rtl/io/video/video_pkg.sv \
+            $(filter-out %/video_pkg.sv, $(wildcard hw/rtl/io/video/*.sv))
+
 SRC_FABRIC = hw/rtl/io/sdram/sdram_pkg.sv \
              $(SRC_AUDIO) \
              hw/rtl/io/usb/usb_pkg.sv \
@@ -1304,8 +1309,7 @@ FPGA_SRC_ulx3s_penumbra3_probe_decode_top = $(SRC_COMMON) $(SRC_CORE_penumbra3) 
 # the video PLL, ODDRX1F cells, and GPDI pads — no CPU or bus, so it is
 # built via the TOP= escape hatch (make fpga TOP=ulx3s_video_test_top)
 # rather than registered as a BOARD/CORE machine.
-FPGA_SRC_ulx3s_video_test_top = hw/rtl/io/video/video_pkg.sv \
-                                $(filter-out %/video_pkg.sv, $(wildcard hw/rtl/io/video/*.sv)) \
+FPGA_SRC_ulx3s_video_test_top = $(SRC_VIDEO) \
                                 hw/rtl/common/build_check.sv \
                                 $(FPGA_RTL)/ecp5_pll_pkg.sv \
                                 $(FPGA_RTL)/ulx3s/ulx3s_video_test_top.sv
@@ -1361,7 +1365,8 @@ XDC_nexysvideo_ddr3_test_top = hw/constraints/nexysvideo_ddr3_test_top.xdc $(XDC
 
 # The gen2 machine on the Nexys Video, growing one device per bring-up
 # step. Its devices are named rather than taken from SRC_FABRIC, whose
-# wildcards bring the ECP5 PHYs. Its RAM is the DDR3 behind the line
+# wildcards bring the ECP5 PHYs; the display's set has none, since
+# its output cells are the top's. Its RAM is the DDR3 behind the line
 # stack's adapter and crossing, with UberDDR3 last (see SRC_UBERDDR3).
 FPGA_SRC_nexysvideo_penumbra2_top = $(SRC_COMMON) $(SRC_CORE) \
                                     $(SRC_MACHINE_penumbra2) \
@@ -1377,8 +1382,10 @@ FPGA_SRC_nexysvideo_penumbra2_top = $(SRC_COMMON) $(SRC_CORE) \
                                     hw/rtl/io/sdram/sdram_cdc.sv \
                                     hw/rtl/io/sdram_line/sdram_bus_adapter.sv \
                                     hw/rtl/io/ddr3/ddr3_stack.sv \
+                                    $(SRC_VIDEO) \
                                     $(SRC_BOARD_nexysvideo) \
                                     $(SRC_DDR3_nexysvideo) \
+                                    $(FPGA_RTL)/nexysvideo/nexysvideo_video_clk.sv \
                                     $(FPGA_RTL)/nexysvideo/nexysvideo_penumbra2_top.sv \
                                     $(SRC_UBERDDR3)
 XDC_nexysvideo_penumbra2_top = $(XDC_MACHINE_nexysvideo)
@@ -1395,7 +1402,8 @@ FPGA_UCODE_TOPS = ulx3s_penumbra1_top
 # top's run happens to have left the file behind, and fails on a clean
 # tree.
 FPGA_VIDEO_TOPS = ulx3s_video_test_top ulx3s_penumbra1_top \
-                  ulx3s_penumbra2_top ulx3s_penumbra2_5_top
+                  ulx3s_penumbra2_top ulx3s_penumbra2_5_top \
+                  nexysvideo_penumbra2_top nexysvideo_penumbra2_5_top
 # Tops that also embed a preloaded cell image — the CPU-free bring-up
 # probe only. A machine draws its own screen from software.
 FPGA_SPLASH_TOPS = ulx3s_video_test_top

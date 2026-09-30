@@ -27,17 +27,6 @@ separate `make flash-persistent` target keeps the JTAG load as the
 development default. The ULX3S has the same gap (`hw-ulx3s.md`,
 "Board workflow: flashing, reset, and persistence annoyances").
 
-## Devices: no display
-
-The display adapter (`CLASS_DISPLAY`) drives the ULX3S's GPDI port;
-the Nexys Video has an HDMI TX connector, and its machine has no
-display. The adapter's pixel side is board-neutral, so what the
-board needs is its output stage, the counterpart of the ULX3S's
-`ODDRX1F` pairs: an `ODDR` and an `OBUFDS` per TMDS lane at 125 MHz
-(TMDS_33), and 25 and 125 MHz from an MMCM of their own, as the
-ULX3S gives video its own PLL, so the pixel clocks never constrain
-the CPU clock.
-
 ## Devices: no USB host, so no keyboard or USB storage
 
 On the ULX3S the USB host controller (`CLASS_USBHC`) carries the

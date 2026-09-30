@@ -1,16 +1,16 @@
 # Penumbra Display Adapter — FPGA Microarchitecture
 
-> **Applies to:** the FPGA (ECP5 / GPDI) implementation of
-> `CLASS_DISPLAY`. Generation-independent — the console attaches to the
-> system bus like any autoconfig device, so both cores drive it
-> identically. The programmer-visible contract is
+> **Applies to:** the FPGA implementation of `CLASS_DISPLAY`, on the
+> ULX3S's GPDI connector and the Nexys Video's HDMI output.
+> Generation-independent — the console attaches to the system bus like
+> any autoconfig device, so every core drives it identically. The programmer-visible contract is
 > [display.md](../system/devices/display.md); this document
 > describes one hardware realization of it.
 
 ## Overview
 
-The console renders a grid of character cells to a GPDI (DVI/HDMI)
-output. It splits cleanly into two parts:
+The console renders a grid of character cells as DVI on the board's
+HDMI connector (GPDI on the ULX3S). It splits cleanly into two parts:
 
 - a **pixel generator** — timing, cell/font fetch, attribute-to-color —
   emitting a parallel RGB + sync stream. This is classic character-display
@@ -49,8 +49,8 @@ flowchart LR
   end
   subgraph PHYBOX["Output PHY"]
     RGB --> TMDS["TMDS encode ×3"]
-    TMDS --> SER["ODDR 10:1 ×3\n+ clock channel"]
-    SER --> GPDI["GPDI pairs"]
+    TMDS --> SER["DDR 10:1 ×3\n+ clock channel"]
+    SER --> PAIRS["board's TMDS pairs"]
   end
   REGS -. "2-FF sync (quasi-static)" .-> PIX
   CRAMW -. "dual-clock BRAM" .-> CRAMR
@@ -67,17 +67,21 @@ flowchart LR
 | Signal                          | Direction | Purpose                                              |
 |---------------------------------|-----------|------------------------------------------------------|
 | `i_clk`, `i_rst`                | in        | System clock / reset — bus interface and registers   |
-| `i_addr`, `i_wdata`, `i_we`, `i_re` | in    | Device bus request (word-strided)                    |
-| `o_rdata`                        | out       | Device bus read data                                 |
-| `o_ack`                          | out       | Access complete; the cycle after it is presented     |
-| `i_pixel_clk`                    | in        | Pixel clock for the active mode                      |
-| `i_serial_clk`                   | in        | 5× pixel clock for the TMDS serializers             |
-| `o_gpdi_dp[3:0]`, `o_gpdi_dn[3:0]` | out    | GPDI pairs: `[2:0]` R/G/B data, `[3]` clock          |
+| `i_addr`, `i_wdata`, `i_we`, `i_re` | in    | Device bus request                                   |
+| `i_byte_en`                     | in        | Byte lanes, honored by the framebuffer aperture alone |
+| `o_rdata`                       | out       | Device bus read data                                 |
+| `o_ack`                         | out       | Access complete; the cycle after it is presented     |
+| `i_pclk`                        | in        | Pixel clock for the active mode                      |
+| `i_sclk`                        | in        | 5× pixel clock for the TMDS serializers              |
+| `i_vrst`                        | in        | Reset of both video domains                          |
+| `o_d0[3:0]`, `o_d1[3:0]`        | out       | Each lane's bit pair: `[0]` B, `[1]` G, `[2]` R, `[3]` clock |
 
 The video clocks are inputs, supplied by a separate **video clock unit**
 (PLL, plus the reconfiguration FSM in the full design). Keeping them out
 of the generator lets it be simulated with any clock source and keeps the
-clocking strategy swappable.
+clocking strategy swappable. The device ends at the bit pairs for the
+same reason: the output cells are the board's, so one device serves
+every board.
 
 ## Character / Attribute RAM
 
@@ -181,10 +185,20 @@ During active video each 8-bit color channel is TMDS-encoded to 10 bits
 emits the control-period codes that carry `hsync`/`vsync` on the blue
 channel. The three 10-bit words, plus the clock channel's fixed
 `0b0000011111` pattern, are serialized LSB-first at the TMDS bit rate
-(10× pixel) using ECP5 DDR output registers (`ODDRX`, two bits per serial
-clock at 5× pixel) — the same primitive family the SDRAM PHY uses. The
-four serial streams drive the GPDI pairs as `LVCMOS33D` pseudo-differential
-outputs.
+(10× pixel), two bits per serial clock at 5× pixel, into a DDR output
+register in each pair's I/O cell. The register and the pad are the
+board's:
+
+| Board       | DDR register        | Pad                                     |
+|-------------|---------------------|-----------------------------------------|
+| ULX3S       | `ODDRX1F`           | `LVCMOS33D` pseudo-differential (GPDI)  |
+| Nexys Video | `ODDR`, `SAME_EDGE` | `OBUFDS`, `TMDS_33` (HDMI TX)           |
+
+Both registers take a lane's pair on the serial clock's rising edge and
+send its first bit while the clock is high, its second while it is low.
+On the 7-series `ODDR` that is `SAME_EDGE` mode: `OPPOSITE_EDGE` samples
+the second bit on the falling edge, after the serializer has moved on
+to the next pair, which pairs the halves of two different bit pairs.
 
 ## Clock Domains
 
@@ -199,8 +213,11 @@ palettes, framebuffer) — bridges CPU↔pixel as a dual-clock BRAM. The few con
 values the pixel domain consumes (`ENABLE`, cursor position, active
 geometry, source select) change rarely and cross via 2-FF synchronizers, treated as
 quasi-static — at worst a torn cursor update misplaces the cursor for one
-frame. The video clocks come from a dedicated PLL, separate from the
-system/SDRAM PLL; the ECP5-85F has spare PLLs for it.
+frame. The video clocks come from a clock manager of their own on each board —
+a second PLL on the ULX3S, an MMCM on the Nexys Video — so the video
+rates never constrain the CPU or memory clocks. Every synchronizer
+flop carries `ASYNC_REG`, which the 7-series flow's clock-crossing
+check requires and the ECP5 flow ignores.
 
 ## Display Modes and Clocking
 
@@ -225,7 +242,9 @@ contents are undefined across the switch (the aperture stride changes with
 The contract [reserves space](../system/devices/display.md#edid-reserved)
 for querying the attached display's EDID block. The board wiring is
 already in place: the ULX3S routes the GPDI connector's DDC pair to
-FPGA pins (`gpdi_sda` / `gpdi_scl`, shared with the RTC I2C). The
+FPGA pins (`gpdi_sda` / `gpdi_scl`, shared with the RTC I2C), and the
+Nexys Video its HDMI output's (`hdmi_tx_rsda` / `hdmi_tx_rscl`), along
+with hot-plug detect (`hdmi_tx_hpd`). The
 implementation choice — a small I2C engine that snapshots the block
 into a readable buffer, or raw SDA/SCL register bits the driver
 bit-bangs — is made by the first revision that implements the

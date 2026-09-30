@@ -86,6 +86,59 @@ module BUFG (
     assign O = I;
 endmodule
 
+// ── ODDR: output DDR register, in the I/O cell ──────────────
+// Behavioral, since a board top's testbench reads its pins through it:
+// Q drives the D1 captured on C's rising edge while C is high, and the
+// D2 captured for that cycle while C is low. SAME_EDGE captures D2 on
+// the same rising edge as D1; OPPOSITE_EDGE captures it on the falling
+// edge after, as the silicon does. Set and reset are not modeled.
+module ODDR #(
+    parameter DDR_CLK_EDGE = "OPPOSITE_EDGE",
+    parameter INIT         = 1'b0,
+    parameter SRTYPE       = "SYNC"
+) (
+    output Q,
+    input  C,
+    input  CE,
+    input  D1,
+    input  D2,
+    input  R,
+    input  S
+);
+    logic d1_q, d2_rise_q, d2_fall_q;
+
+    initial begin
+        d1_q      = INIT;
+        d2_rise_q = INIT;
+        d2_fall_q = INIT;
+    end
+
+    always_ff @(posedge C)
+        if (CE) begin
+            d1_q      <= D1;
+            d2_rise_q <= D2;
+        end
+
+    always_ff @(negedge C)
+        if (CE)
+            d2_fall_q <= D2;
+
+    assign Q = C ? d1_q : (DDR_CLK_EDGE == "SAME_EDGE" ? d2_rise_q : d2_fall_q);
+endmodule
+
+// ── OBUFDS: differential output buffer ──────────────────────
+module OBUFDS #(
+    parameter IOSTANDARD = "DEFAULT",
+    parameter SLEW       = "SLOW"
+) (
+    output O,
+    output OB,
+    input  I
+);
+    assign O  = I;
+    assign OB = ~I;
+endmodule
+
 // ── XADC: analog-to-digital converter and on-chip sensors ───
 // For lint and simulation the die stays cool: no alarm, no
 // over-temperature, and the DRP never answers.
