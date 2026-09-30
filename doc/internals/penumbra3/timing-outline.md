@@ -54,12 +54,18 @@ Corollary on register placement:
 - **Fetch buffer (FIFO)** decouples front-end from back-end.
 - **All prediction is fetch-domain and BRAM-backed, indexed not associative:**
   a bimodal direction table read beside IF1 (gshare measured and does not pay),
-  and a direct-mapped target buffer only as the IF2 redirect's timing requires
-  (training registered off the fetch loop). **Direct targets and the RAS via an
+  training registered off the fetch loop. **Direct targets and the RAS via an
   IF2 pre-decode** (detect the transfer from the fetched word) — the RAS a plain
   ring with no empty check — *not* BTB entries (capacity), *not* ID-stage (a
   decode-stage predictor is marginal and registers to nothing)
-  ([measured](./branch-prediction.md)).
+  ([measured](./branch-prediction.md)). The IF2 redirect closes in its cycle
+  (P0.5), so a target buffer is only an option for indirect targets.
+- **IF2 works per way, then selects.** The word→bundle decode and the pre-decode
+  run on each way's word straight off the block RAM, beside the TLB match and the
+  tag compare; the hit selects finished results. The predicted redirect waits on
+  the hit alone — never the translation fault or cacheability, which a trap or a
+  replay settles from registered state — and the RAS updates a cycle after its
+  transfer enqueues.
 - Mispredict = **registered flush + redirect**, never enters the stall OR-tree.
 
 ## 2. Back-end stall — the load-use freeze (THE critical one)
@@ -236,7 +242,9 @@ cycles, never critical-path logic.**
 ## 4. Caches
 
 - **Hit path:** `EBR read → tag compare → way mux → flop`, nothing else. The hit is
-  a **registered qualifier consumed by replay**, not a combinational stall.
+  a **registered qualifier consumed by replay**, not a combinational stall, and
+  never a wide enable: a register whose load would depend on it (MEM2/WB)
+  loads unconditionally and lets its valid bit carry the decision.
 - **Bookkeeping off the hit→busy cone:** PLRU touch, dirty, write-hit are
   registered/deferred (gen2's L1 already does this — keep it).
 - **L1: write-through**, keep the timing-critical level simple.
@@ -253,11 +261,16 @@ cycles, never critical-path logic.**
   could coincide, yosys adds a bypass that returns the old data — flops capturing
   the write and a mux on the EBR output, i.e. logic after the Tco that the
   hit-path rule forbids. gen2's L1 tag array carries 27 LUTs and 51 flops of it;
-  `penumbra3_tlb_store` about 134 LUTs and 137 flops. Gating the write off while a
-  read launches, or the read enable with a registered write strobe, lets yosys
-  prove the collision cannot happen and drop it. Never `no_rw_check`: it assumes
-  what synthesis cannot check, so a broken invariant would diverge hardware from
-  simulation silently.
+  `penumbra3_tlb_store` about 134 LUTs and 137 flops. yosys drops it only when the
+  read and write *enables* exclude each other — the write gated off while a read
+  launches, or the read enable gated by the write strobe — never through an
+  address compare. A read suppressed only when it meets the write's address (a
+  store hit written a cycle after it resolves) is exclusive but unprovable:
+  mark that memory `no_rw_check` and assert, beside it and on the same enables
+  and addresses, that no entry is read and written in one cycle. Only where the
+  memory's own read enable carries the exclusion: an invariant another module
+  keeps (no launch during a fill) is written into the enables instead, since
+  the attribute would assume it unchecked.
 - **L2: write-through, posted; write-back / write-allocate only if stores prove
   throughput-bound.** L2 takes a store-buffer entry's write in its pipeline and
   serves hits while its bus port carries the write-through, so a fill L2 serves

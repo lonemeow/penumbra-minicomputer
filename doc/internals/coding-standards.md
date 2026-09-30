@@ -77,7 +77,10 @@ Prefix all module ports to distinguish them from internal signals:
   bitstream. `build_check` stops elaboration in Verilator, yosys and
   Vivado alike; its header documents the interface. Assertions about
   behavior during simulation (`assert property`, asserts in `always`
-  blocks) stay assertions: they are simulation-only by intent.
+  blocks) stay assertions: they are simulation-only by intent. Since
+  sv2v deletes them, asserts alone in a procedural `for` leave a loop
+  with an empty body, which Vivado refuses to read; loop over them
+  with a generate `for` instead.
 - **Memories map the same way under yosys and Vivado.** Every memory
   (an unpacked array indexed by a variable) declares its storage with
   an attribute both tools read: `(* ram_style = "block" *)`,
@@ -95,7 +98,20 @@ Prefix all module ports to distinguish them from internal signals:
       `always_ff` with no reset (resets belong to control state, not to
       the array), and the read is registered. yosys merges several
       write sites or packs a 2-D array into one block RAM by itself;
-      Vivado builds either from flip-flops or LUT RAM instead.
+      Vivado builds either from flip-flops or LUT RAM instead. A write
+      wider than the read (a line written, a word read) maps in Vivado
+      only when the whole wide row is written under one enable, as in
+      UG901's asymmetric RAM: a write that can also update one narrow
+      entry of the row is built from registers (`penumbra3_l1_store`
+      keeps word columns instead).
+    - **Read-during-write:** where a read could meet a write at one
+      address, yosys emulates the RTL's result with a delayed write and
+      a mux after the block RAM, and only exclusive enables rule that
+      out. Gate one enable by the other where the exclusion is by
+      enable. Where it is by address, mark the memory `no_rw_check` and
+      assert beside it, on the same enables and addresses, that no
+      entry is read and written in one cycle (`penumbra3_l1_store`);
+      never for an exclusion another module keeps.
     - **LUT RAM:** one write port; the read may be combinational. A
       second independent read port gets its own copy of the memory, as
       the regfile's `regs_a`/`regs_b` do.

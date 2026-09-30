@@ -34,7 +34,12 @@ module penumbra3_tlb_verdict
     output logic [31:0]           o_paddr,
     output logic                  o_cacheable,
     output logic                  o_hit,
-    output logic                  o_prot_fault   // matched but access denied
+    output logic                  o_prot_fault,  // matched but access denied
+
+    // The main-TLB way that supplies the frame, one-hot (none on a main
+    // miss). An L1 compares its tags against every way's frame in parallel
+    // with the match and lets this pick, instead of waiting for o_paddr.
+    output logic [WAYS-1:0]       o_way_sel
 );
 
     // ── Per-way match: V && VPN equal && (global || ASID equal) ──
@@ -57,6 +62,12 @@ module penumbra3_tlb_verdict
         main_pte = i_pte_word[0];
         for (int w = WAYS - 1; w >= 0; w--)
             if (way_match[w]) main_pte = i_pte_word[w];
+    end
+
+    always_comb begin
+        o_way_sel = '0;
+        for (int w = WAYS - 1; w >= 0; w--)
+            if (way_match[w]) o_way_sel = WAYS'(1) << w;
     end
 
     // Pinned-hit-wins: select the pinned entry's PTE when it hit, else the

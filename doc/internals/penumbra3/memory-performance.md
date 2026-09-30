@@ -704,7 +704,11 @@ checked by synthesis (yosys `synth_ecp5`):
   yosys maps it natively to asymmetric ports (36-bit write, 9-bit read),
   4 EBRs a way for up to 512 lines — 8 KB a way — so the word select
   happens inside the EBR and no LUT joins the hit path. 8 KB of L1 costs
-  the same EBRs as 4 KB in this shape.
+  the same EBRs as 4 KB in this shape. Vivado maps it only when the
+  whole row is written under one enable, and a store hit writes one
+  word of it, so P0.5's probe built its L1s from registers there (93K
+  LUTs, 129K flip-flops); `penumbra3_l1_store` keeps word columns, with
+  a 4:1 word select beside the tag compare.
 - **Read-during-write emulation.** For any BRAM whose read and write
   could coincide, yosys adds a bypass that returns the old data: flops
   capturing the write, and a mux on the EBR output. On gen2's L1 tag
@@ -714,10 +718,13 @@ checked by synthesis (yosys `synth_ecp5`):
   into the RTL — the write gated off while a read launches, or the read
   enable gated by a registered write strobe — lets yosys prove the
   collision cannot happen and drop the bypass (1 LUT and 16 LUTs
-  respectively). The `no_rw_check` attribute removes it too, but only by
-  telling synthesis to assume what it cannot check, so a broken
-  invariant would silently diverge hardware from simulation; it is not
-  used.
+  respectively). yosys credits only exclusive enables: in
+  `penumbra3_l1_store`, suppressing a launch's read only when it meets
+  the store's address left the emulation in place (1106 flops, 1830
+  LUTs for an 8 KB 2-way L1-D), and `no_rw_check` on those lanes, with
+  an assertion checking the same exclusion, removed it (514 flops, 1525
+  LUTs) — the same as writing each store only in a cycle with no
+  launch, without holding stores back.
 
 With the line in one register at the L2's output, the fill sequencer's
 word walk disappears; the arbiter routes a line and a done strobe.

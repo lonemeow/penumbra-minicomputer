@@ -39,6 +39,12 @@ module penumbra3_translate
     output logic                    o_miss_fault,
     output logic                    o_prot_fault,
 
+    // Main-TLB frame candidates: each way's frame number straight off the
+    // registered set, and the one-hot way the match selects. A physically
+    // tagged L1 compares against every way's frame while the match resolves.
+    output logic [WAYS-1:0][19:0]   o_way_frame,
+    output logic [WAYS-1:0]         o_way_sel,
+
     // Registered set contents (both ways) -- the MMU taps these for sysreg TLB
     // read-back, driving the read index to the addressed set when no access is
     // translating; the registered output lands one cycle later, on the RDSYS
@@ -129,9 +135,14 @@ module penumbra3_translate
         .o_paddr           (o_paddr),
         .o_cacheable       (o_cacheable),
         .o_hit             (o_hit),
-        .o_prot_fault      (o_prot_fault)
+        .o_prot_fault      (o_prot_fault),
+        .o_way_sel         (o_way_sel)
     );
 
     assign o_miss_fault = lookup_en_q && !o_hit;
+
+    always_comb
+        for (int w = 0; w < WAYS; w++)
+            o_way_frame[w] = rd_pte_word[w][31:12];
 
 endmodule

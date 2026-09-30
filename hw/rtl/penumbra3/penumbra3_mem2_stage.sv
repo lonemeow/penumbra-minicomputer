@@ -228,6 +228,11 @@ module penumbra3_mem2_stage
                        : mem2_is_store              ? BCAUSE_STORE
                        :                              i_bcause;
 
+    // Only the valid bit carries the commit decision. The bundle and payload
+    // load whenever MEM2 advances, and every consumer qualifies them with
+    // o_wb_valid, so their ~350 enables stay off the verdict: the load-miss
+    // decision behind them waits on the TLB permission check, cacheability
+    // and the L1 hit.
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             o_wb_valid  <= 1'b0;
@@ -235,10 +240,10 @@ module penumbra3_mem2_stage
         end else if (~i_hold) begin
             o_wb_valid  <= i_bubble ? 1'b0 : mem2_commits;
             o_wb_bcause <= i_bubble ? BCAUSE_FLUSH : mem2_bcause;
-            if (~i_bubble & mem2_commits) begin
-                o_wb_bundle  <= i_bundle;
-                o_wb_payload <= wb_payload_d;
-            end
+        end
+        if (~i_hold) begin
+            o_wb_bundle  <= i_bundle;
+            o_wb_payload <= wb_payload_d;
         end
     end
 

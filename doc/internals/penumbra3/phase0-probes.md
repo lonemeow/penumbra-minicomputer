@@ -74,11 +74,14 @@ Each timing probe is an **integration variant** top under
 `FPGA_TOPS` table so an invalid tuple is a hard error:
 
 ```
-ulx3s_penumbra3_probe_loadcomplete_top.sv   (P0.1)
-ulx3s_penumbra3_probe_decodeissue_top.sv    (P0.2)
-ulx3s_penumbra3_probe_memtlb_top.sv         (P0.3)
-ulx3s_penumbra3_probe_busburst_top.sv       (P0.4, timing portion)
+ulx3s_penumbra3_probe_issue_top.sv    (P0.1)
+ulx3s_penumbra3_probe_decode_top.sv   (P0.2)
+ulx3s_penumbra3_probe_memtlb_top.sv   (P0.3)
+ulx3s_penumbra3_probe_l1tag_top.sv    (P0.5)
 ```
+
+P0.4's question is functional, so it is a testbench
+(`penumbra3_bus_master_test`) rather than a top.
 
 Each composes `SRC_COMMON` + the gen3 probe modules (`SRC_CORE_penumbra3`,
 filtered to the boundary cluster) + the board shell — but **not**
@@ -96,6 +99,13 @@ existing `i_sdram_clk` at 4× convention) against the real `io/sdram` stack —
 its primary question is functional (deadlock), not timing.
 
 ## Pass bar and margin policy
+
+The target is 37.5 MHz on the ECP5; the 50 MHz budgets below are a margin
+heuristic, not a gate. They exist so that no cone is already marginal at
+37.5 MHz before the rest of the machine and its peripherals share the die.
+A probe that misses them is read as slack at 37.5 MHz (26.7 ns): a few
+percent is marginal and gets fixed before the design builds on it; around
+20 % is not.
 
 A probe **passes** only with margin, because it under-represents routing:
 
@@ -226,7 +236,7 @@ closes trivially. **On fail (deadlock):** decide **now** — fix the shared
 or change the gen3 burst pattern so the adapter never sees a gapped stream.
 Never a "work around in the core later."
 
-### P0.5 — physical-tag compare behind the TLB verdict (proposed)
+### P0.5 — physical-tag compare behind the TLB verdict
 
 Added after the other four passed. P0.3 measured the TLB's verdict alone;
 the L1 compares its tags against the frame that verdict selects, in the
@@ -240,18 +250,22 @@ decode-on-enqueue FIFO write in the cycle, and the pre-decode's redirect
 still reaches the next fetch PC.
 
 **Build.**
-- The P0.3 translate path unchanged: registered BRAM TLB output, 2-way
-  match, pinned override.
-- The L1's per-way tag BRAMs, registered, at each side's target way count
-  (4 for a 16 KB L1, 2 for 8 KB; IF2 may take 4 where MEM2 keeps 2), and
-  the per-way data BRAMs.
+- The real MMU: both BRAM TLB copies, the pinned TLB and bypass, each port
+  exporting its frame candidates — the bypass-or-pinned frame, registered
+  at launch, and each main-TLB way's — with a one-hot select.
+- The L1's per-way tag BRAMs and word-column data BRAMs (a line written
+  in one cycle, a store writing one column's bytes), registered, at the
+  ECP5's 8 KB 2-way on both sides.
 - The compare in the shape the design intends — each cache way against
-  every candidate frame (both TLB ways and the pinned result), the TLB
-  match selecting — then the way mux into the registered load result; for
-  IF2, into the word→bundle decode and the FIFO slot write, and into the
-  pre-decode redirect: the transfer's kind from the word, the return
-  ring's top or PC plus offset, and the next-PC mux
-  ([branch prediction](./branch-prediction.md#open)).
+  every candidate frame, the select picking — then, for MEM2, the way mux
+  into the real MEM2 stage's sub-word extract, MEM2/WB register and
+  load-completion buffer, and a registered store write. For IF2, the way
+  select of bundles each way decoded from its own word into the real
+  fetch FIFO, and the pre-decode redirect: the transfer's kind from each
+  way's word, the direction counter, the return ring's top or PC plus
+  offset, and the next-PC mux
+  ([branch prediction](./branch-prediction.md#design)). The fetch control
+  replays a miss rather than holding IF1 on it.
 - Read/write exclusivity written into every array's RTL, so the netlist
   carries no read-during-write bypass after the EBRs.
 
@@ -267,6 +281,46 @@ L1 size (at the line-wide fill's cost 8 KB 2-way keeps 39–55 % of what
 side, so MEM2 fails more cheaply than IF2), or move the way select a
 cycle later — a structural choice for the board's L1, made before the
 L1 is written.
+
+**Result** (2026-09-30, `ulx3s_penumbra3_probe_l1tag_top`, seeds 1–5):
+42.5, 44.9, 43.4, 44.9 and 43.6 MHz — 12–17 % slack at 37.5 MHz, short of
+the 50 MHz budget. The two sides take turns as the limit, each the cone
+under test: MEM2's is 5.6 ns of Tco, about 7.5 of TLB match, 2 of
+candidate compare and way select, then the sub-word extract and the
+result mux into MEM2/WB; IF2's runs the same compare into the predicted
+redirect and the PC and IF1/IF2 register enables. The candidate compare
+costs about 2 ns after the TLB match. On the Nexys Video's Artix-7 (out of
+context, Vivado 2025.2) the same probe closes at 86 MHz, its worst path
+the IF2 enqueue in 9 logic levels, with every memory in block RAM: 29
+RAMB18, 3.9K LUTs, 3.2K flip-flops.
+
+The L1 data is in word columns, which both tools build as block RAM.
+Byte lanes read a word at a time, with the select inside the EBR, closed
+at 44.3–49.6 MHz on the same seeds for about 410 fewer LUTs, but Vivado
+built them from registers (93K LUTs and 129K flip-flops for the probe),
+since a store writes one word of a lane's row. Getting to either took
+three changes to what the first build measured at 39.7–40.1 MHz:
+
+- **Decode per way.** Decoding the way-muxed word left about 12 LUT levels
+  of decode behind the TLB match and the compare (24.9 ns). Each way now
+  decodes its own word beside them and the hit selects a bundle, for
+  about 220 LUTs.
+- **The redirect ignores the fault.** Qualifying it with the translation
+  fault and the cacheable hit put P0.3's whole permission cone in front of
+  the PC. A faulting slot traps and a missing one replays, both from
+  registered state, so the redirect needs only a hit and FIFO room; the
+  return stack, which must not take a wrong-path push or pop, updates a
+  cycle after its transfer enqueues.
+- **MEM2/WB's enable leaves the verdict.** Gating the whole payload
+  register's load on the commit decision put the permission check,
+  cacheability and the hit on about 350 enables. Only the valid bit now
+  carries the commit.
+
+A miss holding IF1 in the cycle it resolves, rather than replaying, never
+became the worst path, so the replay contract's timing benefit is not yet
+shown. Yosys's read-during-write emulation on the L1-D against
+`no_rw_check` did not move fmax outside the seed spread; it costs about 600
+flops and 300 LUTs.
 
 ## Recommended order — fail fast
 

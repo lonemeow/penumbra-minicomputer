@@ -375,6 +375,10 @@ MODULE_TESTS = \
     penumbra3_irq \
     penumbra3_core \
     penumbra3_mmu \
+    penumbra3_l1_lookup_test:tb_penumbra3_l1_lookup \
+    penumbra3_predecode \
+    penumbra3_return_stack \
+    penumbra3_direction_table \
     video_pattern_test \
     video_tmds_encoder \
     video_serializer \
@@ -1265,6 +1269,7 @@ XDC = $(if $(XDC_$(TOP)),$(XDC_$(TOP)),$(XDC_$(TOP_MODULE)))
 FPGA_TOPS = ulx3s_penumbra1_top ulx3s_penumbra2_probe_top ulx3s_penumbra2_top \
             ulx3s_penumbra2_5_top ulx3s_penumbra3_probe_memtlb_top \
             ulx3s_penumbra3_probe_issue_top ulx3s_penumbra3_probe_decode_top \
+            ulx3s_penumbra3_probe_l1tag_top \
             nexysvideo_penumbra2_top nexysvideo_penumbra2_5_top
 
 FPGA_SRC_ulx3s_penumbra1_top = $(SRC_COMMON) $(SRC_CORE_penumbra1) \
@@ -1309,6 +1314,13 @@ FPGA_SRC_ulx3s_penumbra3_probe_issue_top = $(SRC_COMMON) $(SRC_CORE_penumbra3) \
 # (make timing BOARD=ulx3s CORE=penumbra3 VARIANT=probe_decode).
 FPGA_SRC_ulx3s_penumbra3_probe_decode_top = $(SRC_COMMON) $(SRC_CORE_penumbra3) \
                                $(FPGA_RTL)/ulx3s/ulx3s_penumbra3_probe_decode_top.sv
+
+# gen3 Phase-0 probe P0.5: the L1 physical-tag compare chained behind the
+# BRAM TLB verdict, on both sides -- MEM2 into the load result, IF2 into
+# the fetch FIFO and the predicted redirect into the PC
+# (make timing BOARD=ulx3s CORE=penumbra3 VARIANT=probe_l1tag).
+FPGA_SRC_ulx3s_penumbra3_probe_l1tag_top = $(SRC_COMMON) $(SRC_CORE_penumbra3) \
+                               $(FPGA_RTL)/ulx3s/ulx3s_penumbra3_probe_l1tag_top.sv
 
 # Text-video bring-up probe: the sim-verified output chain in front of
 # the video PLL, ODDRX1F cells, and GPDI pads — no CPU or bus, so it is

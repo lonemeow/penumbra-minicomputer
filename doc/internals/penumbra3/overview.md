@@ -332,9 +332,8 @@ What that means for the ECP5:
 2. **The store buffer is the largest staged lever.**
 3. **Branch prediction is cheap for what it recovers:** a 1K bimodal
    table and a plain 4–8-deep ring behind the IF2 pre-decode; gshare,
-   bigger tables and deeper rings buy nothing. Whether it also needs a
-   target buffer for direct transfers depends on the IF2 redirect
-   closing in a cycle, which P0.5 times.
+   bigger tables and deeper rings buy nothing. The IF2 redirect closes
+   in its cycle (P0.5), so direct transfers need no target buffer.
 4. **Everything else saves about 150 per 1000 or less,** and the
    workloads disagree on the order: the prediction buffer serves the
    kernel paths, stream prefetch serves Doom's data, and a 128 KB L2
@@ -383,10 +382,11 @@ wired with realistic fanout on both sides of the boundary (not bare cells).
 Full per-probe specs — RTL to build, exact path to measure, pass threshold,
 decision-on-fail — are in [`phase0-probes.md`](./phase0-probes.md).
 
-The bars are 50 MHz ones: a non-BRAM cone must also close at ~65 MHz.
-That is what 37.5 MHz on the full top asks of a bare cone, at the
-probe-to-full ratio gen2 measured (~55 vs ~31 MHz); the Phase-1
-full-top read calibrates the ratio for gen3.
+The bars are 50 MHz ones, a margin heuristic rather than a gate: they
+keep a cone from being marginal at 37.5 MHz before the rest of the
+machine shares the die, given the probe-to-full drop gen2 measured
+(~55 vs ~31 MHz). A probe short of them is read as slack at 37.5 MHz;
+the Phase-1 full-top read calibrates the drop for gen3.
 
 | Probe | What it proves |
 |---|---|
@@ -394,7 +394,7 @@ full-top read calibrates the ratio for gen3.
 | P0.2 registered decode→issue | `pre-decoded FIFO slot → regmap → scoreboard/forward compare → issue` starts from flops and fits |
 | P0.3 split MEM + BRAM TLB | MEM1-launch / MEM2-verdict absorbs the 5.8 ns BRAM Tco + tag/permission compare in the period |
 | P0.4 CPU↔bus burst + SDRAM survival | registered line-transaction into the **real `sdram_bus_adapter`** streams without the gapped-read deadlock |
-| P0.5 physical-tag compare *(proposed, added after exit)* | the L1's tag compare at the board's associativity, chained behind the BRAM TLB verdict, still closes in MEM2 and IF2 |
+| P0.5 physical-tag compare *(added after exit)* | the L1's tag compare at the board's associativity, chained behind the BRAM TLB verdict, closes in MEM2 and IF2 with 12–17 % slack at 37.5 MHz |
 
 **Gate rule (the anti-dead-end rule).** If a probe is structurally short of
 its bar, decide *at that probe* — redesign the boundary, add a stage, or

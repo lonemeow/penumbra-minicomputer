@@ -169,25 +169,35 @@ freeze is unexercised).
 **Next, in order** -- the shapes `doc/internals/penumbra3/overview.md`
 ranks first ("Levers ranked by measured benefit"):
 
-1. **The P0.5 probe** (`doc/internals/penumbra3/phase0-probes.md`,
-   "P0.5 -- physical-tag compare behind the TLB verdict"), at the
-   associativity each board's L1 size needs, per side -- IF2 may take
-   4 ways where MEM2 keeps 2 (evidence:
-   `doc/internals/penumbra3/memory-performance.md`, "L1 geometry").
-   P0.3 timed the TLB verdict alone, not the L1 compare chained behind
-   it. On IF2 it also times the pre-decode redirect into the next PC,
-   which decides whether branch prediction needs a target buffer for
-   direct transfers (`doc/internals/penumbra3/branch-prediction.md`).
-2. **The L1 caches:** passive -- index->tag/data plus a line-wide
-   fill-install, no embedded FSM, since miss orchestration is in
-   `load_complete` -- and 8 KB 2-way on the ECP5. **Open decision:**
-   the store write-through path is unbuilt -- `mem2_stage` writes the
-   L1 copy (`o_dcache_we`) but issues no write-through to L2/memory and
-   does not block (stores retire via `mem2_commits`).
-3. **The uncore pipeline:** L2 -- write-through and posted, a look-up
+1. **The L1 caches:** passive -- `penumbra3_l1_store` and
+   `penumbra3_l1_match` plus replacement, the enable and the sysreg
+   interface, no embedded FSM, since miss orchestration is in
+   `load_complete` -- and 8 KB 2-way on the ECP5. P0.5 settled the
+   lookup and the IF2 shape (`doc/internals/penumbra3/phase0-probes.md`,
+   "P0.5 -- physical-tag compare behind the TLB verdict"); the real IF2
+   takes it from the probe top: each way's word decoded and pre-decoded
+   beside the compare, the hit selecting. **The fetch side moves to
+   replay** (`doc/internals/penumbra3/timing-outline.md`, "4. Caches"):
+   today IF2 reads busy low as word valid and IF1 folds busy into its
+   hold and the block RAM enable, which puts the I-cache hit on that
+   cone. Under replay a miss sets a flop that steers IF1 back to the
+   missed PC next cycle, and IF1 holds only on FIFO-full or a
+   registered fill; an uncached fetch, which never hits, then needs its
+   word delivered to the replayed slot. P0.5 never saw the hold form
+   as its worst path, so the full-top read is where replay has to show
+   its worth. **Open decisions:**
+   - the store write-through path is unbuilt -- `mem2_stage` writes
+     the L1 copy (`o_dcache_we`) but issues no write-through to
+     L2/memory and does not block (stores retire via `mem2_commits`);
+   - the store-hit hazards: the L1 writes a store hit a cycle after it
+     resolves, so a load one behind reads the word before the store
+     lands, and a load two behind reading that word finds the way
+     invalid (`penumbra3_l1_store`). That miss must re-read, not refill
+     the line into another way.
+2. **The uncore pipeline:** L2 -- write-through and posted, a look-up
    every cycle, the line-wide transfer with fill-through -- with the
    I/D select and the fill folded in, driving `bus_master`.
-4. **`machine_penumbra3` and `ulx3s_penumbra3_top`.**
+3. **`machine_penumbra3` and `ulx3s_penumbra3_top`.**
 
 **Before the TLB store's geometry is fixed:** the proposed 256x2 needs
 `MMU_CONFIG` version 2 and a wider `TLB_INDEX` in `doc/system/mmu.md`

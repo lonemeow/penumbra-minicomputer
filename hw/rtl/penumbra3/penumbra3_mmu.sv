@@ -48,6 +48,8 @@ module penumbra3_mmu
     output logic        o_i_cacheable,
     output logic        o_i_fault,          // any translation fault (miss | prot)
     output logic [31:0] o_i_fault_status,
+    output logic [WAYS:0][19:0] o_i_frame,  // frame candidates (see the resolve below)
+    output logic [WAYS:0]       o_i_frame_sel,
 
     // ── Data-side translate (launch / resolve) ───────────────────
     input  logic        i_d_lookup_en,
@@ -60,6 +62,8 @@ module penumbra3_mmu
     output logic        o_d_hit,
     output logic        o_d_miss_fault,
     output logic        o_d_prot_fault,
+    output logic [WAYS:0][19:0] o_d_frame,
+    output logic [WAYS:0]       o_d_frame_sel,
 
     // ── Commit-time fault latch (core drives at WB) ──────────────
     input  logic        i_fault_commit,
@@ -207,6 +211,8 @@ module penumbra3_mmu
     logic                d_main_cacheable, d_main_hit, d_main_prot;
     logic                i_main_cacheable, i_main_hit, i_main_prot;
     logic [WAYS-1:0][31:0] d_rb_vpn, d_rb_pte;
+    logic [WAYS-1:0][19:0] d_way_frame, i_way_frame;
+    logic [WAYS-1:0]       d_way_sel, i_way_sel;
 
     penumbra3_translate #(.SETS(SETS), .WAYS(WAYS)) u_d (
         .i_clk             (i_clk),
@@ -224,6 +230,8 @@ module penumbra3_mmu
         .o_hit             (d_main_hit),
         .o_miss_fault      (/* recomposed below with pinned/bypass */),
         .o_prot_fault      (d_main_prot),
+        .o_way_frame       (d_way_frame),
+        .o_way_sel         (d_way_sel),
         .o_rd_vpn_word     (d_rb_vpn),
         .o_rd_pte_word     (d_rb_pte),
         .i_wr_en           (wr_en),
@@ -250,6 +258,8 @@ module penumbra3_mmu
         .o_hit             (i_main_hit),
         .o_miss_fault      (/* recomposed below */),
         .o_prot_fault      (i_main_prot),
+        .o_way_frame       (i_way_frame),
+        .o_way_sel         (i_way_sel),
         .o_rd_vpn_word     (/* read-back uses the D-copy */),
         .o_rd_pte_word     (),
         .i_wr_en           (wr_en),            // shared fan-out: same install to both copies
@@ -329,6 +339,27 @@ module penumbra3_mmu
                             : i_prot ? compose_fault_status(i_user_q, ACC_EXEC, FAULT_PROT)
                             :          32'b0;
 
+    // ── Frame candidates (both ports) ────────────────────────────
+    // The frame o_*_paddr carries, split so a physically tagged L1 can
+    // compare against all of them while the main-TLB match resolves:
+    // candidate 0 is the frame bypass or a pinned hit supplies, both
+    // registered at launch and so known early in the resolve cycle; the
+    // rest are the main-TLB ways' frames. The one-hot select follows the
+    // same bypass > pinned > main priority, and is empty on a miss.
+    logic d_early, i_early;
+    assign d_early = d_bypass_q | d_phit_q;
+    assign i_early = i_bypass_q | i_phit_q;
+
+    assign o_d_frame[0]  = d_bypass_q ? d_vaddr_q[31:12] : d_ppaddr_q[31:12];
+    assign o_i_frame[0]  = i_bypass_q ? i_vaddr_q[31:12] : i_ppaddr_q[31:12];
+    assign o_d_frame_sel = {d_way_sel & {WAYS{~d_early}}, d_early};
+    assign o_i_frame_sel = {i_way_sel & {WAYS{~i_early}}, i_early};
+    always_comb
+        for (int w = 0; w < WAYS; w++) begin
+            o_d_frame[w + 1] = d_way_frame[w];
+            o_i_frame[w + 1] = i_way_frame[w];
+        end
+
     // ── Sysreg read response (one cycle after the RDSYS launch) ──
     logic [31:0] tlb_rb_vpn, tlb_rb_pte;
     assign tlb_rb_vpn = idx_q[6] ? pin_read_vpn : d_rb_vpn[idx_q[5]];
@@ -356,6 +387,22 @@ module penumbra3_mmu
     always_comb
         assert (!(o_d_miss_fault && o_d_prot_fault))
             else $error("penumbra3_mmu: D miss and prot asserted together");
+
+    // On a lookup, the frame candidates select exactly the frame the paddr
+    // carries.
+    always_comb
+        assert ($onehot0(o_d_frame_sel) && $onehot0(o_i_frame_sel))
+            else $error("penumbra3_mmu: frame select not one-hot");
+    for (genvar gk = 0; gk <= WAYS; gk++) begin : g_frame_check
+        always_comb begin
+            assert (i_rst || !d_lookup_q || !o_d_frame_sel[gk]
+                    || o_d_frame[gk] == o_d_paddr[31:12])
+                else $error("penumbra3_mmu: D frame candidate disagrees with paddr");
+            assert (i_rst || !i_lookup_q || !o_i_frame_sel[gk]
+                    || o_i_frame[gk] == o_i_paddr[31:12])
+                else $error("penumbra3_mmu: I frame candidate disagrees with paddr");
+        end
+    end
 
     /* verilator lint_on PINCONNECTEMPTY */
 endmodule

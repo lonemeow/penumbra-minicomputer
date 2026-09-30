@@ -157,6 +157,8 @@ module penumbra3_mem2_stage_test
         .o_hit             (tr_hit),
         .o_miss_fault      (tr_miss_fault),
         .o_prot_fault      (tr_prot_fault),
+        .o_way_frame       (),               // L1 frame candidates, unused here
+        .o_way_sel         (),
         .o_rd_vpn_word     (),               // read-back tap, unused here
         .o_rd_pte_word     (),
         .i_wr_en           (i_tlb_wr_en),

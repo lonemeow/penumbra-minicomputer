@@ -23,7 +23,7 @@ A redirect is priced beyond the transfer's own issue cycle:
 | Where | Cycles | Why |
 |---|---|---|
 | Fetch, from a target buffer | 1 | A block-RAM read beside IF1 answers in IF2: one discarded fetch, as gen2.5's predicted taken branch costs |
-| IF2 pre-decode | 1 | The same stage; an estimate until its path is timed ([open](#open)) |
+| IF2 pre-decode | 1 | The same stage; the redirect closes in the cycle ([design](#design)) |
 | EX | 4 | gen2.5's unpredicted taken branch ([instruction timing](../../system/instruction-timing.md#control-transfers)) |
 
 The counts are exact for the architectural stream; the prices are not.
@@ -154,21 +154,23 @@ fetch FIFO, where the back-end stall does not reach.
 - **A 1K-entry bimodal table** of two-bit counters, read beside IF1 and
   used in IF2, trained off the fetch loop.
 - **A plain return-stack ring,** 4–8 deep, pushed by calls and popped
-  by returns in IF2, with no empty check.
-- **A target buffer** only as the IF2 redirect's timing requires: a
-  small indirect buffer when the redirect takes one cycle, a buffer
-  over direct transfers too when it takes two.
+  by returns as IF2 enqueues them, with no empty check. It updates a
+  cycle later, off the redirect's path; a return enqueued the cycle
+  after its call reads the ring before the push.
+- **The redirect waits on no verdict but the hit.** Each way pre-decodes
+  its own word beside the TLB match and the tag compare, and the way hit
+  selects; the translation fault and cacheability stay off it, since a
+  faulting slot traps and a missing one replays anyway.
+- **No target buffer for direct transfers.** The IF2 redirect closes in
+  its cycle at 37.5 MHz with 12–17 % slack
+  ([P0.5](./phase0-probes.md#p05--physical-tag-compare-behind-the-tlb-verdict)),
+  so a buffer adds only indirect targets: 3–15 cycles per 1000, a
+  measure-driven option.
 - **EX verifies every prediction** and redirects on any mismatch, so no
   predictor structure has to be right, only cheap.
 
 ## Open
 
-- **The IF2 redirect path.** It chains after the fetched word — tag
-  compare, way select, pre-decode, then the stack's top or PC plus
-  offset into the next PC — so it rides the IF2 cone
-  [P0.5](./phase0-probes.md#p05--physical-tag-compare-behind-the-tlb-verdict-proposed)
-  times. Whether it closes in the cycle decides between the two
-  designs above.
 - **The stream without refills.** The model ran under gen2.5's 32×2
   TLB, so the refill handler's branches are in the counts; a 256×2 TLB
   takes most of them out.

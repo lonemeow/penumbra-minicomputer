@@ -118,6 +118,8 @@ module ulx3s_penumbra3_probe_memtlb_top (
         .o_hit             (hit),
         .o_miss_fault      (miss_fault),
         .o_prot_fault      (prot_fault),
+        .o_way_frame       (),
+        .o_way_sel         (),
         .o_rd_vpn_word     (),
         .o_rd_pte_word     (),
         .i_wr_en           (wr_en),
