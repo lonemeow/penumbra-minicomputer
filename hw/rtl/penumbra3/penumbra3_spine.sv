@@ -414,8 +414,9 @@ module penumbra3_spine
     // ════════════════════════════════════════════════════════════
     // EX -- execute (ALU, forwarding, flags, branch, divmul, drain-commit)
     // ════════════════════════════════════════════════════════════
-    // Operand forward sources: MEM2-resolved (two-ahead / load-use) from
-    // mem2.o_fwd; the MEM2/WB register (three-ahead) from the mem2wb wires.
+    // Operand forward sources: two-ahead from mem2.o_fwd (results computed
+    // before MEM2); three-ahead, loads and sysreg reads included, from the
+    // MEM2/WB register.
     // Flag forward sources: the MEM1/MEM2 producer and the MEM2/WB producer.
     penumbra3_ex_stage u_ex (
         .i_clk(i_clk), .i_rst(i_rst),

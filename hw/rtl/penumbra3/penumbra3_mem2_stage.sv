@@ -63,7 +63,7 @@ module penumbra3_mem2_stage
     output logic [31:0]           o_complete_value,
     output logic                  o_complete_fault,
 
-    // -- MEM2->EX forward source (EX's load-use / two-ahead leg) --
+    // -- MEM2->EX forward source (EX's two-ahead leg) -------------
     output logic [31:0]           o_fwd_result,
     output logic [SB_IDX_W-1:0]   o_fwd_dst,
     output logic                  o_fwd_we,
@@ -198,13 +198,17 @@ module penumbra3_mem2_stage
     assign o_dcache_byte_en = i_byte_en;
     assign o_dcache_we      = mem2_is_store & ~mem2_fault & mem2_fire;
 
-    // MEM2->EX forward (EX's two-ahead / load-use leg): a resolved,
-    // non-faulting, committing result. A missing load is not yet resolved, so
-    // mem2_commits already excludes it.
-    assign o_fwd_result = wb_value;
+    // MEM2->EX forward (EX's two-ahead leg): a result that entered MEM2
+    // already computed, so the leg starts from the MEM1/MEM2 register. A
+    // load's or sysreg read's value resolves here, behind a block RAM read
+    // and the tag compare; carried on into EX's operand mux and ALU, that
+    // would make one cycle of the translate, the cache and the add, so
+    // those forward from the MEM2/WB register instead.
+    assign o_fwd_result = i_payload.value;
     assign o_fwd_dst    = i_payload.phys_dst;
     assign o_fwd_we     = i_payload.phys_dst_we;
-    assign o_fwd_valid  = mem2_commits & ~mem2_fault & i_payload.phys_dst_we;
+    assign o_fwd_valid  = i_valid & ~mem2_is_load & ~mem2_is_rdsys & ~mem2_fault
+                        & i_payload.phys_dst_we;
 
     // -- MEM2/WB register -----------------------------------------
     // Assemble the WB payload from the carried payload, overriding value (the

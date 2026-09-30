@@ -235,11 +235,11 @@ Phase-1's gating checkpoint is then the **full-top composition timing read**
 
 - *Issue-release broadcasts* -- the operand-value forward network is settled
   (EX sources EX/MEM1, MEM1/MEM2, MEM2/WB; youngest-wins; write-first regfile
-  for the four-deep distance; the MEM1 leg excludes loads/sysreg reads; MEM2
-  exposes `o_fwd_*` for the load-use leg). What remains is a pure spine task:
-  drive ID's `i_fwd*` to release a scoreboard-pending load / sysreg read at the
-  cycle its value becomes forwardable -- gated on the registered `load_pending`,
-  never a live verdict. ID owns only the match today.
+  for the four-deep distance; the MEM1 and MEM1/MEM2 legs exclude loads and
+  sysreg reads, which forward from MEM2/WB). What remains is a pure spine
+  task: drive ID's `i_fwd*` to release a scoreboard-pending load / sysreg read
+  at the cycle its value reaches MEM2/WB -- gated on the registered
+  `load_pending`, never a live verdict. ID owns only the match today.
 - *divmul aux-destination scoreboard bit* -- set path done (`4fa078b`): the
   scoreboard has a second set port, ID regmaps the aux (Rdh) and sets its bit at
   issue; the spine drives the matching clear at the aux writeback.

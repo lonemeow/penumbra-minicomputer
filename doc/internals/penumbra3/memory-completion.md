@@ -41,12 +41,17 @@ a dependent issued too close behind. That hazard is resolved against
 
 - Issuing a load sets its destination's scoreboard bit (a flop).
 - A dependent reads that bit at issue; if the value isn't yet forwardable
-  (MEM2→EX bypass covers the normal distance), it stalls at issue — reading
-  a flop, never the cache verdict.
+  (from the MEM2/WB register), it stalls at issue — reading a flop, never
+  the cache verdict.
 - The bit clears on completion (the cycle the hit resolves, registered).
 
-Load-use distance is ~1–2 cycles with the MEM2→EX bypass; the exact figure
-is pinned in the pipeline-stages spec.
+A load's value forwards from the MEM2/WB register, so a dependent issued
+directly behind it waits 2 cycles. MEM2 forwards only results computed
+before it: a load's word resolves during MEM2, behind the TLB and cache
+block RAM reads and the tag compare, and forwarding it from there would
+carry that cone on through EX's operand mux and ALU in the same cycle.
+Sysreg reads, which resolve in MEM2 the same way, forward from MEM2/WB
+too.
 
 ## Load miss — hold-and-complete
 

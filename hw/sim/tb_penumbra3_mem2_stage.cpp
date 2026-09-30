@@ -33,6 +33,9 @@ static uint32_t enc_m(int L, int sz, int se, int rd) {
     return (2u << 30) | ((L & 1) << 29) | ((sz & 3) << 27) | ((se & 1) << 26)
          | ((rd & 0xF) << 22);
 }
+static uint32_t enc_r(int op, int rd) {
+    return ((op & 0x1F) << 25) | ((rd & 0xF) << 21);
+}
 static void idle(Vpenumbra3_mem2_stage_test* d) {
     d->i_ir = 0; d->i_ea = 0; d->i_phys_dst = 0; d->i_phys_dst_we = 0;
     d->i_fault_pending = 0; d->i_store_data = 0; d->i_valid = 0;
@@ -72,15 +75,24 @@ int main(int argc, char** argv) {
     d->i_valid = 0; d->i_dcache_hit = 1; d->i_dcache_rdata = 0x12345678;
     d->eval();
     check("ldh_no_pending", d->o_load_pending, 0);
-    check("ldh_fwd_valid",  d->o_fwd_valid, 1);          // resolved, forwardable in MEM2
-    check("ldh_fwd_result", d->o_fwd_result, 0x12345678);
-    check("ldh_fwd_dst",    d->o_fwd_dst, 3);
+    check("ldh_no_fwd",     d->o_fwd_valid, 0);          // forwards from MEM2/WB, not MEM2
     tick(d); d->eval();                        // B -> C
     check("ldh_wb_valid",  d->o_wb_valid, 1);
     check("ldh_wb_class",  d->o_wb_op_class, OPC_LOAD);
     check("ldh_wb_value",  d->o_wb_value, 0x12345678);
     check("ldh_wb_dst",    d->o_wb_phys_dst, 3);
     check("ldh_wb_nofault", d->o_wb_fault_pending, 0);
+
+    // ── ALU result: forwarded from MEM2 as it entered ──
+    idle(d);
+    d->i_ir = enc_r(0 /* ADD */, 4); d->i_ea = 0xCAFE0010;   // the carried result
+    d->i_phys_dst = 4; d->i_phys_dst_we = 1; d->i_valid = 1;
+    d->eval(); tick(d);
+    d->i_valid = 0; d->eval();
+    check("alu_fwd_valid",  d->o_fwd_valid, 1);
+    check("alu_fwd_result", d->o_fwd_result, 0xCAFE0010);
+    check("alu_fwd_dst",    d->o_fwd_dst, 4);
+    tick(d);
 
     // ── Sub-word load hit: byte at offset 2, zero-extended ──
     idle(d);

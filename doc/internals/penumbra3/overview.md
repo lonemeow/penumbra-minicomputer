@@ -99,9 +99,9 @@ graph LR
 | Property | gen3 |
 |---|---|
 | Stages | 7 (IF1, IF2, ID, EX, MEM1, MEM2, WB) + elastic fetch FIFO |
-| Hazards | Full operand forwarding (EX→EX, MEM2→EX) + NZCV flag forwarding; scoreboard interlock for the residual cases |
+| Hazards | Full operand forwarding (EX→EX, MEM2→EX, WB→EX) + NZCV flag forwarding; scoreboard interlock for the residual cases |
 | Branches | Resolve in EX; IF2 pre-decode redirects with a bimodal table and a return-stack ring → 1 bubble on a correct taken prediction; mispredict = registered flush ([branch prediction](./branch-prediction.md)) |
-| Load-use | ≈1–2 cycles with MEM2→EX forwarding (pinned in the pipeline-stages doc) |
+| Load-use | 2 cycles: a load forwards from the MEM2/WB register, never from MEM2's cache read ([memory completion](./memory-completion.md#load-hit--a-registered-load-use-hazard)) |
 | Loads | Single-outstanding, hold-and-complete (no per-op MEM bubble) |
 | divmul | Side FU (reused `common/divmul.sv`), registered completion, dual-write sequenced over two WB cycles |
 | Serializing ops (WRSYS/ERET) | Serialize + registered flush/redirect at commit; default serialize *every* WRSYS |

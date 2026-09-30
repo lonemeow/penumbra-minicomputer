@@ -27,12 +27,13 @@
 // one of three places, youngest first:
 //   - EX/MEM1 (the instruction this stage latched last cycle) -- self-feedback
 //     from o_mem1_*, the same shape penumbra3_flag_bypass uses for its MEM1 leg;
-//   - MEM1/MEM2 (two ahead) -- this is also the load-use bypass path;
-//   - MEM2/WB (three ahead).
+//   - MEM1/MEM2 (two ahead);
+//   - MEM2/WB (three ahead), the first a load or sysreg read reaches.
 // A write-first regfile closes the four-deep distance. A load/sysreg read is
-// NOT forwardable from EX/MEM1 (it has only computed its address there; its
-// value resolves in the back end), so the self-feedback leg excludes them --
-// those are exactly the producers the scoreboard tracks.
+// NOT forwardable from EX/MEM1 (it has only computed its address there) or
+// from MEM1/MEM2 (its value resolves during MEM2, behind the block RAM reads),
+// so both of those legs exclude them -- those are exactly the producers the
+// scoreboard tracks.
 
 module penumbra3_ex_stage
     import penumbra_pkg::*;
@@ -131,8 +132,9 @@ module penumbra3_ex_stage
     //                   Loads and sysreg reads have no value here yet (only an
     //                   address), so they are excluded -- those are exactly the
     //                   scoreboard-tracked producers a dependent stalls on.
-    //   [1] MEM1/MEM2 -- the load-use bypass distance; resolved back-end result.
-    //   [2] MEM2/WB   -- three ahead; resolved back-end result.
+    //   [1] MEM1/MEM2 -- two ahead; MEM2 offers only results computed before
+    //                   it, never a load or sysreg read resolving there.
+    //   [2] MEM2/WB   -- three ahead; the load-use distance.
     // A write-first regfile covers the four-deep distance, so no fourth slot.
     localparam int FWD_N = 3;
 
