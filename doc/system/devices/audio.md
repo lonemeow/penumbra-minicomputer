@@ -11,11 +11,11 @@ registers every device of the class implements, and the state it powers
 up in, after reset. The mandatory core is deliberately small — one
 channel accepting 16-bit signed stereo frames at the device's native
 rate. Everything else — additional channels, per-channel pitch, volume
-control, narrower sample formats, interpolation — is an optional feature
-advertised through a capability flag. A device may add any of them, but
-must always present this interface after reset. Pushed-frame playback is
-the class's identity: a device that synthesizes internally but accepts no
-PCM frames is not a `CLASS_AUDIO` device.
+control, narrower sample formats, interpolation, output-stage status —
+is an optional feature advertised through a capability flag. A device
+may add any of them, but must always present this interface after reset.
+Pushed-frame playback is the class's identity: a device that synthesizes
+internally but accepts no PCM frames is not a `CLASS_AUDIO` device.
 
 The device holds no sample memory the consumer can address. Frames are
 written to a data port and consumed; nothing is stored for replay. This
@@ -45,6 +45,7 @@ how many bits it defines.
 | `0x014` | `IRQ_ENABLE` | R/W   | Interrupt mask, `IRQ_STATUS` layout          |
 | `0x018` | `UNDERRUN`   | R/W1C | Per-channel underrun flags                   |
 | `0x01C` | `MASTER_VOL` | R/W   | Master volume, left and right (optional)     |
+| `0x020` | `STATUS`     | R     | Output-stage readiness (optional)            |
 | `0x100…`| `CHAN[n]`    | R/W   | Per-channel block, `0x20` stride             |
 
 ### Per-channel block (`0x100 + n * 0x20`)
@@ -75,6 +76,9 @@ how many bits it defines.
   `CHAN[n].CTRL.MONO`.
 - Bit [12]: `INTERP` — the device interpolates between source frames when
   `INC` is not unity, selected by `CHAN[n].CTRL.INTERP`.
+- Bit [13]: `STATUS` — the device reports whether its output stage is
+  ready in [`STATUS`](#status-0x020). When clear, the output stage is
+  ready whenever the device is out of reset.
 - Bits [23:16]: `CHANNELS` — number of channels, at least 1 and at most
   32. Channel 0 is the mandated default and is always present. The
   ceiling is what a per-channel bit in a single word allows; the field
@@ -152,6 +156,42 @@ which is otherwise invisible and intermittent.
 Unsigned, `0x0000` silent and `0xFFFF` unity. Applied to the summed mix.
 Present only when `CAP.VOLUME = 1`; reads unity and ignores writes
 otherwise. Resets to unity.
+
+### STATUS (0x020)
+
+- Bit [0]: `BUSY` — the output stage is still being brought up.
+- Bit [1]: `FAULT` — the output stage failed to come up and produces no
+  output.
+
+Remaining bits reserved (read 0). Present only when `CAP.STATUS = 1`: a
+device need not decode offsets it does not implement, so a consumer
+reads this register only after seeing the bit.
+
+Some output stages have to be brought up before they convert anything —
+a codec configured over its own control bus, whose clock must lock
+first, say — and the bring-up can fail. Without this register a failed
+stage looks exactly like a slow one: frames queue, nothing drains, and
+the watermark interrupt never comes. The register turns that silence
+into a condition the consumer can report.
+
+`BUSY` is set from reset until the bring-up ends and clears then,
+whether it succeeded or not; `FAULT` sets when it fails and stays set
+until the device is next reset. A device holds `BUSY` for at most
+100 ms after reset, ending a bring-up that cannot finish in that time in
+`FAULT`, so a consumer that still sees `BUSY` after 100 ms may treat the
+device as faulted.
+
+While either bit is set, the output stage consumes no frames, whatever
+`CTRL.ENABLE` and `CHAN_EN` say: queued frames stay queued and `LEVEL`
+does not rise. Every register still accepts writes, so a consumer may
+queue frames and start channels during bring-up; playback begins when
+`BUSY` clears.
+
+Every bit reads 0 while the output stage works normally, and a bit a
+later revision defines keeps that rule, so `STATUS = 0` is a complete
+test for a consumer that only needs to know whether to proceed. A device
+whose output stage needs no bring-up either reads 0 here or leaves
+`CAP.STATUS` clear; to a consumer the two are the same.
 
 ### CHAN[n].CTRL (+0x00)
 
@@ -314,3 +354,16 @@ control and no volume control serves this flow unchanged.
 A consumer that finds fewer channels than it wants mixes the remainder
 itself and pushes the result to one channel, so the same code runs on
 any conformant device and differs only in how much work it does.
+
+### Output-stage readiness
+
+Before starting playback, typically when it first finds the device, a
+consumer that reports failures rather than waiting on them:
+
+1. Reads `CAP.STATUS`; when clear, the output stage is ready.
+2. Otherwise reads `STATUS` until `BUSY` clears, for at most 100 ms.
+3. Treats a set `FAULT`, or a `BUSY` still set after 100 ms, as a
+   device that will produce no output.
+
+Neither flow above needs these steps. On a stage still coming up it
+starts playing later; on a failed one its frames never drain.
