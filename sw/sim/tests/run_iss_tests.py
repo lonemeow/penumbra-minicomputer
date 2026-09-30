@@ -130,6 +130,8 @@ def store_buffer(stores, drained, waits, waited):
 #   2l/all/bus:   C's store finds both entries taken and waits for A: 11.
 #                 The first load then waits for B and C: 9.
 #   3:4:4:5:      A drains in 5 and the rest in 3: 8, and D 3.
+#   post:         both fills come from memory and need the bus, so posting
+#                 changes nothing: 8l/line/bus/post waits as 8l/line/bus.
 #   8l/merge/bus: the first load waits for A in flight: 10.  B starts after
 #                 that fill and the load from C waits only for it: 4.  C,
 #                 still open, drains once D's store closes it, and the
@@ -151,6 +153,30 @@ SB_WINDOW_LISTED = {
     "sb 2l/all/bus": store_buffer(*SB_LINES, (11, 0, 9, 5), (1,) + SB_FIRST_FILL_WAITS[1:]),
     "sb 8l/all/3:4:4:5": store_buffer(*SB_LINES, (0, 0, 8, 3), SB_FIRST_FILL_WAITS),
     "sb 8l/merge/bus": store_buffer(*SB_LINES, (0, 0, 14, 9), SB_BOTH_FILLS_WAIT),
+    "sb 8l/line/bus/post": store_buffer(*SB_LINES, (0, 0, 19, 5), SB_BOTH_FILLS_WAIT),
+}
+
+# sb_posted.s inside the window, T as in sb_window.s: A completes at T+4
+# and drains from then on, B's store lands at T+5 and C's at T+6; the load
+# at T+7 hits L2 (5 cycles) and the uncached store follows it.
+#   8l/all/bus:        the load waits for A (to T+17), B and C (T+27): 20,
+#                      and the uncached store finds the buffer empty.
+#   8l/line/bus:       the load waits for A in flight: 10.  B drains after
+#                      it, and the uncached store waits for B and C: 9.
+#   8l/all/bus/post:   L2 took A's write by T+6 and B's by T+8; C's L2 write
+#                      ends at T+10, and the load waits for it: 3.  The
+#                      uncached store waits for the bus writes: A, then B
+#                      and C from T+17 to T+27: 11.
+#   8l/line/bus/post:  the load waits only for B's L2 write, to T+8: 1.
+#                      The uncached store at T+14 waits to T+27: 13.
+SB_POSTED_STORES = ((6, 3, 3, 1), (2, 0, 0, 1))
+SB_POSTED_ONE_FILL = (0, (0, 1), (1, 1), (0, 1))     # the load waits; the store does not
+SB_POSTED_BOTH = (0, (0, 1), (1, 1), (1, 1))
+SB_POSTED = {
+    "sb 8l/all/bus": store_buffer(*SB_POSTED_STORES, (0, 0, 20, 0), SB_POSTED_ONE_FILL),
+    "sb 8l/line/bus": store_buffer(*SB_POSTED_STORES, (0, 0, 10, 9), SB_POSTED_BOTH),
+    "sb 8l/all/bus/post": store_buffer(*SB_POSTED_STORES, (0, 0, 3, 11), SB_POSTED_BOTH),
+    "sb 8l/line/bus/post": store_buffer(*SB_POSTED_STORES, (0, 0, 1, 13), SB_POSTED_BOTH),
 }
 SB_WINDOW_CPI2 = {"sb 8l/all/bus": store_buffer(*SB_LINES, (0, 0, 17, 5), SB_FIRST_FILL_WAITS)}
 SB_WINDOW_ARGS = ["+cachemodel=4k/2:4k/2:64k/4", "+model_start=0xFFFF0800",
@@ -240,12 +266,18 @@ CASES = [
     Case("sbmodel cpi", "sb_window.s",
          SB_WINDOW_ARGS + ["+sbmodel=8l/all/bus", "+sbmodel_cpi=2"],
          windows=[("start PC to stop PC", SB_WINDOW_CPI2)]),
+    Case("sbmodel posted write-through", "sb_posted.s",
+         ["+cachemodel=4k/2:1k/1:64k/4", "+model_start=0xFFFF0800", "+model_stop=0xFFFF0900",
+          "+sbmodel=" + ",".join(k[3:] for k in SB_POSTED)],
+         windows=[("start PC to stop PC", SB_POSTED)]),
     Case("sbmodel needs cachemodel", "sb_window.s", ["+sbmodel"],
          error=r"\+sbmodel needs \+cachemodel"),
     Case("sbmodel unknown policy", "sb_window.s", ["+cachemodel", "+sbmodel=8l/some/bus"],
          error=r"unknown policy 'some'"),
     Case("sbmodel bad drain", "sb_window.s", ["+cachemodel", "+sbmodel=8l/all/5:7:9"],
          error=r"neither a preset"),
+    Case("sbmodel unknown option", "sb_window.s", ["+cachemodel", "+sbmodel=8l/all/bus/fifo"],
+         error=r"unknown option '/fifo'"),
 ]
 
 

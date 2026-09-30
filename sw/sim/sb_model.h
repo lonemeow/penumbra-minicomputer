@@ -16,9 +16,15 @@
 // an upper bound.  What served each fetch and load comes from the first
 // hierarchy +cachemodel lists, so the two models run together.
 //
-// The uncore serves one thing at a time — an entry draining, an L1 fill
-// or an uncached access — and never abandons a drain it has started.
-// Each buffer:
+// The uncore has an L2 and a bus, and never abandons a transfer it has
+// started on the bus.  Without posting, a drain holds both for its whole
+// cost, as does every fill and uncached access: one thing at a time.
+// With posting ("/post"), L2 takes an entry's write in POSTED_L2_WRITE
+// cycles and the entry then waits, in order, for its turn on the bus; a
+// fill L2 serves needs only L2, while a fill from memory and an uncached
+// access need both.  A write that has not reached the bus yields to a
+// waiting access, unless the access has to wait for that entry.  Each
+// buffer:
 //
 //  - holds line entries (a line and a byte mask, which stores to that
 //    line merge into) or word entries (one store each);
@@ -28,12 +34,15 @@
 //  - holds its youngest line entry open until a store to another line
 //    arrives, the line is complete, or an access has to wait for it;
 //  - drains oldest first, each entry as one burst over the words from
-//    the first it wrote to the last, at a cost set per burst length;
+//    the first it wrote to the last, at a cost set per burst length,
+//    and frees the entry once the bus write ends;
 //  - makes an L1 fill wait by its policy — "all" for every entry,
 //    "line" for the entries up to the youngest holding the fill's line,
 //    "merge" for none, the fill taking any buffered bytes of its line
 //    from the buffer — and an uncached access wait for every entry,
-//    which keeps it ordered after every earlier store.
+//    which keeps it ordered after every earlier store.  With posting, a
+//    fill L2 serves waits only for those entries' L2 writes; the others
+//    wait for their bus writes, since memory must hold the data first.
 //
 // Only a cacheable store that the enabled L1-D takes enters a buffer;
 // any other store is an uncached access.  The clocks and buffers run
@@ -60,6 +69,10 @@ static constexpr double FILL_FROM_L2     = 5;
 static constexpr double FILL_FROM_MEMORY = 24;
 static constexpr double UNCACHED_ACCESS  = 5;
 
+// Cycles the L2 pipeline takes to accept a line write when write-through
+// is posted: an estimate until the gen3 L2 exists.
+static constexpr double POSTED_L2_WRITE  = 2;
+
 // Drain costs by burst length, one to four words, in CPU cycles at
 // 37.5 MHz through penumbra3_bus_master.  "bus" is the SDRAM stack as it
 // stands: each word its own controller request, paced by the CDC's two
@@ -81,6 +94,7 @@ struct SbConfig {
     bool        lines;       // line entries that merge, else word entries
     SbPolicy    policy;
     uint32_t    drain[4];    // cycles to drain a burst of 1..4 words
+    bool        posted;      // L2 posts write-through to the bus
 };
 
 // ── One store buffer on its own clock ────────────────────────────
@@ -111,7 +125,7 @@ public:
         uint16_t mask = uint16_t(((1u << bytes) - 1) << (pa % LINE_BYTES));
         if (cfg_.lines) {
             for (Entry& e : queue_)
-                if (!e.started && e.line == line) {
+                if (!e.l2_started && e.line == line) {
                     e.mask |= mask;
                     counts_.merged++;
                     if (e.mask == FULL_LINE) close(e);
@@ -121,7 +135,7 @@ public:
             if (!queue_.empty()) close(queue_.back());
         }
         if (queue_.size() == cfg_.entries) {
-            double freed = drain_oldest();
+            double freed = finish_through(1, true);
             if (freed > now_) {
                 counts_.waits[int(Access::Full)] += freed - now_;
                 counts_.waited[int(Access::Full)]++;
@@ -147,9 +161,10 @@ public:
         const char* policy = cfg_.policy == SbPolicy::All  ? "every entry"
                            : cfg_.policy == SbPolicy::Line ? "entries up to their line"
                            :                                 "no entry, merging";
-        fprintf(out, "-- store buffer %s: %u %s entries, fills wait for %s, drain %u/%u/%u/%u cycles\n",
+        fprintf(out, "-- store buffer %s: %u %s entries, fills wait for %s, drain %u/%u/%u/%u cycles%s\n",
                 cfg_.label.c_str(), cfg_.entries, cfg_.lines ? "line" : "word", policy,
-                cfg_.drain[0], cfg_.drain[1], cfg_.drain[2], cfg_.drain[3]);
+                cfg_.drain[0], cfg_.drain[1], cfg_.drain[2], cfg_.drain[3],
+                cfg_.posted ? ", write-through posted" : "");
         const Counts& c = counts_;
         fprintf(out, "  stores: %llu buffered, %llu merged, %llu entries; %llu uncached\n",
                 (unsigned long long)c.stores, (unsigned long long)c.merged,
@@ -185,9 +200,11 @@ private:
         uint32_t line = 0;
         uint16_t mask = 0;           // bytes written, bit per byte of the line
         bool     open = false;       // the youngest line entry, still merging
-        bool     started = false;    // draining: no longer merges
+        bool     l2_started = false; // draining: no longer merges
+        bool     bus_started = false;
         double   ready_at = 0;       // when it could start draining
-        double   done_at = 0;
+        double   l2_start = 0, l2_done = 0;
+        double   done_at = 0;        // the bus write's end, which frees it
     };
 
     struct Counts {
@@ -202,14 +219,14 @@ private:
     }
 
     // An access that needs the uncore: it waits for the entries it has
-    // to, then for whatever is in flight, and then takes the uncore for
-    // its own cycles.
+    // to, then for whatever is in flight on what it uses, and then holds
+    // that for its own cycles.
     void reach_uncore(Access kind, Served served, uint32_t pa) {
         advance(now_);
         size_t n = kind == Access::Uncached ? queue_.size() : must_drain(pa / LINE_BYTES);
-        for (size_t i = 0; i < n; i++) close(queue_[i]);
-        for (size_t i = 0; i < n; i++) drain_oldest();
-        double start = std::max(now_, uncore_free_);
+        bool bus = !cfg_.posted || served != Served::L2;
+        double ready = n ? finish_through(n, bus) : now_;
+        double start = std::max({now_, ready, l2_free_, bus ? bus_free_ : 0.0});
         counts_.reached[int(kind)]++;
         if (start > now_) {
             counts_.waits[int(kind)] += start - now_;
@@ -218,7 +235,9 @@ private:
         now_ = start + (served == Served::L2       ? FILL_FROM_L2
                       : served == Served::Memory   ? FILL_FROM_MEMORY
                       :                              UNCACHED_ACCESS);
-        uncore_free_ = now_;
+        l2_free_ = now_;
+        if (bus) bus_free_ = now_;
+        advance(now_);
     }
 
     // How many entries, oldest first, must finish draining before an L1
@@ -253,36 +272,63 @@ private:
         }
     }
 
-    // Start the drains the uncore could have started by `t`, and retire
-    // the ones finished by then.
+    // Start the writes that could have started by `t`, oldest first,
+    // and retire the entries whose bus writes ended by then.
     void advance(double t) {
-        while (!queue_.empty()) {
-            Entry& head = queue_.front();
-            if (!head.started) {
-                if (head.open) return;
-                double start = std::max(uncore_free_, head.ready_at);
-                if (start > t) return;
-                begin(head, start);
-            }
-            if (head.done_at > t) return;
-            retire_oldest();
+        for (Entry& e : queue_) {
+            if (e.l2_started) continue;
+            if (e.open) break;
+            double start = std::max(l2_free_, e.ready_at);
+            if (start > t) break;
+            begin_l2(e, start);
         }
+        if (cfg_.posted)
+            for (Entry& e : queue_) {
+                if (e.bus_started) continue;
+                if (!e.l2_started || std::max(bus_free_, e.l2_start) > t) break;
+                begin_bus(e);
+            }
+        while (!queue_.empty() && queue_.front().bus_started && queue_.front().done_at <= t)
+            retire_oldest();
     }
 
-    // Run the oldest entry's drain to its end; returns when it ends.
-    double drain_oldest() {
-        Entry& head = queue_.front();
-        if (!head.started) begin(head, std::max(uncore_free_, head.ready_at));
-        double done = head.done_at;
-        retire_oldest();
-        return done;
+    // Start what the oldest `n` entries still need -- their L2 writes,
+    // and with `bus` their bus writes -- and return when the last of
+    // those ends.
+    double finish_through(size_t n, bool bus) {
+        for (size_t i = 0; i < n; i++) {
+            Entry& e = queue_[i];
+            close(e);
+            if (!e.l2_started) begin_l2(e, std::max(l2_free_, e.ready_at));
+        }
+        if (bus && cfg_.posted)
+            for (size_t i = 0; i < n; i++)
+                if (!queue_[i].bus_started) begin_bus(queue_[i]);
+        const Entry& last = queue_[n - 1];
+        return bus ? last.done_at : last.l2_done;
     }
 
-    void begin(Entry& e, double start) {
-        e.started = true;
-        e.done_at = start + cfg_.drain[burst_words(e.mask) - 1];
-        uncore_free_ = e.done_at;
+    // Without posting the whole drain holds L2 and the bus together.
+    void begin_l2(Entry& e, double start) {
+        e.l2_started = true;
+        e.l2_start = start;
+        if (!cfg_.posted) {
+            e.bus_started = true;
+            e.l2_done = e.done_at = start + drain_cycles(e);
+            l2_free_ = bus_free_ = e.done_at;
+            return;
+        }
+        e.l2_done = start + POSTED_L2_WRITE;
+        l2_free_ = e.l2_done;
     }
+
+    void begin_bus(Entry& e) {
+        e.bus_started = true;
+        e.done_at = std::max(bus_free_, e.l2_start) + drain_cycles(e);
+        bus_free_ = e.done_at;
+    }
+
+    double drain_cycles(const Entry& e) const { return cfg_.drain[burst_words(e.mask) - 1]; }
 
     void retire_oldest() {
         counts_.drained[burst_words(queue_.front().mask) - 1]++;
@@ -298,7 +344,7 @@ private:
 
     SbConfig          cfg_;
     std::deque<Entry> queue_;
-    double            now_ = 0, uncore_free_ = 0, window_start_ = 0;
+    double            now_ = 0, l2_free_ = 0, bus_free_ = 0, window_start_ = 0;
     Counts            counts_;
 };
 
@@ -306,9 +352,10 @@ private:
 class SbModel {
 public:
     // Parse the +sbmodel value: empty for a default comparison, or a
-    // comma-separated list of ENTRIES{l|w}/POLICY/DRAIN — ENTRIES line or
-    // word entries, POLICY "all", "line" or "merge", DRAIN a preset name or four
-    // colon-separated cycle counts for bursts of 1..4 words.
+    // comma-separated list of ENTRIES{l|w}/POLICY/DRAIN[/post] — ENTRIES
+    // line or word entries, POLICY "all", "line" or "merge", DRAIN a preset
+    // name or four colon-separated cycle counts for bursts of 1..4 words,
+    // and "/post" for write-through posted past L2.
     static bool parse(const char* spec, double cpi, SbModel& model, std::string& err) {
         model.cpi_ = cpi;
         std::string s(*spec ? spec : "8l/all/bus,8l/line/bus,8l/all/combine,8l/line/combine,8w/all/bus");
@@ -340,9 +387,15 @@ private:
     static bool parse_item(const std::string& item, SbConfig& c, std::string& err) {
         c.label = item;
         size_t a = item.find('/'), b = a == std::string::npos ? a : item.find('/', a + 1);
-        if (b == std::string::npos) { err = "not ENTRIES{l|w}/POLICY/DRAIN"; return false; }
+        if (b == std::string::npos) { err = "not ENTRIES{l|w}/POLICY/DRAIN[/post]"; return false; }
+        size_t o = item.find('/', b + 1);
         std::string entries = item.substr(0, a), policy = item.substr(a + 1, b - a - 1),
-                    drain = item.substr(b + 1);
+                    drain = item.substr(b + 1, o == std::string::npos ? o : o - b - 1);
+        c.posted = o != std::string::npos;
+        if (c.posted && item.substr(o + 1) != "post") {
+            err = "unknown option '/" + item.substr(o + 1) + "' (post)";
+            return false;
+        }
 
         char* end = nullptr;
         unsigned long n = strtoul(entries.c_str(), &end, 10);
