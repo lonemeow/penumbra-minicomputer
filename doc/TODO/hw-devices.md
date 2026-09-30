@@ -915,6 +915,29 @@ channel holds, so its watermark comes due half as often. It needs:
   across a pass boundary, and padding a sound that ends on an odd
   frame.
 
+## Hardware + kernel: audio output-stage status (`STATUS`)
+
+The class contract defines `CAP.STATUS` and a `STATUS` register
+(`doc/system/devices/audio.md`, "STATUS (0x020)"), so a device whose
+output stage has to be brought up can say when it is ready and when it
+failed. The first such device is the Nexys Video's, whose codec is set
+up over I2C (`hw-nexysvideo.md`, "Devices: no audio"); the ULX3S's
+ladder needs no bring-up. Nothing implements the register yet. Open:
+
+- **The device** (`audio.sv`, both boards): the register, its bits
+  supplied by the board's output stage, and `CAP` bit 13; the ULX3S
+  tops tie the bits to 0. The decode today mirrors the global block
+  across every offset below `0x100`, which is why the contract gates
+  the register behind the `CAP` bit. `tb_audio` checks the bit and
+  that `STATUS` follows its inputs.
+- **The driver** (`paudio`): the readiness flow at attach. It waits out
+  `BUSY` for up to 100 ms, then fails the attach on `FAULT`, or on a
+  `BUSY` that outlasted the wait, with a message naming the output
+  stage, rather than leaving `/dev/audio` to hang.
+- **The ISS**: `CAP.STATUS` set and `STATUS` reading 0, plus an option
+  that holds `BUSY` for a while or presents `FAULT`, so the driver's
+  attach paths run somewhere other than on a broken board.
+
 ## Hardware + kernel: tracker voices click on a retrigger or a volume step
 
 A voice changes gain and source material instantly: `VOL` applies on
@@ -1041,6 +1064,9 @@ Open:
 - **The Nexys Video's RTL**: the RGMII stages (DDR input and output
   registers, and the receive clock's alignment, which depends on how
   the PHY's RGMII delays are strapped), the PHY's reset and interrupt,
-  and where the board's MAC address comes from.
+  and the board's MAC address. A 24AA025E48 EEPROM holds it, on the
+  I2C bus the audio codec also uses; the schematic straps the
+  EEPROM's A0 to A2 high, so it answers at 0x57, where the reference
+  manual gives 1010000b (0x50).
 - **The driver**: an `ifnet` driver over the frame buffers, attaching
   `mii(4)`.
