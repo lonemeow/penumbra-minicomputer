@@ -175,7 +175,9 @@ ranks first ("Levers ranked by measured benefit"):
    4 ways where MEM2 keeps 2 (evidence:
    `doc/internals/penumbra3/memory-performance.md`, "L1 geometry").
    P0.3 timed the TLB verdict alone, not the L1 compare chained behind
-   it.
+   it. On IF2 it also times the pre-decode redirect into the next PC,
+   which decides whether branch prediction needs a target buffer for
+   direct transfers (`doc/internals/penumbra3/branch-prediction.md`).
 2. **The L1 caches:** passive -- index->tag/data plus a line-wide
    fill-install, no embedded FSM, since miss orchestration is in
    `load_complete` -- and 8 KB 2-way on the ECP5. **Open decision:**

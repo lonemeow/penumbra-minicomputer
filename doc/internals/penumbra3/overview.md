@@ -87,7 +87,7 @@ hygiene around these:
 
 ```mermaid
 graph LR
-    IF1[IF1<br/>PC→cache addr<br/>BTB+BHT read] --> IF2[IF2<br/>I-cache word<br/>predecode→FIFO]
+    IF1[IF1<br/>PC→cache addr<br/>direction-table read] --> IF2[IF2<br/>I-cache word<br/>predecode→FIFO<br/>redirect]
     IF2 --> FIFO{{fetch FIFO<br/>decoded bundle}}
     FIFO --> ID[ID<br/>regmap, scoreboard/<br/>forward, issue]
     ID --> EX[EX<br/>ALU, flags,<br/>branch resolve,<br/>divmul launch]
@@ -100,7 +100,7 @@ graph LR
 |---|---|
 | Stages | 7 (IF1, IF2, ID, EX, MEM1, MEM2, WB) + elastic fetch FIFO |
 | Hazards | Full operand forwarding (EX→EX, MEM2→EX) + NZCV flag forwarding; scoreboard interlock for the residual cases |
-| Branches | Resolve in EX; fetch-time BTB → 0 bubbles on correct taken-prediction; cold/mispredict = registered flush |
+| Branches | Resolve in EX; IF2 pre-decode redirects with a bimodal table and a return-stack ring → 1 bubble on a correct taken prediction; mispredict = registered flush ([branch prediction](./branch-prediction.md)) |
 | Load-use | ≈1–2 cycles with MEM2→EX forwarding (pinned in the pipeline-stages doc) |
 | Loads | Single-outstanding, hold-and-complete (no per-op MEM bubble) |
 | divmul | Side FU (reused `common/divmul.sv`), registered completion, dual-write sequenced over two WB cycles |
@@ -139,13 +139,16 @@ as-is" carries a real risk — and it is a Phase-0 probe.
 
 ## Feature set: what's foundational vs staged
 
-**Foundational — designed in from the start.** Forwarding and the BTB are
-*not* additive: the gen2 post-mortem is explicit that forwarding + branch
-prediction reshape the EX/MEM/stall/commit region, which is exactly the
-floor. Designing that region without them means optimizing a tail that gets
-rewritten. So the Phase-1 skeleton already carries full operand forwarding,
-flag forwarding, and the registered load-completion back-end; the BTB lands
-right behind it.
+**Foundational — designed in from the start.** Forwarding and branch
+prediction are *not* additive: the gen2 post-mortem is explicit that
+forwarding + branch prediction reshape the EX/MEM/stall/commit region,
+which is exactly the floor. Designing that region without them means
+optimizing a tail that gets rewritten. So the Phase-1 skeleton already
+carries full operand forwarding, flag forwarding, and the registered
+load-completion back-end; branch prediction lands right behind it: the
+IF2 pre-decode redirect, a 1K bimodal table and a return-stack ring,
+with a target buffer as the IF2 redirect's timing requires
+([measured](./branch-prediction.md)).
 
 **Shapes — built into the memory hierarchy as it is written.** The
 largest measured costs are TLB refills and L1 fills
@@ -183,27 +186,22 @@ None reshapes the core's critical cones, so each follows the booting
 skeleton:
 
 1. **Store buffer** — the store-traffic strategy below.
-2. **Return and direction prediction** — a RAS from the IF2
-   pre-decode, and a direction table beside the BTB, each chosen by a
-   predictor model in the ISS before it is built. Branches resolve in
-   EX as on gen2, so a misprediction costs about what it did there,
-   but its share of the cycles grows as the base CPI falls.
-3. **Next-line prediction buffer for L1-I** — most of what a 16 KB
+2. **Next-line prediction buffer for L1-I** — most of what a 16 KB
    4-way L1-I would save on the kernel paths, with no change to the
    hit logic
    ([prediction buffer](./memory-performance.md#next-line-prediction-buffer-for-l1-i)).
-4. **Stream prefetch beside the L2,** for data streaming through it —
+3. **Stream prefetch beside the L2,** for data streaming through it —
    Doom, the streaming demos and bulk copies
    ([stream buffers](./memory-performance.md#next-line-prefetch-into-stream-buffers)).
-5. **A 128 KB L2,** where block RAM allows.
-6. **Selective `WRSYS` serialization:** a 256×2 TLB leaves too few
+4. **A 128 KB L2,** where block RAM allows.
+5. **Selective `WRSYS` serialization:** a 256×2 TLB leaves too few
    refills for it to pay much
    ([timing outline](./timing-outline.md#multi-cycle-and-serializing-instructions-divmul-wrsys-eret)).
-7. **Write combining in the SDRAM adapter** — whole lines drained as
+6. **Write combining in the SDRAM adapter** — whole lines drained as
    one burst, inside the bus contract
    ([write combining](./memory-performance.md#sdram-side-write-combining)).
-8. **Write-back L2,** only if stores prove throughput-bound.
-9. **A native port for on-board RAM** — stretch.
+7. **Write-back L2,** only if stores prove throughput-bound.
+8. **A native port for on-board RAM** — stretch.
 
 The store buffer needs no reserved seam in the core's cones: it sits
 between the completion unit and the uncore and reaches the core only
@@ -293,14 +291,14 @@ overlap, so they do not add.
 | Main TLB 32×2 → 256×2 | 810–1000 / 570–700 / 350–440 | no block RAM; invalidation in the MMU; `MMU_CONFIG` version 2 | shape |
 | Line-wide L2→L1 transfer, fill-through, one uncore pipeline | ~750 / ~700 / ~230 | block RAM as word-wide; a 128-bit fill path in place of the word walk | shape |
 | Store buffer: line entries, line search, L2 posting | ~380 / ~560 / ~370 | ~1.4 kbit of entries, 8 line-tag compares; outside the core cones | staged 1; posting is an L2 shape |
-| Return and direction prediction | pool of ~350–500, unmeasured split | a block RAM for a direction table; IF2 pre-decode for a RAS | staged 2, after a predictor model |
+| Branch prediction: IF2 pre-decode, 1K bimodal table, 4–8-deep return ring | ~205 / ~205 / ~200 | a block RAM for the table, a ring of return addresses, the IF2 redirect into the next PC | Phase 2 |
 | L1 4 KB → 8 KB 2-way | ~140 / ~110 / ~40 | none in the line-wide shape | shape |
 | L1 8 KB → 16 KB 4-way | ~135 / ~155 / ~30 | ~10 more block RAMs; two more tag compares in IF2 | Artix-7 |
-| Next-line prediction buffer, L1-I | ~100 / ~105 / ~10 | a line register, a tag compare, a second L2 look-up per fill | staged 3 |
-| Stream prefetch beside L2 | ~55 / ~35 / ~65 | two line buffers and stream detection | staged 4 |
-| L2 64 KB → 128 KB | ~90 / ~40 / ~30 | ~35 more block RAMs | staged 5, if block RAM allows |
-| Selective `WRSYS`, behind a 256×2 TLB | ~15 / ~10 / ~2 | a serialize bit on the MMU's responses | staged 6 |
-| Write combining, L2 posting | ~6 / ~4 / ~7 | a line buffer in the SDRAM adapter and a wider CDC, where placement is tight | staged 7 |
+| Next-line prediction buffer, L1-I | ~100 / ~105 / ~10 | a line register, a tag compare, a second L2 look-up per fill | staged 2 |
+| Stream prefetch beside L2 | ~55 / ~35 / ~65 | two line buffers and stream detection | staged 3 |
+| L2 64 KB → 128 KB | ~90 / ~40 / ~30 | ~35 more block RAMs | staged 4, if block RAM allows |
+| Selective `WRSYS`, behind a 256×2 TLB | ~15 / ~10 / ~2 | a serialize bit on the MMU's responses | staged 5 |
+| Write combining, L2 posting | ~6 / ~4 / ~7 | a line buffer in the SDRAM adapter and a wider CDC, where placement is tight | staged 6 |
 | Native port for on-board RAM | ~3 | a second memory port and stack front end | stretch |
 | Merging from the store buffer | under 0.5 | an entry read and byte merge on the fill path | ruled out |
 
@@ -320,9 +318,11 @@ overlap, so they do not add.
   that continues a stream.
 - **Selective `WRSYS`** at the ~38 cycles of serialization in each
   refill a 256×2 TLB still takes.
-- **Prediction's pool** is gen2.5's hardware `flush` share, 12–18 % of
-  its ~3 cycles an instruction with its BTB, but no model yet splits it
-  between returns, direction and the BTB's own misses.
+- **Branch prediction** against resolving every transfer in EX, with
+  fetch and IF2 redirects at 1 cycle and EX at 4
+  ([branch prediction](./branch-prediction.md)). A registered IF2
+  redirect would cost it ~60–70 of that unless a target buffer takes
+  the direct transfers.
 
 What that means for the ECP5:
 
@@ -330,9 +330,11 @@ What that means for the ECP5:
    TLB, the line-wide transfer with fill-through and posting, and the
    8 KB L1. They come with the Phase-1 memory hierarchy.
 2. **The store buffer is the largest staged lever.**
-3. **Prediction's pool rivals the store buffer's but is unmeasured.**
-   Build the ISS predictor model before giving fabric to a direction
-   table or a RAS.
+3. **Branch prediction is cheap for what it recovers:** a 1K bimodal
+   table and a plain 4–8-deep ring behind the IF2 pre-decode; gshare,
+   bigger tables and deeper rings buy nothing. Whether it also needs a
+   target buffer for direct transfers depends on the IF2 redirect
+   closing in a cycle, which P0.5 times.
 4. **Everything else saves about 150 per 1000 or less,** and the
    workloads disagree on the order: the prediction buffer serves the
    kernel paths, stream prefetch serves Doom's data, and a 128 KB L2
@@ -350,13 +352,13 @@ runs on hardware.
 |---|---|---|
 | Fmax | ULX3S: reliable 37.5 MHz across a seed sweep, with headroom for the staged features; Artix-7: whatever the full top closes at | gen2 topped at barely-37.5 |
 | CPI, cache-hot tight loop | ~1.1–1.3 (forwarding from day one) | gen2 ~2.5–3.0 unforwarded |
-| CMP+Bcc heavy | ~1.0–1.1 (flags forwarded, BTB) | — |
+| CMP+Bcc heavy | ~1.0–1.1 (flags forwarded, branch prediction) | — |
 | L1 size | per board: ECP5 8 KB 2-way (gen2's hit logic); Artix-7 16 KB, with 4 ways on the fetch side if MEM2 cannot take them ([geometry data](./memory-performance.md#l1-geometry)) | gen2 4 KB (then 2-way) |
 | Main TLB | 256×2 in BRAM ([refill data](./memory-performance.md#tlb-sets-and-a-cheaper-refill)) | gen2 32×2 |
 | L2-hit fill | ~5 cycles ([line-wide transfer](./memory-performance.md#the-line-wide-transfer)) | gen2.5 16 |
 | L2-miss fill | ~20–25 cycles ([design target](./memory-performance.md#design-target-memory-latency-in-cpu-cycles)) | gen2.5 38 with the line stack |
 | Load-use stall | 1 (forwarded) | gen2 4 |
-| Taken-branch bubbles | 0 predicted / full flush cold | gen2 3 |
+| Taken-branch bubbles | 1 predicted at IF2 / 4 mispredicted | gen2 3; gen2.5 1 predicted |
 
 ## Build plan
 
@@ -404,7 +406,7 @@ and fix later." A path that only closes on 1-of-N seeds is not a close.
 Full 7-stage pipeline using the proven boundaries: registered
 load-completion, decode-on-enqueue, full operand + flag forwarding,
 single-outstanding hold-buffer loads, static-not-taken branches resolved in
-EX (no BTB yet), and the memory hierarchy in its
+EX (no prediction yet), and the memory hierarchy in its
 [shapes](#feature-set-whats-foundational-vs-staged): write-through L1 +
 **write-through L2** in one uncore pipeline with the line-wide transfer
 and fill-through, the 256×2 TLB, and the registered bus. **Store path:
@@ -413,18 +415,19 @@ slow-but-correct, and a stall (CPI) outside the core cones, so safe to
 leave for the Phase-4 store buffer. divmul reused from `common/`.
 **Exit:** `isa/` conformance passes on the gen3 RTL runner.
 
-### Phase 2 — BTB
+### Phase 2 — branch prediction
 
-Fetch-time direct-branch BTB (0-bubble correct taken-prediction). Return
-and direction prediction are staged, each chosen by a predictor model
-first. Re-run conformance + gen3 microarch regressions; re-read full-top
-fmax.
+The IF2 pre-decode redirect of direct transfers, a 1K bimodal table read
+beside IF1, and a 4–8-deep return-stack ring, with a target buffer as
+the IF2 redirect's timing requires
+([branch prediction](./branch-prediction.md#design)). Re-run conformance
++ gen3 microarch regressions; re-read full-top fmax.
 
 ### Phase 3 — NetBSD boot
 
-Boot the kernel (same binary, CPUID-discriminated). Core is feature-complete
-(forwarding + BTB) and correctness-validated against a real OS before perf
-work begins.
+Boot the kernel (same binary, CPUID-discriminated). Core is
+feature-complete (forwarding + branch prediction) and
+correctness-validated against a real OS before perf work begins.
 
 ### Phase 4 — store buffer (store-traffic perf)
 
@@ -458,6 +461,9 @@ the seed sweep, not into a higher clock.
      memory-path costs, gen2.5 workload profiles, and the uncore levers
      they point to (store buffer, one uncore pipeline, whole-line SDRAM
      fetch, stream prefetch, next-line prediction for L1-I).
+   - [`branch-prediction.md`](./branch-prediction.md) — each prediction
+     component measured on real workloads, and the front-end design it
+     points to.
 4. Further per-area gen3 specs — *to be written as each subsystem is
    designed* (design-decisions, pipeline-stages, hazard-model,
    memory-interface), following the gen2 doc layout under `penumbra2/`.

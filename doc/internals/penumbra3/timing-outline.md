@@ -52,13 +52,14 @@ Corollary on register placement:
 - Only a **1-bit `ready`** crosses backward into fetch — gates clock-enables, never
   the PC mux or RAM address/enable.
 - **Fetch buffer (FIFO)** decouples front-end from back-end.
-- **All prediction is fetch-time and BRAM-backed, indexed not associative:**
-  direct-mapped BTB, and any direction table beside it — bimodal or tagless
-  gshare, chosen by a predictor model before it is built (one BRAM each, parallel
-  with icache, training registered off the fetch loop). **RAS via an IF2
-  pre-decode** (detect call/return from the fetched word) — *not* BTB entries
-  (capacity), *not* ID-stage (a decode-stage predictor is marginal and registers
-  to nothing).
+- **All prediction is fetch-domain and BRAM-backed, indexed not associative:**
+  a bimodal direction table read beside IF1 (gshare measured and does not pay),
+  and a direct-mapped target buffer only as the IF2 redirect's timing requires
+  (training registered off the fetch loop). **Direct targets and the RAS via an
+  IF2 pre-decode** (detect the transfer from the fetched word) — the RAS a plain
+  ring with no empty check — *not* BTB entries (capacity), *not* ID-stage (a
+  decode-stage predictor is marginal and registers to nothing)
+  ([measured](./branch-prediction.md)).
 - Mispredict = **registered flush + redirect**, never enters the stall OR-tree.
 
 ## 2. Back-end stall — the load-use freeze (THE critical one)

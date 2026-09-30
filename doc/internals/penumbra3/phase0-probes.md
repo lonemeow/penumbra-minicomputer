@@ -236,7 +236,8 @@ same cycle, and the L1's size target sets how wide that compare is. See
 **Claim.** MEM2 (and IF2) close with the L1's physical-tag compare, at the
 associativity the board's L1 size needs, chained behind the BRAM TLB
 verdict; on the fetch side, the way-muxed word still reaches the
-decode-on-enqueue FIFO write in the cycle.
+decode-on-enqueue FIFO write in the cycle, and the pre-decode's redirect
+still reaches the next fetch PC.
 
 **Build.**
 - The P0.3 translate path unchanged: registered BRAM TLB output, 2-way
@@ -247,12 +248,18 @@ decode-on-enqueue FIFO write in the cycle.
 - The compare in the shape the design intends — each cache way against
   every candidate frame (both TLB ways and the pinned result), the TLB
   match selecting — then the way mux into the registered load result; for
-  IF2, into the word→bundle decode and the FIFO slot write.
+  IF2, into the word→bundle decode and the FIFO slot write, and into the
+  pre-decode redirect: the transfer's kind from the word, the return
+  ring's top or PC plus offset, and the next-PC mux
+  ([branch prediction](./branch-prediction.md#open)).
 - Read/write exclusivity written into every array's RTL, so the netlist
   carries no read-during-write bypass after the EBRs.
 
 **Path to read.** TLB BRAM output → match / candidate compares → hit and
-way select → data way mux → result flop (MEM2) or FIFO write (IF2).
+way select → data way mux → result flop (MEM2), or FIFO write and the
+pre-decode redirect into the fetch PC (IF2). A redirect that does not
+close in the cycle takes a register, and costs a cycle on every predicted
+taken transfer.
 
 **Pass.** BRAM-cone bar. **On fail:** take the associativity down with the
 L1 size (at the line-wide fill's cost 8 KB 2-way keeps 39–55 % of what
