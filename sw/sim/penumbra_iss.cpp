@@ -28,7 +28,10 @@
 // (cache_model.h), and +tlbmodel[=list] every main-TLB translation through
 // shadow TLBs (tlb_model.h); both report what they hit and missed, per
 // measurement window: +model_start= / +model_stop= PCs, SIGUSR1,
-// +model_report=path.
+// +model_report=path.  +sbmodel[=list] runs every store through shadow
+// store buffers on an estimated clock (sb_model.h), with the fills of the
+// first +cachemodel hierarchy and +sbmodel_cpi= cycles an instruction,
+// and reports the waits they cause in the same windows.
 //
 // +raw enables full raw TTY mode: all control characters (Ctrl-C,
 // Ctrl-Z, etc.) pass through to the simulated UART for job control
@@ -61,6 +64,7 @@
 #include "penumbra_cores.h"
 #include "cache_model.h"
 #include "tlb_model.h"
+#include "sb_model.h"
 
 // ═══════════════════════════════════════════════════════════════
 // SD Card Emulator (inline — same protocol as hw/sim/sd_card_sim.h
@@ -1137,6 +1141,10 @@ static CacheModel* cache_model;
 // +tlbmodel: shadow TLBs fed by every main-TLB translation (tlb_model.h).
 static TlbModel* tlb_model;
 
+// +sbmodel: shadow store buffers fed by every store and every fill
+// (sb_model.h).
+static SbModel* sb_model;
+
 static CacheEnables cache_enables() {
     return { cache_l1i.enabled, cache_l1d.enabled, cache_l2.enabled };
 }
@@ -1168,11 +1176,12 @@ static struct {
 } model_window;
 static volatile sig_atomic_t model_window_signal = 0;
 
-static bool models_active() { return cache_model || tlb_model; }
+static bool models_active() { return cache_model || tlb_model || sb_model; }
 
 static void model_window_open(const char* why) {
     if (cache_model) cache_model->clear_counts();
     if (tlb_model) tlb_model->clear_counts();
+    if (sb_model) sb_model->clear_counts();
     model_window.open      = true;
     model_window.opened_by = why;
     model_window.insn0     = cpu.insn_count;
@@ -1186,6 +1195,7 @@ static void model_window_close(const char* why) {
             model_window.number, (unsigned long long)insns, model_window.opened_by, why);
     if (cache_model) cache_model->report(out, insns);
     if (tlb_model) tlb_model->report(out, insns, TLB_GEOMETRY);
+    if (sb_model) sb_model->report(out, insns);
     fflush(out);
     model_window.open = false;
 }
@@ -2327,7 +2337,10 @@ static uint32_t mem_load(uint32_t vaddr, int size, bool sign_ext, bool& took_exc
         return 0;
     }
 
-    if (cache_model) cache_model->load(paddr, cacheable, supervisor(), cache_enables());
+    if (cache_model) {
+        Served served = cache_model->load(paddr, cacheable, supervisor(), cache_enables());
+        if (sb_model) sb_model->load(served, paddr);
+    }
 
     // Byte/half extraction + sign extension
     if (size == 0) {
@@ -2352,6 +2365,8 @@ static void mem_store(uint32_t vaddr, uint32_t data, int size, bool& took_except
     phys_write(paddr, data, size, bus_fault);
     if (!bus_fault && cache_model)
         cache_model->store(paddr, cacheable, supervisor(), cache_enables());
+    if (!bus_fault && sb_model)
+        sb_model->store(paddr, 1u << size, cacheable && cache_enables().l1d);
     if (bus_fault) {
         mmu.fault_addr = vaddr;
         mmu.fault_status = (uint32_t)((!(cpu.sr&SR_S))<<11) | (2u<<8) | 0x04;
@@ -2373,8 +2388,10 @@ static uint32_t insn_fetch(bool& took_exception) {
 
     bool bus_fault;
     uint32_t insn = phys_read(paddr, 2, bus_fault);
-    if (!bus_fault && cache_model)
-        cache_model->fetch(paddr, cacheable, supervisor(), cache_enables());
+    if (!bus_fault && cache_model) {
+        Served served = cache_model->fetch(paddr, cacheable, supervisor(), cache_enables());
+        if (sb_model) sb_model->fetch(served, paddr);
+    }
     if (bus_fault) {
         mmu.fault_addr = cpu.pc;
         mmu.fault_status = (uint32_t)((!(cpu.sr&SR_S))<<11) | (4u<<8) | 0x04;
@@ -3253,6 +3270,8 @@ int main(int argc, char** argv) {
     const char* core_name = DEFAULT_CORE_GENERATION;
     const char* cachemodel_spec = nullptr;
     const char* tlbmodel_spec = nullptr;
+    const char* sbmodel_spec = nullptr;
+    double sbmodel_cpi = 1;
     const char* model_report_path = nullptr;
 
     for (int i = 1; i < argc; i++) {
@@ -3297,6 +3316,9 @@ int main(int argc, char** argv) {
         else if (strncmp(argv[i], "+cachemodel=", 12) == 0) cachemodel_spec = argv[i] + 12;
         else if (strcmp(argv[i], "+tlbmodel") == 0) tlbmodel_spec = "";
         else if (strncmp(argv[i], "+tlbmodel=", 10) == 0) tlbmodel_spec = argv[i] + 10;
+        else if (strcmp(argv[i], "+sbmodel") == 0) sbmodel_spec = "";
+        else if (strncmp(argv[i], "+sbmodel=", 9) == 0) sbmodel_spec = argv[i] + 9;
+        else if (strncmp(argv[i], "+sbmodel_cpi=", 13) == 0) sbmodel_cpi = atof(argv[i] + 13);
         else if (strncmp(argv[i], "+model_start=", 13) == 0)
             model_window.start_pc = (uint32_t)strtoull(argv[i] + 13, nullptr, 0);
         else if (strncmp(argv[i], "+model_stop=", 12) == 0)
@@ -3306,7 +3328,7 @@ int main(int argc, char** argv) {
     }
 
     if (!hex_path) {
-        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+ram=size] [+sdcard=path] [+usbdev=type:config] [+audiofile=path] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+pcprof=path [+pcprof_start=addr]] [+irq_at_pc=addr[,period]] [+core=generation] [+cachemodel[=list]] [+tlbmodel[=list]] [+model_start=addr] [+model_stop=addr] [+model_report=path]\n");
+        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+ram=size] [+sdcard=path] [+usbdev=type:config] [+audiofile=path] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+pcprof=path [+pcprof_start=addr]] [+irq_at_pc=addr[,period]] [+core=generation] [+cachemodel[=list]] [+tlbmodel[=list]] [+sbmodel[=list] [+sbmodel_cpi=N]] [+model_start=addr] [+model_stop=addr] [+model_report=path]\n");
         return 1;
     }
 
@@ -3343,6 +3365,23 @@ int main(int argc, char** argv) {
             return 1;
         }
         tlb_model = &model;
+    }
+    if (sbmodel_spec) {
+        if (!cache_model) {
+            fprintf(stderr, "+sbmodel needs +cachemodel: it takes its fills from the first hierarchy\n");
+            return 1;
+        }
+        if (!(sbmodel_cpi > 0)) {
+            fprintf(stderr, "+sbmodel_cpi: must be a positive number of cycles\n");
+            return 1;
+        }
+        static SbModel model;
+        std::string err;
+        if (!SbModel::parse(sbmodel_spec, sbmodel_cpi, model, err)) {
+            fprintf(stderr, "+sbmodel: %s\n", err.c_str());
+            return 1;
+        }
+        sb_model = &model;
     }
     if (models_active()) {
         model_window.out = stderr;

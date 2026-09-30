@@ -98,6 +98,65 @@ WINDOW_PENUMBRA1 = hierarchy(
     l1d=(16, 16, 0, 0), l2=(16 * 3, 16, 0, 0), fills={("D", "user"): (0, 16)})
 
 
+def store_buffer(stores, drained, waits, waited):
+    """A store buffer's expected counts over one window: stores as
+    (buffered, merged, entries, uncached), entries drained by burst
+    length in words (1, 2, 3, 4), waits in model cycles as (buffer full,
+    I fills, D fills, uncached), and the accesses behind them as (stores
+    that found the buffer full, then I fills, D fills and uncached
+    accesses each as (waited, all))."""
+    full, (i_waited, i_all), (d_waited, d_all), (u_waited, u_all) = waited
+    return {"sb": {"stores": tuple(stores), "drained": tuple(drained), "waits": tuple(waits),
+                   "waited": (full, i_waited, i_all, d_waited, d_all, u_waited, u_all)}}
+
+
+# sb_window.s inside the window, T being the cycle `BL body` issues after
+# its fill; each instruction takes one cycle (two in the cpi case).  A's
+# four stores land at T+1..T+4, completing it, so it drains from T+4; B's
+# store lands at T+5 and C's at T+6, which closes B.  Both loads miss L1
+# and L2 (24 cycles each).  D's store follows; the uncached load after it
+# waits for D whatever the policy, so the uncached store finds every
+# buffer empty.  The window's one I fill, and its first, waits for nothing.
+#   8l/all/bus:   the load at T+7 waits for A (to T+17), B (T+22) and C
+#                 (T+27): 20.  The uncached load closes D and waits 5.
+#   8l/line/bus:  the first load waits only for A in flight: 10.  B starts
+#                 after that fill, at T+41, and the load from C at T+42
+#                 waits for B and C: to T+51, 9.
+#   combine:      A drains in 11 (to T+15): 18 for all; for line 8, then
+#                 B from T+39 and C behind it, 9 at T+40: 17.
+#   8w/all/bus:   every store is a one-word entry, ready at once and 5
+#                 cycles to drain: the first load waits to T+31, 24.  D is
+#                 draining already when the uncached load comes: 4.
+#   2l/all/bus:   C's store finds both entries taken and waits for A: 11.
+#                 The first load then waits for B and C: 9.
+#   3:4:4:5:      A drains in 5 and the rest in 3: 8, and D 3.
+#   8l/merge/bus: the first load waits for A in flight: 10.  B starts after
+#                 that fill and the load from C waits only for it: 4.  C,
+#                 still open, drains once D's store closes it, and the
+#                 uncached load waits for C and then D: 9.
+#   cpi 2:        stores at T+2..T+12, A draining from T+8 to T+21: the
+#                 load at T+14 waits to T+31, 17.
+SB_LINES = ((7, 3, 4, 1), (3, 0, 0, 1))
+SB_FIRST_FILL_WAITS = (0, (0, 1), (1, 2), (1, 2))    # only the first load waits
+SB_BOTH_FILLS_WAIT = (0, (0, 1), (2, 2), (1, 2))
+SB_WINDOW_DEFAULT = {
+    "sb 8l/all/bus": store_buffer(*SB_LINES, (0, 0, 20, 5), SB_FIRST_FILL_WAITS),
+    "sb 8l/line/bus": store_buffer(*SB_LINES, (0, 0, 19, 5), SB_BOTH_FILLS_WAIT),
+    "sb 8l/all/combine": store_buffer(*SB_LINES, (0, 0, 18, 5), SB_FIRST_FILL_WAITS),
+    "sb 8l/line/combine": store_buffer(*SB_LINES, (0, 0, 17, 5), SB_BOTH_FILLS_WAIT),
+    "sb 8w/all/bus": store_buffer((7, 0, 7, 1), (7, 0, 0, 0), (0, 0, 24, 4),
+                                  SB_FIRST_FILL_WAITS),
+}
+SB_WINDOW_LISTED = {
+    "sb 2l/all/bus": store_buffer(*SB_LINES, (11, 0, 9, 5), (1,) + SB_FIRST_FILL_WAITS[1:]),
+    "sb 8l/all/3:4:4:5": store_buffer(*SB_LINES, (0, 0, 8, 3), SB_FIRST_FILL_WAITS),
+    "sb 8l/merge/bus": store_buffer(*SB_LINES, (0, 0, 14, 9), SB_BOTH_FILLS_WAIT),
+}
+SB_WINDOW_CPI2 = {"sb 8l/all/bus": store_buffer(*SB_LINES, (0, 0, 17, 5), SB_FIRST_FILL_WAITS)}
+SB_WINDOW_ARGS = ["+cachemodel=4k/2:4k/2:64k/4", "+model_start=0xFFFF0800",
+                  "+model_stop=0xFFFF0900"]
+
+
 def tlb_misses(user=0, supervisor=0):
     """A shadow TLB's expected misses over one window, or with the label
     "real" the refills the program's own miss handler took."""
@@ -173,6 +232,20 @@ CASES = [
          error=r"ways must be a power of two"),
     Case("cachemodel unknown item", "cache_data.s", ["+cachemodel=penumbra7"],
          error=r"neither a generation nor L1I:L1D:L2"),
+    Case("sbmodel default buffers", "sb_window.s", SB_WINDOW_ARGS + ["+sbmodel"],
+         windows=[("start PC to stop PC", SB_WINDOW_DEFAULT)]),
+    Case("sbmodel listed buffers", "sb_window.s",
+         SB_WINDOW_ARGS + ["+sbmodel=" + ",".join(k[3:] for k in SB_WINDOW_LISTED)],
+         windows=[("start PC to stop PC", SB_WINDOW_LISTED)]),
+    Case("sbmodel cpi", "sb_window.s",
+         SB_WINDOW_ARGS + ["+sbmodel=8l/all/bus", "+sbmodel_cpi=2"],
+         windows=[("start PC to stop PC", SB_WINDOW_CPI2)]),
+    Case("sbmodel needs cachemodel", "sb_window.s", ["+sbmodel"],
+         error=r"\+sbmodel needs \+cachemodel"),
+    Case("sbmodel unknown policy", "sb_window.s", ["+cachemodel", "+sbmodel=8l/some/bus"],
+         error=r"unknown policy 'some'"),
+    Case("sbmodel bad drain", "sb_window.s", ["+cachemodel", "+sbmodel=8l/all/5:7:9"],
+         error=r"neither a preset"),
 ]
 
 
@@ -198,6 +271,28 @@ def parse_report(text):
             continue
         if line.startswith("-- tlb: "):
             counts = None
+            continue
+        m = re.match(r"-- store buffer (\S+): ", line)
+        if m:
+            counts = windows[-1][1].setdefault(f"sb {m.group(1)}", {"sb": {}})
+            continue
+        m = re.match(r"\s+stores: (\d+) buffered, (\d+) merged, (\d+) entries; (\d+) uncached", line)
+        if m:
+            counts["sb"]["stores"] = tuple(int(v) for v in m.groups())
+            continue
+        m = re.match(r"\s+entries drained by words: (\d+) (\d+) (\d+) (\d+)", line)
+        if m:
+            counts["sb"]["drained"] = tuple(int(v) for v in m.groups())
+            continue
+        m = re.match(r"\s+waits, cycles: buffer full (\d+), I fills (\d+), D fills (\d+),"
+                     r" uncached (\d+)", line)
+        if m:
+            counts["sb"]["waits"] = tuple(int(v) for v in m.groups())
+            continue
+        m = re.match(r"\s+accesses that waited: buffer full (\d+), I fills (\d+) of (\d+),"
+                     r" D fills (\d+) of (\d+), uncached (\d+) of (\d+)", line)
+        if m:
+            counts["sb"]["waited"] = tuple(int(v) for v in m.groups())
             continue
         m = re.match(r"\s+(\S+)\s+\d+x\d+/\S+\s+\d+\s+(\d+)\s+(\d+)\s", line)
         if m and counts is None:
@@ -232,6 +327,11 @@ def compare_windows(expected, got):
                 if have.get("tlb") != want["tlb"]:
                     problems.append(f"{label} misses (user, supervisor) {have.get('tlb')}, "
                                     f"expected {want['tlb']}")
+                continue
+            if "sb" in want:
+                for key, value in want["sb"].items():
+                    if have["sb"].get(key) != value:
+                        problems.append(f"{label} {key} {have['sb'].get(key)}, expected {value}")
                 continue
             for level in ("L1I", "L1D", "L2"):
                 if have.get(level) != want[level]:

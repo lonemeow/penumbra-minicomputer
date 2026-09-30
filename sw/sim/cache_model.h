@@ -37,7 +37,9 @@
 //
 // The model sees the architectural stream only: no wrong-path fetches,
 // and nothing that needs time — fill latency, prefetch, overlap.  Its
-// counts are exact for that stream; cycles are not modelled.  It indexes
+// counts are exact for that stream; cycles are not modelled.  What
+// served each fetch and load is returned for the store-buffer model
+// (sb_model.h), which does keep a clock.  It indexes
 // every level by physical address, which for a VIPT L1 matches the
 // hardware only while a way fits in a page (4 KiB); a larger way is
 // modelled as if physically indexed.
@@ -176,6 +178,10 @@ enum class CacheLevel { L1I, L1D, L2 };
 
 struct CacheEnables { bool l1i, l1d, l2; };
 
+// Where a fetch or load was served: its L1, an L1 fill from L2 or from
+// memory, or no cache level at all.
+enum class Served { L1, L2, Memory, Uncached };
+
 struct CacheCounts {
     uint64_t read_hits = 0, read_misses = 0, write_hits = 0, write_misses = 0;
 };
@@ -191,12 +197,12 @@ public:
           l2_(l2, ModelCache::Victim::TreeOnly, false),
           line_words_(l2.line_bytes / 4), page_lines_(page_bytes / l1i.line_bytes) {}
 
-    void fetch(uint32_t pa, bool cacheable, bool super, const CacheEnables& en) {
-        read(Kind::I, l1i_, counts_[L1I], pa, cacheable && en.l1i, en.l2, super);
+    Served fetch(uint32_t pa, bool cacheable, bool super, const CacheEnables& en) {
+        return read(Kind::I, l1i_, counts_[L1I], pa, cacheable && en.l1i, en.l2, super);
     }
 
-    void load(uint32_t pa, bool cacheable, bool super, const CacheEnables& en) {
-        read(Kind::D, l1d_, counts_[L1D], pa, cacheable && en.l1d, en.l2, super);
+    Served load(uint32_t pa, bool cacheable, bool super, const CacheEnables& en) {
+        return read(Kind::D, l1d_, counts_[L1D], pa, cacheable && en.l1d, en.l2, super);
     }
 
     void store(uint32_t pa, bool cacheable, bool super, const CacheEnables& en) {
@@ -284,14 +290,14 @@ private:
     enum { L1I = 0, L1D = 1, L2 = 2 };
     enum class Kind { I = 0, D = 1 };
 
-    void read(Kind kind, ModelCache& l1, CacheCounts& c, uint32_t pa, bool l1_active,
-              bool l2_enabled, bool super) {
+    Served read(Kind kind, ModelCache& l1, CacheCounts& c, uint32_t pa, bool l1_active,
+                bool l2_enabled, bool super) {
         if (!l1_active) {           // forwarded uncacheable: no level keeps it
             uncached_[super][int(kind)][0]++;
-            return;
+            return Served::Uncached;
         }
         uint32_t line = l1.line_of(pa);
-        if (l1.read(line)) { c.read_hits++; return; }
+        if (l1.read(line)) { c.read_hits++; return Served::L1; }
         c.read_misses++;
         if (kind == Kind::I) {
             i_misses_++;
@@ -318,6 +324,7 @@ private:
         fills_[super][int(kind)][from_l2 ? 0 : 1]++;
         l1.fill(line);
         if (kind == Kind::I) next_line_miss(line, l2_enabled);
+        return from_l2 ? Served::L2 : Served::Memory;
     }
 
     // The prediction buffers at an L1-I miss to `line`: count whether each
@@ -401,8 +408,17 @@ public:
         return true;
     }
 
-    void fetch(uint32_t pa, bool c, bool super, const CacheEnables& en) { for (auto& h : h_) h.fetch(pa, c, super, en); }
-    void load(uint32_t pa, bool c, bool super, const CacheEnables& en)  { for (auto& h : h_) h.load(pa, c, super, en); }
+    // Each returns what served the access in the first hierarchy listed.
+    Served fetch(uint32_t pa, bool c, bool super, const CacheEnables& en) {
+        Served first = h_[0].fetch(pa, c, super, en);
+        for (size_t i = 1; i < h_.size(); i++) h_[i].fetch(pa, c, super, en);
+        return first;
+    }
+    Served load(uint32_t pa, bool c, bool super, const CacheEnables& en) {
+        Served first = h_[0].load(pa, c, super, en);
+        for (size_t i = 1; i < h_.size(); i++) h_[i].load(pa, c, super, en);
+        return first;
+    }
     void store(uint32_t pa, bool c, bool super, const CacheEnables& en) { for (auto& h : h_) h.store(pa, c, super, en); }
     void invalidate(CacheLevel level) { for (auto& h : h_) h.invalidate(level); }
     void clear_counts() { for (auto& h : h_) h.clear_counts(); }

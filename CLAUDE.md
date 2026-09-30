@@ -320,7 +320,8 @@ rom.ld ──────────────────┘
   The table is `sw/sim/penumbra_cores.h`; a generation's cache or
   TLB geometry or CPU name changing in RTL has to change there too.
   Measurement options: `+opstats` (instruction-class histogram),
-  `+branchstats`, `+pcprof`, `+cachemodel` and `+tlbmodel` — see below.
+  `+branchstats`, `+pcprof`, `+cachemodel`, `+tlbmodel` and `+sbmodel`
+  — see below.
 - **Cache model** (`+cachemodel[=list]`, `sw/sim/cache_model.h`) —
   runs every fetch, load and store through shadow cache hierarchies:
   the `+core=` generation's by default, or a comma-separated list of
@@ -347,6 +348,21 @@ rom.ld ──────────────────┘
   the built layout's shadow calibrates the rest.  Shadows drop only
   what software invalidates in the real TLB, so ones larger than it
   read slightly optimistic.
+- **Store-buffer model** (`+sbmodel[=list]`, `sw/sim/sb_model.h`) —
+  runs every store through shadow store buffers of gen3's planned shape,
+  each on its own estimated clock: `+sbmodel_cpi=` cycles an
+  instruction (1 by default) plus fill and uncached-access costs, with
+  fills taken from the first `+cachemodel` hierarchy (so it needs
+  `+cachemodel`).  Items are `ENTRIES{l|w}/POLICY/DRAIN`: line or word
+  entries, fills waiting for `all` entries, for those up to their
+  `line`, or for none as they `merge` buffered bytes, and drain costs
+  as a preset (`bus`, `combine`) or four cycle counts by burst length
+  (`8l/line/5:7:9:11`).  Each window reports
+  merges, drains by burst length, and the cycles the core waits on a
+  full buffer and on drains before I fills, D fills and uncached
+  accesses.  **Waits are an upper bound:** nothing else a pipeline
+  stalls on is modelled, so stores arrive closer together than on
+  hardware.
 - **Execution profiles** (`+pcprof=file` plus
   `sw/tools/pcprof-report.py`) — buckets executed instructions by PC,
   exceptions by vector and TLB misses by faulting page.
