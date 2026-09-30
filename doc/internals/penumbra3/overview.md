@@ -46,7 +46,7 @@ discipline is the [build plan](#build-plan) below.
 |---|---|
 | **Is** | Single-issue, in-order, 7-stage pipelined RISC. Same ISA, ABI, exception model, and bus contracts as gen1/gen2. Boots the same NetBSD binary (CPUID-discriminated). |
 | **Is not** | Superscalar, out-of-order, multi-issue, or speculative beyond fetch-time branch prediction. Those stay out of scope (a hypothetical gen4's territory). |
-| **Target** | A **reliable** 50 MHz on the −6 ULX3S ECP5 *with margin* — built toward until proven *structurally* (not placement-) difficult, then a **reliable** 37.5 MHz with headroom is the accepted fallback. Never a barely-closing 50. |
+| **Target** | A **reliable** 37.5 MHz on the −6 ULX3S ECP5: the full top closes across a seed sweep, with headroom left for the staged features. 50 MHz is not a goal; a board with faster fabric (the Artix-7 Nexys Video) runs the same RTL at whatever its full top closes at. Performance comes from cycles — memory latency first, then prediction ([feature set](#feature-set-whats-foundational-vs-staged)). |
 
 The discrete-logic constraint does **not** apply: like gen2, gen3 is
 FPGA-only (BRAM caches, wide registered datapaths). Only gen1 and the ISA
@@ -147,14 +147,64 @@ rewritten. So the Phase-1 skeleton already carries full operand forwarding,
 flag forwarding, and the registered load-completion back-end; the BTB lands
 right behind it.
 
-**Staged — additive, outside the core cones.** RAS (fetch-domain return
-prediction, small payoff) and the entire store-traffic optimization
-(a store buffer, plus write-back L2 only if measurement justifies it)
-reshape nothing in the core's critical cones, so they follow the booting
-skeleton. The store-traffic strategy is detailed below — it needs no
-reserved seam in the core's cones, because the store buffer sits between
-the completion unit and the uncore and reaches the core only through a
-registered `full`.
+**Shapes — built into the memory hierarchy as it is written.** The
+largest measured costs are TLB refills and L1 fills
+([memory-performance](./memory-performance.md)), and what removes them
+is the shape of storage the L1, L2 and TLB fix when they are written.
+Changing a shape later means rewriting the module, so these land with
+the Phase-1 memory hierarchy:
+
+- **The line-wide L2→L1 transfer with fill-through, in one uncore
+  pipeline.** One L2 access returns the whole line and L1 installs it
+  in a cycle; on an L2 miss, L1 takes the line the bus delivered. An
+  L2-hit fill drops from 16 cycles to ~5 and an L2-miss fill from 37
+  to ~24 ([the line-wide
+  transfer](./memory-performance.md#the-line-wide-transfer)). The L2's
+  first stage accepts a lookup every cycle, which the L1-I prediction
+  buffer below depends on.
+- **The main TLB at 256×2.** It removes 92–98 % of refills, the
+  largest single cost measured, and costs no block RAM over 32×2
+  ([TLB sets](./memory-performance.md#tlb-sets-and-a-cheaper-refill)).
+  It needs `MMU_CONFIG` version 2 with invalidation done in the MMU
+  ([timing outline](./timing-outline.md#5-mmu--tlb)); without it, the
+  kernel's invalidation sweep grows with the TLB.
+- **The L1 at 8 KB 2-way on the ECP5,** which the line-wide array
+  shape gives for the block RAM of 4 KB; an Artix-7 board takes
+  16 KB ([targets](#performance-targets)).
+- **Read/write exclusivity written into every array,** so no BRAM
+  output carries a synthesized bypass.
+
+**Staged — additive, outside the core cones,** in the order the
+measurements rank them. None reshapes the core's critical cones, so
+each follows the booting skeleton:
+
+1. **Store buffer** — the store-traffic strategy below.
+2. **Next-line prediction buffer for L1-I** — most of what a 16 KB
+   4-way L1-I would save on the kernel paths, with no change to the
+   hit logic
+   ([prediction buffer](./memory-performance.md#next-line-prediction-buffer-for-l1-i)).
+3. **Return and direction prediction** — a RAS from the IF2
+   pre-decode, and a direction table beside the BTB, each chosen by a
+   predictor model in the ISS before it is built. Branches resolve in
+   EX as on gen2, so a misprediction costs about what it did there,
+   but its share of the cycles grows as the base CPI falls.
+4. **Selective `WRSYS` serialization,** re-measured once the TLB has
+   grown: a 256×2 TLB removes most of the refills whose `WRSYS`es make
+   it pay ([timing outline](./timing-outline.md#multi-cycle-and-serializing-instructions-divmul-wrsys-eret)).
+5. **Stream prefetch beside the L2,** for the streaming demos and bulk
+   copies
+   ([stream buffers](./memory-performance.md#next-line-prefetch-into-stream-buffers)).
+6. **Write combining in the SDRAM adapter** — whole lines drained as
+   one burst, inside the bus contract
+   ([write combining](./memory-performance.md#sdram-side-write-combining)).
+7. **Write-back L2,** only if stores prove throughput-bound.
+8. **A native port for on-board RAM** — stretch: over write combining
+   it adds an estimated ~3 cycles per 1000 instructions on the profiled
+   workloads.
+
+The store buffer needs no reserved seam in the core's cones: it sits
+between the completion unit and the uncore and reaches the core only
+through a registered `full`.
 
 ### Store-traffic strategy — store buffer first, write-back L2 only if it earns it
 
@@ -190,7 +240,13 @@ That sets the order:
   (a fill, an uncached load) and every uncached store waits for the
   buffer to drain. It meets the core only through registered signals
   (`full` into the freeze), so it lives outside the core timing cones and
-  is *safe to defer* (see the [deferral principle](#build-plan)).
+  is *safe to defer* (see the [deferral principle](#build-plan)). Its
+  entries are lines with a byte mask: stores to one line merge, a
+  kernel frame save of about 21 words fits in eight entries where it
+  would overflow eight words, and an entry drains as one bus burst
+  that the SDRAM adapter can write as a single line
+  ([store streams](./memory-performance.md#store-streams),
+  [write combining](./memory-performance.md#sdram-side-write-combining)).
 - **Write-back L2 is a measure-driven option, not a plan item.** A
   write-back hit completes at the L2 tag verdict, about as late as the
   posted write-through it replaces, so it does little for store latency.
@@ -215,11 +271,12 @@ runs on hardware.
 
 | Metric | gen3 target | Reference |
 |---|---|---|
-| Fmax | reliable 50 MHz w/ margin; reliable 37.5 fallback | gen2 topped at barely-37.5 |
+| Fmax | ULX3S: reliable 37.5 MHz across a seed sweep, with headroom for the staged features; Artix-7: whatever the full top closes at | gen2 topped at barely-37.5 |
 | CPI, cache-hot tight loop | ~1.1–1.3 (forwarding from day one) | gen2 ~2.5–3.0 unforwarded |
 | CMP+Bcc heavy | ~1.0–1.1 (flags forwarded, BTB) | — |
 | L1 size | per board: ECP5 8 KB 2-way (gen2's hit logic); Artix-7 16 KB, with 4 ways on the fetch side if MEM2 cannot take them ([geometry data](./memory-performance.md#l1-geometry)) | gen2 4 KB (then 2-way) |
 | Main TLB | 256×2 in BRAM ([refill data](./memory-performance.md#tlb-sets-and-a-cheaper-refill)) | gen2 32×2 |
+| L2-hit fill | ~5 cycles ([line-wide transfer](./memory-performance.md#the-line-wide-transfer)) | gen2.5 16 |
 | L2-miss fill | ~20–25 cycles ([design target](./memory-performance.md#design-target-memory-latency-in-cpu-cycles)) | gen2.5 38 with the line stack |
 | Load-use stall | 1 (forwarded) | gen2 4 |
 | Taken-branch bubbles | 0 predicted / full flush cold | gen2 3 |
@@ -242,10 +299,15 @@ never inside them.
 
 ### Phase 0 — structural feasibility probes (the gate)
 
-Prove the four load-bearing claims close at *reliable 50 with margin*, each
+Prove the four load-bearing claims close with margin on a bare cone, each
 wired with realistic fanout on both sides of the boundary (not bare cells).
 Full per-probe specs — RTL to build, exact path to measure, pass threshold,
 decision-on-fail — are in [`phase0-probes.md`](./phase0-probes.md).
+
+The bars are 50 MHz ones: a non-BRAM cone must also close at ~65 MHz.
+That is what 37.5 MHz on the full top asks of a bare cone, at the
+probe-to-full ratio gen2 measured (~55 vs ~31 MHz); the Phase-1
+full-top read calibrates the ratio for gen3.
 
 | Probe | What it proves |
 |---|---|
@@ -256,8 +318,8 @@ decision-on-fail — are in [`phase0-probes.md`](./phase0-probes.md).
 | P0.5 physical-tag compare *(proposed, added after exit)* | the L1's tag compare at the board's associativity, chained behind the BRAM TLB verdict, still closes in MEM2 and IF2 |
 
 **Gate rule (the anti-dead-end rule).** If a probe is structurally short of
-reliable-50, decide *at that probe* — redesign the boundary, or consciously
-accept 37.5 for that path with the headroom documented. Never "wire it up
+its bar, decide *at that probe* — redesign the boundary, add a stage, or
+take the structure down (fewer ways, a smaller array). Never "wire it up
 and fix later." A path that only closes on 1-of-N seeds is not a close.
 
 ### Phase 1 — correctness skeleton (boots conformance)
@@ -265,17 +327,21 @@ and fix later." A path that only closes on 1-of-N seeds is not a close.
 Full 7-stage pipeline using the proven boundaries: registered
 load-completion, decode-on-enqueue, full operand + flag forwarding,
 single-outstanding hold-buffer loads, static-not-taken branches resolved in
-EX (no BTB yet), write-through L1 + **write-through L2** + burst read-fill +
-registered bus. **Store path: blocking write-through, WnA** — no buffer, no
-disambiguation; slow-but-correct, and a stall (CPI) outside the core cones,
-so safe to leave for the Phase-4 store buffer. divmul reused from `common/`.
+EX (no BTB yet), and the memory hierarchy in its
+[shapes](#feature-set-whats-foundational-vs-staged): write-through L1 +
+**write-through L2** in one uncore pipeline with the line-wide transfer
+and fill-through, the 256×2 TLB, and the registered bus. **Store path:
+blocking write-through, WnA** — no buffer, no disambiguation;
+slow-but-correct, and a stall (CPI) outside the core cones, so safe to
+leave for the Phase-4 store buffer. divmul reused from `common/`.
 **Exit:** `isa/` conformance passes on the gen3 RTL runner.
 
-### Phase 2 — BTB (+ optional RAS)
+### Phase 2 — BTB
 
-Fetch-time direct-branch BTB (0-bubble correct taken-prediction); optional
-fetch-domain RAS for returns. Re-run conformance + gen3 microarch
-regressions; re-read full-top fmax.
+Fetch-time direct-branch BTB (0-bubble correct taken-prediction). Return
+and direction prediction are staged, each chosen by a predictor model
+first. Re-run conformance + gen3 microarch regressions; re-read full-top
+fmax.
 
 ### Phase 3 — NetBSD boot
 
@@ -287,19 +353,19 @@ work begins.
 
 The primary store-traffic optimization: a cacheable-only store buffer
 between the completion unit and the uncore
-([design](./memory-performance.md#store-buffer-at-the-core-boundary)). It
-meets the core only through registered signals, so it lands here, late,
-with no risk to the core fmax proven in Phase 0. Write-back / write-allocate
-L2 follows *only* if profiling after this shows stores throughput-bound.
-L1-D write-allocate is investigated here at the earliest, and only if it
-can be shown not to lengthen the critical cone.
+([design](./memory-performance.md#store-buffer-at-the-core-boundary)),
+its entries a line wide with a byte mask. It meets the core only through
+registered signals, so it lands here, late, with no risk to the core
+fmax proven in Phase 0. Write-back / write-allocate L2 follows *only* if
+profiling after this shows stores throughput-bound. L1-D write-allocate
+is investigated here at the earliest, and only if it can be shown not to
+lengthen the critical cone.
 
 ### Phase 5 — floorplan + clock
 
-The **one-time** floorplan pass that converts structural headroom into the
-operating clock — floorplan once, after all features land, never
-per-feature. Set the PLL step (50 or reliable-37.5) from the full-top fmax
-with margin.
+The **one-time** floorplan pass — once, after all features land, never
+per-feature. It turns structural headroom into a 37.5 MHz close across
+the seed sweep, not into a higher clock.
 
 ## Reading guide
 

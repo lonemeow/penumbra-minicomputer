@@ -2,9 +2,13 @@
 
 > **Applies to:** Penumbra/3 · timing-critical design rationale.
 
-The structural rules gen3 must follow to hit a *reliable* ~50 MHz on the −6
-ULX3S (ECP5), distilled from the gen2 timing-closure work. Each point is a
-rule + why + the gen2 mistake it avoids.
+The structural rules gen3 must follow to close a *reliable* 37.5 MHz on the −6
+ULX3S (ECP5) with headroom for its staged features, distilled from the gen2
+timing-closure work. Each point is a rule + why + the gen2 mistake it avoids.
+
+The per-cone budgets below are 50 MHz ones (a 20 ns period). A bare cone reads
+well above what the same logic makes on the full top — gen2 measured ~55 MHz
+against ~31 — so a cone designed to 50 is what closes 37.5 on the full top.
 
 This is the **rationale layer**: the [gen3 plan](./overview.md) builds on
 these rules (and references them rather than restating them), the
@@ -49,10 +53,12 @@ Corollary on register placement:
   the PC mux or RAM address/enable.
 - **Fetch buffer (FIFO)** decouples front-end from back-end.
 - **All prediction is fetch-time and BRAM-backed, indexed not associative:**
-  direct-mapped BTB + tagless gshare BHT (one BRAM each, parallel with icache,
-  training registered off the fetch loop). **RAS via an IF2 pre-decode** (detect
-  call/return from the fetched word) — *not* BTB entries (capacity), *not* ID-stage
-  (a decode-stage predictor is marginal and registers to nothing).
+  direct-mapped BTB, and any direction table beside it — bimodal or tagless
+  gshare, chosen by a predictor model before it is built (one BRAM each, parallel
+  with icache, training registered off the fetch loop). **RAS via an IF2
+  pre-decode** (detect call/return from the fetched word) — *not* BTB entries
+  (capacity), *not* ID-stage (a decode-stage predictor is marginal and registers
+  to nothing).
 - Mispredict = **registered flush + redirect**, never enters the stall OR-tree.
 
 ## 2. Back-end stall — the load-use freeze (THE critical one)
@@ -195,13 +201,19 @@ cycles, never critical-path logic.**
     4–6 per 1000 instructions on Doom and the kernel paths — several percent of all
     cycles, more at gen3's lower base CPI
     ([memory-performance](./memory-performance.md#tlb-sets-and-a-cheaper-refill)).
-    A larger TLB shrinks the refill count, and so the case; what remains argues for
-    selectivity. Move the policy **out** of the core, not into the decoder:
+    A larger TLB shrinks the refill count, and so the case: 256×2 removes 92–98 % of
+    refills, so selectivity is re-measured once the TLB has grown. Any selective form
+    keeps what software sees: every WRSYS is context-synchronizing
+    ([sysregs](../../system/sysregs.md)), and existing kernels rely on it. Move the
+    policy **out** of the core, not into the decoder:
+      - **uncore-reported serialize bit** on the WRSYS response: the device sets it on
+        writes whose effect a younger, already-fetched instruction could observe — for
+        the MMU, a TLB install, not the staging of its VPN. Core stays dumb, no ISA
+        change, existing kernels unaffected. Preferred. *(device declares)*
       - **explicit barrier op** (SFENCE/FENCE.I style, cf. Wally `CSRWriteFenceM`):
-        WRSYS stays non-serializing, the kernel fences once per PTE *batch* — flush cost
-        scales with fault count, not PTE count. Preferred. *(software declares the sync)*
-      - **uncore-reported serialize bit** on the WRSYS response: the MMU device sets it
-        on the commit write only; core stays dumb, no ISA change. *(device declares)*
+        only as an opt-in path a kernel built for it uses, fencing once per PTE
+        *batch* — never by making plain WRSYS non-serializing, which every existing
+        kernel would break on. *(software declares the sync)*
   - Keep the **WRSYS value interlock** (gen2.5 `wrsys_value_stall`): the datum rides
     registered `idex_op_b`, so stall a reader until its writer commits — else a TLB-miss
     handler installs a stale PTE and re-faults forever. Scoreboard stall ⇒ timing-safe.
@@ -305,9 +317,14 @@ cycles, never critical-path logic.**
 
 ## 6. Bus / uncore — the Amiga decouple
 
-- **Memory stays a first-class autoconfig bus device.** Do NOT split SDRAM onto a
-  private port — boards without onboard SDRAM need bus-attached RAM, and a RAM board
-  in an autoconfig slot is core to the design (Amiga Zorro model).
+- **RAM stays reachable on the bus.** A RAM board in an autoconfig slot keeps
+  working, in the bus's sync and async forms — boards without on-board SDRAM need
+  it, and it is core to the design (Amiga Zorro model). That rules out taking
+  memory *off* the bus, not a faster path beside it: a native port from the uncore
+  to on-board RAM, with the bus still serving peripherals and add-on RAM, stays an
+  option (the PC northbridge; the A3000's motherboard Fast RAM beside Zorro III).
+  On the profiled workloads it adds little over write combining on the bus
+  ([memory-performance](./memory-performance.md#sdram-side-write-combining)).
 - The fix is **decoupling the CPU/L2 from the bus, Amiga 68040↔Zorro style:**
   registered **line-transaction** request out, streamed response back through a fill
   buffer, **cache hides the latency**. The CPU clock is independent of bus speed.
@@ -342,13 +359,14 @@ cycles, never critical-path logic.**
 ## 8. FPGA / tooling / hardware reality
 
 - **`keep_hierarchy` helps placement** in this flow (confirmed) — keep it.
-- **−6 grade is the floor** (5.8 ns BRAM Tco). 50 MHz is reachable (VexRiscv proves
-  it on comparable fabric) but tight. **Design for margin, not barely-closing** — a
-  1-of-N-seeds close is *not* a close.
+- **−6 grade is the floor** (5.8 ns BRAM Tco). 50 MHz cones are reachable (VexRiscv
+  proves it on comparable fabric) but tight. **Design for margin, not
+  barely-closing** — a 1-of-N-seeds close is *not* a close.
 - CPU clock ∈ {25, 37.5, 50} from the 600 MHz VCO (SDRAM phase fixed). Target
-  **reliable 50** (600/12) with slack; reliable 37.5 is the fallback. The VCO is
-  pinned: the phase detector needs ≥10 MHz (5 MHz never locked) and USB's exact
-  60 MHz shares the PLL, which leaves 600 MHz as the only legal VCO.
+  **reliable 37.5** (600/16) across a seed sweep of the full top; 50 (600/12) is not
+  a goal, and the cones are designed to it so that 37.5 closes with headroom. The
+  VCO is pinned: the phase detector needs ≥10 MHz (5 MHz never locked) and USB's
+  exact 60 MHz shares the PLL, which leaves 600 MHz as the only legal VCO.
 - **No synchronous crossings between PLL clocks.** nextpnr reports a path between
   two PLL outputs as a delay only — no slack, no failure, no placement weight — so
   a crossing that relies on a fixed clock ratio is unverified by the flow. Cross
