@@ -183,6 +183,69 @@ SB_WINDOW_ARGS = ["+cachemodel=4k/2:4k/2:64k/4", "+model_start=0xFFFF0800",
                   "+model_stop=0xFFFF0900"]
 
 
+def predictor(fetch, decode, execute, transfers=None):
+    """A branch predictor's expected redirects over one window: at fetch,
+    at decode, and at execute by kind as (conditional, direct, calls,
+    indirect calls, returns, indirect).  `transfers` is the window's
+    (conditional, taken, direct, calls, indirect calls, returns,
+    indirect), bp_basic.s's by default."""
+    return {"bp": {"transfers": transfers or BP_TRANSFERS,
+                   "redirects": (fetch, decode, sum(execute)) + tuple(execute)}}
+
+
+# bp_basic.s: 6 conditional (4 taken), 0 direct, 2 calls, 1 indirect call,
+# 3 returns, 2 indirect.  Every taken transfer costs a redirect somewhere;
+# a not-taken one only when predicted taken.  Word n of the program is
+# each table's slot n.
+#   none:        every taken transfer resolves in EX.
+#   btb32:       direct only, taken while held: C1 hits once and then
+#                mispredicts its exit, C2 misses and mispredicts its exit;
+#                calls miss once each; nothing indirect is held.
+#   ibtb32:      as btb32, plus I1 hitting on its second run; each return
+#                finds the previous caller's target.
+#   dec:         backward conditionals and calls redirect at decode, the
+#                loops mispredict their exits and the forward C3 its taken.
+#   dec+ras4:    as dec, and the stack returns all three right.
+#   dec+bim64:   counters start weakly not taken: C1 learns by its second
+#                run and mispredicts its exit; C2 and C3 never predict taken.
+#   dec+gs64:    history moves C1's second run to a fresh counter, so only
+#                calls redirect at decode.
+#   ibtb32+ras4+dec: the buffer takes C1's and I1's second runs at fetch;
+#                decode takes the first runs, the calls and every return.
+BP_TRANSFERS = (6, 4, 0, 2, 1, 3, 2)
+# bp_ras.s: six calls and six returns, nested.  Pre-decode redirects every
+# call; a 4-deep ring predicts the four innermost returns and misses the
+# other two, stale or empty; an 8-deep one predicts all six.
+BP_RAS_TRANSFERS = (0, 0, 0, 6, 0, 6, 0)
+BP_RAS = {
+    "bp dec": predictor(0, 6, (0, 0, 0, 0, 6, 0), BP_RAS_TRANSFERS),
+    "bp dec+ras4": predictor(0, 10, (0, 0, 0, 0, 2, 0), BP_RAS_TRANSFERS),
+    "bp dec+ras4e": predictor(0, 10, (0, 0, 0, 0, 2, 0), BP_RAS_TRANSFERS),
+    "bp dec+ras8": predictor(0, 12, (0, 0, 0, 0, 0, 0), BP_RAS_TRANSFERS),
+}
+# bp_recurse.s: six calls, five from one recursive site, six returns, and
+# one forward conditional taken once (BTFN misses it).  Every ring slot
+# holds the site's address once the recursion wraps a 4-deep ring: the
+# plain ring's stale fifth pop is right and the counting ring's empty one
+# predicts nothing; both miss the return to _start.
+BP_RECURSE_TRANSFERS = (6, 1, 0, 6, 0, 6, 0)
+BP_RECURSE = {
+    "bp dec+ras4": predictor(0, 11, (1, 0, 0, 0, 1, 0), BP_RECURSE_TRANSFERS),
+    "bp dec+ras4e": predictor(0, 10, (1, 0, 0, 0, 2, 0), BP_RECURSE_TRANSFERS),
+    "bp dec+ras8": predictor(0, 12, (1, 0, 0, 0, 0, 0), BP_RECURSE_TRANSFERS),
+}
+BP_BASIC = {
+    "bp none": predictor(0, 0, (4, 0, 2, 1, 3, 2)),
+    "bp btb32": predictor(1, 0, (5, 0, 2, 1, 3, 2)),
+    "bp ibtb32": predictor(2, 0, (5, 0, 2, 1, 3, 1)),
+    "bp dec": predictor(0, 5, (3, 0, 0, 1, 3, 2)),
+    "bp dec+ras4": predictor(0, 8, (3, 0, 0, 1, 0, 2)),
+    "bp dec+bim64": predictor(0, 3, (5, 0, 0, 1, 3, 2)),
+    "bp dec+gs64": predictor(0, 2, (4, 0, 0, 1, 3, 2)),
+    "bp ibtb32+ras4+dec": predictor(2, 7, (3, 0, 0, 1, 0, 1)),
+}
+
+
 def tlb_misses(user=0, supervisor=0):
     """A shadow TLB's expected misses over one window, or with the label
     "real" the refills the program's own miss handler took."""
@@ -270,6 +333,18 @@ CASES = [
          ["+cachemodel=4k/2:1k/1:64k/4", "+model_start=0xFFFF0800", "+model_stop=0xFFFF0900",
           "+sbmodel=" + ",".join(k[3:] for k in SB_POSTED)],
          windows=[("start PC to stop PC", SB_POSTED)]),
+    Case("bpmodel predictors", "bp_basic.s", ["+bpmodel=" + ",".join(k[3:] for k in BP_BASIC)],
+         windows=[("reset to exit", BP_BASIC)]),
+    Case("bpmodel return stack overflow", "bp_ras.s",
+         ["+bpmodel=" + ",".join(k[3:] for k in BP_RAS)],
+         windows=[("reset to exit", BP_RAS)]),
+    Case("bpmodel return stack in recursion", "bp_recurse.s",
+         ["+bpmodel=" + ",".join(k[3:] for k in BP_RECURSE)],
+         windows=[("reset to exit", BP_RECURSE)]),
+    Case("bpmodel unknown component", "bp_basic.s", ["+bpmodel=btb32+xyz"],
+         error=r"unknown component 'xyz'"),
+    Case("bpmodel size not a power of two", "bp_basic.s", ["+bpmodel=btb30"],
+         error=r"unknown component 'btb30'"),
     Case("sbmodel needs cachemodel", "sb_window.s", ["+sbmodel"],
          error=r"\+sbmodel needs \+cachemodel"),
     Case("sbmodel unknown policy", "sb_window.s", ["+cachemodel", "+sbmodel=8l/some/bus"],
@@ -303,6 +378,21 @@ def parse_report(text):
             continue
         if line.startswith("-- tlb: "):
             counts = None
+            continue
+        m = re.match(r"-- branch predictor (\S+)$", line)
+        if m:
+            counts = windows[-1][1].setdefault(f"bp {m.group(1)}", {"bp": {}})
+            continue
+        m = re.match(r"\s+transfers \(taken\): conditional (\d+) \((\d+)\), direct (\d+), calls (\d+),"
+                     r" indirect calls (\d+), returns (\d+), indirect (\d+)", line)
+        if m:
+            counts["bp"]["transfers"] = tuple(int(v) for v in m.groups())
+            continue
+        m = re.match(r"\s+redirects: fetch (\d+), decode (\d+), execute (\d+) \(conditional (\d+),"
+                     r" direct (\d+), calls (\d+), indirect calls (\d+), returns (\d+), indirect (\d+)\)",
+                     line)
+        if m:
+            counts["bp"]["redirects"] = tuple(int(v) for v in m.groups())
             continue
         m = re.match(r"-- store buffer (\S+): ", line)
         if m:
@@ -359,6 +449,11 @@ def compare_windows(expected, got):
                 if have.get("tlb") != want["tlb"]:
                     problems.append(f"{label} misses (user, supervisor) {have.get('tlb')}, "
                                     f"expected {want['tlb']}")
+                continue
+            if "bp" in want:
+                for key, value in want["bp"].items():
+                    if have["bp"].get(key) != value:
+                        problems.append(f"{label} {key} {have['bp'].get(key)}, expected {value}")
                 continue
             if "sb" in want:
                 for key, value in want["sb"].items():

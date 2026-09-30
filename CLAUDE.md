@@ -320,8 +320,8 @@ rom.ld ──────────────────┘
   The table is `sw/sim/penumbra_cores.h`; a generation's cache or
   TLB geometry or CPU name changing in RTL has to change there too.
   Measurement options: `+opstats` (instruction-class histogram),
-  `+branchstats`, `+pcprof`, `+cachemodel`, `+tlbmodel` and `+sbmodel`
-  — see below.
+  `+branchstats`, `+pcprof`, `+cachemodel`, `+tlbmodel`, `+sbmodel` and
+  `+bpmodel` — see below.
 - **Cache model** (`+cachemodel[=list]`, `sw/sim/cache_model.h`) —
   runs every fetch, load and store through shadow cache hierarchies:
   the `+core=` generation's by default, or a comma-separated list of
@@ -364,6 +364,17 @@ rom.ld ──────────────────┘
   accesses.  **Waits are an upper bound:** nothing else a pipeline
   stalls on is modelled, so stores arrive closer together than on
   hardware.
+- **Branch-predictor model** (`+bpmodel[=list]`, `sw/sim/bp_model.h`) —
+  runs every control transfer through shadow predictors and counts
+  where each would have redirected fetch: at fetch from a target
+  buffer, at the IF2 pre-decode, or in EX.  Items join components with
+  `+`: `btbN` (direct transfers, as gen2.5's) or `ibtbN` (indirect too),
+  `bimN` or `gsN` (bimodal or gshare two-bit counters), `rasN` (return
+  stack, a plain ring) or `rasNe` (one that predicts nothing when
+  empty), `dec` (pre-decode redirects of direct transfers, BTFN without
+  a direction table), or `none` (`+bpmodel=btb32,ibtb256+gs1k+ras8+dec`).
+  Each window reports transfers by kind, redirects by stage and the
+  cycles they cost; the counts are exact, the per-stage costs estimates.
 - **Execution profiles** (`+pcprof=file` plus
   `sw/tools/pcprof-report.py`) — buckets executed instructions by PC,
   exceptions by vector and TLB misses by faulting page.
