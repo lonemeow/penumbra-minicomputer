@@ -842,13 +842,23 @@ static struct {
 // inferred.  INC is applied on the way, so a consumer pushing a slower
 // rate is captured at the rate it will be heard at rather than at the
 // rate it wrote.
+//
+// +audio_status= presents a device that is not ready, so a driver's
+// readiness handling runs without a broken board: busy:N reads BUSY for
+// the first N reads of STATUS and then comes up, as a bring-up that
+// finishes; busy holds BUSY for good, as one that breaks the class's
+// 100 ms bound; fault presents FAULT from reset, and fault:CODE with
+// that FAULT_CODE.  Until the device is up it consumes nothing, so
+// frames queue as they would on hardware, and play the moment it comes
+// up.
 static constexpr uint32_t AUDIO_DEPTH     = 1024;
 static constexpr uint32_t AUDIO_CHANNELS = 4;
 static constexpr uint32_t AUDIO_RATE     = 48000;
 static constexpr uint32_t AUDIO_INC_UNITY = 0x00010000u;
-// Version 1, PITCH and VOLUME implemented, AUDIO_CHANNELS channels.
+// Version 1; PITCH, VOLUME and STATUS implemented, AUDIO_CHANNELS channels.
 static constexpr uint32_t AUDIO_CAP =
-    1u | (1u << 8) | (1u << 9) | (AUDIO_CHANNELS << 16);
+    1u | (1u << 8) | (1u << 9) | (1u << 13) | (AUDIO_CHANNELS << 16);
+static constexpr uint32_t AUDIO_ST_BUSY = 1u << 0, AUDIO_ST_FAULT = 1u << 1;
 
 static struct {
     uint32_t ctrl;          // [0] ENABLE, resets 0
@@ -863,6 +873,15 @@ static struct {
     uint32_t frac[AUDIO_CHANNELS];   // phase within the source frame, 16.16
     FILE*    capture = nullptr;
 
+    // Readiness, as +audio_status set it up and as it stands now.
+    // busy_reads counts the STATUS reads left before a finite bring-up
+    // ends; held[c] is what channel c queued while the device was not up.
+    enum class Stage { ready, busy_for, busy_stuck, fault };
+    Stage    stage_cfg = Stage::ready, stage = Stage::ready;
+    uint32_t busy_reads_cfg = 0, busy_reads = 0;
+    uint32_t fault_code = 0;
+    std::vector<uint32_t> held[AUDIO_CHANNELS];
+
     void reset() {
         ctrl = chan_en = irq_enable = irq_status = underrun = 0;
         master_vol = 0xFFFFFFFFu;
@@ -871,7 +890,99 @@ static struct {
             inc[c]  = AUDIO_INC_UNITY;
             vol[c]  = 0xFFFFFFFFu;
             frac[c] = 0;
+            held[c].clear();
         }
+        stage      = stage_cfg;
+        busy_reads = busy_reads_cfg;
+    }
+
+    // +audio_status=busy, busy:N (N >= 1), fault or fault:CODE (0-255).
+    // False on anything else, which the caller refuses.
+    bool set_stage(const char* spec) {
+        if (strcmp(spec, "busy") == 0) {
+            stage_cfg = Stage::busy_stuck;
+        } else if (strcmp(spec, "fault") == 0) {
+            stage_cfg = Stage::fault;
+        } else if (strncmp(spec, "fault:", 6) == 0) {
+            char* end;
+            unsigned long code = strtoul(spec + 6, &end, 0);
+            if (spec[6] == '\0' || *end != '\0' || code > 0xFF)
+                return false;
+            stage_cfg = Stage::fault;
+            fault_code = uint32_t(code);
+        } else if (strncmp(spec, "busy:", 5) == 0) {
+            char* end;
+            unsigned long n = strtoul(spec + 5, &end, 10);
+            if (spec[5] == '\0' || *end != '\0' || n == 0 || n > UINT32_MAX)
+                return false;
+            stage_cfg = Stage::busy_for;
+            busy_reads_cfg = uint32_t(n);
+        } else {
+            return false;
+        }
+        stage = stage_cfg;
+        busy_reads = busy_reads_cfg;
+        return true;
+    }
+
+    uint32_t status() const {
+        switch (stage) {
+            case Stage::busy_for:
+            case Stage::busy_stuck: return AUDIO_ST_BUSY;
+            case Stage::fault:      return AUDIO_ST_FAULT | (fault_code << 8);
+            default:                return 0;
+        }
+    }
+
+    uint32_t level(uint32_t c) const {
+        return AUDIO_DEPTH - uint32_t(held[c].size());
+    }
+
+    // A channel's watermark flag, sticky while its free space has reached
+    // an armed watermark.
+    void update_watermarks() {
+        for (uint32_t i = 0; i < AUDIO_CHANNELS; i++)
+            if (wm[i] != 0 && level(i) >= wm[i]) irq_status |= (1u << i);
+    }
+
+    // The device consumes INC source frames per output frame, so one
+    // source frame covers every output frame whose phase falls inside
+    // it, held across them as the device holds it.
+    //
+    // Only channel 0 is captured: this models the registers rather than
+    // the mix, so there is nothing to combine the others into, and
+    // channel 0 is what a single-stream consumer drives.
+    void play(uint32_t c, uint32_t data) {
+        const uint8_t b[4] = { uint8_t(data), uint8_t(data >> 8),
+                               uint8_t(data >> 16), uint8_t(data >> 24) };
+        // A zero INC would advance the phase not at all; the class floor
+        // is 0x100, so one LSB keeps the walk finite without standing in
+        // for a rate anything asks for.
+        uint32_t step = inc[c] != 0 ? inc[c] : 1;
+        bool live = capture != nullptr && c == 0 && (ctrl & 1) &&
+                    (chan_en & 1);
+
+        for (; frac[c] < AUDIO_INC_UNITY; frac[c] += step)
+            if (live) fwrite(b, 1, 4, capture);
+        frac[c] -= AUDIO_INC_UNITY;
+    }
+
+    // A finite bring-up has ended: what queued meanwhile plays at once.
+    void come_up() {
+        stage = Stage::ready;
+        for (uint32_t c = 0; c < AUDIO_CHANNELS; c++) {
+            for (uint32_t w : held[c]) play(c, w);
+            held[c].clear();
+        }
+        update_watermarks();
+    }
+
+    // STATUS shares CAP's slot, told apart by address bit 5 alone, so it
+    // mirrors into every odd block outside the channels, as the device
+    // decodes it.
+    static bool is_status(uint32_t addr) {
+        return chan_of(addr) == AUDIO_CHANNELS && ((addr >> 2) & 7) == 0 &&
+               (addr & 0x20) != 0;
     }
 
     // Global registers occupy the first 32-byte block, channel n the
@@ -886,6 +997,11 @@ static struct {
     uint32_t read(uint32_t addr) {
         uint32_t r = (addr >> 2) & 7;
         uint32_t c = chan_of(addr);
+        if (is_status(addr)) {
+            uint32_t st = status();
+            if (stage == Stage::busy_for && --busy_reads == 0) come_up();
+            return st;
+        }
         if (c == AUDIO_CHANNELS) {
             switch (r) {
                 case 0: return AUDIO_CAP;
@@ -902,7 +1018,7 @@ static struct {
             case 1:  return inc[c];
             case 2:  return vol[c];
             case 3:  return AUDIO_DEPTH;
-            case 4:  return AUDIO_DEPTH;                // LEVEL: always free
+            case 4:  return level(c);    // all free, unless the stage is down
             case 5:  return wm[c];
             default: return 0;
         }
@@ -929,42 +1045,20 @@ static struct {
             case 0:
                 // FLUSH discards the queue, and with it where the output
                 // sits inside a source frame.
-                if (data & (1u << 8)) frac[c] = 0;
+                if (data & (1u << 8)) { frac[c] = 0; held[c].clear(); }
                 break;
             case 1: inc[c] = data; break;
             case 2: vol[c] = data; break;
             case 5: wm[c]  = data; break;
-            case 6: {
-                // A frame.  The device consumes INC source frames per
-                // output frame, so one source frame covers every output
-                // frame whose phase falls inside it, held across them as
-                // the device holds it.
-                //
-                // Only channel 0 is captured: this models the registers
-                // rather than the mix, so there is nothing to combine the
-                // others into, and channel 0 is what a single-stream
-                // consumer drives.
-                const uint8_t b[4] = { uint8_t(data), uint8_t(data >> 8),
-                                       uint8_t(data >> 16),
-                                       uint8_t(data >> 24) };
-                // A zero INC would advance the phase not at all; the class
-                // floor is 0x100, so one LSB keeps the walk finite without
-                // standing in for a rate anything asks for.
-                uint32_t step = inc[c] != 0 ? inc[c] : 1;
-                bool live = capture != nullptr && c == 0 && (ctrl & 1) &&
-                            (chan_en & 1);
-
-                for (; frac[c] < AUDIO_INC_UNITY; frac[c] += step)
-                    if (live) fwrite(b, 1, 4, capture);
-                frac[c] -= AUDIO_INC_UNITY;
+            case 6:
+                // A frame: consumed at once behind a ready stage, queued
+                // behind one that is not, and discarded past a full queue.
+                if (stage == Stage::ready) play(c, data);
+                else if (held[c].size() < AUDIO_DEPTH) held[c].push_back(data);
                 break;
-            }
             default: break;
         }
-        // The queue is always empty here, so a channel's watermark is
-        // met whenever one is armed at all.
-        for (uint32_t i = 0; i < AUDIO_CHANNELS; i++)
-            if (wm[i] != 0) irq_status |= (1u << i);
+        update_watermarks();
     }
 
     bool irq() const { return (irq_status & irq_enable) != 0; }
@@ -3305,6 +3399,14 @@ int main(int argc, char** argv) {
         else if (strncmp(argv[i], "+usbdev=", 8) == 0) usbdev_spec = argv[i] + 8;
         else if (strncmp(argv[i], "+trace=", 7) == 0) trace_path = argv[i] + 7;
         else if (strncmp(argv[i], "+audiofile=", 11) == 0) audio_path = argv[i] + 11;
+        else if (strncmp(argv[i], "+audio_status=", 14) == 0) {
+            if (!audio.set_stage(argv[i] + 14)) {
+                fprintf(stderr, "penumbra-iss: bad +audio_status= '%s' "
+                        "(busy, busy:N with N >= 1, fault, or fault:CODE "
+                        "with CODE 0-255)\n", argv[i] + 14);
+                return 1;
+            }
+        }
         else if (strncmp(argv[i], "+max-insn=", 10) == 0) max_insns = strtoull(argv[i] + 10, nullptr, 0);
         else if (strcmp(argv[i], "+raw") == 0) full_raw = true;
         else if (strcmp(argv[i], "+hosted") == 0) hosted_mode = true;
@@ -3349,7 +3451,7 @@ int main(int argc, char** argv) {
     }
 
     if (!hex_path) {
-        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+ram=size] [+sdcard=path] [+usbdev=type:config] [+audiofile=path] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+pcprof=path [+pcprof_start=addr]] [+irq_at_pc=addr[,period]] [+core=generation] [+cachemodel[=list]] [+tlbmodel[=list]] [+sbmodel[=list] [+sbmodel_cpi=N]] [+bpmodel[=list]] [+model_start=addr] [+model_stop=addr] [+model_report=path]\n");
+        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+ram=size] [+sdcard=path] [+usbdev=type:config] [+audiofile=path] [+audio_status=busy[:N]|fault[:CODE]] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+pcprof=path [+pcprof_start=addr]] [+irq_at_pc=addr[,period]] [+core=generation] [+cachemodel[=list]] [+tlbmodel[=list]] [+sbmodel[=list] [+sbmodel_cpi=N]] [+bpmodel[=list]] [+model_start=addr] [+model_stop=addr] [+model_report=path]\n");
         return 1;
     }
 

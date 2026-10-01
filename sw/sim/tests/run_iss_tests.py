@@ -45,6 +45,15 @@ CORE_IDENTITY = {
 }
 CTRL_READBACK = {6: 0, 7: 1}
 
+# audio.sv's CAP_VALUE at the board's four channels: version 1, PITCH,
+# VOLUME and STATUS.  audio_status.s leaves the class of the chain's
+# fourth device in R8 (CLASS_AUDIO) and queues two frames, so a LEVEL of
+# DEPTH - 2 means a device that is not up held them.
+AUDIO_DEPTH = 1024
+AUDIO_CAP = 1 | (1 << 8) | (1 << 9) | (1 << 13) | (4 << 16)
+AUDIO_HELD = AUDIO_DEPTH - 2
+ST_BUSY, ST_FAULT = 1, 2
+
 
 def hierarchy(l1i=(0, 0), l1d=(0, 0, 0, 0), l2=(0, 0, 0, 0), fills=None, prediction=None):
     """A cache model's expected counts for one hierarchy over one window:
@@ -282,6 +291,22 @@ CASES = [
          regs={**CORE_IDENTITY["penumbra1"], **CTRL_READBACK}),
     Case("unknown core", "core_identity.s", ["+core=penumbra9"],
          error=r"unknown \+core generation 'penumbra9'"),
+    Case("audio device ready", "audio_status.s", [],
+         regs={2: AUDIO_CAP, 3: 0, 4: 0, 5: 0,
+               6: AUDIO_DEPTH, 7: AUDIO_DEPTH, 8: 7}),
+    Case("+audio_status=busy:2", "audio_status.s", ["+audio_status=busy:2"],
+         regs={3: ST_BUSY, 4: ST_BUSY, 5: 0, 6: AUDIO_HELD, 7: AUDIO_DEPTH}),
+    Case("+audio_status=busy", "audio_status.s", ["+audio_status=busy"],
+         regs={3: ST_BUSY, 4: ST_BUSY, 5: ST_BUSY, 6: AUDIO_HELD, 7: AUDIO_HELD}),
+    Case("+audio_status=fault", "audio_status.s", ["+audio_status=fault"],
+         regs={3: ST_FAULT, 4: ST_FAULT, 5: ST_FAULT, 6: AUDIO_HELD, 7: AUDIO_HELD}),
+    Case("+audio_status=fault:0x5A", "audio_status.s", ["+audio_status=fault:0x5A"],
+         regs={3: ST_FAULT | (0x5A << 8), 5: ST_FAULT | (0x5A << 8),
+               6: AUDIO_HELD, 7: AUDIO_HELD}),
+    Case("bad audio status", "audio_status.s", ["+audio_status=busy:0"],
+         error=r"bad \+audio_status= 'busy:0'"),
+    Case("audio fault code out of range", "audio_status.s", ["+audio_status=fault:256"],
+         error=r"bad \+audio_status= 'fault:256'"),
     Case("cachemodel data", "cache_data.s",
          ["+cachemodel=penumbra1,penumbra2,penumbra2_5,1k/1:1k/1:64k/4,4k/2:4k/2:64k/4"],
          windows=[("reset to exit", {
