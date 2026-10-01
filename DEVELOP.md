@@ -201,15 +201,21 @@ A full report is written to `build/test-compiler-report.txt`.
 
 Two benchmark families live under `benchmark/`:
 
-**Bare-metal** (PIE ELFs booted from ROM via `boot sd:0,0/<NAME>.ELF`):
+**Bare-metal** (ELFs booted from ROM via `boot sd:0,0/<NAME>.ELF`):
 - `DHRYSTON.ELF` — Dhrystone 2.1 (DMIPS / CPI).
+- `COREMARK.ELF` — CoreMark 1.0 (iterations per second and per MHz,
+  CPI). Runs the validation seeds and the performance seeds, sizing
+  each run to the ten seconds the run rules ask for, and ends with the
+  lines the reporting rules define. A machine the harness cannot
+  describe gets no per-MHz line: add its memory to `machine_memory[]`
+  in `benchmark/common/bench.c`.
 - `MEMBENCH.ELF` — cached + uncached memory throughput / latency at W/H/B sizes.
 - `MEMTEST.ELF` — SDRAM correctness walk (six patterns; round-trip / walking-1 / etc.).
 
 ```sh
 sw/tools/setup-compiler-rt.sh  # Once: the compiler-rt builtins the benchmarks link
-make benchmark                 # ISS (fast, all three benches)
-make benchmark-rtl             # Verilator (cycle-accurate, slower; memtest dominates)
+make benchmark                 # ISS (fast, every bench)
+make benchmark-rtl             # Verilator (cycle-accurate, slower; memtest dominates; no CoreMark)
 make benchmark BENCH_ITERS=100 # Override Dhrystone iteration count
 make benchmark COPT="-Os"      # Override benchmark optimization level
 ```

@@ -601,13 +601,12 @@ cycles, do not move, and none of them is the compiler's.
 
 ## Benchmark: CoreMark-Pro under NetBSD
 
-Dhrystone is the only modern-era integer benchmark in the bare-metal
-harness and is widely understood as unrepresentative of real workloads
-(tiny working set, no float, no state machine, trivial branching).
-CoreMark-Pro is the natural successor: a 9-workload suite covering
-JPEG encode, linear algebra (SP float), 64K-point FFT, SHA, DEFLATE,
-neural-net inference, parser, and a 125 KB-working-set workload that
-meaningfully exercises the TLB.
+The integer benchmarks in the bare-metal harness, Dhrystone and
+CoreMark, measure the CPU in isolation on working sets that fit the
+caches. CoreMark-Pro is the system-level counterpart: a 9-workload
+suite covering JPEG encode, linear algebra (SP float), 64K-point FFT,
+SHA, DEFLATE, neural-net inference, parser, and a 125 KB-working-set
+workload that meaningfully exercises the TLB.
 
 **Hosting decision: run it under NetBSD, not bare-metal.**
 CoreMark-Pro is licensed Apache 2.0 (compatible with project licensing
@@ -657,15 +656,6 @@ benchmark output to stay clean of trademark misuse.
 - `radix2-big-64k` walks ~512 KB of complex floats — blows past our
   1 KB caches and 64-entry TLB and is the most interesting workload
   from a memory-hierarchy perspective.
-
-**Related, separate item.**  CoreMark (singular, not -Pro) is a
-better fit for the *bare-metal* harness — single C file, no float,
-no file I/O, drops cleanly alongside dhrystone in `benchmark/`.
-Plausible to land it first as the dhrystone successor in the
-bare-metal tier, then add CoreMark-Pro to the hosted tier on top of
-pbench.  The split gives a clean two-tier story: bare-metal
-benchmarks measure the CPU in isolation, hosted benchmarks measure
-the system.
 
 ## ISA (data point): no rotate instruction costs SHA-256 ~30% of its ALU work
 

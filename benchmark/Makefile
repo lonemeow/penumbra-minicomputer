@@ -38,13 +38,13 @@ BUILDDIR := $(PROJROOT)/build/benchmark
 
 # ── Targets ────────────────────────────────────────────────────
 
-.PHONY: all dhrystone memtest membench strtest fbtest audiotest clean
+.PHONY: all dhrystone coremark memtest membench strtest fbtest audiotest clean
 
 # fbtest and audiotest ship with the others so they are on the SD image
 # ready to run on hardware; both stay out of BENCH_ELFS in the root
 # Makefile, which is the list the automated ISS/RTL benchmark loop
 # runs, because both need a real device and a human to judge them.
-all: dhrystone memtest membench fbtest audiotest
+all: dhrystone coremark memtest membench fbtest audiotest
 
 # ── Common harness objects ─────────────────────────────────────
 
@@ -206,6 +206,63 @@ dhrystone: $(BUILDDIR)/DHRYSTON.ELF
 # Dhrystone's code already fills.
 $(BUILDDIR)/DHRYSTON.ELF: $(STATIC_CRT0_OBJ) $(DHRY_TIMED_OBJ) $(PENSTRING_LIB) $(DHRY_GLUE_OBJ) $(STATIC_COMMON_OBJ) $(BUILTINS) common/bench_static.ld
 	$(LD) $(STATIC_LDFLAGS) $(STATIC_CRT0_OBJ) $(DHRY_TIMED_OBJ) $(PENSTRING_LIB) $(DHRY_GLUE_OBJ) $(STATIC_COMMON_OBJ) $(BUILTINS) -o $@
+
+# ── CoreMark 1.0 ──────────────────────────────────────────────
+#
+# coremark/ holds EEMBC's sources unmodified, from
+# https://github.com/eembc/coremark at 9d07b05: the newest revision
+# whose own coremark.md5 matches its files (a comment fix to coremark.h
+# after it left the list stale).  A score may be called CoreMark only
+# if the files that list names are unchanged (LICENSE.md, and "Run
+# Rules" in upstream's README), so the build checks them.
+#
+# coremark/penumbra/ is the port, which the same rules leave to the
+# platform, and the harness's entry point.  The port takes its seeds
+# and its iteration count at run time, so nothing here sizes the run.
+#
+# The run rules want every source built with the same flags and the
+# flags reported, so one flag set serves the port and CoreMark alike
+# and FLAGS_STR carries its optimization and code generation options
+# into the report.
+#
+# A static-link benchmark (see STATIC_CFLAGS), without the soft-float
+# stubs: the port keeps CoreMark's own arithmetic in integers, and a
+# stub would turn a float that crept in into a silent zero.
+
+COREMARK_FLAGS_STR := $(filter -O% -f% -m%,$(STATIC_CFLAGS))
+COREMARK_CFLAGS    := $(STATIC_CFLAGS) -I coremark -I coremark/penumbra \
+                      -DFLAGS_STR='"$(COREMARK_FLAGS_STR)"'
+
+COREMARK_CORE := core_list_join core_main core_matrix core_state core_util
+COREMARK_PORT := core_portme ee_printf entry
+COREMARK_HDRS := coremark/coremark.h coremark/penumbra/core_portme.h \
+                 coremark/penumbra/port.h common/bench.h
+COREMARK_TIMED_OBJ := $(COREMARK_CORE:%=$(BUILDDIR)/coremark_%.o)
+COREMARK_GLUE_OBJ  := $(COREMARK_PORT:%=$(BUILDDIR)/coremark_%.o)
+
+COREMARK_COMMON_OBJ := $(BUILDDIR)/bench.static.o $(BUILDDIR)/librt.static.o
+
+COREMARK_CHECKED := $(BUILDDIR)/.coremark_checked
+$(COREMARK_CHECKED): coremark/coremark.md5 coremark/coremark.h \
+                     $(COREMARK_CORE:%=coremark/%.c) | $(BUILDDIR)
+	cd coremark && md5sum --quiet -c coremark.md5
+	@touch $@
+
+$(BUILDDIR)/coremark_%.o: coremark/%.c $(COREMARK_HDRS) $(COREMARK_CHECKED) | $(BUILDDIR)
+	$(CC) $(COREMARK_CFLAGS) -c $< -o $@
+
+$(BUILDDIR)/coremark_%.o: coremark/penumbra/%.c $(COREMARK_HDRS) | $(BUILDDIR)
+	$(CC) $(COREMARK_CFLAGS) -c $< -o $@
+
+coremark: $(BUILDDIR)/COREMARK.ELF
+
+# Laid out as Dhrystone is: CoreMark's own code, the string routines,
+# then the port and the harness, so neither of those moves the code the
+# timed region runs.  That code outgrows the L1 I-cache on the machines
+# so far, so here the order buys a layout that holds still, not one
+# free of conflicts.
+$(BUILDDIR)/COREMARK.ELF: $(STATIC_CRT0_OBJ) $(COREMARK_TIMED_OBJ) $(PENSTRING_LIB) $(COREMARK_GLUE_OBJ) $(COREMARK_COMMON_OBJ) $(BUILTINS) common/bench_static.ld
+	$(LD) $(STATIC_LDFLAGS) $(STATIC_CRT0_OBJ) $(COREMARK_TIMED_OBJ) $(PENSTRING_LIB) $(COREMARK_GLUE_OBJ) $(COREMARK_COMMON_OBJ) $(BUILTINS) -o $@
 
 # ── memtest ──────────────────────────────────────────────────
 #

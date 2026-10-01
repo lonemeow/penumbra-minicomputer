@@ -1000,13 +1000,18 @@ sdimage-bench: bench-elfs demoscene-elfs
 # MEMTEST is a correctness check; MEMBENCH and DHRYSTON are perf measurements.
 BENCH_ELFS := DHRYSTON.ELF MEMTEST.ELF MEMBENCH.ELF
 
+# COREMARK sizes its own runs to the ten seconds its run rules ask for:
+# seconds of ISS time, where it checks its results against known CRCs,
+# and hours of RTL simulation, so only the ISS loop runs it.
+BENCH_ELFS_ISS := $(BENCH_ELFS) COREMARK.ELF
+
 .PHONY: benchmark
 benchmark: sdimage-bench $(ISS)
 	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX)
 	@# +halt-on-break: each benchmark ends with a BREAK "done" sentinel.
 	@# Without it the interactive ISS traps that BREAK into the ROM monitor
 	@# and blocks on stdin, so the loop would never reach the next ELF.
-	@for elf in $(BENCH_ELFS); do \
+	@for elf in $(BENCH_ELFS_ISS); do \
 		echo "═══ Running $$elf on ISS ═══"; \
 		echo "boot sd:0,0/$$elf" | $(ISS) program.hex $(if $(RAM),+ram=$(RAM)) +sdcard=$(BENCH_IMG) +halt-on-break \
 			|| echo "*** $$elf FAILED ***"; \

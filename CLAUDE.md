@@ -442,10 +442,12 @@ Hex files are gitignored; the Makefile builds them from sources.
 
 ## Benchmarks
 
-Bare-metal benchmarks (Dhrystone 2.1, memtest, membench) under
-`benchmark/`; built as PIE ELFs loaded from FAT32 via
-`boot sd:0,0/DHRYSTON.ELF` etc. NetBSD-hosted microbenchmark suite
-(`pbench`, syscalls + libc hot paths) under `benchmark/netbsd-bench/`.
+Bare-metal benchmarks (Dhrystone 2.1, CoreMark 1.0, memtest, membench)
+under `benchmark/`; built as ELFs loaded from FAT32 via
+`boot sd:0,0/DHRYSTON.ELF` etc. — PIE, except Dhrystone and CoreMark,
+which link statically as the builds published scores come from do.
+NetBSD-hosted microbenchmark suite (`pbench`, syscalls + libc hot
+paths) under `benchmark/netbsd-bench/`.
 Graphics demos live in `sw/demos/` — they share `perfctr.c` with pbench
 but are exhibit material rather than measurements.
 
@@ -459,6 +461,13 @@ but are exhibit material rather than measurements.
   (`sw/tools/setup-compiler-rt.sh`), which give the harness 64-bit
   division: harness arithmetic is `uint64_t`, never 32-bit with an
   argument about what fits.
+- **CoreMark** (`COREMARK.ELF`) sizes its own runs to the ten seconds
+  its run rules ask for, so it is in the ISS loop only. The sources in
+  `benchmark/coremark/` are EEMBC's and may not change (the build
+  checks `coremark.md5`); the port is `benchmark/coremark/penumbra/`.
+  Its per-MHz reporting line states the memory, which no register
+  describes: `machine_memory[]` in `benchmark/common/bench.c` restates
+  each board's memory type and clock, and has to follow the board.
 - The repo keeps no reference numbers: measure on the FPGA, running the
   build you compare against in the same session.  A DMIPS/CPI/fmax
   figure quoted in any doc, CLAUDE.md included, is a dated sample.
