@@ -54,6 +54,10 @@ constrains the CPU clock. The CPU rates are fixed operating points,
 where the fabric's timing runs out: gen2 closes 37.5 MHz only
 narrowly.
 
+The benchmark harness restates the memory's type and clock in
+`machine_memory[]` (`benchmark/common/bench.c`), for the reporting
+line that has to give them; a change to either changes there too.
+
 The CLKOS2 phase is empirical, since boards and SDRAM parts see
 slightly different data windows. `PHASE_DEG` (180 by default) sets it
 at build time, and a sweep over the eight steps finds the arc that

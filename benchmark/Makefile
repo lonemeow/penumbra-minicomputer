@@ -127,6 +127,24 @@ $(PENSTRING_LIB): $(NETBSD_STRING_OBJS)
 	rm -f $@
 	$(AR) rcs $@ $^
 
+# ── Compiler runtime ───────────────────────────────────────────
+#
+# What the compiler leaves to its runtime on a 32-bit machine: 64-bit
+# division above all, which lets the harness do its arithmetic in 64
+# bits instead of arguing about what fits in 32.  These are the
+# compiler-rt builtins sw/tools/setup-compiler-rt.sh builds, linked as
+# an archive after the harness objects, so a benchmark takes only the
+# routines it calls and librt.c's stay the ones used where both define
+# one.  The -O2 build whatever COPT is: its routines serve the
+# harness's bookkeeping, not the code a benchmark measures.
+
+BUILTINS := $(PROJROOT)/build/compiler-rt-builtins-O2/lib/linux/libclang_rt.builtins-penumbra.a
+
+$(BUILTINS):
+	@echo "error: $@ not found — run sw/tools/setup-compiler-rt.sh" >&2; false
+
+HARNESS_LIBS := $(PENSTRING_LIB) $(BUILTINS)
+
 # ── Dhrystone 2.1 ─────────────────────────────────────────────
 #
 # Original source files (dhry.h, dhry_1.c, dhry_2.c) are unmodified
@@ -186,8 +204,8 @@ dhrystone: $(BUILDDIR)/DHRYSTON.ELF
 # in any set than the cache has ways, so the loop cannot evict itself,
 # and nothing added to the harness can move the routines into the sets
 # Dhrystone's code already fills.
-$(BUILDDIR)/DHRYSTON.ELF: $(STATIC_CRT0_OBJ) $(DHRY_TIMED_OBJ) $(PENSTRING_LIB) $(DHRY_GLUE_OBJ) $(STATIC_COMMON_OBJ) common/bench_static.ld
-	$(LD) $(STATIC_LDFLAGS) $(STATIC_CRT0_OBJ) $(DHRY_TIMED_OBJ) $(PENSTRING_LIB) $(DHRY_GLUE_OBJ) $(STATIC_COMMON_OBJ) -o $@
+$(BUILDDIR)/DHRYSTON.ELF: $(STATIC_CRT0_OBJ) $(DHRY_TIMED_OBJ) $(PENSTRING_LIB) $(DHRY_GLUE_OBJ) $(STATIC_COMMON_OBJ) $(BUILTINS) common/bench_static.ld
+	$(LD) $(STATIC_LDFLAGS) $(STATIC_CRT0_OBJ) $(DHRY_TIMED_OBJ) $(PENSTRING_LIB) $(DHRY_GLUE_OBJ) $(STATIC_COMMON_OBJ) $(BUILTINS) -o $@
 
 # ── memtest ──────────────────────────────────────────────────
 #
@@ -208,8 +226,8 @@ $(BUILDDIR)/memtest_patterns.o: memtest/patterns.c memtest/patterns.h common/ben
 
 memtest: $(BUILDDIR)/MEMTEST.ELF
 
-$(BUILDDIR)/MEMTEST.ELF: $(CRT0_OBJ) $(MEMTEST_OBJ) $(COMMON_OBJ) $(PENSTRING_LIB) common/bench.ld
-	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(MEMTEST_OBJ) $(COMMON_OBJ) $(PENSTRING_LIB) -o $@
+$(BUILDDIR)/MEMTEST.ELF: $(CRT0_OBJ) $(MEMTEST_OBJ) $(COMMON_OBJ) $(HARNESS_LIBS) common/bench.ld
+	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(MEMTEST_OBJ) $(COMMON_OBJ) $(HARNESS_LIBS) -o $@
 
 # ── membench ─────────────────────────────────────────────────
 #
@@ -231,8 +249,8 @@ $(BUILDDIR)/membench_loops.o: membench/loops.S | $(BUILDDIR)
 
 membench: $(BUILDDIR)/MEMBENCH.ELF
 
-$(BUILDDIR)/MEMBENCH.ELF: $(CRT0_OBJ) $(MEMBENCH_OBJ) $(COMMON_OBJ) $(PENSTRING_LIB) common/bench.ld
-	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(MEMBENCH_OBJ) $(COMMON_OBJ) $(PENSTRING_LIB) -o $@
+$(BUILDDIR)/MEMBENCH.ELF: $(CRT0_OBJ) $(MEMBENCH_OBJ) $(COMMON_OBJ) $(HARNESS_LIBS) common/bench.ld
+	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(MEMBENCH_OBJ) $(COMMON_OBJ) $(HARNESS_LIBS) -o $@
 
 # ── strtest ──────────────────────────────────────────────────
 #
@@ -251,8 +269,8 @@ $(BUILDDIR)/strtest_entry.o: strtest/entry.c common/bench.h | $(BUILDDIR)
 
 strtest: $(BUILDDIR)/STRTEST.ELF
 
-$(BUILDDIR)/STRTEST.ELF: $(CRT0_OBJ) $(STRTEST_OBJ) $(COMMON_OBJ) $(PENSTRING_LIB) common/bench.ld
-	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(STRTEST_OBJ) $(COMMON_OBJ) $(PENSTRING_LIB) -o $@
+$(BUILDDIR)/STRTEST.ELF: $(CRT0_OBJ) $(STRTEST_OBJ) $(COMMON_OBJ) $(HARNESS_LIBS) common/bench.ld
+	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(STRTEST_OBJ) $(COMMON_OBJ) $(HARNESS_LIBS) -o $@
 
 # ── fbtest ───────────────────────────────────────────────────
 #
@@ -284,8 +302,8 @@ fbtest: $(BUILDDIR)/FBTEST.ELF
 $(BUILDDIR)/fbtest_tlbrange.o: common/tlbrange.c common/bench.h | $(BUILDDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILDDIR)/FBTEST.ELF: $(CRT0_OBJ) $(FBTEST_OBJ) $(BUILDDIR)/fbtest_tlbrange.o $(COMMON_OBJ) $(PENSTRING_LIB) common/bench.ld
-	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(FBTEST_OBJ) $(BUILDDIR)/fbtest_tlbrange.o $(COMMON_OBJ) $(PENSTRING_LIB) -o $@
+$(BUILDDIR)/FBTEST.ELF: $(CRT0_OBJ) $(FBTEST_OBJ) $(BUILDDIR)/fbtest_tlbrange.o $(COMMON_OBJ) $(HARNESS_LIBS) common/bench.ld
+	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(FBTEST_OBJ) $(BUILDDIR)/fbtest_tlbrange.o $(COMMON_OBJ) $(HARNESS_LIBS) -o $@
 
 # ── audiotest ────────────────────────────────────────────────
 #
@@ -367,8 +385,8 @@ $(BUILDDIR)/audiotest_sample.o: audiotest/sample.S $(AUDIOTEST_CLIP) \
 
 audiotest: $(BUILDDIR)/AUDIOTES.ELF
 
-$(BUILDDIR)/AUDIOTES.ELF: $(CRT0_OBJ) $(AUDIOTEST_OBJ) $(COMMON_OBJ) $(PENSTRING_LIB) common/bench.ld
-	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(AUDIOTEST_OBJ) $(COMMON_OBJ) $(PENSTRING_LIB) -o $@
+$(BUILDDIR)/AUDIOTES.ELF: $(CRT0_OBJ) $(AUDIOTEST_OBJ) $(COMMON_OBJ) $(HARNESS_LIBS) common/bench.ld
+	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(AUDIOTEST_OBJ) $(COMMON_OBJ) $(HARNESS_LIBS) -o $@
 
 # ── Cleanup ────────────────────────────────────────────────────
 

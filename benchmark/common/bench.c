@@ -6,9 +6,9 @@
  * ticks).  The IRQ handler (installed by crt0.S) accumulates raw
  * ticks at address 0x38 on each underflow (adds 0xFFFF per wrap).
  * The readback function adds the partial count.  Conversion to µs
- * uses the actual TMFREQ value via a 64-bit-precision (a*b)/d helper,
- * so the result is exact even when TMFREQ isn't an integer multiple
- * of 1 MHz (e.g. 1041666 Hz at 12.5 MHz, 961538 Hz at 25 MHz).
+ * uses the actual TMFREQ value with a 64-bit product, so the result
+ * is exact even when TMFREQ isn't an integer multiple of 1 MHz
+ * (e.g. 1041666 Hz at 12.5 MHz, 961538 Hz at 25 MHz).
  */
 
 #include "bench.h"
@@ -47,8 +47,12 @@ static uint32_t timer_freq;
 #define TMCR_AUTOLOAD  0x04
 #define TMST_UDF       0x01
 
-/* ── CPU perfctr sysregs (device 1) ────────────────────────────── */
+/* ── CPU identity and perfctr sysregs (device 1) ───────────────── */
 #define SYSDEV_CPU            1
+#define CPU_NAME0             1
+#define CPU_NAME1             2
+#define CPU_NAME2             3
+#define CPU_NAME3             4
 #define CPU_CYCLES            5
 #define CPU_INSNS_RETIRED     6
 #define CPU_STALL_FUNIT       7
@@ -57,6 +61,14 @@ static uint32_t timer_freq;
 #define CPU_STALL_STORE       10
 #define CPU_STALL_HAZARD      11
 #define CPU_STALL_FLUSH       12
+
+/* ── Machine identity sysregs (device 8) ───────────────────────── */
+#define SYSDEV_MACH           8
+#define MACH_NAME0            1
+#define MACH_NAME1            2
+#define MACH_NAME2            3
+#define MACH_NAME3            4
+#define MACH_CPU_FREQ         5
 
 /* ── Cache sysregs (devices 2, 3, 9 — identical layout) ────────── */
 #define SYSDEV_L1_DCACHE      2
@@ -135,44 +147,13 @@ uint32_t bench_timer_elapsed_ticks(void) {
     return base + (TIMER_RELOAD - count);
 }
 
-/* Compute (a * b) / d at 64-bit precision using only 32-bit ops.
- * Caller guarantees the quotient fits in 32 bits and d > 0.
- * Forms the 64-bit product via four 16x16 multiplies, then long-divides. */
-static uint32_t mul_div_u32(uint32_t a, uint32_t b, uint32_t d) {
-    uint32_t a_hi = a >> 16, a_lo = a & 0xFFFF;
-    uint32_t b_hi = b >> 16, b_lo = b & 0xFFFF;
-
-    uint32_t hh = a_hi * b_hi;
-    uint32_t hl = a_hi * b_lo;
-    uint32_t lh = a_lo * b_hi;
-    uint32_t ll = a_lo * b_lo;
-
-    uint32_t mid     = (hl & 0xFFFF) + (lh & 0xFFFF) + (ll >> 16);
-    uint32_t prod_lo = (mid << 16) | (ll & 0xFFFF);
-    uint32_t prod_hi = hh + (hl >> 16) + (lh >> 16) + (mid >> 16);
-
-    /* Long-divide [prod_hi:prod_lo] by d, MSB-first across 64 bits.
-     * Top 32 bits feed the running remainder; only the low 32 quotient
-     * bits are kept (caller asserts the quotient fits there). */
-    uint32_t q = 0, r = 0;
-    for (int i = 31; i >= 0; i--) {
-        r = (r << 1) | ((prod_hi >> i) & 1);
-        if (r >= d) r -= d;
-    }
-    for (int i = 31; i >= 0; i--) {
-        r = (r << 1) | ((prod_lo >> i) & 1);
-        q <<= 1;
-        if (r >= d) { r -= d; q |= 1; }
-    }
-    return q;
-}
-
 uint32_t bench_us_to_ticks(uint32_t us) {
-    return mul_div_u32(us, timer_freq, 1000000u);
+    return (uint32_t)((uint64_t)us * timer_freq / 1000000u);
 }
 
 uint32_t bench_timer_elapsed_us(void) {
-    return mul_div_u32(bench_timer_elapsed_ticks(), 1000000u, timer_freq);
+    return (uint32_t)((uint64_t)bench_timer_elapsed_ticks() * 1000000u
+                      / timer_freq);
 }
 
 uint32_t bench_timer_freq_hz(void) {
@@ -393,6 +374,63 @@ void bench_cache_perf_print_delta(const char *label,
     bench_puts("\n");
 }
 
+/* ── Machine identity ──────────────────────────────────────────── */
+
+/* A name register holds four characters, the first in bits [7:0]. */
+static void unpack_name_word(char *name, uint32_t word) {
+    for (int i = 0; i < 4; i++)
+        name[i] = (char)(word >> (8 * i));
+}
+
+void bench_machine_name(char name[BENCH_NAME_LEN]) {
+    unpack_name_word(name + 0,  read_sysreg(SYSDEV_MACH, MACH_NAME0));
+    unpack_name_word(name + 4,  read_sysreg(SYSDEV_MACH, MACH_NAME1));
+    unpack_name_word(name + 8,  read_sysreg(SYSDEV_MACH, MACH_NAME2));
+    unpack_name_word(name + 12, read_sysreg(SYSDEV_MACH, MACH_NAME3));
+    name[BENCH_NAME_LEN - 1] = '\0';
+}
+
+void bench_cpu_name(char name[BENCH_NAME_LEN]) {
+    unpack_name_word(name + 0,  read_sysreg(SYSDEV_CPU, CPU_NAME0));
+    unpack_name_word(name + 4,  read_sysreg(SYSDEV_CPU, CPU_NAME1));
+    unpack_name_word(name + 8,  read_sysreg(SYSDEV_CPU, CPU_NAME2));
+    unpack_name_word(name + 12, read_sysreg(SYSDEV_CPU, CPU_NAME3));
+    name[BENCH_NAME_LEN - 1] = '\0';
+}
+
+uint32_t bench_cpu_freq_hz(void) {
+    return read_sysreg(SYSDEV_MACH, MACH_CPU_FREQ);
+}
+
+/* Main memory by machine name.  No register describes it, so each row
+ * restates its board's memory, the clock that memory runs at and that
+ * the clock is unrelated to the CPU's (doc/internals/<board>/), and has
+ * to follow them when they change.
+ * The strings sit in the rows, not behind pointers, so a PIE image
+ * needs no relocation to read the table. */
+static const bench_memory_t machine_memory[] = {
+    { "ULX3S",       "SDR SDRAM 100 MHz async",   100000000u, 0 },
+    { "Nexys Video", "DDR3-667 333.33 MHz async", 333333333u, 0 },
+    { "Simulator",   "",                          0u,         1 },
+};
+
+static int name_eq(const char *a, const char *b) {
+    while (*a && *a == *b) { a++; b++; }
+    return *a == *b;
+}
+
+const bench_memory_t *bench_machine_memory(void) {
+    char name[BENCH_NAME_LEN];
+
+    bench_machine_name(name);
+    for (uint32_t i = 0;
+         i < sizeof(machine_memory) / sizeof(machine_memory[0]); i++) {
+        if (name_eq(name, machine_memory[i].machine))
+            return &machine_memory[i];
+    }
+    return 0;
+}
+
 /* ── Console output ────────────────────────────────────────────── */
 
 void bench_putchar(int c) {
@@ -431,4 +469,25 @@ void bench_print_int(int val) {
     } else {
         bench_print_uint((uint32_t)val);
     }
+}
+
+static void print_u64(uint64_t val) {
+    char buf[21];
+    char *p = buf + sizeof(buf) - 1;
+    *p = '\0';
+    do {
+        *--p = '0' + (char)(val % 10);
+        val /= 10;
+    } while (val);
+    bench_puts(p);
+}
+
+void bench_print_milli(uint64_t milli) {
+    uint32_t frac = (uint32_t)(milli % 1000);
+
+    print_u64(milli / 1000);
+    bench_putchar('.');
+    if (frac < 100) bench_putchar('0');
+    if (frac < 10)  bench_putchar('0');
+    bench_print_uint(frac);
 }

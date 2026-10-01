@@ -133,6 +133,10 @@ ratio. The constraints bound each direction of the crossing with
 slot settles before the pointer announcing it clears its synchronizer,
 and the pointer's bits land within a cycle of each other.
 
+The benchmark harness restates the memory's type and clock in
+`machine_memory[]` (`benchmark/common/bench.c`), for the reporting
+line that has to give them; a change to either changes there too.
+
 Calibration decides the reset order:
 
 - **The controller** resets from its PLL's lock alone. CPU RESET

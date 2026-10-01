@@ -455,6 +455,10 @@ but are exhibit material rather than measurements.
   both (along with `penmon` and `exhibit-launcher`) into the rootfs
   `/usr/local/bin`.
 - Override `BENCH_ITERS=`, `COPT="-Os"`, etc.
+- The bare-metal benchmarks link the `-O2` `compiler-rt` builtins
+  (`sw/tools/setup-compiler-rt.sh`), which give the harness 64-bit
+  division: harness arithmetic is `uint64_t`, never 32-bit with an
+  argument about what fits.
 - The repo keeps no reference numbers: measure on the FPGA, running the
   build you compare against in the same session.  A DMIPS/CPI/fmax
   figure quoted in any doc, CLAUDE.md included, is a dated sample.

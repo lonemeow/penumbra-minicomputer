@@ -8,7 +8,7 @@
 #ifndef BENCH_H
 #define BENCH_H
 
-typedef unsigned int uint32_t;
+#include <stdint.h>
 
 /*
  * Initialize the benchmark harness: start the periodic timer
@@ -176,10 +176,47 @@ void bench_cache_perf_print_delta(const char *label,
                                   const bench_cache_perf_t *before,
                                   const bench_cache_perf_t *after);
 
+/*
+ * Machine identity: the board's name, the CPU implementation's name,
+ * and the CPU clock.  A name is the register's 16 characters and a
+ * terminator.  The clock reads 0 on a machine that reports none.
+ */
+#define BENCH_NAME_LEN 17
+
+void     bench_machine_name(char name[BENCH_NAME_LEN]);
+void     bench_cpu_name(char name[BENCH_NAME_LEN]);
+uint32_t bench_cpu_freq_hz(void);
+
+/*
+ * A machine's main memory, as a benchmark report has to state it.  A
+ * score divided by the CPU clock is only comparable alongside what the
+ * memory is and how its clock stands to the CPU's, and no register
+ * says either, so the harness keeps them by machine name.
+ */
+typedef struct {
+    char     machine[BENCH_NAME_LEN];   /* the machine name this describes */
+    char     memory[32];                /* memory type and clock, as printed */
+    uint32_t clock_hz;                  /* that clock, for its ratio to the CPU's */
+    int      simulated;                 /* a simulator: its timings are not
+                                         * measurements, and it has no memory
+                                         * to describe */
+} bench_memory_t;
+
+/*
+ * The description of the machine this is running on, or 0 for a
+ * machine the harness has not been told about — which a report should
+ * say out loud, never guess around.
+ */
+const bench_memory_t *bench_machine_memory(void);
+
 /* Console output (polled UART at 0xFF000000) */
 void bench_putchar(int c);
 void bench_puts(const char *s);
 void bench_print_uint(uint32_t val);
 void bench_print_int(int val);
+
+/* Print a value held in thousandths, to three decimals: 56123 prints
+ * as "56.123". */
+void bench_print_milli(uint64_t milli);
 
 #endif /* BENCH_H */

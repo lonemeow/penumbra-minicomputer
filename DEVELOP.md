@@ -207,6 +207,7 @@ Two benchmark families live under `benchmark/`:
 - `MEMTEST.ELF` — SDRAM correctness walk (six patterns; round-trip / walking-1 / etc.).
 
 ```sh
+sw/tools/setup-compiler-rt.sh  # Once: the compiler-rt builtins the benchmarks link
 make benchmark                 # ISS (fast, all three benches)
 make benchmark-rtl             # Verilator (cycle-accurate, slower; memtest dominates)
 make benchmark BENCH_ITERS=100 # Override Dhrystone iteration count
