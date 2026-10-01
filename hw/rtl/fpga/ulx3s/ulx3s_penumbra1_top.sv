@@ -1039,6 +1039,9 @@ module ulx3s_penumbra1_top (
         .o_rdata    (audio_dev_rdata),
         .o_ack      (audio_dev_ack),
         .o_irq      (audio_irq),
+        .i_out_busy (1'b0),         // the ladder has nothing to bring up
+        .i_out_fault(1'b0),
+        .i_out_fault_code(8'd0),
         .i_aclk     (clk_60mhz),
         .i_arst     (rst_60mhz),
         .i_frame_req(audio_frame_req),

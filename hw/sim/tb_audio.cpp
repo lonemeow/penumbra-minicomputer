@@ -6,6 +6,8 @@
 // being exact — that frames leave in order at the output rate, that
 // UNDERRUN distinguishes "the audio sounds wrong" from "the device ran
 // out of data", and that a full queue discards rather than corrupts.
+// It also checks STATUS, the output stage's readiness, which the
+// harness exposes so the testbench can play the stage.
 //
 // The two clock domains run at different rates here, so the frame
 // handoff is exercised rather than assumed.
@@ -22,7 +24,10 @@ namespace {
 // Register offsets, from the device specification.
 constexpr uint32_t CAP = 0x000, RATE = 0x004, CTRL = 0x008, CHAN_EN = 0x00C;
 constexpr uint32_t IRQ_STATUS = 0x010, IRQ_ENABLE = 0x014, UNDERRUN = 0x018;
-constexpr uint32_t MASTER_VOL = 0x01C;
+constexpr uint32_t MASTER_VOL = 0x01C, STATUS = 0x020;
+constexpr uint32_t CAP_STATUS = 1u << 13;
+constexpr uint32_t ST_BUSY = 1u << 0, ST_FAULT = 1u << 1;
+constexpr uint32_t st_fault_code(uint32_t code) { return code << 8; }
 constexpr uint32_t C_CTRL = 0x100, C_INC = 0x104, C_VOL = 0x108;
 constexpr uint32_t C_DEPTH = 0x10C, C_LEVEL = 0x110, C_WM = 0x114, C_FIFO = 0x118;
 
@@ -88,6 +93,7 @@ uint32_t rd(uint32_t addr) {
 void reset() {
     dut->i_rst = 1; dut->i_arst = 1;
     dut->i_we = 0; dut->i_re = 0; dut->i_addr = 0; dut->i_wdata = 0;
+    dut->i_out_busy = 0; dut->i_out_fault = 0; dut->i_out_fault_code = 0;
     steps(8);
     dut->i_rst = 0; dut->i_arst = 0;
     steps(8);
@@ -102,7 +108,8 @@ int main() {
 
     // ── Discovery ────────────────────────────────────────────
     // A consumer reads these before touching anything else.
-    check(rd(CAP) == 0x00010301, "CAP: %08X, expected version 1, pitch, volume, 1 channel", rd(CAP));
+    check(rd(CAP) == 0x00012301,
+          "CAP: %08X, expected version 1, pitch, volume, status, 1 channel", rd(CAP));
     check(rd(RATE) == 48000, "RATE: %u, expected 48000", rd(RATE));
     check(rd(C_DEPTH) == DEPTH, "DEPTH: %u, expected %d", rd(C_DEPTH), DEPTH);
     check(rd(C_LEVEL) == DEPTH, "LEVEL at reset: %u, expected %d", rd(C_LEVEL), DEPTH);
@@ -260,6 +267,83 @@ int main() {
     while (emitted.size() < mark) step();
     check(emitted.back() == 0x0BBB0000u,
           "frame after a flush never arrived: %08X", emitted.back());
+
+    // ── Output-stage status ──────────────────────────────────
+    // STATUS reads 0 behind a ready stage, and a write leaves it alone.
+    // The offset mirrors CAP in the global block's aliasing, which is
+    // exactly why the class gates the register behind CAP.STATUS. A
+    // code with no fault behind it is not one: FAULT_CODE reads 0.
+    reset();
+    check(rd(CAP) & CAP_STATUS, "CAP.STATUS clear");
+    check(rd(STATUS) == 0, "STATUS behind a ready stage: %08X, expected 0",
+          rd(STATUS));
+    dut->i_out_fault_code = 0x5A;
+    steps(4);
+    check(rd(STATUS) == 0, "a code with no fault read back: %08X", rd(STATUS));
+    dut->i_out_fault_code = 0;
+    wr(STATUS, ST_BUSY | ST_FAULT);
+    check(rd(STATUS) == 0, "a write moved STATUS: %08X", rd(STATUS));
+
+    // A stage still being brought up consumes nothing, however long it
+    // asks for frames: a codec left clocking by an earlier configuration
+    // would otherwise swallow a stream nobody has set it up to play.
+    // Frames and enables written meanwhile stand, and play once it is up.
+    reset();
+    dut->i_out_busy = 1;
+    steps(4);
+    check(rd(STATUS) == ST_BUSY, "STATUS while busy: %08X, expected BUSY",
+          rd(STATUS));
+    for (int i = 0; i < 4; i++) wr(C_FIFO, 0x33330000u + i);
+    wr(CHAN_EN, 1);
+    wr(CTRL, 1);
+    steps(64 * 4);
+    check(rd(C_LEVEL) == uint32_t(DEPTH - 4), "busy stage drained: LEVEL %u",
+          rd(C_LEVEL));
+    check(emitted.empty(), "busy stage emitted %zu frames", emitted.size());
+
+    dut->i_out_busy = 0;
+    steps(64 * 8);
+    check(rd(STATUS) == 0, "STATUS once up: %08X, expected 0", rd(STATUS));
+    bool queued = emitted.size() >= 4;
+    for (size_t i = 0; queued && i < 4; i++)
+        if (emitted[i] != 0x33330000u + i) queued = false;
+    check(queued, "frames queued during bring-up did not play: %zu emitted",
+          emitted.size());
+
+    // A failed bring-up has ended, so BUSY reads clear; FAULT then holds
+    // until reset whatever the stage does next, with the code it arrived
+    // with, and nothing plays. A later failure is a consequence of the
+    // first, so its code does not replace the first one's.
+    reset();
+    dut->i_out_busy = 1;
+    steps(4);
+    dut->i_out_fault = 1;
+    dut->i_out_fault_code = 0x13;
+    steps(4);
+    check(rd(STATUS) == (ST_FAULT | st_fault_code(0x13)),
+          "STATUS on a fault: %08X, expected FAULT with code 13", rd(STATUS));
+    dut->i_out_busy = 0;
+    dut->i_out_fault = 0;
+    dut->i_out_fault_code = 0;
+    steps(4);
+    check(rd(STATUS) == (ST_FAULT | st_fault_code(0x13)),
+          "FAULT or its code cleared without a reset: %08X", rd(STATUS));
+    dut->i_out_fault = 1;
+    dut->i_out_fault_code = 0x77;
+    steps(4);
+    dut->i_out_fault = 0;
+    check(rd(STATUS) == (ST_FAULT | st_fault_code(0x13)),
+          "a later fault replaced the first code: %08X", rd(STATUS));
+    for (int i = 0; i < 4; i++) wr(C_FIFO, 0x44440000u + i);
+    wr(CHAN_EN, 1);
+    wr(CTRL, 1);
+    steps(64 * 4);
+    check(rd(C_LEVEL) == uint32_t(DEPTH - 4), "faulted stage drained: LEVEL %u",
+          rd(C_LEVEL));
+    check(emitted.empty(), "faulted stage emitted %zu frames", emitted.size());
+
+    reset();
+    check(rd(STATUS) == 0, "STATUS after reset: %08X, expected 0", rd(STATUS));
 
     printf("\naudio: %d/%d tests passed\n", pass, pass + fail);
     delete dut;
