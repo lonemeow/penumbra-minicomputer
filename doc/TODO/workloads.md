@@ -599,6 +599,81 @@ cycles, do not move, and none of them is the compiler's.
   The spill reloads loop invariants, which hit L1, against saving a
   write-through store, so only a measurement can say whether it pays.
 
+## Compiler: hot-loop code review — CoreMark
+
+Reviewed 2026-10-01: the bare-metal CoreMark (`benchmark/coremark/`)
+at `-O2`, statically linked.  Method: an ISS `+pcprof` profile of the
+whole run, symbolized with `sw/tools/pcprof-report.py`, and the per-PC
+counts joined to `llvm-objdump -d` of the hot functions.
+
+An iteration executes about 394,500 instructions, so one cycle an
+instruction would score 2.53 per MHz, and a core scores that over its
+CPI.  Sampled on the ULX3S (penumbra2_5, 37.5 MHz): 1.27 per MHz at
+CPI 1.99, the stalls splitting into `funit` 11.9 %, store 11.7 %,
+flush 11.2 %, load 8.5 %, hazard 5.9 % and ifetch 0.3 % of cycles.
+The hot code is about 4.4 KB and the data 2 KB, so both L1s hit
+99.9 % and fetch is not a lever here.
+
+| Kernel | Instructions | Per unit of work |
+|---|---|---|
+| `core_state_transition` | 37.1 % | 28 a character |
+| `core_bench_list`: finds, reverse, the inlined sort | 27.0 % | 6–8 a list node |
+| `matrix_mul_matrix_bitextract` | 11.5 % | 14 an element product |
+| `matrix_mul_matrix` | 7.1 % | 8 an element product |
+| `matrix_sum`, inlined after each of four kernels | 7.1 % | 21.7 an element |
+| The other matrix loops | 2.5 % | 6–8 an element |
+
+What each cause costs, as a share of all instructions executed.  The
+shares compare the emitted code with a sequence written by hand, not
+with rebuilt code:
+
+| Cause | Costs | Entry |
+|---|---|---|
+| Two selects on one condition become two diamonds, each with its own compare, beside a third for a signed compare's 0/1 | ~3.5 %: `matrix_sum` takes 21.7 an element where the branch the source wrote takes about 11 | [compiler-selection.md](compiler-selection.md), "selects that share a condition are expanded one by one"; the single diamond's own cost is in "signed comparisons have no branchless materialisation" there and in [compiler-pipeline.md](compiler-pipeline.md), "no branch-cost model" |
+| A stepped pointer whose old value leaves the loop takes three instructions | ~2.2 %: 2 a character | [compiler-pipeline.md](compiler-pipeline.md), "a loop-carried value that is also live out is copied twice" |
+| A jump table's entries are relative to its base in a static link | ~1.2 %: 1 a dispatch | [compiler-pipeline.md](compiler-pipeline.md), "jump tables stay base-relative in a static link" |
+| A byte mask widened by sign extension misses the immediate and takes a callee-saved register | ~0.5 %: a save and a restore a call | [compiler-selection.md](compiler-selection.md), "a sub-word mask widened by sign extension misses the immediate" |
+
+### Smaller findings
+
+- **Both multiply loops use a load in the next instruction.**  The
+  second `LDHS` feeds the `MUL` directly, where the two pointer steps
+  could stand between them and hide the wait: a cycle an element
+  product, no instructions.  Nothing schedules; the pre-RA
+  MachineScheduler is in
+  [compiler-pipeline.md](compiler-pipeline.md), "codegen pass/gate
+  audit".
+- **The outer matrix loops rebuild the store address.**  `C[i*N+j]`
+  is `mov; shl 2; add` and a store for each element, where a stepped
+  pointer needs one `add`.  Once an element, not once a product:
+  about 0.2 %.
+- **`N` is spilled around the inner loop into another register.**
+  `matrix_mul_matrix` uses the register holding `N` as a temporary in
+  the inner loop and copies `N` out and back each outer iteration.
+
+Checked and not levers:
+
+- The multiply and list inner loops are as short as the ISA allows
+  without post-increment addressing: two loads, `MUL`, the
+  accumulate, two pointer steps, the count and its branch.
+- `matrix_mul_matrix_bitextract` loads with `LDH` where the source
+  type is signed.  Only the product's low 12 bits are used, so the
+  zero-extending load is right.
+- `ee_isdigit` is the unsigned range check, `sub 58; and 255;
+  cmp 246; bcs`.
+- A `CMP` against zero follows each load that a branch tests: loads
+  set no flags.
+
+Open:
+
+- The four compiler entries in the table.
+- Whether an eight-case switch should be a jump table on these cores.
+  The dispatch is 8 instructions with a load and an indirect jump,
+  9.2 % of all instructions here, and neither penumbra2_5's predictor
+  nor the one planned for gen3 predicts the jump, so each costs a
+  redirect.  A compare tree is about 6 instructions with conditional
+  branches a direction table can learn.  Unmeasured.
+
 ## Benchmark: CoreMark-Pro under NetBSD
 
 The integer benchmarks in the bare-metal harness, Dhrystone and

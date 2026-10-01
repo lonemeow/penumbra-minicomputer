@@ -418,6 +418,83 @@ xor form (InstCombine's bit-select fold); find where the SHA shape
 escapes it — likely the `^` vs `|` variant or a disjoint-or rewrite
 upstream of the fold.  Worth ~4 instructions × 64 rounds per block.
 
+## Compiler: selects that share a condition are expanded one by one
+
+Each `G_SELECT` becomes its own pseudo, and
+`EmitInstrWithCustomInserter` expands each pseudo into its own
+diamond: its own compare, branch and join.  Two selects on one
+condition therefore compare twice and branch twice, and whatever the
+compare reads has to be live, or reloaded, at both.
+
+The middle end produces such pairs from an `if`/`else` that assigns
+two variables.  CoreMark's `matrix_sum` is one:
+
+```c
+if (tmp > clipval) { ret += 10; tmp = 0; }
+else               { ret += (cur > prev) ? 1 : 0; }
+```
+
+reaches the backend as `select %c, 0, %tmp` and `select %c, 10, %flag`,
+and comes out as
+
+```
+ldw  r5, [sp + 32]      ; clipval, spilled
+cmp  r6, r5
+mov  r7, zero
+bgt  1f
+mov  r7, r6
+1: lli  r5, 10
+ldw  r8, [sp + 32]      ; clipval again
+cmp  r6, r8
+bgt  2f
+mov  r5, r3
+2:
+```
+
+with a third diamond before it building the 0/1 of `cur > prev`.
+The three leave no register for `clipval`, which is why it is
+reloaded.  The loop is 21.7 instructions an element where the branch
+as written is about 11, 3.5 % of CoreMark's instructions
+([workloads.md](workloads.md), "hot-loop code review — CoreMark").
+
+Open:
+
+- Expand adjacent select pseudos with the same compare operands and
+  condition as one diamond with a PHI each, as RISC-V's
+  `emitSelectPseudo` does.
+- Whether the middle end should form these selects at all for a
+  target with no conditional move: that is the cost question in
+  [compiler-pipeline.md](compiler-pipeline.md), "no branch-cost
+  model".  Merging helps either way, since selects also arrive from
+  source.
+
+## Compiler: a sub-word mask widened by sign extension misses the immediate
+
+An `and` on a narrow type keeps its constant in that type until the
+legalizer widens it, and widening sign-extends the constant.  A mask
+with the type's top bit set then has ones in all its upper bits, does
+not fit `ANDi`'s zero-extended 16 bits, and is loaded into a register:
+`and i8 %c, -33` becomes `llis r5, -33` and `and r3, r5`.
+
+Where the other operand's upper bits are known zero, as they are
+after `LDB`, the zero-extended mask is equivalent and fits: `and r3,
+223`.
+
+CoreMark's `core_state_transition` tests `c == 'e' || c == 'E'` this
+way.  The constant is loaded once a call, outside the loop, but it
+holds a callee-saved register in a function that has none to spare,
+so the cost is a save and a restore a call: 0.5 % of CoreMark's
+instructions, and a store the core waits on
+([workloads.md](workloads.md), "hot-loop code review — CoreMark").
+
+Open:
+
+- Shrink the constant to the bits the other operand can have set,
+  when that makes it fit the immediate: SelectionDAG's
+  `targetShrinkDemandedConstant` is the same idea.
+- Count the sites in the kernel and `libc`, as the mask entry "InstCombine's
+  shift-and-mask form costs a constant" did for its form.
+
 ## Ruled out
 
 - **Callee-saved slots next to SP in frames over 32 KiB.**  The save

@@ -828,6 +828,74 @@ back step (`LDH +SEXT offset,[entry_addr]` → `ADD offset, base`
 sensitive builds and large switches; for now we always pay the
 4 B/entry tax.
 
+## Compiler: jump tables stay base-relative in a static link
+
+`getJumpTableEncoding` returns `EK_LabelDifference32` for every
+relocation model, and `emitJumpTableEntry` emits `target - table`
+whatever the encoding says.  That is what a PIE needs, since the
+entries then take no dynamic relocation.  A static link pays for it
+with an `ADD` on every dispatch:
+
+```
+shl  r6, 2
+add  r6, r11            ; the table
+ldw  r6, [r6 + 0]
+add  r6, r11            ; the entry is an offset from the table
+jmp  r6
+```
+
+With absolute entries the second `add` goes.  CoreMark's state
+machine dispatches 4,600 times an iteration, so it is 1.2 % of its
+instructions ([workloads.md](workloads.md), "hot-loop code review —
+CoreMark").  The kernel is a static link too.
+
+Open:
+
+- Emit absolute entries, `EK_BlockAddress`, when the relocation model
+  is static, and drop the add-back from the `G_BRJT` selection there.
+- This and "16-bit jump-table entries when offsets fit" pull opposite
+  ways: a 16-bit entry is necessarily an offset.  Decide by relocation
+  model and size together.
+
+## Compiler: a loop-carried value that is also live out is copied twice
+
+A pointer stepped once an iteration, whose value before the step is
+used on a loop exit, takes three instructions where the step is one.
+CoreMark's `core_state_transition` walks its input this way:
+
+```
+ldb  lr, [r4 + 0]
+cmp  lr, 0
+beq  exit               ; stores r4
+mov  r6, r4
+add  r6, 1              ; str + 1, beside the old str
+cmp  r3, 1
+bne  head               ; else exit, storing r4
+...
+head:
+mov  r4, r6
+```
+
+The exit on the second branch stores the pointer before the step and
+the loop continues with it after, so both are live across that
+branch.  Two instructions a character, 2.2 % of CoreMark's
+instructions ([workloads.md](workloads.md), "hot-loop code review —
+CoreMark").
+
+Not root-caused.  The edge back to the loop head is critical: its
+source has two successors and its target two predecessors.  PHI
+elimination puts the head's copy at the end of the source block,
+ahead of the branch, so the copy runs on the exit path too and the
+old value has to survive in a second register.  Splitting that edge
+would let the step sit on it alone as `add r4, 1`, at the price of
+a block that needs a place where it costs no jump.
+
+Open:
+
+- Confirm the cause on the MIR before and after PHI elimination.
+- Count how often the shape occurs: a static scan for `mov a, b;
+  add a, C` whose `a` is copied back to `b` at a loop head.
+
 ## Compiler: backend byval handling is only safe because clang avoids it
 
 Clang's `PenumbraABIInfo` passes a 5–8 byte aggregate as
