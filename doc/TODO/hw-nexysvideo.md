@@ -110,9 +110,10 @@ the ULX3S. The Nexys Video's four jacks all belong to an ADAU1761
 codec (IC4), which takes I2S and needs its registers set over I2C
 before it plays anything. Software sees the same class on both
 boards: the top sets the codec up by itself, and NetBSD plays through
-`/dev/audio` with the kernel and image the ULX3S runs. `paudio` needs
-only the output-stage status (`hw-devices.md`, "Hardware + kernel:
-audio output-stage status (`STATUS`)").
+`/dev/audio` with the kernel and image the ULX3S runs. The device
+already reports the setup's progress and failure in `STATUS`
+(`doc/system/devices/audio.md`, "STATUS (0x020)"), and `paudio` reads
+it at attach.
 
 ### The board
 
@@ -192,17 +193,11 @@ because it costs two register writes.
 
 ### Steps
 
-1. **Frame timing from outside `audio.sv`.** The device's
-   `AUDIO_HZ / SAMPLE_HZ` divider becomes an input that requests one
-   frame per pulse, and a small module keeps the divider for the
-   ULX3S tops and the `audio_test` and `audio_multi_test` wrappers.
-   `tb_audio` and `tb_audio_multi` pass unchanged, and the ULX3S build
-   is listened to before the commit. `SRC_AUDIO` splits into the
-   device and the ULX3S's output stage.
-2. **The output-stage status**, in the device, the driver and the ISS
-   (`hw-devices.md`, "Hardware + kernel: audio output-stage status
-   (`STATUS`)").
-3. **I2C and the codec setup.** A generic I2C master (start, repeated
+The device side landed first: it takes its frame timing from the
+output stage (e358bfc11c62), and reports readiness and a fault code
+in `STATUS` ("hw: report the audio device's readiness in STATUS").
+
+1. **I2C and the codec setup.** A generic I2C master (start, repeated
    start, a byte written with its ACK checked, a byte read with ACK or
    NACK, stop), since the EEPROM shares the bus. Over it, the setup
    sequencer:
@@ -214,12 +209,14 @@ because it costs two register writes.
    4. the DACs, playback power and the mixers;
    5. the precharge wait, then the unmute.
 
-   It drives `STATUS.BUSY` and `STATUS.FAULT` (a NACK, or no lock) and
-   finishes inside the contract's 100 ms. A testbench with a codec
-   model (an I2C slave with the register file, and a lock bit that
-   sets after a delay) checks the register image the codec ends with,
-   and both fault paths.
-4. **The I2S output stage**, `audio_i2s_out`, board-neutral because the
+   It drives `STATUS.BUSY` and `STATUS.FAULT` (a NACK, or no lock),
+   with a `FAULT_CODE` naming the step that failed and how, and
+   finishes inside the contract's 100 ms. The codes' meanings go in
+   the board's documentation, since the class gives them none. A
+   testbench with a codec model (an I2C slave with the register file,
+   and a lock bit that sets after a delay) checks the register image
+   the codec ends with, and both fault paths with their codes.
+2. **The I2S output stage**, `audio_i2s_out`, board-neutral because the
    clocks come in from the codec. BCLK and LRCLK are synchronized into
    the audio clock, the next frame is requested one frame ahead, and
    each channel's 16 bits go MSB-first, padded to 32, changing after
@@ -227,13 +224,13 @@ because it costs two register writes.
    a BCLK at 60 MHz, with a build check on that ratio; the rate no
    longer comes from this clock. A testbench decodes `DAC_SDATA`
    against the frames pushed.
-5. **The Nexys top**: the MCLK PLL; the device behind autoconfig after
+3. **The Nexys top**: the MCLK PLL; the device behind autoconfig after
    the display, with `AUDIO_CHANNELS` as on the ULX3S and the CPU clock
    as its audio clock; the setup and the output stage; and the pins
    copied from the master XDC with their false paths.
    `tb_nexysvideo_penumbra2_top` lists the device, with a codec model
    enough for the setup to finish.
-6. **Bring-up**: `paudio` attaches, `audioplay` plays a WAV and
+4. **Bring-up**: `paudio` attaches, `audioplay` plays a WAV and
    `pmusic-test` its listening checks through the speakers. With the
    speakers on, listen through a board power-on, a bitstream load, a
    CPU RESET, and a reload while audio plays.

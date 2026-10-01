@@ -56,6 +56,7 @@ static void	paudio_attach(device_t, device_t, void *);
 static int	paudio_intr(void *);
 static const struct sysctlnode *paudio_sysctl_attach(struct paudio_softc *);
 static void	paudio_selftest(struct paudio_softc *);
+static bool	paudio_stage_ready(struct paudio_softc *, uint32_t);
 
 CFATTACH_DECL_NEW(paudio, sizeof(struct paudio_softc),
     paudio_match, paudio_attach, NULL, NULL);
@@ -581,6 +582,50 @@ paudio_match(device_t parent, cfdata_t cf, void *aux)
 	return pa->pb_class == ACFG_CLASS_AUDIO;
 }
 
+/*
+ * Whether the device will ever play, by the class's readiness flow
+ * (doc/system/devices/audio.md, "Readiness").  A device without
+ * PA_CAP_STATUS is ready from reset; one with it may still be coming
+ * up, for at most PA_STATUS_WAIT_MS, and may report that it failed to,
+ * with a code only its own documentation explains.  Without this check
+ * a failed device looks like a slow one: frames queue, nothing drains,
+ * and the watermark interrupt never comes.  False means the device will
+ * produce no output, and the console has been told why.
+ */
+static bool
+paudio_stage_ready(struct paudio_softc *sc, uint32_t cap)
+{
+	uint32_t status;
+	u_int ms;
+
+	/* Older devices mirror CAP at this offset, so only the bit says
+	 * STATUS is there to read. */
+	if ((cap & PA_CAP_STATUS) == 0)
+		return true;
+
+	for (ms = 0;; ms++) {
+		status = PA_RD(sc, PA_STATUS);
+		if ((status & PA_STATUS_BUSY) == 0 || ms == PA_STATUS_WAIT_MS)
+			break;
+		DELAY(1000);
+	}
+
+	if (status & PA_STATUS_FAULT) {
+		aprint_error_dev(sc->sc_dev,
+		    "failed to initialize (fault code 0x%02x)\n",
+		    PA_STATUS_FAULT_CODE(status));
+		return false;
+	}
+	if (status & PA_STATUS_BUSY) {
+		/* Not a failure the device reports: it broke the class's
+		 * own bound on how long it may take. */
+		aprint_error_dev(sc->sc_dev,
+		    "did not finish initializing in %d ms\n", PA_STATUS_WAIT_MS);
+		return false;
+	}
+	return true;
+}
+
 static void
 paudio_attach(device_t parent, device_t self, void *aux)
 {
@@ -617,6 +662,8 @@ paudio_attach(device_t parent, device_t self, void *aux)
 		aprint_error_dev(self, "device reports no rate or no queue\n");
 		return;
 	}
+	if (!paudio_stage_ready(sc, cap))
+		return;
 	sc->sc_nchan = MIN(PA_CAP_CHANNELS(cap), PA_MAXCHAN);
 	sc->sc_pitch = (cap & PA_CAP_PITCH) != 0;
 

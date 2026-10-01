@@ -28,6 +28,7 @@
 #define	PA_IRQ_STATUS		0x010
 #define	PA_IRQ_ENABLE		0x014
 #define	PA_UNDERRUN		0x018
+#define	PA_STATUS		0x020
 #define	PA_CHAN(n)		(0x100 + (n) * 0x20)
 #define	PA_C_CTRL		0x00
 #define	PA_C_INC		0x04
@@ -40,9 +41,16 @@
 #define	PA_CAP_VERSION(c)	((c) & 0xFF)
 #define	PA_CAP_PITCH		__BIT(8)
 #define	PA_CAP_VOLUME		__BIT(9)
+#define	PA_CAP_STATUS		__BIT(13)
 #define	PA_CAP_CHANNELS(c)	(((c) >> 16) & 0xFF)
 #define	PA_CTRL_ENABLE		__BIT(0)
+#define	PA_STATUS_BUSY		__BIT(0)
+#define	PA_STATUS_FAULT		__BIT(1)
+#define	PA_STATUS_FAULT_CODE(s)	(((s) >> 8) & 0xFF)
 #define	PA_C_CTRL_FLUSH		__BIT(8)
+
+/* How long the class lets STATUS.BUSY stay set after reset. */
+#define	PA_STATUS_WAIT_MS	100
 
 #define	PA_INC_UNITY		0x00010000
 #define	PA_VOL_UNITY		0xFFFFFFFF

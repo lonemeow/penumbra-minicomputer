@@ -140,8 +140,10 @@ bootinfo — `boot sd:0,0` reaches single-user with no prompts.
   `/dev/pmusic` — samples in a per-session memory, played by
   events timed on a tick clock the kernel keeps, with the
   refill in the watermark interrupt.  The two share channel 0,
-  first claim wins.  `pmusic-test` passes its contract checks
-  and plays its listening checks correctly on the board.
+  first claim wins.  Attach waits out a device still coming up
+  and refuses one that reports a fault, printing its fault code.
+  `pmusic-test` passes its contract checks and plays its
+  listening checks correctly on the board.
   Design: [design-notes.md, Audio Driver](design-notes.md#audio-driver).
 
 - **Core dumps:** the process register accessors and ELF core
