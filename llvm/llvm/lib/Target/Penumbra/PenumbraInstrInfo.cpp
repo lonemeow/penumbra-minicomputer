@@ -314,6 +314,52 @@ bool PenumbraInstrInfo::reverseBranchCondition(
 }
 
 //===----------------------------------------------------------------------===//
+// Flag uses.
+//
+// SR holds one flag value at a time and nothing names it, so every question
+// about the flags -- may this point clobber them, who would see a different
+// producer's flags, is this definition dead -- comes down to which
+// instructions read the value that is in SR at some point.
+//===----------------------------------------------------------------------===//
+
+Penumbra::FlagUses Penumbra::flagUsesFrom(MachineBasicBlock &MBB,
+                                          MachineBasicBlock::iterator I) {
+  // Passed to readsRegister and modifiesRegister, so that a call's register
+  // mask counts as writing SR.
+  const TargetRegisterInfo *TRI =
+      MBB.getParent()->getSubtarget().getRegisterInfo();
+
+  FlagUses Uses;
+  Uses.Overwriter = MBB.end();
+
+  for (MachineBasicBlock::iterator It = I, E = MBB.end(); It != E; ++It) {
+    if (It->isDebugInstr())
+      continue;
+    if (It->readsRegister(Penumbra::SR, TRI))
+      Uses.Readers.push_back(&*It);
+    if (It->modifiesRegister(Penumbra::SR, TRI)) {
+      Uses.Overwriter = It;
+      return Uses;
+    }
+  }
+
+  Uses.LiveOut =
+      llvm::any_of(MBB.successors(), [](const MachineBasicBlock *Succ) {
+        return Succ->isLiveIn(Penumbra::SR);
+      });
+  return Uses;
+}
+
+// The uses hold mutable instructions for the callers that rewrite a reader;
+// collecting them changes nothing.
+bool Penumbra::flagsLiveBefore(const MachineBasicBlock &MBB,
+                               MachineBasicBlock::const_iterator I) {
+  return flagUsesFrom(const_cast<MachineBasicBlock &>(MBB),
+                      I.getNonConstIterator())
+      .live();
+}
+
+//===----------------------------------------------------------------------===//
 // Compare-elimination peephole.
 //
 // Penumbra has flag-setting ALU instructions (Defs = [SR]) and a separate
@@ -511,26 +557,20 @@ bool PenumbraInstrInfo::optimizeWrapCheck(
     return false;
 
   // SSA puts the add before its compare; its flags must still be in SR there.
-  const TargetRegisterInfo &TRI = getRegisterInfo();
-  for (auto It = std::next(Add->getIterator()); It != CmpInstr.getIterator();
-       ++It)
-    if (It->modifiesRegister(Penumbra::SR, &TRI))
-      return false;
-
-  SmallVector<MachineInstr *, 2> Readers;
-  for (auto It = std::next(CmpInstr.getIterator()); It != MBB->end(); ++It) {
-    if (It->readsRegister(Penumbra::SR, &TRI)) {
-      if (getBranchFlagsRead(It->getOpcode()) != FC)
-        return false;
-      Readers.push_back(&*It);
-    }
-    if (It->modifiesRegister(Penumbra::SR, &TRI))
-      break;
-  }
-  if (Readers.empty())
+  if (Penumbra::flagUsesFrom(*MBB, std::next(Add->getIterator())).Overwriter !=
+      CmpInstr.getIterator())
     return false;
 
-  for (MachineInstr *Reader : Readers)
+  // A reader in another block cannot have its condition swapped from here.
+  Penumbra::FlagUses Uses =
+      Penumbra::flagUsesFrom(*MBB, std::next(CmpInstr.getIterator()));
+  if (Uses.Readers.empty() || Uses.LiveOut)
+    return false;
+  for (MachineInstr *Reader : Uses.Readers)
+    if (getBranchFlagsRead(Reader->getOpcode()) != FC)
+      return false;
+
+  for (MachineInstr *Reader : Uses.Readers)
     Reader->setDesc(get(getOppositeBranchOpcode(Reader->getOpcode())));
   Add->clearRegisterDeads(Penumbra::SR);
   CmpInstr.eraseFromParent();
@@ -587,21 +627,18 @@ bool PenumbraInstrInfo::optimizeCompareInstr(
   if (!producesNZFlagsForMask(*Producer, CmpMask))
     return false;
 
-  // Walk forward from the CMP and verify every SR reader consumes only Z
-  // and N before the next SR clobber.  C and V differ between the producer
-  // (e.g. `SUBi Rx, k`) and the CMP it replaces (`CMPi Rx, 0`) whenever
-  // k != 0, so a reader of C or V must keep the explicit CMP.
-  for (auto It = std::next(CmpInstr.getIterator()); It != MBB->end(); ++It) {
-    if (It->isDebugInstr())
-      continue;
-    if (It->readsRegister(Penumbra::SR, &TRI)) {
-      unsigned Flags = getBranchFlagsRead(It->getOpcode());
-      if (Flags & ~(FZ | FN))
-        return false;
-    }
-    if (It->modifiesRegister(Penumbra::SR, &TRI))
-      break;
-  }
+  // Every reader of the CMP's flags must consume only Z and N.  C and V differ
+  // between the producer (e.g. `SUBi Rx, k`) and the CMP it replaces
+  // (`CMPi Rx, 0`) whenever k != 0, so a reader of C or V must keep the
+  // explicit CMP, and so must a reader in another block, whose flags are
+  // not known here.
+  Penumbra::FlagUses Uses =
+      Penumbra::flagUsesFrom(*MBB, std::next(CmpInstr.getIterator()));
+  if (Uses.LiveOut)
+    return false;
+  for (MachineInstr *Reader : Uses.Readers)
+    if (getBranchFlagsRead(Reader->getOpcode()) & ~(FZ | FN))
+      return false;
 
   // Splice the producer down to immediately before the CMP, then erase the
   // CMP.  Producer's SR def becomes the most recent flag write before any

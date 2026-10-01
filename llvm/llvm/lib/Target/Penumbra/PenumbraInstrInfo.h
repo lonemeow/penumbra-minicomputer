@@ -7,6 +7,8 @@
 #ifndef LLVM_LIB_TARGET_PENUMBRA_PENUMBRAINSTRINFO_H
 #define LLVM_LIB_TARGET_PENUMBRA_PENUMBRAINSTRINFO_H
 
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 
@@ -83,6 +85,34 @@ private:
   bool optimizeWrapCheck(MachineInstr &CmpInstr, Register SumReg,
                          const MachineRegisterInfo &MRI) const;
 };
+
+namespace Penumbra {
+
+// How the flags, as they stand before some instruction, are used from there to
+// the end of its block.  Flags are consumed in the block that sets them -- the
+// select expansion keeps its compare and branch together -- so code that
+// splits a block between a flag producer and its reader must add SR to the new
+// block's live-ins.
+struct FlagUses {
+  // The instructions that read them, in block order.
+  SmallVector<MachineInstr *, 2> Readers;
+  // The instruction that overwrites them, or the block's end.  An instruction
+  // that reads the flags and writes new ones, as ADC does, is the last reader
+  // too.
+  MachineBasicBlock::iterator Overwriter;
+  // They reach the block's end and a successor names SR as a live-in.
+  bool LiveOut = false;
+
+  bool live() const { return !Readers.empty() || LiveOut; }
+};
+
+FlagUses flagUsesFrom(MachineBasicBlock &MBB, MachineBasicBlock::iterator I);
+
+// Whether anything reads the flags as they stand before I.
+bool flagsLiveBefore(const MachineBasicBlock &MBB,
+                     MachineBasicBlock::const_iterator I);
+
+} // namespace Penumbra
 
 } // namespace llvm
 

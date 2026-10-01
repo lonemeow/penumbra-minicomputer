@@ -121,10 +121,7 @@ void PenumbraFrameLowering::emitEpilogue(MachineFunction &MF,
 }
 
 // Whether Reg holds a value that is still read after I.  Liveness out of the
-// block comes from the successors' live-in lists.  Flags are consumed in the
-// block that sets them — the select expansion keeps its compare and branch
-// together — so code that splits a block between a flag producer and its
-// reader must add SR to the new block's live-ins.
+// block comes from the successors' live-in lists.
 static bool isRegLiveBefore(const MachineBasicBlock &MBB,
                             MachineBasicBlock::const_iterator I,
                             MCRegister Reg) {
@@ -148,7 +145,7 @@ static bool mayAdjustSPThroughScratch(const MachineFunction &MF) {
 // where R11 holds a live value.
 static bool canAdjustSPAt(const MachineBasicBlock &MBB,
                           MachineBasicBlock::const_iterator I) {
-  if (isRegLiveBefore(MBB, I, Penumbra::SR))
+  if (Penumbra::flagsLiveBefore(MBB, I))
     return false;
   return !mayAdjustSPThroughScratch(*MBB.getParent()) ||
          !isRegLiveBefore(MBB, I, Penumbra::R11);

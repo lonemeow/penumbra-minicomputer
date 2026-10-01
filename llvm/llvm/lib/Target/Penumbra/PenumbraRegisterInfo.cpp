@@ -54,21 +54,6 @@ PenumbraRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   return Reserved;
 }
 
-// Whether the flags hold a value some later instruction reads, just before MI.
-static bool flagsLiveBefore(MachineBasicBlock &MBB,
-                            MachineBasicBlock::iterator MI,
-                            const TargetRegisterInfo *TRI) {
-  for (MachineBasicBlock::iterator I = MI, E = MBB.end(); I != E; ++I) {
-    if (I->readsRegister(Penumbra::SR, TRI))
-      return true;
-    if (I->modifiesRegister(Penumbra::SR, TRI))
-      return false;
-  }
-  return llvm::any_of(MBB.successors(), [](const MachineBasicBlock *Succ) {
-    return Succ->isLiveIn(Penumbra::SR);
-  });
-}
-
 // Returns the instruction that starts the flag value live at MI; an ADC or SBC
 // continues the value it reads.  The errors guard invariants kept elsewhere:
 // selection keeps each flag value within one block, and nothing in the body
@@ -152,7 +137,7 @@ bool PenumbraRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator MI,
   // where they are live the address is formed ahead of the instruction that
   // set them.
   MachineBasicBlock::iterator InsertPt = MI;
-  if (flagsLiveBefore(MBB, MI, this))
+  if (Penumbra::flagsLiveBefore(MBB, MI))
     InsertPt = flagChainStart(MBB, MI, BaseReg, this);
   DebugLoc DL = Inst.getDebugLoc();
   MachineRegisterInfo &MRI = MF.getRegInfo();
