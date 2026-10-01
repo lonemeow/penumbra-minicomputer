@@ -148,8 +148,9 @@ DHRY_CRT0_OBJ := $(BUILDDIR)/dhry_crt0.o
 DHRY_COMMON_OBJ := $(BUILDDIR)/bench.dhry.o $(BUILDDIR)/librt.dhry.o \
                    $(BUILDDIR)/softfloat_stub.dhry.o
 
-DHRY_OBJ := $(BUILDDIR)/dhry_1.o $(BUILDDIR)/dhry_2.o \
-            $(BUILDDIR)/dhry_shim.o $(BUILDDIR)/dhry_entry.o
+# What the timed loop runs, and what only surrounds it.
+DHRY_TIMED_OBJ := $(BUILDDIR)/dhry_1.o $(BUILDDIR)/dhry_2.o
+DHRY_GLUE_OBJ  := $(BUILDDIR)/dhry_shim.o $(BUILDDIR)/dhry_entry.o
 
 $(DHRY_CRT0_OBJ): dhrystone/dhry_crt0.S | $(BUILDDIR)
 	$(CC) $(DHRY_ASFLAGS) -x assembler-with-cpp $< -o $@
@@ -177,8 +178,16 @@ $(BUILDDIR)/dhry_entry.o: dhrystone/entry.c common/bench.h $(DHRY_STAMP) | $(BUI
 
 dhrystone: $(BUILDDIR)/DHRYSTON.ELF
 
-$(BUILDDIR)/DHRYSTON.ELF: $(DHRY_CRT0_OBJ) $(DHRY_OBJ) $(DHRY_COMMON_OBJ) $(PENSTRING_LIB) dhrystone/dhry.ld
-	$(LD) $(DHRY_LDFLAGS) $(DHRY_CRT0_OBJ) $(DHRY_OBJ) $(DHRY_COMMON_OBJ) $(PENSTRING_LIB) -o $@
+# The link order is the code layout, and lld places an archive member
+# where its archive stands on the command line.  So the string routines
+# go directly after Dhrystone's own two files and ahead of the shims
+# and the harness: everything the timed loop runs is one contiguous
+# stretch.  A stretch no longer than the L1 I-cache puts no more lines
+# in any set than the cache has ways, so the loop cannot evict itself,
+# and nothing added to the harness can move the routines into the sets
+# Dhrystone's code already fills.
+$(BUILDDIR)/DHRYSTON.ELF: $(DHRY_CRT0_OBJ) $(DHRY_TIMED_OBJ) $(PENSTRING_LIB) $(DHRY_GLUE_OBJ) $(DHRY_COMMON_OBJ) dhrystone/dhry.ld
+	$(LD) $(DHRY_LDFLAGS) $(DHRY_CRT0_OBJ) $(DHRY_TIMED_OBJ) $(PENSTRING_LIB) $(DHRY_GLUE_OBJ) $(DHRY_COMMON_OBJ) -o $@
 
 # ── memtest ──────────────────────────────────────────────────
 #
