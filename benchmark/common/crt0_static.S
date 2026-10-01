@@ -1,14 +1,14 @@
 /*
- * dhry_crt0.S — Bare-metal startup for the static-link Dhrystone build.
+ * crt0_static.S — Bare-metal startup for the static-link benchmarks.
  *
- * Differs from common/crt0.S in two ways:
+ * Differs from crt0.S in two ways:
  *   1. The image is NOT PIE.  It is linked statically at virtual
  *      address 0x80000000, so global accesses compile down to the
  *      classic 2-instruction LUI+LDW sequence — no GOT indirection.
  *   2. The TLB miss handler is range-aware.  Faults inside the
- *      [DHRY_VBASE, DHRY_VBASE+image_size) window are mapped to
- *      PA = VA - DHRY_VBASE + load_base (the physical address ROM
- *      chose); faults below DHRY_VBASE stay identity-mapped (low
+ *      [BENCH_VBASE, BENCH_VBASE+image_size) window are mapped to
+ *      PA = VA - BENCH_VBASE + load_base (the physical address ROM
+ *      chose); faults below BENCH_VBASE stay identity-mapped (low
  *      RAM, page-0 vectors); faults at >= 0xFF000000 stay
  *      identity-mapped uncached (MMIO).
  *
@@ -18,7 +18,7 @@
  *
  * Startup phases:
  *   1. Compute load_bias = runtime_PC − linktime_PC
- *      (= load_base − DHRY_VBASE, possibly negative i.e. wrapping)
+ *      (= load_base − BENCH_VBASE, possibly negative i.e. wrapping)
  *   2. Copy TLB miss + IRQ handlers to page 0x1000 and patch the
  *      load_bias scratch slot inside the copy
  *   3. Install vector table entries, pin handler page + page 0
@@ -60,18 +60,18 @@
 #define TIMER_BASE_ADDR     0x38         /* accumulated ticks, page 0 */
 
 /* ── Stack ────────────────────────────────────────────────────────
- * The stack is part of the image's .bss, above DHRY_VBASE, so the ROM
+ * The stack is part of the image's .bss, above BENCH_VBASE, so the ROM
  * allocates it with the program and the miss handler maps it with the
  * load bias. */
 #define BENCH_STACK_BYTES   16384
-#define DHRY_VBASE          0x80000000   /* must match dhry.ld */
+#define BENCH_VBASE         0x80000000   /* must match bench_static.ld */
 
 
 /* ═════════════════════════════════════════════════════════════════
  * Phase 1: Entry + compute load_bias
  *
  * We are executing at the physical address ROM picked, but the
- * image was linked for DHRY_VBASE.  Any PC-relative reference to
+ * image was linked for BENCH_VBASE.  Any PC-relative reference to
  * a same-image symbol at runtime yields the runtime address
  * automatically (PC + (link_sym − link_pc) = sym + load_bias).
  *
@@ -147,7 +147,7 @@ _start:
  * Slot 1: page 0 (0x0000) — vectors, bootdata, overflow counter
  *
  * Both identity-mapped (VA = PA) so handlers can run without
- * nested TLB misses.  The dhrystone window at DHRY_VBASE is
+ * nested TLB misses.  The image window at BENCH_VBASE is
  * left to the miss handler.
  * ═════════════════════════════════════════════════════════════════ */
 
@@ -178,7 +178,7 @@ _start:
  * still running at the physical load address, so this entry maps
  * VA == PA for the current page (one extra pinned slot).  Once the
  * very next instruction (a fixed-VA branch) lands, fetches come
- * from the DHRY_VBASE range and the miss handler refills as needed.
+ * from the BENCH_VBASE range and the miss handler refills as needed.
  * ═════════════════════════════════════════════════════════════════ */
 
         /* Slot 2: identity-map current physical code page */
@@ -274,7 +274,7 @@ _handler_start:
  * Three address ranges, three mapping policies:
  *
  *   VA >= 0xFF000000              → uncached identity (MMIO)
- *   VA >= DHRY_VBASE (0x80000000) → cached, PA = VA + load_bias
+ *   VA >= BENCH_VBASE (0x80000000) → cached, PA = VA + load_bias
  *   otherwise                      → cached identity (low RAM)
  *
  * Uses alternating-way replacement (bit 5 of TLB_INDEX).
@@ -308,19 +308,13 @@ _bench_tlb_miss:
          * Then fall through to the WRSYS + restore below.
          *
          * Three cases (see header comment for ranges).  The
-         * load_bias scratch slot holds (load_base − DHRY_VBASE)
+         * load_bias scratch slot holds (load_base − BENCH_VBASE)
          * as a wrap-around uint32_t; adding it to a high-half VA
          * yields the physical address.
-         *
-         * Hint: the existing common/crt0.S handler is two-case
-         * (identity vs uncached) — extend that pattern with a
-         * third branch that biases the PA before OR'ing the
-         * cached PTE flags.  Use r3 to build the PA-page-base,
-         * then OR/add the chosen PTE flag word into r3.
          */
         /* Classify on VA[31:24] (top byte of VPN).  Three policies:
          *   top >= 0xFF → uncached identity (MMIO)
-         *   top >= 0x80 → cached biased    (dhrystone window)
+         *   top >= 0x80 → cached biased    (image window)
          *   otherwise   → cached identity  (low RAM, stack)
          *
          * Common prefix: r3 = VPN << 12 = VA page base.  For both

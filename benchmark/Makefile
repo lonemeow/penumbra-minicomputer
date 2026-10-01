@@ -25,12 +25,14 @@ CFLAGS  := --target=$(TARGET) -fPIE $(COPT) -ffreestanding -nostdlib -I common
 ASFLAGS := --target=$(TARGET) -fPIE -c
 LDFLAGS := --pie --apply-dynamic-relocs --image-base=0 -T common/bench.ld
 
-# Dhrystone-only: static link at fixed VA 0x80000000 so global accesses
-# compile to the classic 2-instruction LUI+LDW sequence (no GOT).
-# Paired with dhry_crt0.S which sets up the VA→PA mapping at boot.
-DHRY_CFLAGS_BASE  := --target=$(TARGET) $(COPT) -ffreestanding -nostdlib -I common
-DHRY_ASFLAGS      := --target=$(TARGET) -c
-DHRY_LDFLAGS      := --image-base=0x80000000 -T dhrystone/dhry.ld
+# Static link at fixed VA 0x80000000, for a benchmark whose score is
+# compared with other machines': global accesses compile to the classic
+# 2-instruction LUI+LDW sequence (no GOT), as they do in the builds
+# published scores come from.  Paired with common/crt0_static.S, which
+# sets up the VA→PA mapping at boot.
+STATIC_CFLAGS  := --target=$(TARGET) $(COPT) -ffreestanding -nostdlib -I common
+STATIC_ASFLAGS := --target=$(TARGET) -c
+STATIC_LDFLAGS := --image-base=0x80000000 -T common/bench_static.ld
 
 BUILDDIR := $(PROJROOT)/build/benchmark
 
@@ -65,6 +67,28 @@ $(BUILDDIR)/librt.o: common/librt.c | $(BUILDDIR)
 $(BUILDDIR)/softfloat_stub.o: common/softfloat_stub.c | $(BUILDDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+# A static-link benchmark takes the harness rebuilt as *.static.o, so
+# the GOT-free LUI+LDW sequence reaches bench.c / librt.c too (otherwise
+# the helpers would keep paying GOT indirection for every uart_putchar
+# etc.).  The string routines need no such variant: they reference no
+# globals, so the shared $(PENSTRING_LIB) archive links cleanly at
+# either image base.
+STATIC_CRT0_OBJ   := $(BUILDDIR)/crt0_static.o
+STATIC_COMMON_OBJ := $(BUILDDIR)/bench.static.o $(BUILDDIR)/librt.static.o \
+                     $(BUILDDIR)/softfloat_stub.static.o
+
+$(STATIC_CRT0_OBJ): common/crt0_static.S | $(BUILDDIR)
+	$(CC) $(STATIC_ASFLAGS) -x assembler-with-cpp $< -o $@
+
+$(BUILDDIR)/bench.static.o: common/bench.c common/bench.h | $(BUILDDIR)
+	$(CC) $(STATIC_CFLAGS) -c $< -o $@
+
+$(BUILDDIR)/librt.static.o: common/librt.c | $(BUILDDIR)
+	$(CC) $(STATIC_CFLAGS) -c $< -o $@
+
+$(BUILDDIR)/softfloat_stub.static.o: common/softfloat_stub.c | $(BUILDDIR)
+	$(CC) $(STATIC_CFLAGS) -c $< -o $@
+
 # ── Optimized string/memory routines (shared with NetBSD) ──────
 #
 # Rather than maintain byte-loop fallbacks here, assemble the
@@ -76,8 +100,8 @@ $(BUILDDIR)/softfloat_stub.o: common/softfloat_stub.c | $(BUILDDIR)
 #
 # The routines are position-independent leaf code (registers + relative
 # branches, no global references), so one archive serves both the PIE
-# benchmarks and the static-linked Dhrystone build — the "rebuild as
-# .dhry.o for GOT-free codegen" dance below does not apply to them.
+# benchmarks and the static-link ones — the "rebuild as .static.o for
+# GOT-free codegen" dance above does not apply to them.
 # Linking an archive (not a fixed object list) pulls in only the
 # routines actually referenced, and a wildcard absorbs any new .S that
 # NetBSD adds to the directory without touching this Makefile.
@@ -128,41 +152,17 @@ $(DHRY_STAMP): FORCE | $(BUILDDIR)
 	fi
 FORCE:
 
-# Dhrystone uses non-PIE codegen — the same C source files are
-# rebuilt as *.dhry.o so the GOT-free LUI+LDW sequence reaches
-# bench.c / librt.c too (otherwise common helpers would keep paying
-# GOT indirection for every uart_putchar etc.).  The string routines
-# need no .dhry.o variant: they reference no globals, so the shared
-# $(PENSTRING_LIB) archive links cleanly at either image base.
+# Dhrystone is a static-link benchmark (see STATIC_CFLAGS).
 
-DHRY_CFLAGS := $(DHRY_CFLAGS_BASE) -isystem dhrystone/include \
+DHRY_CFLAGS := $(STATIC_CFLAGS) -isystem dhrystone/include \
                -DTIME -Dmain=dhrystone_main \
                -DDHRYSTONE_ITERATIONS=$(DHRYSTONE_ITERATIONS) \
                -Wno-implicit-int -Wno-implicit-function-declaration \
                -Wno-return-type -Wno-deprecated-non-prototype
 
-DHRY_COMMON_CFLAGS := $(DHRY_CFLAGS_BASE)
-
-DHRY_CRT0_OBJ := $(BUILDDIR)/dhry_crt0.o
-
-DHRY_COMMON_OBJ := $(BUILDDIR)/bench.dhry.o $(BUILDDIR)/librt.dhry.o \
-                   $(BUILDDIR)/softfloat_stub.dhry.o
-
 # What the timed loop runs, and what only surrounds it.
 DHRY_TIMED_OBJ := $(BUILDDIR)/dhry_1.o $(BUILDDIR)/dhry_2.o
 DHRY_GLUE_OBJ  := $(BUILDDIR)/dhry_shim.o $(BUILDDIR)/dhry_entry.o
-
-$(DHRY_CRT0_OBJ): dhrystone/dhry_crt0.S | $(BUILDDIR)
-	$(CC) $(DHRY_ASFLAGS) -x assembler-with-cpp $< -o $@
-
-$(BUILDDIR)/bench.dhry.o: common/bench.c common/bench.h | $(BUILDDIR)
-	$(CC) $(DHRY_COMMON_CFLAGS) -c $< -o $@
-
-$(BUILDDIR)/librt.dhry.o: common/librt.c | $(BUILDDIR)
-	$(CC) $(DHRY_COMMON_CFLAGS) -c $< -o $@
-
-$(BUILDDIR)/softfloat_stub.dhry.o: common/softfloat_stub.c | $(BUILDDIR)
-	$(CC) $(DHRY_COMMON_CFLAGS) -c $< -o $@
 
 $(BUILDDIR)/dhry_1.o: dhrystone/dhry_1.c dhrystone/dhry.h $(DHRY_STAMP) | $(BUILDDIR)
 	$(CC) $(DHRY_CFLAGS) -c $< -o $@
@@ -171,10 +171,10 @@ $(BUILDDIR)/dhry_2.o: dhrystone/dhry_2.c dhrystone/dhry.h | $(BUILDDIR)
 	$(CC) $(DHRY_CFLAGS) -c $< -o $@
 
 $(BUILDDIR)/dhry_shim.o: dhrystone/shim.c common/bench.h $(DHRY_STAMP) | $(BUILDDIR)
-	$(CC) $(DHRY_COMMON_CFLAGS) -DDHRYSTONE_ITERATIONS=$(DHRYSTONE_ITERATIONS) -c $< -o $@
+	$(CC) $(STATIC_CFLAGS) -DDHRYSTONE_ITERATIONS=$(DHRYSTONE_ITERATIONS) -c $< -o $@
 
 $(BUILDDIR)/dhry_entry.o: dhrystone/entry.c common/bench.h $(DHRY_STAMP) | $(BUILDDIR)
-	$(CC) $(DHRY_COMMON_CFLAGS) -DDHRYSTONE_ITERATIONS=$(DHRYSTONE_ITERATIONS) -c $< -o $@
+	$(CC) $(STATIC_CFLAGS) -DDHRYSTONE_ITERATIONS=$(DHRYSTONE_ITERATIONS) -c $< -o $@
 
 dhrystone: $(BUILDDIR)/DHRYSTON.ELF
 
@@ -186,8 +186,8 @@ dhrystone: $(BUILDDIR)/DHRYSTON.ELF
 # in any set than the cache has ways, so the loop cannot evict itself,
 # and nothing added to the harness can move the routines into the sets
 # Dhrystone's code already fills.
-$(BUILDDIR)/DHRYSTON.ELF: $(DHRY_CRT0_OBJ) $(DHRY_TIMED_OBJ) $(PENSTRING_LIB) $(DHRY_GLUE_OBJ) $(DHRY_COMMON_OBJ) dhrystone/dhry.ld
-	$(LD) $(DHRY_LDFLAGS) $(DHRY_CRT0_OBJ) $(DHRY_TIMED_OBJ) $(PENSTRING_LIB) $(DHRY_GLUE_OBJ) $(DHRY_COMMON_OBJ) -o $@
+$(BUILDDIR)/DHRYSTON.ELF: $(STATIC_CRT0_OBJ) $(DHRY_TIMED_OBJ) $(PENSTRING_LIB) $(DHRY_GLUE_OBJ) $(STATIC_COMMON_OBJ) common/bench_static.ld
+	$(LD) $(STATIC_LDFLAGS) $(STATIC_CRT0_OBJ) $(DHRY_TIMED_OBJ) $(PENSTRING_LIB) $(DHRY_GLUE_OBJ) $(STATIC_COMMON_OBJ) -o $@
 
 # ── memtest ──────────────────────────────────────────────────
 #

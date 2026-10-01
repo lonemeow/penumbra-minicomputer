@@ -692,7 +692,7 @@ counts are common.
 ## Benchmark: bare-metal startups use fixed low RAM
 
 The harness startups (`benchmark/common/crt0.S`,
-`benchmark/dhrystone/dhry_crt0.S`) copy their TLB-miss and interrupt
+`benchmark/common/crt0_static.S`) copy their TLB-miss and interrupt
 handlers to physical `0x1000` and pin that page, keep the timer's
 accumulated ticks at `0x38` — reserved vector 14 — and pin page 0 so
 the handlers reach it with the MMU on. `bench.c` and `tlbrange.c`
