@@ -135,7 +135,7 @@ body: |
     ; CHECK:      CMP
     ; CHECK-NEXT: CMPC
     ; CHECK-NEXT: [[ZERO:%[0-9]+]]:gpr_allocatable = COPY $r0
-    ; CHECK-NEXT: [[RAW:%[0-9]+]]:{{[a-z_]+}} = SBC [[ZERO]], $r0, implicit-def $sr, implicit $sr
+    ; CHECK-NEXT: [[RAW:%[0-9]+]]:{{[a-z_]+}} = SBC [[ZERO]], $r0, implicit-def dead $sr, implicit $sr
     ; CHECK-NEXT: ANDi [[RAW]], 1
     %0:gprbank(s32) = COPY $r1
     %1:gprbank(s32) = COPY $r2

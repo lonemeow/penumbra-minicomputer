@@ -36,7 +36,7 @@ body: |
     ; CHECK-NEXT: [[COPY1:%[0-9]+]]:gpr_allocatable = COPY $r2
     ; CHECK-NEXT: [[ADD:%[0-9]+]]:gpr = ADD [[COPY]], [[COPY1]], implicit-def $sr
     ; CHECK-NEXT: [[COPY2:%[0-9]+]]:gpr_allocatable = COPY $r0
-    ; CHECK-NEXT: [[ADC:%[0-9]+]]:gpr = ADC [[COPY2]], $r0, implicit-def $sr, implicit $sr
+    ; CHECK-NEXT: [[ADC:%[0-9]+]]:gpr = ADC [[COPY2]], $r0, implicit-def dead $sr, implicit $sr
     ; CHECK-NEXT: [[COPY3:%[0-9]+]]:gpr_allocatable = COPY [[ADC]]
     ; CHECK-NEXT: $r1 = COPY [[ADD]]
     ; CHECK-NEXT: $r2 = COPY [[COPY3]]
@@ -68,7 +68,7 @@ body: |
     ; CHECK-NEXT: [[COPY2:%[0-9]+]]:gpr_allocatable = COPY $r3
     ; CHECK-NEXT: [[COPY3:%[0-9]+]]:gpr_allocatable = COPY $r4
     ; CHECK-NEXT: [[ADD:%[0-9]+]]:gpr = ADD [[COPY]], [[COPY2]], implicit-def $sr
-    ; CHECK-NEXT: [[ADC:%[0-9]+]]:gpr = ADC [[COPY1]], [[COPY3]], implicit-def $sr, implicit $sr
+    ; CHECK-NEXT: [[ADC:%[0-9]+]]:gpr = ADC [[COPY1]], [[COPY3]], implicit-def dead $sr, implicit $sr
     ; CHECK-NEXT: $r1 = COPY [[ADD]]
     ; CHECK-NEXT: $r2 = COPY [[ADC]]
     ; CHECK-NEXT: RET implicit $r1, implicit $r2
@@ -101,7 +101,7 @@ body: |
     ; CHECK-NEXT: [[COPY1:%[0-9]+]]:gpr_allocatable = COPY $r2
     ; CHECK-NEXT: [[COPY2:%[0-9]+]]:gpr_allocatable = COPY $r3
     ; CHECK-NEXT: CMPi [[COPY2]], 1, implicit-def $sr
-    ; CHECK-NEXT: [[ADC:%[0-9]+]]:gpr = ADC [[COPY]], [[COPY1]], implicit-def $sr, implicit $sr
+    ; CHECK-NEXT: [[ADC:%[0-9]+]]:gpr = ADC [[COPY]], [[COPY1]], implicit-def dead $sr, implicit $sr
     ; CHECK-NEXT: $r1 = COPY [[ADC]]
     ; CHECK-NEXT: RET implicit $r1
     %0:gprbank(s32) = COPY $r1
@@ -131,7 +131,7 @@ body: |
     ; CHECK-NEXT: [[COPY1:%[0-9]+]]:gpr_allocatable = COPY $r2
     ; CHECK-NEXT: [[COPY2:%[0-9]+]]:gpr_allocatable = COPY $r3
     ; CHECK-NEXT: CMP $r0, [[COPY2]], implicit-def $sr
-    ; CHECK-NEXT: [[SBC:%[0-9]+]]:gpr = SBC [[COPY]], [[COPY1]], implicit-def $sr, implicit $sr
+    ; CHECK-NEXT: [[SBC:%[0-9]+]]:gpr = SBC [[COPY]], [[COPY1]], implicit-def dead $sr, implicit $sr
     ; CHECK-NEXT: $r1 = COPY [[SBC]]
     ; CHECK-NEXT: RET implicit $r1
     %0:gprbank(s32) = COPY $r1
@@ -159,7 +159,7 @@ body: |
     ; CHECK-NEXT: [[COPY:%[0-9]+]]:gpr_allocatable = COPY $r1
     ; CHECK-NEXT: [[COPY1:%[0-9]+]]:gpr_allocatable = COPY $r2
     ; CHECK-NEXT: [[ADDi:%[0-9]+]]:gpr = ADDi [[COPY]], 1, implicit-def $sr
-    ; CHECK-NEXT: [[ADC:%[0-9]+]]:gpr = ADC [[COPY1]], $r0, implicit-def $sr, implicit $sr
+    ; CHECK-NEXT: [[ADC:%[0-9]+]]:gpr = ADC [[COPY1]], $r0, implicit-def dead $sr, implicit $sr
     ; CHECK-NEXT: $r1 = COPY [[ADDi]]
     ; CHECK-NEXT: $r2 = COPY [[ADC]]
     ; CHECK-NEXT: RET implicit $r1, implicit $r2
@@ -190,7 +190,7 @@ body: |
     ; CHECK-NEXT: [[COPY:%[0-9]+]]:gpr_allocatable = COPY $r1
     ; CHECK-NEXT: [[COPY1:%[0-9]+]]:gpr_allocatable = COPY $r2
     ; CHECK-NEXT: [[SUBi:%[0-9]+]]:gpr = SUBi [[COPY]], 1000, implicit-def $sr
-    ; CHECK-NEXT: [[SBC:%[0-9]+]]:gpr = SBC [[COPY1]], $r0, implicit-def $sr, implicit $sr
+    ; CHECK-NEXT: [[SBC:%[0-9]+]]:gpr = SBC [[COPY1]], $r0, implicit-def dead $sr, implicit $sr
     ; CHECK-NEXT: $r1 = COPY [[SUBi]]
     ; CHECK-NEXT: $r2 = COPY [[SBC]]
     ; CHECK-NEXT: RET implicit $r1, implicit $r2
@@ -220,7 +220,7 @@ body: |
     ; CHECK-NEXT: [[COPY:%[0-9]+]]:gpr_allocatable = COPY $r1
     ; CHECK-NEXT: [[COPY1:%[0-9]+]]:gpr_allocatable = COPY $r2
     ; CHECK-NEXT: [[SUBi:%[0-9]+]]:gpr = SUBi [[COPY]], 1000, implicit-def $sr
-    ; CHECK-NEXT: [[SBC:%[0-9]+]]:gpr = SBC [[COPY1]], $r0, implicit-def $sr, implicit $sr
+    ; CHECK-NEXT: [[SBC:%[0-9]+]]:gpr = SBC [[COPY1]], $r0, implicit-def dead $sr, implicit $sr
     ; CHECK-NEXT: $r1 = COPY [[SUBi]]
     ; CHECK-NEXT: $r2 = COPY [[SBC]]
     ; CHECK-NEXT: RET implicit $r1, implicit $r2
@@ -250,7 +250,7 @@ body: |
     ; CHECK-NEXT: [[COPY:%[0-9]+]]:gpr_allocatable = COPY $r1
     ; CHECK-NEXT: [[COPY1:%[0-9]+]]:gpr_allocatable = COPY $r2
     ; CHECK-NEXT: [[ADDi:%[0-9]+]]:gpr = ADDi [[COPY]], 1, implicit-def $sr
-    ; CHECK-NEXT: [[ADC:%[0-9]+]]:gpr = ADC [[COPY1]], $r0, implicit-def $sr, implicit $sr
+    ; CHECK-NEXT: [[ADC:%[0-9]+]]:gpr = ADC [[COPY1]], $r0, implicit-def dead $sr, implicit $sr
     ; CHECK-NEXT: $r1 = COPY [[ADDi]]
     ; CHECK-NEXT: $r2 = COPY [[ADC]]
     ; CHECK-NEXT: RET implicit $r1, implicit $r2
@@ -281,7 +281,7 @@ body: |
     ; CHECK-NEXT: [[COPY:%[0-9]+]]:gpr_allocatable = COPY $r1
     ; CHECK-NEXT: [[ADDi:%[0-9]+]]:gpr = ADDi [[COPY]], 0, implicit-def $sr
     ; CHECK-NEXT: [[COPY1:%[0-9]+]]:gpr_allocatable = COPY $r0
-    ; CHECK-NEXT: [[ADC:%[0-9]+]]:gpr = ADC [[COPY1]], $r0, implicit-def $sr, implicit $sr
+    ; CHECK-NEXT: [[ADC:%[0-9]+]]:gpr = ADC [[COPY1]], $r0, implicit-def dead $sr, implicit $sr
     ; CHECK-NEXT: [[COPY2:%[0-9]+]]:gpr_allocatable = COPY [[ADC]]
     ; CHECK-NEXT: $r1 = COPY [[ADDi]]
     ; CHECK-NEXT: $r2 = COPY [[COPY2]]
@@ -313,7 +313,7 @@ body: |
     ; CHECK-NEXT: [[COPY2:%[0-9]+]]:gpr_allocatable = COPY $r3
     ; CHECK-NEXT: [[LLI:%[0-9]+]]:gpr = LLI 5
     ; CHECK-NEXT: [[ADD:%[0-9]+]]:gpr = ADD [[COPY]], [[COPY1]], implicit-def $sr
-    ; CHECK-NEXT: [[ADC:%[0-9]+]]:gpr = ADC [[COPY2]], [[LLI]], implicit-def $sr, implicit $sr
+    ; CHECK-NEXT: [[ADC:%[0-9]+]]:gpr = ADC [[COPY2]], [[LLI]], implicit-def dead $sr, implicit $sr
     ; CHECK-NEXT: $r1 = COPY [[ADD]]
     ; CHECK-NEXT: $r2 = COPY [[ADC]]
     ; CHECK-NEXT: RET implicit $r1, implicit $r2
@@ -344,7 +344,7 @@ body: |
     ; CHECK-NEXT: [[PseudoLI:%[0-9]+]]:gpr = PseudoLI 74565
     ; CHECK-NEXT: [[ADD:%[0-9]+]]:gpr = ADD [[COPY]], [[PseudoLI]], implicit-def $sr
     ; CHECK-NEXT: [[COPY1:%[0-9]+]]:gpr_allocatable = COPY $r0
-    ; CHECK-NEXT: [[ADC:%[0-9]+]]:gpr = ADC [[COPY1]], $r0, implicit-def $sr, implicit $sr
+    ; CHECK-NEXT: [[ADC:%[0-9]+]]:gpr = ADC [[COPY1]], $r0, implicit-def dead $sr, implicit $sr
     ; CHECK-NEXT: [[COPY2:%[0-9]+]]:gpr_allocatable = COPY [[ADC]]
     ; CHECK-NEXT: $r1 = COPY [[ADD]]
     ; CHECK-NEXT: $r2 = COPY [[COPY2]]

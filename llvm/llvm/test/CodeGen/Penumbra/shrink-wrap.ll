@@ -94,8 +94,9 @@ ret2:
   ret i32 2
 }
 
-; R11 carries a * b past the early exit, and the frame is adjusted through R11:
-; the frame stays in the entry block.
+; R11 carries a / b past the early exit, and the frame is adjusted through R11:
+; the frame stays in the entry block.  A divide stays where it is written,
+; since a zero divisor traps; a multiply would sink into the block that uses it.
 define void @large_frame_r11_live(i32 %a, i32 %b, i32 %c, i32 %d) {
 ; CHECK-LABEL: large_frame_r11_live:
 ; CHECK:         .cfi_startproc
@@ -108,7 +109,7 @@ define void @large_frame_r11_live(i32 %a, i32 %b, i32 %c, i32 %d) {
 ; CHECK-NEXT:    add r11, sp
 ; CHECK-NEXT:    stw lr, [r11 + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r11, r1
-; CHECK-NEXT:    mul r11, r2
+; CHECK-NEXT:    divu r11, r2
 ; CHECK-NEXT:    cmp r4, 0
 ; CHECK-NEXT:    beq .LBB2_2
 ; CHECK-NEXT:  // %bb.1: // %body
@@ -133,7 +134,7 @@ define void @large_frame_r11_live(i32 %a, i32 %b, i32 %c, i32 %d) {
 ; CHECK-NEXT:    add sp, r11
 ; CHECK-NEXT:    jmp lr
   %buf = alloca [70000 x i8]
-  %x = mul i32 %a, %b
+  %x = udiv i32 %a, %b
   %z = icmp eq i32 %d, 0
   br i1 %z, label %early, label %body
 early:

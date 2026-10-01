@@ -26,6 +26,10 @@ public:
   EmitInstrWithCustomInserter(MachineInstr &MI,
                               MachineBasicBlock *MBB) const override;
 
+  // Marks the flag definitions nothing reads as dead, once selection and the
+  // select expansion have each built their instructions.
+  void finalizeLowering(MachineFunction &MF) const override;
+
   // Hold G_SCMP/G_UCMP on LegalizerHelper's select-chain expansion.  Declaring
   // ZeroOrOneBooleanContent otherwise switches it to `zext(gt) - zext(lt)`,
   // which measures worse here: the select chain folds each comparison into a

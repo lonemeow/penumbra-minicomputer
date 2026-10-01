@@ -305,6 +305,39 @@ PenumbraISelLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
   return TailMBB;
 }
 
+// Give every SR definition in MBB the dead flag its uses call for.  Selection
+// keeps each flag value within one block, so the uses that follow a definition
+// in its block are all of them.  Flags live into a block that does not name SR
+// as a live-in break that: their producer, in another block, would be marked
+// dead.
+static void markDeadFlagDefs(MachineBasicBlock &MBB) {
+  if (Penumbra::flagsLiveBefore(MBB, MBB.begin()) &&
+      !MBB.isLiveIn(Penumbra::SR))
+    report_fatal_error("flags live into a block without SR as a live-in");
+
+  // Each query stops at the next definition, so the block is walked once.
+  for (MachineInstr &MI : MBB) {
+    for (MachineOperand &MO : MI.all_defs()) {
+      if (MO.getReg() != Penumbra::SR)
+        continue;
+      MO.setIsDead(
+          !Penumbra::flagUsesFrom(MBB, std::next(MI.getIterator())).live());
+    }
+  }
+}
+
+// An instruction selected through a TableGen pattern has its unused SR
+// definition marked dead; one built by hand, in the selector or the select
+// expansion above, has not.  The machine passes that hoist, merge and sink
+// instructions while the function is still in SSA form leave one with a live
+// physical-register definition where selection put it, though it has no side
+// effect, and they run before liveness is next computed.
+void PenumbraISelLowering::finalizeLowering(MachineFunction &MF) const {
+  for (MachineBasicBlock &MBB : MF)
+    markDeadFlagDefs(MBB);
+  TargetLowering::finalizeLowering(MF);
+}
+
 // ── LSR / CodeGenPrepare addressing-mode cost ───────────────────────────────
 //
 // The `AddrMode` struct expresses the address as
