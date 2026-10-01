@@ -1,0 +1,635 @@
+// pair_model.h — shadow two-slot issue stages (+pairmodel).
+//
+// Every instruction the ISS executes runs through one or more models of
+// an in-order issue stage with two slots, X and Y, each counting the
+// issue cycles the stream would take: which instructions issue as a
+// pair, which fuse into one op, and what kept the rest apart.  The
+// counts are exact for the architectural stream.  They are issue slots
+// only: no stall, miss or redirect is modelled, and fetch always has the
+// next sequential instruction ready.
+//
+// An *op* is one instruction, or two adjacent ones a configured fusion
+// combines.  Ops issue in order, one a cycle, or two when the younger
+// may join the older:
+//
+//  - Sequence.  The younger directly follows the older: the older is not
+//    a taken transfer, no trap or interrupt came between them, and
+//    neither trapped.  System instructions (WRSYS, RDSYS, WRSPR, RDSPR,
+//    EI, DI, ERET, SYSCALL, BREAK) issue alone.
+//  - Slots.  The older takes X and the younger Y, each slot issuing only
+//    its classes; `flex` also allows the older in Y and the younger in X.
+//  - Units.  One branch and one MUL/DIV a cycle, and one memory access
+//    (`mem:ld2`: or two loads; `mem:2`: any two).
+//  - Dependencies.  The younger takes nothing the older writes that
+//    cycle, a register or the flags, unless a configured forward
+//    carries it.
+//
+// An item names one model: a base, `single` (X issues nothing) or `dual`
+// (X issues alu, sh and mov; Y everything), then modifiers joined by '+':
+//
+//  - x:LIST / y:LIST: the slot's classes, joined by ':'.  alu (ADD SUB
+//    AND OR XOR NOT CMP TEST), sh (SHL SHR SAR), mov (MOV LLI LLIS LUI),
+//    adc (ADC SBC CMPC), ld, st, br (B Bcc BL JMP JALR), md (MUL DIV),
+//    or the sets simple (alu:sh:mov), all and none.
+//  - fw:LIST: same-cycle forwards from the older op to the younger.
+//      cond   the flags it writes, to the condition a branch tests
+//      carry  the flags it writes, to the carry ADC, SBC and CMPC add
+//      mov    a MOV's source, wherever the younger reads the copy
+//      imm    an LLI or LLIS immediate, or a fused LLI+LUI's, likewise
+//      data   a result ready at the end of EX, as a store's data
+//      ea     an ADD or SUB #imm result, as a load's or store's base (a
+//             three-input address add)
+//      alu    a result ready at the end of EX, as an ALU operand
+//             (cascaded ALUs: a ceiling to measure against)
+//  - fuse:LIST: fusions.
+//      lilui  LLI Rd; LUI Rd as one load of a 32-bit constant
+//      cmpbr  a flag-only compare; Bcc as one compare-and-branch
+//      movop  MOV Rd, Rs; an ALU op or shift updating Rd in place, as
+//             one three-operand op
+//  - mem:1 | mem:ld2 | mem:2: memory accesses a cycle.
+//  - flex: either op may take either slot.
+//  - yflags: only the younger op of a pair commits flags.
+//
+// A fused op has the class of its second instruction, except LLI+LUI,
+// which stays a mov.
+
+#pragma once
+
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <string>
+#include <vector>
+
+// What a slot must be able to do to issue an instruction.
+enum class IssueClass { Alu, Shift, Move, Carry, Load, Store, Branch, MulDiv, System };
+static constexpr int ISSUE_CLASSES = 9;
+static const char* const ISSUE_CLASS_NAMES[ISSUE_CLASSES] =
+    { "alu", "sh", "mov", "adc", "ld", "st", "br", "md", "sys" };
+static constexpr uint32_t CLASSES_SIMPLE = 0x07;    // alu, sh, mov
+static constexpr uint32_t CLASSES_ALL    = 0xFF;    // every class a slot can be given
+
+// How an op uses a register it reads, which sets when it needs the value.
+enum class Use { Operand, Base, Data, Target };     // ALU input; address base; store data; jump target
+static constexpr int USES = 4;
+
+// How the value an op writes comes about, which sets when it exists.
+enum class Producer {
+    Copy,       // a MOV: its source register's value
+    Constant,   // known at decode: an immediate, or a call's return address
+    AddImm,     // a register plus or minus an immediate, at the end of EX
+    Execute,    // any other result ready at the end of EX
+    Late,       // after EX: a load, MUL or DIV
+};
+
+// The shapes the fusions look for.
+enum class Shape { Other, Lli, Lui, Mov, Compare, TiedAlu, CondBranch };
+
+// Same-cycle forwards (fw:), as bits of IssueConfig::forwards, from the
+// narrowest to the widest: a pair counts a value several of them could
+// carry under the first.
+enum : uint32_t {
+    FW_COND = 1 << 0, FW_CARRY = 1 << 1, FW_MOV = 1 << 2, FW_IMM = 1 << 3,
+    FW_DATA  = 1 << 4, FW_EA    = 1 << 5, FW_ALU = 1 << 6,
+};
+static constexpr int FORWARDS = 7;
+static const char* const FORWARD_NAMES[FORWARDS] =
+    { "cond", "carry", "mov", "imm", "data", "ea", "alu" };
+
+// Fusions (fuse:), as bits of IssueConfig::fusions.
+enum : uint32_t { FUSE_LILUI = 1 << 0, FUSE_CMPBR = 1 << 1, FUSE_MOVOP = 1 << 2 };
+static constexpr int FUSIONS = 3;
+static const char* const FUSION_NAMES[FUSIONS] = { "lilui", "cmpbr", "movop" };
+
+// Why an op issued alone with no younger op to consider.
+enum class Alone { Taken, Break, System, End };
+static constexpr int ALONES = 4;
+static const char* const ALONE_NAMES[ALONES] = { "taken", "break", "system", "end" };
+
+// What kept a younger op from joining, as bits: any number can hold at once.
+enum : uint32_t {
+    CAUSE_SLOT_OLDER = 1 << 0, CAUSE_SLOT_YOUNGER = 1 << 1, CAUSE_UNIT = 1 << 2,
+    CAUSE_MEMORY     = 1 << 3, CAUSE_FLAGS        = 1 << 4, CAUSE_OPERAND = 1 << 5,
+    CAUSE_BASE       = 1 << 6, CAUSE_DATA         = 1 << 7, CAUSE_TARGET  = 1 << 8,
+};
+static constexpr int CAUSES = 9;
+static const char* const CAUSE_NAMES[CAUSES] =
+    { "slot-older", "slot-younger", "unit", "memory", "flags", "operand", "base", "data", "target" };
+
+// One instruction, or a fused pair, as the issue stage sees it.
+struct IssueOp {
+    uint32_t   pc = 0;              // address of its first instruction
+    int        insns = 1;           // instructions it stands for: 2 when fused
+    IssueClass cls = IssueClass::System;
+    uint16_t   writes = 0;          // registers it writes, a bit each; never R0 or PC
+    uint16_t   reads[USES] = {};    // registers it reads, a bit each, by use; never R0 or PC
+    Producer   produces = Producer::Late;   // how the registers it writes get their value
+    bool       writes_flags = false;        // it leaves new NZCV
+    bool       reads_cond = false;  // it branches on flags an earlier op wrote (a fused
+                                    // compare-and-branch tests its own, so does not)
+    bool       reads_carry = false; // ADC, SBC or CMPC: it adds in the C an earlier op wrote
+    bool       taken = false;       // a control transfer that left the sequential path
+    bool       trapped = false;     // it raised an exception instead of completing
+    Shape      shape = Shape::Other;
+    int        rd = 0, rs = 0;      // register fields, for the shapes that name them
+};
+
+static inline uint16_t issue_reg_bit(int r) { return (r == 0 || r == 15) ? 0 : uint16_t(1u << r); }
+
+// The op one instruction word makes, before the run says whether it was
+// taken or trapped.
+static inline IssueOp issue_decode(uint32_t pc, uint32_t word) {
+    IssueOp op;
+    op.pc = pc;
+    auto operand = [&](int r) { op.reads[int(Use::Operand)] |= issue_reg_bit(r); };
+    switch (word >> 30) {
+    case 0: {   // Format R
+        int code = (word >> 25) & 0x1F;
+        bool flag_only = (word >> 16) & 1;
+        op.rd = (word >> 21) & 0xF;
+        op.rs = (word >> 17) & 0xF;
+        if (code <= 7) {                    // ADD SUB AND OR XOR SHL SHR SAR
+            op.cls = code >= 5 ? IssueClass::Shift : IssueClass::Alu;
+            operand(op.rd); operand(op.rs);
+            op.writes_flags = true;
+            op.produces = Producer::Execute;
+            op.shape = flag_only ? Shape::Compare : Shape::TiedAlu;
+            if (!flag_only) op.writes = issue_reg_bit(op.rd);
+        } else if (code == 8) {             // MOV
+            op.cls = IssueClass::Move;
+            operand(op.rs);
+            op.produces = Producer::Copy;
+            if (!flag_only) { op.writes = issue_reg_bit(op.rd); op.shape = Shape::Mov; }
+        } else if (code == 9) {             // NOT
+            op.cls = IssueClass::Alu;
+            operand(op.rs);
+            op.writes_flags = true;
+            op.produces = Producer::Execute;
+            if (!flag_only) op.writes = issue_reg_bit(op.rd);
+        } else if (code <= 11) {            // ADC SBC, and CMPC with the F bit
+            op.cls = IssueClass::Carry;
+            operand(op.rd); operand(op.rs);
+            op.reads_carry = op.writes_flags = true;
+            op.produces = Producer::Execute;
+            if (!flag_only) op.writes = issue_reg_bit(op.rd);
+        } else if (code >= 16 && code <= 19) {  // MUL MULU DIV DIVU
+            op.cls = IssueClass::MulDiv;
+            operand(op.rd); operand(op.rs);
+            op.writes_flags = true;
+            op.writes = issue_reg_bit(op.rd) | issue_reg_bit((word >> 12) & 0xF);
+        }
+        break;
+    }
+    case 1: {   // Format L
+        int code = (word >> 26) & 0xF;
+        op.rd = (word >> 22) & 0xF;
+        if (code <= 1) {                    // LLI LLIS
+            op.cls = IssueClass::Move;
+            op.writes = issue_reg_bit(op.rd);
+            op.produces = Producer::Constant;
+            if (code == 0) op.shape = Shape::Lli;
+        } else if (code == 2) {             // LUI
+            op.cls = IssueClass::Move;
+            operand(op.rd);
+            op.writes = issue_reg_bit(op.rd);
+            op.produces = Producer::Execute;
+            op.shape = Shape::Lui;
+        } else if (code <= 10) {            // ADD SUB CMP AND TEST SHL SHR SAR #imm
+            bool flag_only = code == 5 || code == 7;
+            op.cls = code >= 8 ? IssueClass::Shift : IssueClass::Alu;
+            operand(op.rd);
+            op.writes_flags = true;
+            op.produces = code <= 4 ? Producer::AddImm : Producer::Execute;
+            op.shape = flag_only ? Shape::Compare : Shape::TiedAlu;
+            if (!flag_only) op.writes = issue_reg_bit(op.rd);
+        } else if (code <= 12) {            // JMP JALR
+            op.cls = IssueClass::Branch;
+            op.reads[int(Use::Target)] = issue_reg_bit(op.rd);
+            if (code == 12) { op.writes = issue_reg_bit(13); op.produces = Producer::Constant; }
+        }
+        break;
+    }
+    case 2: {   // Format M
+        op.rd = (word >> 22) & 0xF;
+        op.reads[int(Use::Base)] = issue_reg_bit((word >> 18) & 0xF);
+        if ((word >> 29) & 1) {
+            op.cls = IssueClass::Load;
+            op.writes = issue_reg_bit(op.rd);
+        } else {
+            op.cls = IssueClass::Store;
+            op.reads[int(Use::Data)] = issue_reg_bit(op.rd);
+        }
+        break;
+    }
+    default: {  // Format B
+        int cond = (word >> 26) & 0xF;
+        op.cls = IssueClass::Branch;
+        if (cond == 15) { op.writes = issue_reg_bit(13); op.produces = Producer::Constant; }
+        else if (cond != 0) { op.reads_cond = true; op.shape = Shape::CondBranch; }
+        break;
+    }
+    }
+    return op;
+}
+
+// Memory accesses a cycle may issue (mem:): one, two when both are
+// loads, or any two.
+enum class MemoryLimit { One, TwoLoads, Two };
+
+// ── One issue stage ──────────────────────────────────────────────
+struct IssueConfig {
+    std::string label;
+    uint32_t    x = 0, y = CLASSES_ALL;     // classes each slot issues, a bit per IssueClass
+    uint32_t    forwards = 0;       // FW_* bits: the same-cycle forwards that exist
+    uint32_t    fusions = 0;        // FUSE_* bits
+    MemoryLimit memory = MemoryLimit::One;
+    bool        flex = false;       // the older op may take Y and the younger X
+    bool        younger_commits_flags = false;  // yflags: the flag state takes only the younger op's write
+};
+
+class IssueStage {
+public:
+    explicit IssueStage(IssueConfig c) : cfg_(std::move(c)) {}
+
+    // One executed instruction, in order.
+    void insn(const IssueOp& op) {
+        if (have_first_) {
+            have_first_ = false;
+            IssueOp fused;
+            int kind;
+            if (follows(first_, op) && fuse(first_, op, fused, kind)) {
+                counts_.fused[kind]++;
+                issue(fused);
+                return;
+            }
+            issue(first_);
+        }
+        if (starts_fusion(op)) { first_ = op; have_first_ = true; }
+        else                   issue(op);
+    }
+
+    // A trap or interrupt is entered: what is waiting issues without
+    // whatever follows it.
+    void boundary() { drain(Alone::Break); }
+
+    // The window ends: what is waiting issues, and is counted in it.
+    void end_window() { drain(Alone::End); }
+
+    void clear_counts() { drain(Alone::End); counts_ = Counts(); }
+
+    void report(FILE* out) const {
+        const Counts& c = counts_;
+        auto n = [](uint64_t v) { return (unsigned long long)v; };
+        fprintf(out, "-- pairing %s\n", cfg_.label.c_str());
+        fprintf(out, "  instructions %llu, ops %llu, issue cycles %llu: %llu pairs, %llu singles\n",
+                n(c.insns), n(c.ops), n(c.pairs + c.singles), n(c.pairs), n(c.singles));
+        fprintf(out, "  issue cycles per 1000 instructions: %.1f\n",
+                c.insns ? (c.pairs + c.singles) * 1000.0 / c.insns : 0.0);
+        fprintf(out, "  fused:");
+        for (int i = 0; i < FUSIONS; i++)
+            fprintf(out, "%s %s %llu", i ? "," : "", FUSION_NAMES[i], n(c.fused[i]));
+        fprintf(out, "\n  pairs by forward: none %llu", n(c.pair_plain));
+        for (int i = 0; i < FORWARDS; i++) fprintf(out, ", %s %llu", FORWARD_NAMES[i], n(c.pair_forward[i]));
+        fprintf(out, "\n  pairs by younger:");
+        for (int i = 0; i < ISSUE_CLASSES - 1; i++)
+            fprintf(out, "%s %s %llu", i ? "," : "", ISSUE_CLASS_NAMES[i], n(c.pair_younger[i]));
+        fprintf(out, "\n  singles by class:");
+        for (int i = 0; i < ISSUE_CLASSES; i++)
+            fprintf(out, "%s %s %llu", i ? "," : "", ISSUE_CLASS_NAMES[i], n(c.single_class[i]));
+        fprintf(out, "\n  singles, no candidate:");
+        for (int i = 0; i < ALONES; i++)
+            fprintf(out, "%s %s %llu", i ? "," : "", ALONE_NAMES[i], n(c.single_alone[i]));
+        fprintf(out, "\n  singles, one cause:");
+        for (int i = 0; i < CAUSES; i++)
+            fprintf(out, "%s %s %llu", i ? "," : "", CAUSE_NAMES[i], n(c.single_sole[i]));
+        fprintf(out, "\n  singles, several causes: %llu (", n(c.single_several));
+        for (int i = 0; i < CAUSES; i++)
+            fprintf(out, "%s%s %llu", i ? ", " : "", CAUSE_NAMES[i], n(c.single_among[i]));
+        fprintf(out, ")\n");
+    }
+
+private:
+    static uint32_t class_bit(IssueClass c) { return 1u << int(c); }
+    static bool accesses_memory(const IssueOp& op) {
+        return op.cls == IssueClass::Load || op.cls == IssueClass::Store;
+    }
+
+    // `younger` is the instruction after `older` on the sequential path.
+    static bool follows(const IssueOp& older, const IssueOp& younger) {
+        return !older.taken && !older.trapped && !younger.trapped
+            && younger.pc == older.pc + 4 * uint32_t(older.insns);
+    }
+
+    // ── Fusion ──
+    bool starts_fusion(const IssueOp& op) const {
+        if (op.trapped) return false;
+        return (op.shape == Shape::Lli && (cfg_.fusions & FUSE_LILUI))
+            || (op.shape == Shape::Compare && (cfg_.fusions & FUSE_CMPBR))
+            || (op.shape == Shape::Mov && (cfg_.fusions & FUSE_MOVOP));
+    }
+
+    bool fuse(const IssueOp& first, const IssueOp& second, IssueOp& fused, int& kind) const {
+        if (first.shape == Shape::Lli && second.shape == Shape::Lui && first.rd == second.rd) {
+            fused = first;                  // a constant, written to Rd
+            fused.shape = Shape::Other;
+            kind = 0;
+        } else if (first.shape == Shape::Compare && second.shape == Shape::CondBranch) {
+            fused = second;                 // a branch that reads the compare's registers
+            fused.reads[int(Use::Operand)] = first.reads[int(Use::Operand)];
+            fused.writes_flags = true;
+            fused.reads_cond = false;
+            kind = 1;
+        } else if (first.shape == Shape::Mov && second.shape == Shape::TiedAlu
+                   && second.rd == first.rd && first.writes) {
+            fused = second;                 // the op, reading the MOV's source in Rd's place
+            fused.reads[int(Use::Operand)] =
+                (second.reads[int(Use::Operand)] & ~first.writes) | first.reads[int(Use::Operand)];
+            kind = 2;
+        } else {
+            return false;
+        }
+        fused.pc = first.pc;
+        fused.insns = 2;
+        return true;
+    }
+
+    // ── Pairing ──
+    struct Verdict {
+        bool     pairs = false;
+        Alone    alone = Alone::Break;  // when the younger was no candidate at all
+        bool     candidate = false;
+        uint32_t causes = 0;            // CAUSE_* bits, when it was a candidate and did not join
+        uint32_t forwards = 0;          // FW_* bits a pair relies on
+    };
+
+    // ── What a pair needs ──
+    // These describe the two ops alone.  Whether a stage supplies what
+    // they describe is judge()'s question.
+
+    // One value `younger` takes from `older` in the cycle they would share.
+    struct Link {
+        uint32_t cause;     // the CAUSE_* bit charged when no configured forward carries it
+        uint32_t forwards;  // FW_* bits, any one of which carries it; 0 when none can
+    };
+    static constexpr int MAX_LINKS = USES + 2;
+
+    // The forwards that carry a value produced as `p` to a use `u` in the
+    // cycle it is produced.
+    static uint32_t forwards_carrying(Producer p, Use u) {
+        if (p == Producer::Late) return 0;
+        uint32_t fw = 0;
+        if (p == Producer::Copy)     fw |= FW_MOV;
+        if (p == Producer::Constant) fw |= FW_IMM;
+        if (u == Use::Data)          fw |= FW_DATA;
+        if (u == Use::Base && p == Producer::AddImm) fw |= FW_EA;
+        if (u == Use::Operand)       fw |= FW_ALU;
+        return fw;
+    }
+
+    // Every value `younger` takes from `older`, the op directly ahead of
+    // it: each register the older op writes and the younger reads, by
+    // use, and the flags the older op writes, as the younger's condition
+    // or carry.  Flags that ops of earlier cycles wrote are no link: they
+    // stand by the time the younger op executes.  Returns how many links
+    // `out` holds.
+    static int links(const IssueOp& older, const IssueOp& younger, Link out[MAX_LINKS]) {
+        static constexpr uint32_t use_cause[USES] =
+            { CAUSE_OPERAND, CAUSE_BASE, CAUSE_DATA, CAUSE_TARGET };
+        int count = 0;
+        for (int u = 0; u < USES; u++)
+            if (older.writes & younger.reads[u])
+                out[count++] = { use_cause[u], forwards_carrying(older.produces, Use(u)) };
+        if (older.writes_flags && younger.reads_cond)  out[count++] = { CAUSE_FLAGS, FW_COND };
+        if (older.writes_flags && younger.reads_carry) out[count++] = { CAUSE_FLAGS, FW_CARRY };
+        return count;
+    }
+
+    // The flags the pair leaves are the older op's: after a pair the
+    // flag state is what its youngest flag writer left.
+    static bool leaves_older_flags(const IssueOp& older, const IssueOp& younger) {
+        return older.writes_flags && !younger.writes_flags;
+    }
+
+    // ── Whether this stage issues it ──
+    Verdict judge(const IssueOp& older, const IssueOp& younger) const {
+        Verdict v;
+        if (older.trapped || younger.trapped)        { v.alone = Alone::Break;  return v; }
+        if (older.cls == IssueClass::System || younger.cls == IssueClass::System)
+                                                     { v.alone = Alone::System; return v; }
+        if (older.taken)                             { v.alone = Alone::Taken;  return v; }
+        if (!follows(older, younger))                { v.alone = Alone::Break;  return v; }
+        v.candidate = true;
+
+        uint32_t a = class_bit(older.cls), b = class_bit(younger.cls);
+        bool fits = ((cfg_.x & a) && (cfg_.y & b)) || (cfg_.flex && (cfg_.y & a) && (cfg_.x & b));
+        if (!fits) {
+            if (!(cfg_.x & a)) v.causes |= CAUSE_SLOT_OLDER;
+            if (!(cfg_.y & b)) v.causes |= CAUSE_SLOT_YOUNGER;
+        }
+
+        if (older.cls == younger.cls
+            && (older.cls == IssueClass::Branch || older.cls == IssueClass::MulDiv))
+            v.causes |= CAUSE_UNIT;
+
+        if (accesses_memory(older) && accesses_memory(younger)) {
+            bool both_load = older.cls == IssueClass::Load && younger.cls == IssueClass::Load;
+            if (cfg_.memory == MemoryLimit::One || (cfg_.memory == MemoryLimit::TwoLoads && !both_load))
+                v.causes |= CAUSE_MEMORY;
+        }
+
+        Link link[MAX_LINKS];
+        int count = links(older, younger, link);
+        for (int i = 0; i < count; i++) {
+            uint32_t carrying = link[i].forwards & cfg_.forwards;
+            if (carrying) v.forwards |= carrying & (~carrying + 1);    // the narrowest
+            else          v.causes |= link[i].cause;
+        }
+
+        if (cfg_.younger_commits_flags && leaves_older_flags(older, younger))
+            v.causes |= CAUSE_FLAGS;
+
+        v.pairs = !v.causes;
+        return v;
+    }
+
+    void issue(const IssueOp& op) {
+        if (!have_older_) { older_ = op; have_older_ = true; return; }
+        Verdict v = judge(older_, op);
+        if (v.pairs) {
+            have_older_ = false;
+            counts_.insns += older_.insns + op.insns;
+            counts_.ops += 2;
+            counts_.pairs++;
+            counts_.pair_younger[int(op.cls)]++;
+            if (!v.forwards) counts_.pair_plain++;
+            for (int i = 0; i < FORWARDS; i++)
+                if (v.forwards & (1u << i)) counts_.pair_forward[i]++;
+            return;
+        }
+        count_single(older_);
+        if (!v.candidate) {
+            counts_.single_alone[int(v.alone)]++;
+        } else if (v.causes & (v.causes - 1)) {
+            counts_.single_several++;
+            for (int i = 0; i < CAUSES; i++)
+                if (v.causes & (1u << i)) counts_.single_among[i]++;
+        } else {
+            counts_.single_sole[__builtin_ctz(v.causes)]++;
+        }
+        older_ = op;
+    }
+
+    void count_single(const IssueOp& op) {
+        counts_.insns += op.insns;
+        counts_.ops++;
+        counts_.singles++;
+        counts_.single_class[int(op.cls)]++;
+    }
+
+    void drain(Alone why) {
+        if (have_first_) { have_first_ = false; issue(first_); }
+        if (have_older_) {
+            have_older_ = false;
+            count_single(older_);
+            counts_.single_alone[int(why)]++;
+        }
+    }
+
+    struct Counts {
+        uint64_t insns = 0, ops = 0, pairs = 0, singles = 0;
+        uint64_t fused[FUSIONS] = {};
+        uint64_t pair_plain = 0, pair_forward[FORWARDS] = {};   // a pair counts under each forward it uses
+        uint64_t pair_younger[ISSUE_CLASSES] = {}, single_class[ISSUE_CLASSES] = {};
+        uint64_t single_alone[ALONES] = {};
+        uint64_t single_sole[CAUSES] = {};      // exactly one cause held
+        uint64_t single_several = 0, single_among[CAUSES] = {};  // several held; each counted
+    };
+
+    IssueConfig cfg_;
+    IssueOp     first_;                 // an instruction held to see whether the next fuses with it
+    bool        have_first_ = false;
+    IssueOp     older_;                 // an op waiting to see whether the next joins it
+    bool        have_older_ = false;
+    Counts      counts_;
+};
+
+// ── The model: every stage +pairmodel names ──────────────────────
+class PairModel {
+public:
+    // Parse the +pairmodel value: empty for a default comparison, or a
+    // comma-separated list of items, each `single` or `dual` followed by
+    // modifiers joined by '+'.
+    static bool parse(const char* spec, PairModel& model, std::string& err) {
+        std::string s(*spec ? spec
+            : "single,single+fuse:lilui,dual+yflags,dual,dual+fw:cond,"
+              "dual+fw:cond:mov:imm:data,dual+fw:cond:mov:imm:data+fuse:lilui,"
+              "dual+fw:cond:mov:imm:data+fuse:lilui+flex,"
+              "dual+x:simple:ld+fw:cond:mov:imm:data+fuse:lilui+flex+mem:ld2");
+        size_t pos = 0;
+        while (pos <= s.size()) {
+            size_t comma = s.find(',', pos);
+            std::string item = s.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+            IssueConfig c;
+            if (!parse_item(item, c, err)) {
+                err = "'" + item + "': " + err;
+                return false;
+            }
+            model.stages_.emplace_back(c);
+            if (comma == std::string::npos) break;
+            pos = comma + 1;
+        }
+        return true;
+    }
+
+    // One instruction that reached the end of its execution: `taken` when
+    // it left the sequential path, `trapped` when it raised an exception.
+    void insn(uint32_t pc, uint32_t word, bool taken, bool trapped) {
+        IssueOp op = issue_decode(pc, word);
+        op.taken = taken;
+        op.trapped = trapped;
+        for (auto& s : stages_) s.insn(op);
+    }
+    void boundary() { for (auto& s : stages_) s.boundary(); }
+    void end_window() { for (auto& s : stages_) s.end_window(); }
+    void clear_counts() { for (auto& s : stages_) s.clear_counts(); }
+    void report(FILE* out) const { for (const auto& s : stages_) s.report(out); }
+
+private:
+    // Split `list` at each ':' and hand the parts to `each`, which
+    // returns false for one it does not know.
+    template <typename F>
+    static bool for_each_part(const std::string& list, F each) {
+        size_t pos = 0;
+        while (pos <= list.size()) {
+            size_t colon = list.find(':', pos);
+            if (!each(list.substr(pos, colon == std::string::npos ? std::string::npos : colon - pos)))
+                return false;
+            if (colon == std::string::npos) break;
+            pos = colon + 1;
+        }
+        return true;
+    }
+
+    static bool named_bit(const std::string& name, const char* const names[], int count, uint32_t& bits) {
+        for (int i = 0; i < count; i++)
+            if (name == names[i]) { bits |= 1u << i; return true; }
+        return false;
+    }
+
+    static bool parse_classes(const std::string& list, uint32_t& classes) {
+        classes = 0;
+        return for_each_part(list, [&](const std::string& part) {
+            if (part == "none")   return true;
+            if (part == "simple") { classes |= CLASSES_SIMPLE; return true; }
+            if (part == "all")    { classes |= CLASSES_ALL;    return true; }
+            return named_bit(part, ISSUE_CLASS_NAMES, ISSUE_CLASSES - 1, classes);
+        });
+    }
+
+    static bool parse_item(const std::string& item, IssueConfig& c, std::string& err) {
+        c.label = item;
+        size_t pos = 0;
+        bool based = false;
+        while (pos <= item.size()) {
+            size_t plus = item.find('+', pos);
+            std::string part = item.substr(pos, plus == std::string::npos ? std::string::npos : plus - pos);
+            auto list = [&](const char* prefix) {
+                size_t len = strlen(prefix);
+                return part.compare(0, len, prefix) == 0 ? part.substr(len) : std::string();
+            };
+            bool ok = true;
+            if (!based) {
+                if (part == "single")    c.x = 0;
+                else if (part == "dual") c.x = CLASSES_SIMPLE;
+                else { err = "an item starts with single or dual"; return false; }
+                based = true;
+            }
+            else if (part == "flex")            c.flex = true;
+            else if (part == "yflags")          c.younger_commits_flags = true;
+            else if (part == "mem:1")           c.memory = MemoryLimit::One;
+            else if (part == "mem:ld2")         c.memory = MemoryLimit::TwoLoads;
+            else if (part == "mem:2")           c.memory = MemoryLimit::Two;
+            else if (!list("x:").empty())       ok = parse_classes(list("x:"), c.x);
+            else if (!list("y:").empty())       ok = parse_classes(list("y:"), c.y);
+            else if (!list("fw:").empty())
+                ok = for_each_part(list("fw:"), [&](const std::string& name) {
+                    return named_bit(name, FORWARD_NAMES, FORWARDS, c.forwards);
+                });
+            else if (!list("fuse:").empty())
+                ok = for_each_part(list("fuse:"), [&](const std::string& name) {
+                    return named_bit(name, FUSION_NAMES, FUSIONS, c.fusions);
+                });
+            else ok = false;
+            if (!ok) {
+                err = "unknown modifier '" + part + "' (x:CLASSES, y:CLASSES, fw:FORWARDS,"
+                      " fuse:FUSIONS, mem:1|ld2|2, flex, yflags)";
+                return false;
+            }
+            if (plus == std::string::npos) break;
+            pos = plus + 1;
+        }
+        return true;
+    }
+
+    std::vector<IssueStage> stages_;
+};

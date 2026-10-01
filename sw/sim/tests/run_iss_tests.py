@@ -255,6 +255,201 @@ BP_BASIC = {
 }
 
 
+def pairing(insns, pairs=0, fused=None, forward=None, younger=None, alone=None, one=None,
+            several=(0, {})):
+    """An issue stage's expected counts over one window, each a dict of
+    the report's names holding only what is not zero: instructions
+    `fused` away by kind; `pairs` by the `forward` each relies on ("none"
+    for those that need no forward) and by the `younger` op's class;
+    singles that had no candidate to pair with, by why (`alone`); singles
+    whose candidate was kept out by `one` cause; and `several` as (singles
+    kept out by more than one cause, how often each cause was among
+    them)."""
+    fused = fused or {}
+    ops = insns - sum(fused.values())
+    singles = ops - 2 * pairs
+    return {"pair": {"issued": (insns, ops, pairs + singles, pairs, singles),
+                     "fused": fused, "pairs by forward": forward or {},
+                     "pairs by younger": younger or {}, "singles, no candidate": alone or {},
+                     "singles, one cause": one or {}, "singles, several causes": several}}
+
+
+# Every pair_*.s probe ends in a DI, which issues alone, and so does a
+# probe's last op when it did not pair: both count under "system", as
+# does each setup instruction.  The BREAK that ends the window counts
+# under "end".
+#
+# pair_slots.s: 35 instructions, 13 of them DI or BREAK.  No probe has a
+# dependency, so slots, units and memory accesses decide:
+#   single:       X issues nothing: A B F H lack only a slot for the older
+#                 op; C D E also make two memory accesses and I two branches;
+#                 both B's are taken with the next op off the path.
+#   dual:         A (MOV; LDW) and F (MOV; B) pair.  B and H start with an op
+#                 X cannot issue; C D E I as before.
+#   +flex:        B (LDW; MOV) and H (BEQ; MOV) pair with the older op in Y.
+#   x:simple:ld:  B pairs in order; C now lacks only a second memory access.
+#   +mem:ld2:     C (LDW; LDW) pairs; a store still pairs with no access.
+#   x:all+mem:2:  every probe pairs but I, two branches for one branch unit.
+PAIR_SLOTS_SEVERAL = (4, {"slot-older": 4, "memory": 3, "unit": 1})
+PAIR_SLOTS = {
+    "pairing single": pairing(35, alone={"taken": 2, "system": 24, "end": 1},
+                              one={"slot-older": 4}, several=PAIR_SLOTS_SEVERAL),
+    "pairing dual": pairing(35, 2, forward={"none": 2}, younger={"ld": 1, "br": 1},
+                            alone={"taken": 1, "system": 23, "end": 1},
+                            one={"slot-older": 2}, several=PAIR_SLOTS_SEVERAL),
+    "pairing dual+flex": pairing(35, 4, forward={"none": 4}, younger={"mov": 2, "ld": 1, "br": 1},
+                                 alone={"taken": 1, "system": 21, "end": 1},
+                                 several=PAIR_SLOTS_SEVERAL),
+    "pairing dual+x:simple:ld": pairing(
+        35, 3, forward={"none": 3}, younger={"mov": 1, "ld": 1, "br": 1},
+        alone={"taken": 1, "system": 22, "end": 1}, one={"slot-older": 1, "memory": 1},
+        several=(3, {"slot-older": 3, "memory": 2, "unit": 1})),
+    "pairing dual+x:simple:ld+mem:ld2": pairing(
+        35, 4, forward={"none": 4}, younger={"mov": 1, "ld": 2, "br": 1},
+        alone={"taken": 1, "system": 21, "end": 1}, one={"slot-older": 1},
+        several=(3, {"slot-older": 3, "memory": 2, "unit": 1})),
+    "pairing dual+x:all+mem:2": pairing(
+        35, 7, forward={"none": 7}, younger={"mov": 2, "ld": 3, "st": 1, "br": 1},
+        alone={"taken": 1, "system": 18, "end": 1}, one={"unit": 1}),
+}
+# The default list holds single and dual among its stages.
+PAIR_DEFAULT = {k: PAIR_SLOTS[k] for k in ("pairing single", "pairing dual")}
+
+# pair_deps.s: 30 instructions, 11 of them DI or BREAK.  Each probe's
+# younger op reads what its older op writes; H (LDW; STW) also starts
+# with a load X cannot issue and makes two memory accesses.
+#   dual:      nothing forwards: B A G wait for an operand, D E F for a
+#              base, C for store data, I for a jump target.
+#   fw:mov:    the copies pair: A (operand), D (base), I (target).
+#   fw:imm:    B, the constant.
+#   fw:data:   C; H's data is a load's, which no forward reaches in time.
+#   fw:ea:     E, the base an ADD #imm makes; not D's copy or F's LUI.
+#   fw:alu:    every operand: B A G.
+#   all of them, with X issuing everything and two accesses a cycle: each
+#              probe pairs under its narrowest forward, except F (a LUI
+#              result as a base) and H (a load's data).
+PAIR_DEPS_H = (1, {"slot-older": 1, "memory": 1, "data": 1})
+PAIR_DEPS = {
+    "pairing dual": pairing(30, alone={"system": 20, "end": 1},
+                            one={"operand": 3, "base": 3, "data": 1, "target": 1},
+                            several=PAIR_DEPS_H),
+    "pairing dual+fw:mov": pairing(30, 3, forward={"mov": 3}, younger={"alu": 1, "ld": 1, "br": 1},
+                                   alone={"system": 17, "end": 1},
+                                   one={"operand": 2, "base": 2, "data": 1}, several=PAIR_DEPS_H),
+    "pairing dual+fw:imm": pairing(30, 1, forward={"imm": 1}, younger={"mov": 1},
+                                   alone={"system": 19, "end": 1},
+                                   one={"operand": 2, "base": 3, "data": 1, "target": 1},
+                                   several=PAIR_DEPS_H),
+    "pairing dual+fw:data": pairing(30, 1, forward={"data": 1}, younger={"st": 1},
+                                    alone={"system": 19, "end": 1},
+                                    one={"operand": 3, "base": 3, "target": 1},
+                                    several=PAIR_DEPS_H),
+    "pairing dual+fw:ea": pairing(30, 1, forward={"ea": 1}, younger={"ld": 1},
+                                  alone={"system": 19, "end": 1},
+                                  one={"operand": 3, "base": 2, "data": 1, "target": 1},
+                                  several=PAIR_DEPS_H),
+    "pairing dual+fw:alu": pairing(30, 3, forward={"alu": 3}, younger={"alu": 2, "mov": 1},
+                                   alone={"system": 17, "end": 1},
+                                   one={"base": 3, "data": 1, "target": 1}, several=PAIR_DEPS_H),
+    "pairing dual+x:all+mem:2+fw:mov:imm:data:ea:alu": pairing(
+        30, 7, forward={"mov": 3, "imm": 1, "data": 1, "ea": 1, "alu": 1},
+        younger={"alu": 2, "mov": 1, "ld": 2, "st": 1, "br": 1},
+        alone={"system": 13, "end": 1}, one={"base": 1, "data": 1}),
+}
+
+# pair_fuse.s: 26 instructions, 9 of them DI or BREAK.  B (LLI R5; LUI R6)
+# never fuses and pairs wherever X issues.
+#   single+fuse:lilui:  A's and I's LLI+LUI fuse; nothing pairs.  Every
+#                       other older op lacks a slot, and all but B's also
+#                       feed the op behind them.
+#   dual+fuse:lilui:    the fused constants feed A's load and I's jump, C's
+#                       LLIS its LUI, and each MOV the op behind it.
+#   +fw:imm:            A's load and I's jump pair with the fused constant,
+#                       three instructions a cycle, and C pairs.
+#   dual+fuse:movop:    D fuses and then issues alone before its DI; E and F
+#                       do not fuse; A and I issue as LLI, LUI and a third.
+PAIR_FUSE = {
+    "pairing single+fuse:lilui": pairing(
+        26, fused={"lilui": 2}, alone={"system": 16, "end": 1}, one={"slot-older": 1},
+        several=(6, {"slot-older": 6, "operand": 4, "base": 1, "target": 1})),
+    "pairing dual+fuse:lilui": pairing(
+        26, 1, fused={"lilui": 2}, forward={"none": 1}, younger={"mov": 1},
+        alone={"system": 15, "end": 1}, one={"operand": 4, "base": 1, "target": 1}),
+    "pairing dual+fuse:lilui+fw:imm": pairing(
+        26, 4, fused={"lilui": 2}, forward={"none": 1, "imm": 3},
+        younger={"mov": 2, "ld": 1, "br": 1},
+        alone={"system": 12, "end": 1}, one={"operand": 3}),
+    "pairing dual+fuse:movop": pairing(
+        26, 1, fused={"movop": 1}, forward={"none": 1}, younger={"mov": 1},
+        alone={"system": 15, "end": 1}, one={"operand": 5, "base": 1, "target": 1}),
+}
+
+# pair_trap.s: 13 instructions.  The MOV ahead of the trapping LDW and
+# the LDW itself issue alone ("break"); DI, the handler's four
+# instructions, the MOV before BREAK and, in the plain stage, the LLI
+# before DI count under "system".
+#   dual:               LLI feeds LUI, LUI the STW's data, and X cannot
+#                       issue the STW ahead of the second LLI.
+#   +fw:imm:data+flex:  LLI and LUI pair, and the STW pairs from Y with the
+#                       LLI behind it.
+PAIR_TRAP = {
+    "pairing dual": pairing(13, alone={"break": 2, "system": 7, "end": 1},
+                            one={"slot-older": 1, "operand": 1, "data": 1}),
+    "pairing dual+fw:imm:data+flex": pairing(
+        13, 2, forward={"none": 1, "imm": 1}, younger={"mov": 2},
+        alone={"break": 2, "system": 6, "end": 1}),
+}
+
+# pair_flags.s: 27 instructions, 10 of them DI or BREAK.  One stage a
+# case, so that a case names the flag rule it pins:
+#   dual:           P1 (both write) and P2 (the older alone writes) pair,
+#                   as do P5 and P6, whose flags are an earlier cycle's.
+#                   P3's BEQ and P4's ADC wait for the flags.  P8's ADD
+#                   and CMP pair, leaving its BEQ alone.
+#   fw:cond:       P3 pairs.
+#   fw:carry:       P4 pairs.
+#   yflags:         P2 no longer pairs: its MOV would have to commit the
+#                   ADD's flags.
+#   yflags+fw:cond:carry:  P4 pairs, its ADC writing the flags itself;
+#                   P3 does not, since its BEQ writes none.
+#   fuse:cmpbr:     P3's and P8's CMP and BEQ fuse.  P3's issues alone; P8's
+#                   joins the ADD, both writing the flags.
+PAIR_FLAGS = {
+    "dual": pairing(27, 5, forward={"none": 5},
+                    younger={"alu": 2, "mov": 1, "adc": 1, "br": 1},
+                    alone={"system": 14, "end": 1}, one={"flags": 2}),
+    "dual+fw:cond": pairing(27, 6, forward={"none": 5, "cond": 1},
+                             younger={"alu": 2, "mov": 1, "adc": 1, "br": 2},
+                             alone={"system": 13, "end": 1}, one={"flags": 1}),
+    "dual+fw:carry": pairing(27, 6, forward={"none": 5, "carry": 1},
+                             younger={"alu": 2, "mov": 1, "adc": 2, "br": 1},
+                             alone={"system": 13, "end": 1}, one={"flags": 1}),
+    "dual+yflags": pairing(27, 4, forward={"none": 4}, younger={"alu": 2, "adc": 1, "br": 1},
+                           alone={"system": 15, "end": 1}, one={"flags": 3}),
+    "dual+yflags+fw:cond:carry": pairing(
+        27, 5, forward={"none": 4, "carry": 1}, younger={"alu": 2, "adc": 2, "br": 1},
+        alone={"system": 14, "end": 1}, one={"flags": 2}),
+    "dual+fuse:cmpbr": pairing(27, 5, fused={"cmpbr": 2}, forward={"none": 5},
+                               younger={"alu": 1, "mov": 1, "adc": 1, "br": 2},
+                               alone={"system": 13, "end": 1}, one={"flags": 1}),
+}
+PAIR_FLAGS_CASES = {
+    "dual": "an older flag writer keeps a flag reader out",
+    "dual+fw:cond": "fw:cond lets a branch join",
+    "dual+fw:carry": "fw:carry lets an ADC join",
+    "dual+yflags": "yflags keeps a pair the older op's flags would outlive apart",
+    "dual+yflags+fw:cond:carry": "yflags outranks a forward",
+    "dual+fuse:cmpbr": "a fused compare-and-branch writes the flags",
+}
+
+
+def pair_case(name, program, stages):
+    """A case running `program` through the stages of `stages`, a dict
+    of "pairing <item>" labels."""
+    return Case(name, program, ["+pairmodel=" + ",".join(k[len("pairing "):] for k in stages)],
+                windows=[("reset to exit", stages)])
+
+
 def tlb_misses(user=0, supervisor=0):
     """A shadow TLB's expected misses over one window, or with the label
     "real" the refills the program's own miss handler took."""
@@ -370,6 +565,22 @@ CASES = [
          error=r"unknown component 'xyz'"),
     Case("bpmodel size not a power of two", "bp_basic.s", ["+bpmodel=btb30"],
          error=r"unknown component 'btb30'"),
+    pair_case("pairmodel slots, units and memory", "pair_slots.s", PAIR_SLOTS),
+    Case("pairmodel default stages", "pair_slots.s", ["+pairmodel"],
+         windows=[("reset to exit", PAIR_DEFAULT)]),
+    pair_case("pairmodel forwards", "pair_deps.s", PAIR_DEPS),
+    pair_case("pairmodel fusions", "pair_fuse.s", PAIR_FUSE),
+    pair_case("pairmodel traps", "pair_trap.s", PAIR_TRAP),
+] + [
+    pair_case(f"pairmodel flags: {rule}", "pair_flags.s", {f"pairing {item}": PAIR_FLAGS[item]})
+    for item, rule in PAIR_FLAGS_CASES.items()
+] + [
+    Case("pairmodel item without a base", "pair_slots.s", ["+pairmodel=fw:cond"],
+         error=r"an item starts with single or dual"),
+    Case("pairmodel unknown forward", "pair_slots.s", ["+pairmodel=dual+fw:cond:xyz"],
+         error=r"unknown modifier 'fw:cond:xyz'"),
+    Case("pairmodel unknown class", "pair_slots.s", ["+pairmodel=dual+x:alu:fpu"],
+         error=r"unknown modifier 'x:alu:fpu'"),
     Case("sbmodel needs cachemodel", "sb_window.s", ["+sbmodel"],
          error=r"\+sbmodel needs \+cachemodel"),
     Case("sbmodel unknown policy", "sb_window.s", ["+cachemodel", "+sbmodel=8l/some/bus"],
@@ -387,6 +598,11 @@ def final_registers(stderr):
     if not lines:
         return None
     return {int(n): int(v, 16) for n, v in re.findall(r"R(\d+)=([0-9a-fA-F]+)", lines[-1])}
+
+
+def named_counts(text):
+    """A report line's "name N, name N" list, without the zero counts."""
+    return {name: int(n) for name, n in re.findall(r"([a-z-]+) (\d+)", text) if int(n)}
 
 
 def parse_report(text):
@@ -418,6 +634,24 @@ def parse_report(text):
                      line)
         if m:
             counts["bp"]["redirects"] = tuple(int(v) for v in m.groups())
+            continue
+        m = re.match(r"-- pairing (\S+)$", line)
+        if m:
+            counts = windows[-1][1].setdefault(f"pairing {m.group(1)}", {"pair": {}})
+            continue
+        m = re.match(r"\s+instructions (\d+), ops (\d+), issue cycles (\d+): (\d+) pairs,"
+                     r" (\d+) singles", line)
+        if m:
+            counts["pair"]["issued"] = tuple(int(v) for v in m.groups())
+            continue
+        m = re.match(r"\s+singles, several causes: (\d+) \((.*)\)", line)
+        if m:
+            counts["pair"]["singles, several causes"] = (int(m.group(1)), named_counts(m.group(2)))
+            continue
+        m = re.match(r"\s+(fused|pairs by forward|pairs by younger|singles by class"
+                     r"|singles, no candidate|singles, one cause): (.*)", line)
+        if m:
+            counts["pair"][m.group(1)] = named_counts(m.group(2))
             continue
         m = re.match(r"-- store buffer (\S+): ", line)
         if m:
@@ -479,6 +713,11 @@ def compare_windows(expected, got):
                 for key, value in want["bp"].items():
                     if have["bp"].get(key) != value:
                         problems.append(f"{label} {key} {have['bp'].get(key)}, expected {value}")
+                continue
+            if "pair" in want:
+                for key, value in want["pair"].items():
+                    if have["pair"].get(key) != value:
+                        problems.append(f"{label} {key} {have['pair'].get(key)}, expected {value}")
                 continue
             if "sb" in want:
                 for key, value in want["sb"].items():

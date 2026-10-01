@@ -320,8 +320,8 @@ rom.ld ──────────────────┘
   The table is `sw/sim/penumbra_cores.h`; a generation's cache or
   TLB geometry or CPU name changing in RTL has to change there too.
   Measurement options: `+opstats` (instruction-class histogram),
-  `+branchstats`, `+pcprof`, `+cachemodel`, `+tlbmodel`, `+sbmodel` and
-  `+bpmodel` — see below.
+  `+branchstats`, `+pcprof`, `+cachemodel`, `+tlbmodel`, `+sbmodel`,
+  `+bpmodel` and `+pairmodel` — see below.
 - **Cache model** (`+cachemodel[=list]`, `sw/sim/cache_model.h`) —
   runs every fetch, load and store through shadow cache hierarchies:
   the `+core=` generation's by default, or a comma-separated list of
@@ -375,6 +375,22 @@ rom.ld ──────────────────┘
   a direction table), or `none` (`+bpmodel=btb32,ibtb256+gs1k+ras8+dec`).
   Each window reports transfers by kind, redirects by stage and the
   cycles they cost; the counts are exact, the per-stage costs estimates.
+- **Pairing model** (`+pairmodel[=list]`, `sw/sim/pair_model.h`) —
+  runs every instruction through shadow two-slot issue stages and
+  counts the issue cycles each would take: which instructions issue as
+  a pair, which fuse into one op, and what kept the rest apart.  Items
+  start with `single` or `dual` (slot X issues nothing, or the simple
+  ALU classes; Y everything) and add modifiers with `+`: `x:` / `y:`
+  class lists (`alu`, `sh`, `mov`, `adc`, `ld`, `st`, `br`, `md`, or
+  `simple`, `all`, `none`), `fw:` same-cycle forwards (`cond`,
+  `carry`, `mov`, `imm`, `data`, `ea`, `alu`), `fuse:` fusions
+  (`lilui`, `cmpbr`, `movop`), `mem:1|ld2|2`, `flex` (either op in
+  either slot) and `yflags` (only the younger op commits flags):
+  `+pairmodel=dual,dual+fw:cond:mov:imm+fuse:lilui`.  Each window
+  reports pairs by the forward they rely on and by the younger op's
+  class, and singles by what kept the next op out: one cause alone, or
+  several.  **Counts are issue slots only:** no stall, miss or redirect
+  is modelled, and fetch always has the next instruction ready.
 - **Execution profiles** (`+pcprof=file` plus
   `sw/tools/pcprof-report.py`) — buckets executed instructions by PC,
   exceptions by vector and TLB misses by faulting page.

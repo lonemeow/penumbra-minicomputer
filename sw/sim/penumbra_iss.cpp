@@ -34,7 +34,9 @@
 // and reports the waits they cause in the same windows.  +bpmodel[=list]
 // runs every control transfer through shadow branch predictors
 // (bp_model.h) and reports, in the same windows, where each would have
-// redirected fetch.
+// redirected fetch.  +pairmodel[=list] runs every instruction through
+// shadow two-slot issue stages (pair_model.h) and reports the issue
+// cycles each would take and what kept instructions from pairing.
 //
 // +raw enables full raw TTY mode: all control characters (Ctrl-C,
 // Ctrl-Z, etc.) pass through to the simulated UART for job control
@@ -69,6 +71,7 @@
 #include "tlb_model.h"
 #include "sb_model.h"
 #include "bp_model.h"
+#include "pair_model.h"
 
 // ═══════════════════════════════════════════════════════════════
 // SD Card Emulator (inline — same protocol as hw/sim/sd_card_sim.h
@@ -1247,6 +1250,10 @@ static SbModel* sb_model;
 // (bp_model.h).
 static BpModel* bp_model;
 
+// +pairmodel: shadow issue stages fed by every instruction that reaches
+// the end of its execution (pair_model.h).
+static PairModel* pair_model;
+
 static CacheEnables cache_enables() {
     return { cache_l1i.enabled, cache_l1d.enabled, cache_l2.enabled };
 }
@@ -1278,13 +1285,16 @@ static struct {
 } model_window;
 static volatile sig_atomic_t model_window_signal = 0;
 
-static bool models_active() { return cache_model || tlb_model || sb_model || bp_model; }
+static bool models_active() {
+    return cache_model || tlb_model || sb_model || bp_model || pair_model;
+}
 
 static void model_window_open(const char* why) {
     if (cache_model) cache_model->clear_counts();
     if (tlb_model) tlb_model->clear_counts();
     if (sb_model) sb_model->clear_counts();
     if (bp_model) bp_model->clear_counts();
+    if (pair_model) pair_model->clear_counts();
     model_window.open      = true;
     model_window.opened_by = why;
     model_window.insn0     = cpu.insn_count;
@@ -1300,6 +1310,10 @@ static void model_window_close(const char* why) {
     if (tlb_model) tlb_model->report(out, insns, TLB_GEOMETRY);
     if (sb_model) sb_model->report(out, insns);
     if (bp_model) bp_model->report(out, insns);
+    if (pair_model) {
+        pair_model->end_window();
+        pair_model->report(out);
+    }
     fflush(out);
     model_window.open = false;
 }
@@ -2189,8 +2203,11 @@ static void sysreg_write(int dev, int reg, uint32_t val) {
 // ═══════════════════════════════════════════════════════════════
 
 static bool pc_written;  // Set by exception entry, branches, jumps
+static bool insn_trapped;  // The instruction being executed entered an exception
 
 static void exception_entry(int vector) {
+    insn_trapped = true;
+    if (pair_model) pair_model->boundary();
     if (pcprof_on) {
         pcprof_vector[vector & 15]++;
         if (vector == VEC_TLB_MISS) pcprof_miss[mmu.fault_addr >> 12]++;
@@ -2629,6 +2646,7 @@ static void execute_one() {
         std::abort();
     }
     prev_pc = cpu.pc;
+    const uint32_t insn_pc = cpu.pc;
 
     bool took_exception;
     uint32_t insn = insn_fetch(took_exception);
@@ -2639,6 +2657,7 @@ static void execute_one() {
     cpu.ei_shadow = false;
 
     pc_written = false;
+    insn_trapped = false;
     int fmt = (insn >> 30) & 3;
     if (opstats_enabled) opstats_record(insn);
     if (pcprof_path) {
@@ -2977,6 +2996,7 @@ static void execute_one() {
     // Restore ei_shadow if it was set at entry (don't clear prematurely)
     if (had_ei_shadow) cpu.ei_shadow = false;
 
+    if (pair_model) pair_model->insn(insn_pc, insn, pc_written && !insn_trapped, insn_trapped);
     cpu.insn_count++;
 }
 
@@ -3385,6 +3405,7 @@ int main(int argc, char** argv) {
     const char* sbmodel_spec = nullptr;
     double sbmodel_cpi = 1;
     const char* bpmodel_spec = nullptr;
+    const char* pairmodel_spec = nullptr;
     const char* model_report_path = nullptr;
 
     for (int i = 1; i < argc; i++) {
@@ -3442,6 +3463,8 @@ int main(int argc, char** argv) {
         else if (strncmp(argv[i], "+sbmodel_cpi=", 13) == 0) sbmodel_cpi = atof(argv[i] + 13);
         else if (strcmp(argv[i], "+bpmodel") == 0) bpmodel_spec = "";
         else if (strncmp(argv[i], "+bpmodel=", 9) == 0) bpmodel_spec = argv[i] + 9;
+        else if (strcmp(argv[i], "+pairmodel") == 0) pairmodel_spec = "";
+        else if (strncmp(argv[i], "+pairmodel=", 11) == 0) pairmodel_spec = argv[i] + 11;
         else if (strncmp(argv[i], "+model_start=", 13) == 0)
             model_window.start_pc = (uint32_t)strtoull(argv[i] + 13, nullptr, 0);
         else if (strncmp(argv[i], "+model_stop=", 12) == 0)
@@ -3451,7 +3474,7 @@ int main(int argc, char** argv) {
     }
 
     if (!hex_path) {
-        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+ram=size] [+sdcard=path] [+usbdev=type:config] [+audiofile=path] [+audio_status=busy[:N]|fault[:CODE]] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+pcprof=path [+pcprof_start=addr]] [+irq_at_pc=addr[,period]] [+core=generation] [+cachemodel[=list]] [+tlbmodel[=list]] [+sbmodel[=list] [+sbmodel_cpi=N]] [+bpmodel[=list]] [+model_start=addr] [+model_stop=addr] [+model_report=path]\n");
+        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+ram=size] [+sdcard=path] [+usbdev=type:config] [+audiofile=path] [+audio_status=busy[:N]|fault[:CODE]] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+pcprof=path [+pcprof_start=addr]] [+irq_at_pc=addr[,period]] [+core=generation] [+cachemodel[=list]] [+tlbmodel[=list]] [+sbmodel[=list] [+sbmodel_cpi=N]] [+bpmodel[=list]] [+pairmodel[=list]] [+model_start=addr] [+model_stop=addr] [+model_report=path]\n");
         return 1;
     }
 
@@ -3514,6 +3537,15 @@ int main(int argc, char** argv) {
             return 1;
         }
         bp_model = &model;
+    }
+    if (pairmodel_spec) {
+        static PairModel model;
+        std::string err;
+        if (!PairModel::parse(pairmodel_spec, model, err)) {
+            fprintf(stderr, "+pairmodel: %s\n", err.c_str());
+            return 1;
+        }
+        pair_model = &model;
     }
     if (models_active()) {
         model_window.out = stderr;
