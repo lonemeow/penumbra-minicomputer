@@ -124,6 +124,15 @@ correctness over performance; gen2.5 added the early-1990s polish
 *   **[Penumbra/2 Control Decode](./internals/penumbra2/control-decode.md)** — Turning the instruction word into control: hardwired per-stage decode, the four instruction formats, the ID control bundle, register/immediate extraction, branch-condition evaluation, and the IR[15:12] aliasing hazard.
 *   **[Penumbra/2 Register File](./internals/penumbra2/regfile.md)** — The 2R/1W register file: storage organisation, R0/R15 overrides, R14 (USP/SSP) banking and cross-bank access, and how divmul sequences its two-register result through the single write port.
 
+### Penumbra/4 (gen4 — ideas and measurements)
+
+An in-order core that issues two instructions a cycle: the generation
+after gen3, on the same ISA. Nothing is built; these collect the ideas
+and the measurements behind them.
+
+*   **[Penumbra/4 Overview](./internals/penumbra4/overview.md)** — Start here. Why dual issue, the shape of the two pipelines, what carries over from gen3, and what is open.
+*   **[Penumbra/4 Fusion and Pairing](./internals/penumbra4/issue-pairing.md)** — What each instruction fusion and each pairing rule is worth on real workloads, measured with the ISS's pairing model, and the issue stage the numbers point to.
+
 ---
 
 ## 🚀 [Roadmap](./TODO/README.md)
