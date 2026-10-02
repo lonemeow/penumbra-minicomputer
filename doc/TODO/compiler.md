@@ -36,7 +36,6 @@ a scan that misread branch targets written in upper-case hex.
 
 | Item | Shape counted | Kernel | libc | Doom | Tests |
 |---|---|---:|---:|---:|---:|
-| "flag definitions stay live after C++ selection" (PIC anchors) | `add x, pc` / `mov x, pc` | 1 | 12,486 | 30 | 0 |
 | "InstCombine's shift-and-mask form costs a constant" | `llis t, -2^k; and y, t` | 413 | 300 | 12 | 234 |
 | "inline small constant-size memcpy/memset/memmove" | `lli r3, N` before a call to one, N ≤ 32 (≤ 64) | 510 (654) | — | — | — |
 | "pointer-minus-constant and integer MMIO addresses miss their folds": MMIO | `add x, imm; ld/st [x + 0]`, `x` dead | 63 | 2 | 1 | 0 |
@@ -47,9 +46,9 @@ a scan that misread branch targets written in upper-case hex.
 The memory-call row counts the kernel only: libc and Doom call through
 the PLT, which the scan does not resolve.
 
-Each row saves about one instruction per site, except a PIC anchor
-in a loop, 1–2 per iteration, and an inlined memory call, which trades the call and the
-callee's loop for a few loads and stores.  The two-address commute
+Each row saves about one instruction per site, except an inlined
+memory call, which trades the call and the callee's loop for a few
+loads and stores.  The two-address commute
 heuristics were measured the same way at 0.02–0.06% (in the
 audio-mixing review), and the 64-bit select of zero only concerns the
 32.32 mixer loop.
@@ -64,14 +63,10 @@ What follows, by value:
    outright, passing the address of its own frame.  15–18 KB of kernel
    text once wrappers lose their frames.  A first cut without outgoing
    stack arguments is small.
-2. **Dead flag definitions after C++ selection** — lets libc's PIC
-   anchors leave their loops, in every shared library and PIE program,
-   and `MUL` join the select-of-identity rule; the least work of the
-   three.
-3. **Inlined small memory calls and the `p - K` and MMIO folds** —
+2. **Inlined small memory calls and the `p - K` and MMIO folds** —
    broad in the kernel but unmeasured at run time; the kernel
    `memmove`'s backward byte loop is 10 instructions where 6 do.
-4. **The rest** — at most 0.1% each; the zero-low-half carry and the
+3. **The rest** — at most 0.1% each; the zero-low-half carry and the
    64-bit select of zero go with the 32.32 mixer.
 
 Copies are 10.5–15% of all instructions (kernel 12.8%, libc 15.0%,

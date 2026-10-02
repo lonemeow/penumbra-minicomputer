@@ -335,36 +335,19 @@ instructions) while only shrinking the rarely-used i64 three-way compares
 alongside a custom `G_SCMP`/`G_UCMP` lowering that keeps the i32
 SELECT-chain.
 
-## Compiler: flag definitions stay live after C++ selection
+## Compiler: a multiply by a select of 1 runs on both paths
 
-An instruction selected through a TableGen pattern gets its unused
-`SR` definition marked dead (`implicit-def dead $sr`); one built by
-hand in `PenumbraInstructionSelector.cpp` keeps it live
-(`implicit-def $sr`).  MachineLICM and MachineSink refuse to move an
-instruction whose physical-register definition is live, so every
-hand-built ALU operation stays where selection put it even though it
-has no side effects.
+`penumbra_select_of_identity` moves an operation into the arm of a
+select that is not its identity, so the identity's path skips it.  Its
+opcode list has no `G_MUL`, whose identity is 1: `x * (c ? k : 1)`
+compiles to `cmp; bcc; lli r2, 1; mul r1, r2`, with the multiply
+after the join, so the path that multiplies by 1 pays a whole `MUL`.
 
-- **PIC addresses in loops.**  In "PIC global addresses are
-  recomputed inside loops", the `PICLLI`/`PICLUI` carriers now leave
-  the loop but the `PICADDPC` anchor stays, behind a copy of the
-  hoisted offset: 2 instructions per iteration where hoisting the
-  anchor too needs none.
-- **Divides.**  `DIV`'s live `SR` definition was what kept
-  MachineLICM from lifting a guarded divide out of its guard, before
-  the divides were marked side-effecting.
-- **Multiplies in a select's arm.**  `penumbra_select_of_identity`
-  leaves `x * select(c, 1, k)` alone because `MUL` cannot sink into
-  its arm; once its flag definition is dead, `G_MUL` with 1 joins the
-  rule.
-
-Fix: mark the `SR` definition dead on each hand-built instruction
-whose flags nothing reads.  No selector path lets a flag value cross
-a block boundary before register allocation — a compare is emitted
-beside its branch, a carry fuses only with the instruction just before
-its user, and a select diamond emits its own compare beside its
-branch — so "not read before the next `SR` definition or the end of
-the block" is the whole test.
+`MUL` was left out while its selection kept the flag definition live:
+the multiply could not sink into its arm, and the rewrite only added
+copies around it.  `a6514241d532` marks that definition dead.  Open:
+add `G_MUL` with identity 1 to the rule, with a test that the multiply
+lands in the arm that needs it.
 
 ## Compiler: a wrap check used as a value pays for its materialisation
 
@@ -502,7 +485,3 @@ Open:
   such a frame costs `LLI; LUI; ADD`.  In `libc.so` that is 43 sites
   in three functions with big local buffers (`__put_page`,
   `cdbw_output`, `allocaddrinfo`) — not worth a frame-layout change.
-- **`MUL` by 1 in `penumbra_select_of_identity`.**  Its selection
-  keeps the multiply's flag definition live, so the multiply cannot
-  sink into its arm and the rewrite only adds copies around it (see
-  "flag definitions stay live after C++ selection").

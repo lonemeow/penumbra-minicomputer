@@ -280,9 +280,8 @@ where `pmci_burst` (32k a frame) and most of the idle time come from.
   memcpy/memset hot loops".
 - **The rest of the codegen ranking does not reach Doom.**  64-bit
   compares: the renderer is 32-bit fixed point.  Tail calls: the BSP
-  walk is 0.3% of a frame.  Dead flag definitions: PIC anchors, and
-  Doom is not PIC.  Inlined small memory calls: Doom's copies are
-  64 KB, not 32 bytes.
+  walk is 0.3% of a frame.  Inlined small memory calls: Doom's copies
+  are 64 KB, not 32 bytes.
 
 The profiler is `+pcprof`, with `sw/tools/pcprof-report.py` for the
 symbols; how to drive a NetBSD workload under it is in the root

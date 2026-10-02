@@ -153,6 +153,29 @@ clobber (llvm-project issue #213564). Penumbra's MOV-doesn't-set-flags
 choice is load-bearing; **never add a flag-setting register move or a
 flag-setting load to a future ISA revision.**
 
+### Flag values stay within a block
+
+Selection consumes every flag value in the block that sets it: a
+compare sits beside its branch, a carry beside the instruction that
+adds it in, and the select expansion keeps its compare and branch
+together.  Three things rely on that:
+
+- An `SR` definition is marked dead from the readers that follow it
+  in its block, once selection is done.  An instruction with a live
+  physical-register definition is neither hoisted, merged nor sunk, so
+  an unmarked definition pins its instruction where selection put it.
+- A loop preheader has a single successor, so no flags are live at
+  its end, and a flag-writing instruction hoisted there clobbers
+  nothing.
+- Frame lowering and compare elimination ask who reads the flags at
+  a point (`Penumbra::flagUsesFrom`), and that walk ends with the
+  block.
+
+A flag value that does cross a block has to be named in the reading
+block's live-ins; flags live into a block that does not name `SR`
+stop compilation.  Cross-block compare elimination (item 7 below)
+would have to add `SR` to the live-ins of the blocks it reaches.
+
 ## What could still be added (ranked)
 
 1. **Fix the splice bug** (above). Correctness, one line + test.
@@ -185,10 +208,6 @@ flag-setting load to a future ISA revision.**
    cramped. Measure first: count `CMPi Rx, 0` at block entry whose
    single predecessor ends with a qualifying producer (a cheap stat in
    `optimizeCompareInstr`) before building anything.
-8. **Doc gap** — `PenumbraInstrInfo.{h,cpp}` has no row in the backend
-   CLAUDE.md file map, and the compare-elim summary was trimmed from
-   it in `eead907e15fe`; the .cpp block comment (:302-340) is now the
-   only prose. Add a file-map row pointing at it.
 
 ## Upstream reference points
 

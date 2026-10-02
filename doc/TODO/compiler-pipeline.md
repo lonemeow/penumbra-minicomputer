@@ -207,10 +207,8 @@ targets opt into are silently off.  Status per item:
   "Instruction Properties" in `doc/system/instruction-set.md`.
   The audit found `DIV`/`DIVU` marked side-effect-free though a zero
   divisor traps, so MachineLICM could lift a guarded divide above its
-  guard; they are side-effecting now.  Follow-ups: "Compiler: flag
-  definitions stay live after C++ selection", "Compiler: large frame
-  offsets write the flags unchecked" and "Compiler: constants are not
-  rematerializable".
+  guard; they are side-effecting now.  Follow-up: "Compiler: constants
+  are not rematerializable".
 - **`AllowRegisterRenaming` — DONE.**  Unset, every operand carried
   `ExtraSrcRegAllocReq`/`ExtraDefRegAllocReq` and `isRenamable()` was
   false everywhere, so MachineCopyPropagation could neither forward a
