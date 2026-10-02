@@ -335,20 +335,6 @@ instructions) while only shrinking the rarely-used i64 three-way compares
 alongside a custom `G_SCMP`/`G_UCMP` lowering that keeps the i32
 SELECT-chain.
 
-## Compiler: a multiply by a select of 1 runs on both paths
-
-`penumbra_select_of_identity` moves an operation into the arm of a
-select that is not its identity, so the identity's path skips it.  Its
-opcode list has no `G_MUL`, whose identity is 1: `x * (c ? k : 1)`
-compiles to `cmp; bcc; lli r2, 1; mul r1, r2`, with the multiply
-after the join, so the path that multiplies by 1 pays a whole `MUL`.
-
-`MUL` was left out while its selection kept the flag definition live:
-the multiply could not sink into its arm, and the rewrite only added
-copies around it.  `a6514241d532` marks that definition dead.  Open:
-add `G_MUL` with identity 1 to the rule, with a test that the multiply
-lands in the arm that needs it.
-
 ## Compiler: a wrap check used as a value pays for its materialisation
 
 Register-width wrap checks stay compares (`9a9bcc05c70a`) and a branch

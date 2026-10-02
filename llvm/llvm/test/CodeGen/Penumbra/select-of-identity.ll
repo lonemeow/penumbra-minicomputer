@@ -140,22 +140,41 @@ define ptr @ptr_step(ptr %p, i32 %a, i32 %k) {
   ret ptr %r
 }
 
-; Left alone: MUL's selection keeps its flag definition live, which stops
-; machine sinking from moving the multiply into its arm, so the rewrite would
-; only add copies around a multiply still made on every path.
+; A multiply's identity is 1, and the path that would multiply by it skips a
+; whole MUL.
 define i32 @mul_cond(i32 %x, i32 %a, i32 %k) {
 ; CHECK-LABEL: mul_cond:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    cmp r2, 0
-; CHECK-NEXT:    bne .LBB8_2
+; CHECK-NEXT:    beq .LBB8_2
 ; CHECK-NEXT:  // %bb.1:
-; CHECK-NEXT:    lli r3, 1
-; CHECK-NEXT:  .LBB8_2:
 ; CHECK-NEXT:    mul r1, r3
+; CHECK-NEXT:  .LBB8_2:
 ; CHECK-NEXT:    jmp lr
   %c = icmp ne i32 %a, 0
   %s = select i1 %c, i32 %k, i32 1
+  %r = mul i32 %x, %s
+  ret i32 %r
+}
+
+; In its arm a constant multiplier is in reach of strength reduction, which a
+; select of two constants hid from it.
+define i32 @mul_const_cond(i32 %x, i32 %a) {
+; CHECK-LABEL: mul_const_cond:
+; CHECK:         .cfi_startproc
+; CHECK-NEXT:  // %bb.0:
+; CHECK-NEXT:    cmp r2, 0
+; CHECK-NEXT:    beq .LBB9_2
+; CHECK-NEXT:  // %bb.1:
+; CHECK-NEXT:    mov r2, r1
+; CHECK-NEXT:    shl r1, 2
+; CHECK-NEXT:    add r1, r2
+; CHECK-NEXT:    shl r1, 1
+; CHECK-NEXT:  .LBB9_2:
+; CHECK-NEXT:    jmp lr
+  %c = icmp ne i32 %a, 0
+  %s = select i1 %c, i32 10, i32 1
   %r = mul i32 %x, %s
   ret i32 %r
 }
@@ -166,10 +185,10 @@ define i32 @sub_select_on_left(i32 %x, i32 %a, i32 %k) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    cmp r2, 0
-; CHECK-NEXT:    beq .LBB9_2
+; CHECK-NEXT:    beq .LBB10_2
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r3, zero
-; CHECK-NEXT:  .LBB9_2:
+; CHECK-NEXT:  .LBB10_2:
 ; CHECK-NEXT:    sub r3, r1
 ; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:    jmp lr
@@ -185,10 +204,10 @@ define i32 @select_two_uses(i32 %x, i32 %a, i32 %k, ptr %q) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    cmp r2, 0
-; CHECK-NEXT:    beq .LBB10_2
+; CHECK-NEXT:    beq .LBB11_2
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r3, zero
-; CHECK-NEXT:  .LBB10_2:
+; CHECK-NEXT:  .LBB11_2:
 ; CHECK-NEXT:    stw r3, [r4 + 0]
 ; CHECK-NEXT:    sub r1, r3
 ; CHECK-NEXT:    jmp lr
@@ -208,14 +227,14 @@ define i32 @select_outside_loop(i32 %a, i32 %k, i32 %n) {
 ; CHECK-NEXT:    mov r4, r1
 ; CHECK-NEXT:    mov r1, zero
 ; CHECK-NEXT:    cmp r4, 0
-; CHECK-NEXT:    beq .LBB11_2
+; CHECK-NEXT:    beq .LBB12_2
 ; CHECK-NEXT:  // %bb.1: // %entry
 ; CHECK-NEXT:    mov r2, r1
-; CHECK-NEXT:  .LBB11_2: // %loop
+; CHECK-NEXT:  .LBB12_2: // %loop
 ; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
 ; CHECK-NEXT:    add r1, r2
 ; CHECK-NEXT:    sub r3, 1
-; CHECK-NEXT:    bne .LBB11_2
+; CHECK-NEXT:    bne .LBB12_2
 ; CHECK-NEXT:  // %bb.3: // %exit
 ; CHECK-NEXT:    jmp lr
 entry:

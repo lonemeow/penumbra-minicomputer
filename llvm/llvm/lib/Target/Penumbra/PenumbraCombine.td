@@ -53,7 +53,7 @@ def penumbra_select_of_identity_matchdata : GIDefMatchData<"SelectOfIdentity">;
 def penumbra_select_of_identity : GICombineRule<
   (defs root:$root, penumbra_select_of_identity_matchdata:$matchinfo),
   (match (wip_match_opcode G_ADD, G_SUB, G_AND, G_OR, G_XOR, G_SHL, G_LSHR,
-                           G_ASHR, G_PTR_ADD):$root,
+                           G_ASHR, G_PTR_ADD, G_MUL):$root,
          [{ return matchSelectOfIdentity(*${root}, MRI, ${matchinfo}); }]),
   (apply [{ applySelectOfIdentity(*${root}, MRI, B, ${matchinfo}); }])>;
 

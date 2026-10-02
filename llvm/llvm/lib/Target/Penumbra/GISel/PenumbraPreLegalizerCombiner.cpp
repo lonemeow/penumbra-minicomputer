@@ -115,7 +115,8 @@ struct SelectOfIdentity {
 };
 
 // Whether Reg holds a right identity of Opc: a value id with `x op id == x`
-// for every x.
+// for every x.  A divide has one too, but it traps on a zero divisor and so
+// cannot sink into its arm: rewritten, it would run on the identity's path.
 static bool isRightIdentity(unsigned Opc, Register Reg,
                             const MachineRegisterInfo &MRI) {
   using namespace MIPatternMatch;
@@ -131,6 +132,8 @@ static bool isRightIdentity(unsigned Opc, Register Reg,
     return mi_match(Reg, MRI, m_ZeroInt());
   case TargetOpcode::G_AND:
     return mi_match(Reg, MRI, m_AllOnesInt());
+  case TargetOpcode::G_MUL:
+    return mi_match(Reg, MRI, m_SpecificICst(1));
   default:
     return false;
   }
