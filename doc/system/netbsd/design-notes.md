@@ -28,7 +28,9 @@ Penumbra-specific -- no `<mips/*.h>` includes.
 0x0400_0000  USRSTACK    stack top at 64 MB (grows down)
 0x8000_0000              kernel VA start
 0x8001_0000              kernel text (KERNEL_TEXT_BASE)
-                         kernel data / bss / page tables
+                         kernel data, its first page cpu_info_store's
+                           alone (pinned slot 6)
+                         bss / page tables
                          MMIO devices (pmap_map_device)
                          virtual_avail -> kernel VM pool (UVM)
 0xFFFF_9000  SCRATCH2_VA   pinned slot 5: second page window
@@ -210,9 +212,37 @@ separate structure, so covering a page there also hands its way back
 to the set it used to occupy: pinning one page whose own cost was
 13,891 refills dropped its set's total from 45,960 to 14,370.
 
-What the MMU provides beyond the structural slots is unused.  Spending
-it on hot pages was tried and did not pay -- see "Ruled out" in
-[kernel.md](../../TODO/kernel.md).
+The MMU provides two slots beyond the structural ones.  Spending them
+on gathered hot code was tried and did not pay -- see "Ruled out" in
+[kernel.md](../../TODO/kernel.md).  One holds the per-CPU page.
+
+### The per-CPU page
+
+`cpu_info_store` has a page to itself, and a pinned slot maps it.
+Every trap reads and writes the structure, so in the main TLB its page
+held one way of its set for good and left that set a single way for
+everything else.  Where the set also held the trap path's text, any
+third page evicted one of the two on every syscall.
+
+Measured on a build where that happened: the set took 47% of all
+refills over the kernel benchmarks and 7% with the page pinned, and
+`getpid` fell from 2,995 cycles a call to 1,107 on hardware, 967
+instructions to 381.  On a build where the page sits alone in its set
+the pin saves little; what it removes is the bad roll.
+
+Pinning this page differs from pinning code in what it disturbs.
+Gathering hot code moves everything linked after it, and kernel text
+sits at fixed addresses, so the I-cache aliasing that results is
+permanent.  Most hot kernel data is allocated at run time, so what the
+per-CPU structure shares L1-D sets with changes from process to
+process and boot to boot, and a bad alignment does not last.
+
+The structure starts 128 bytes into its page.  A page-aligned
+allocation puts its first lines in the first sets of every cache way,
+and so does anything at a multiple of a smaller way's size, 1 KiB at
+the least; from 128 bytes in, the structure's 896 bytes end at the
+first such multiple without reaching it.  The link fails if the
+structure outgrows its page.
 
 ### What none of this reaches
 

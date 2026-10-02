@@ -92,7 +92,9 @@ efficiency:
                          mmap region (for programs > 64 MB)
 0x8000_0000              kernel VA start
 0x8001_0000              kernel text (KERNEL_TEXT_BASE)
-                         kernel data / bss / page tables
+                         kernel data, its first page cpu_info_store's
+                           alone (pinned slot 6)
+                         bss / page tables
                          MMIO devices (mapped via pmap_map_device)
                          virtual_avail → kernel VM pool (UVM)
 0xFFFF_9000  SCRATCH2_VA   pinned slot 5: second page window
@@ -112,7 +114,8 @@ accessed via the scratch window (pinned slot 3).
 Naming: `PT_L1_*` for first level, `PT_L2_*` for second level — keeps
 page-table levels visually distinct from L1/L2 caches. Pinned slot
 names (in `sysreg.h`): `PTLB_VECTOR`, `PTLB_KERN_L1`, `PTLB_L2WIN`,
-`PTLB_SCRATCH`, `PTLB_USER_L1`.  The fast TLB miss handler branches
+`PTLB_SCRATCH`, `PTLB_USER_L1`, `PTLB_SCRATCH2`, and `PTLB_CPU_INFO`
+for the page holding `cpu_info_store`.  The fast TLB miss handler branches
 on the faulting VA's MSB and walks either kernel L1 (slot 1, never
 reprogrammed after boot) or current user L1 (slot 4, re-pinned per
 `pmap_activate`) — SH-4-style split walker.  User pmaps therefore

@@ -54,10 +54,10 @@ __KERNEL_RCSID(0, "$NetBSD$");
 
 /*
  * Single CPU info structure (uniprocessor).  Every exception entry
- * reads it, so it sits in the hot data region the pinned slots draw
- * from (kern.ldscript).
+ * reads it, so it has a page to itself (kern.ldscript) that a pinned
+ * TLB slot maps (pmap_bootstrap).
  */
-struct cpu_info cpu_info_store = {
+struct cpu_info cpu_info_store __section(".data.cpu_info") = {
 	.ci_curlwp = &lwp0,
 };
 

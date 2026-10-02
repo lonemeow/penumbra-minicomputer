@@ -405,8 +405,8 @@ They are spread far too thin for a handful of slots to matter.  Kernel
 text spans 259 pages that take at least one refill and kernel data
 2,919.  The hottest single text page is 1.5% of all refills, the
 hottest data page 1.6%, and the top twenty text pages together reach
-16.5%.  Two slots are free after the structural ones, which bounds the
-whole exercise at low single digits -- before the partial-evacuation
+16.5%.  Two slots were free after the structural ones, which bounds
+the whole exercise at low single digits -- before the partial-evacuation
 problem, which is that moving one routine off a page removes only the
 entries it accounted for while the page keeps faulting for whatever
 else lives there.
@@ -419,6 +419,11 @@ TLB's shape costs, and which parts are reachable" already put
 associativity an order of magnitude ahead of placement.  Placement
 earns its keep because it is free and because a bad roll is expensive,
 not because it can close the gap.
+
+One of the two slots has since gone to the page holding
+`cpu_info_store`, for the conflicts that page caused rather than for
+its own refills ("The per-CPU page" in
+[design-notes.md](../system/netbsd/design-notes.md)).
 
 ## Kernel: a TLB refill can split a TLB sysreg sequence
 
@@ -801,27 +806,17 @@ drops `cpu_info` to 832 bytes.  `ci_softints` was moved there when the
 fast softint path landed, for the trap-exit read; the rest still sits
 past the 768-byte MI structure, where nothing groups it.
 
+The 64 bytes are also the structure's only headroom.  It sits 128
+bytes into a page of its own and ends on the page's first 1 KiB
+boundary, so one more cache line puts its tail in the first set of a
+1 KiB cache way, among the page-aligned allocations the offset is
+there to avoid ("The per-CPU page" in
+[design-notes.md](../system/netbsd/design-notes.md)).
+
 Worth doing in the same pass: `ci_cpl` is declared and never read or
 written.  The SPL model derives the level from `SR.I` and the soft
 level from the LWP, so the field is four dead bytes and an invitation
 to assume a software `cpl` exists.
-
-### Pinning the hot page
-
-Kernel data is mapped by ordinary 4 KB PTEs through the 64-slot,
-2-way main TLB, so `cpu_info_store`'s page competes for one of 32 sets
-against everything else the kernel touches.  Three of the eight pinned
-slots are free (`sysreg.h` assigns 0-4).  A pinned page holding the
-per-CPU structure — and whatever else the trap path dereferences on
-every exception — would take that competition off the table entirely,
-the way the vector page already does for the miss handler.
-
-Open questions before it is worth building: whether the page actually
-misses often enough to matter, which needs a measurement rather than
-an argument; what else deserves to share it, since 4 KB for an 832-byte
-structure wastes most of a page and a pinned slot is scarce; and the
-mechanics, which are a linker section plus a pin at boot in
-`pmap_bootstrap`, alongside the existing pinned-slot assignments.
 
 ## Kernel: physical memory setup keeps off the vector page by placement
 
@@ -875,9 +870,13 @@ place of the fixed low range.
   on those workloads LRU took 22-31% fewer refills than the kernel's
   pick.
 
-- **Pinning hot kernel pages.**  Hot text and data were gathered into
-  fixed regions, linked first and pinned into the slots the MMU leaves
-  spare.  Five hardware runs could not separate it from noise: builds
+- **Pinning gathered hot kernel code and data.**  Hot text and data
+  were gathered into fixed regions, linked first and pinned into the
+  slots the MMU leaves spare.  Gathering code moves everything linked
+  after it, and kernel text sits at fixed addresses, so whatever
+  I-cache aliasing the move produces between the pinned code, other
+  warm code and user code is there for good.  Five hardware runs could
+  not separate the result from noise: builds
   differing only by a few hundred bytes of shift moved `getpid` by up
   to 28%, and once the region's successor was aligned so tenant edits
   moved nothing else, changing the tenant list made no measurable
@@ -886,7 +885,9 @@ place of the fixed low range.
   refills, the hottest single page 1.5% of the total ("Kernel: count
   TLB refills", "What pinning can reach").  Reverted along with
   `-ffunction-sections`, which existed only to name individual
-  routines for it.
+  routines for it.  The one page that is pinned, `cpu_info_store`'s,
+  moves no code ("The per-CPU page" in
+  [design-notes.md](../system/netbsd/design-notes.md)).
 
 - **Uncached MMIO `STW` as a hardware write-path asymmetry.**  The
   write path is symmetric: RTL-sim microbenches put an uncached `STW`

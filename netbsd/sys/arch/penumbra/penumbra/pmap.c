@@ -374,6 +374,21 @@ pmap_bootstrap(void)
 	    (unsigned)kernel_pmap_store.pm_l1_pa);
 
 	/*
+	 * Pin the page that holds cpu_info_store.  Every trap reads and
+	 * writes it, so in the main TLB it would hold one of the two ways
+	 * of its set for good, and two more pages a path takes from that
+	 * set would evict each other on every pass.  The slot repeats the
+	 * mapping the kernel's page table gives the page; a pinned hit
+	 * takes precedence over the main TLB's.
+	 */
+	{
+		vaddr_t ci_va = trunc_page((vaddr_t)&cpu_info_store);
+
+		pmap_pin_slot(PTLB_CPU_INFO, ci_va,
+		    ((ci_va + phys_bias) & PTE_PPN_MASK) | PTE_KERNEL);
+	}
+
+	/*
 	 * Reserve VA past the loaded kernel tail (symbol table region).
 	 * The actual PTE installation is deferred to pmap_map_kernel_tail()
 	 * called later from cpu_startup() — see that function's comment.

@@ -46,7 +46,8 @@ bootinfo — `boot sd:0,0` reaches single-user with no prompts.
   `pmap_destroy` (user address spaces), `pmap_activate` (L1
   re-pin + ASID on context switch), `pmap_protect`/`pmap_remove`/
   `pmap_remove_all`, `pmap_kenter_pa`/`pmap_kremove` (wired
-  mappings), `pmap_extract`, `pmap_map_device`.
+  mappings), `pmap_extract`, `pmap_map_device`.  The page holding
+  `cpu_info_store` is pinned in a TLB slot of its own.
 
 - **ASID management:** Generational allocator (1--255, 0=kernel).
   Stale ASIDs get fresh allocation on `pmap_activate`.  When 255

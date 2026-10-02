@@ -99,6 +99,9 @@
  */
 #define PTLB_NSTRUCTURAL 6
 
+/* The page holding cpu_info_store, which every trap reads and writes. */
+#define PTLB_CPU_INFO	(TLB_INDEX_PINNED | 6)
+
 /* TLB_VPN word: (VPN << 8) | ASID */
 #define TLB_VPN_SHIFT	8
 

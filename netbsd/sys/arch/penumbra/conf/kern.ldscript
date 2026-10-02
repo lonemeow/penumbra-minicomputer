@@ -38,6 +38,22 @@ SECTIONS
   .data :
   {
     _fdata = . ;
+
+    /*
+     * cpu_info_store has a page to itself, which a pinned TLB slot maps
+     * (pmap_bootstrap), so the page never competes for a main-TLB way.
+     *
+     * Offset from the page start to reduce L1 D-cache conflicts; there are
+     * many dynamically allocated structures that end up being page aligned,
+     * offsetting to a cache line that doesn't alias with those in any likely
+     * cache configuration is beneficial.
+     */
+    #define CPU_INFO_PAGE_OFFSET 128
+    . += CPU_INFO_PAGE_OFFSET;
+    *(.data.cpu_info)
+    ASSERT(. - _fdata <= PAGE_SIZE, "cpu_info_store crosses its page");
+    . = _fdata + PAGE_SIZE;
+
     *(.data)
     CONSTRUCTORS
     . = ALIGN(32);
