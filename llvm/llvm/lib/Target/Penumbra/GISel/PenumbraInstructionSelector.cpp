@@ -1541,14 +1541,24 @@ bool PenumbraInstructionSelector::selectGlobalValue(MachineInstr &I,
         .addImm(PCLabelId);
     constrainSelectedInstRegOperands(*ADDInst, TII, TRI, RBI);
 
-    // LDW DstReg/TmpReg, [GotAddrReg + 0] — load symbol address from GOT
+    // LDW DstReg/TmpReg, [GotAddrReg + 0] — load symbol address from GOT.
+    // The dynamic linker fills the slot before any code that reads it runs
+    // and nothing writes it afterwards, so the read may be hoisted out of a
+    // loop or shared like any other loop-invariant value.
     Register LoadDst = (Offset != 0)
         ? MRI.createVirtualRegister(&Penumbra::GPR_AllocatableRegClass)
         : DstReg;
+    MachineFunction &MF = *MBB.getParent();
+    MachineMemOperand *GotSlot = MF.getMachineMemOperand(
+        MachinePointerInfo::getGOT(MF),
+        MachineMemOperand::MOLoad | MachineMemOperand::MODereferenceable |
+            MachineMemOperand::MOInvariant,
+        LLT::pointer(0, 32), Align(4));
     auto LDWInst = BuildMI(MBB, InsertPt, DL, TII.get(Penumbra::LDW))
         .addDef(LoadDst)
         .addReg(GotAddrReg)
-        .addImm(0);
+        .addImm(0)
+        .addMemOperand(GotSlot);
     constrainSelectedInstRegOperands(*LDWInst, TII, TRI, RBI);
 
     // If G_GLOBAL_VALUE has a non-zero offset, add it after the GOT load.

@@ -21,53 +21,18 @@ duplicated the return into its predecessors, after machine copy
 propagation's last run, so the pair survives `AllowRegisterRenaming`
 too (see it in "codegen pass/gate audit").
 
-## Compiler: PIC global addresses are recomputed inside loops
-
-Under PIC, a loop that indexes a global array recomputes the array's
-address on every iteration: the `LLI`/`LUI`/`ADD Rd, PC` triple sits in
-the loop body even when the source hoists the pointer into a local.
-Found in skrolli2026's sine lookup (`-fPIE -O2`, penumbra2_5): a
-320-pixel row of table lookups is 15 instructions per pixel where 12
-do the work, so a fifth of the loop is address arithmetic.  Any
-per-pixel loop over a table pays the same three instructions.
-
-Two passes combine to cause it, found with `-print-after-all`:
-
-1. The GlobalISel Localizer clones the `G_GLOBAL_VALUE` into its using
-   block, which is the loop body; the preheader copy is then dead.
-2. Nothing hoists all of it back.  The direct PC-relative path
-   selects the `PICLLI`/`PICLUI`/`PICADDPC` triple ("PC-Anchored
-   Relocation Pairs" in `doc/system/abi.md`).  With the pseudos now
-   free of side effects, MachineLICM lifts `PICLLI`/`PICLUI` into the
-   preheader, but `PICADDPC` is built by hand and keeps its `SR`
-   definition live, so it stays in the loop behind a copy of the
-   hoisted offset (see "flag definitions stay live after C++
-   selection"): 2 instructions per iteration instead of 3.  The
-   static-mode `PseudoLI` does not have the problem: it is
-   `Rematerializable` with no side effects.
-
-Moving the triple is safe since the anchors became label-relative;
-only duplicating `PICADDPC` is not (it would redefine its label).
-Marking the anchor's `SR` definition dead should let MachineLICM take
-all three.  The fuller fix is a single rematerialisable pseudo for the
-direct path, expanded after register allocation into the anchored
-triple, the way `PseudoLI` works for static code.  Keeping the Localizer from
-sinking a global into a deeper loop would also remove the symptom, but
-MachineLICM should be able to undo it either way.
-
-Test shape: a loop storing `table[f(i)]` from a hidden global table,
-checking that no `ADD ..., PC` remains in the loop block.  An empty
-`asm("" : "+r"(p))` on the pointer before the loop reaches the
-12-instruction body, which is the measure for the fix.
-
 ## Compiler: the PIC test suite has no dynamic PIE leg
 
 `make test-compiler-pic` links its `-fPIC` set static at a fixed
 address, so lld resolves the GOT at link time and the flat ISS image
 needs no runtime relocator.  That exercises GOT-indirect codegen (it
 catches a broken anchor pairing, `d2d682ee1250`) but cannot reach
-TLS-GD, which needs `__tls_get_addr` and runtime relocation.  A true
-dynamic PIE leg would cover it.
+TLS-GD, which needs `__tls_get_addr` and runtime relocation.  Nor does
+it run a GOT that a relocator fills at run time: a GOT read is
+selected as one no store changes, so it may move ahead of any store
+in its function, and only a relocator in the same image would show a
+read that moved ahead of the write to its slot.  A true dynamic PIE
+leg would cover both.
 
 ## Compiler: support `[R0 + offset]` absolute addressing for low memory
 

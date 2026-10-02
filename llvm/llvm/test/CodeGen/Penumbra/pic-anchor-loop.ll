@@ -59,30 +59,28 @@ exit:
   ret void
 }
 
-; The GOT path of a preemptible one: the slot's address leaves the loop.  The
-; read of the slot stays, since nothing says that the loop's store leaves the
-; slot alone.
+; The GOT path of a preemptible one: the read of the slot leaves the loop with
+; the slot's address, since the read is marked as one that no store changes.
 define void @lookup_row_got(ptr %dst, ptr %src, i32 %n) {
 ; CHECK-LABEL: lookup_row_got:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0: // %entry
-; CHECK-NEXT:    sub sp, 12
-; CHECK-NEXT:    stw r5, [sp + 8] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r6, [sp + 4] // 4-byte Folded Spill
+; CHECK-NEXT:    sub sp, 8
+; CHECK-NEXT:    stw r5, [sp + 4] // 4-byte Folded Spill
 ; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    lli r4, %got_pcrel_lo16(gtable-.LPC1_0)
 ; CHECK-NEXT:    lui r4, %got_pcrel_hi16(gtable-.LPC1_0)
 ; CHECK-NEXT:  .LPC1_0:
 ; CHECK-NEXT:    add r4, pc
+; CHECK-NEXT:    ldw r4, [r4 + 0]
 ; CHECK-NEXT:    mov r11, zero
 ; CHECK-NEXT:  .LBB1_1: // %loop
 ; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
 ; CHECK-NEXT:    mov lr, r2
 ; CHECK-NEXT:    add lr, r11
 ; CHECK-NEXT:    ldb r5, [lr + 0]
-; CHECK-NEXT:    ldw r6, [r4 + 0]
-; CHECK-NEXT:    add r6, r5
-; CHECK-NEXT:    ldb r5, [r6 + 0]
+; CHECK-NEXT:    add r5, r4
+; CHECK-NEXT:    ldb r5, [r5 + 0]
 ; CHECK-NEXT:    mov lr, r1
 ; CHECK-NEXT:    add lr, r11
 ; CHECK-NEXT:    stb r5, [lr + 0]
@@ -91,9 +89,8 @@ define void @lookup_row_got(ptr %dst, ptr %src, i32 %n) {
 ; CHECK-NEXT:    bcc .LBB1_1
 ; CHECK-NEXT:  // %bb.2: // %exit
 ; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r6, [sp + 4] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r5, [sp + 8] // 4-byte Folded Reload
-; CHECK-NEXT:    add sp, 12
+; CHECK-NEXT:    ldw r5, [sp + 4] // 4-byte Folded Reload
+; CHECK-NEXT:    add sp, 8
 ; CHECK-NEXT:    jmp lr
 entry:
   br label %loop
