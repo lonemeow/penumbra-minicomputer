@@ -213,6 +213,11 @@ exposed external bus.
   transfer engine (stall-on-empty/full), IRQ. See
   `doc/system/devices/spi.md` for register map and driver flow.
 - `spi_fifo.sv` — parameterized sync FIFO (used by UART + SPI).
+- `i2c/i2c_master.sv` — I2C bus master, one byte per command with a
+  START, repeated START or STOP around it where asked, the ACK checked
+  or given. One state per quarter-period step, with a table of both
+  lines in every state; open-drain pins in positive logic. No clock
+  stretching: SCL held low is a bus error. Frees the bus after reset.
 - `sdram/sdram_pkg.sv` — command encoding + chip presets.
 - `sdram/sdram_ctrl.sv` — FSM core: init / refresh / ACT/RW/RECOVER.
   `PHY_OUT_LATENCY` / `PHY_IN_LATENCY` parameters absorb
@@ -263,6 +268,9 @@ exposed external bus.
   `tb_sdram_line_test` (a `VARIANT_MODULE_TESTS` entry naming the
   forked sources, since the choice is a fileset rather than a
   parameter).
+- `i2c_master_test.sv` — `i2c_master` at a 4 MHz clock, so a step is
+  ten cycles, for `tb_i2c_master`: a slave model on the two lines and a
+  monitor holding the bus to the standard-mode minimums.
 - `sdram_test.sv` — DUT wrapper exposing controller req/rsp for
   `tb_sdram_test`; `BURST_LEN` selects the read burst.
 - `sdram_bl8_test.sv` — the same chain at an eight-beat burst, named as

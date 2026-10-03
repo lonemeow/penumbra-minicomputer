@@ -39,7 +39,7 @@ OPT_BUILD ?= -O2
 VERILATOR_BASE_FLAGS = --cc --exe --build -Wall --assert \
                        $(if $(VCD),--trace) \
                        -CFLAGS "-std=c++17 $(OPT_BUILD)"
-VERILATOR_INCLUDES   = -Ihw/rtl/common -Ihw/rtl/penumbra1 -Ihw/rtl/penumbra2 -Ihw/rtl/penumbra3 -Ihw/rtl/machine -Ihw/rtl/bus -Ihw/rtl/io -Ihw/rtl/io/audio -Ihw/rtl/io/sdram -Ihw/rtl/io/video -Ihw/rtl/io/usb -Ihw/rtl/soc -Ihw/rtl/sim
+VERILATOR_INCLUDES   = -Ihw/rtl/common -Ihw/rtl/penumbra1 -Ihw/rtl/penumbra2 -Ihw/rtl/penumbra3 -Ihw/rtl/machine -Ihw/rtl/bus -Ihw/rtl/io -Ihw/rtl/io/audio -Ihw/rtl/io/i2c -Ihw/rtl/io/sdram -Ihw/rtl/io/video -Ihw/rtl/io/usb -Ihw/rtl/soc -Ihw/rtl/sim
 
 # A core build (program runners, interactive sim) puts its variant's
 # directory first, so the variant's forks shadow the base modules they
@@ -346,6 +346,7 @@ MODULE_TESTS = \
     audio_sigma_delta_test \
     audio_test:tb_audio \
     audio_multi_test:tb_audio_multi \
+    i2c_master_test:tb_i2c_master \
     timer \
     sdram_test \
     sdram_bl8_test:tb_sdram_bl8_test \
