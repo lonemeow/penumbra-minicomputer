@@ -59,20 +59,27 @@ module penumbra3_regfile
     // -- Read logic -----------------------------------------------
     // Each port reads its replicated array copy; override_read picks the final
     // value by physical index (R0 -> 0, 14 -> USP, 15 -> SSP, else stored).
+    //
+    // Every value it can return is an argument. A continuous assignment is
+    // re-evaluated only when an operand of its own expression changes, so an
+    // SP flop read from module scope inside the function would not wake it:
+    // reset clears the flops without touching the array word at their index.
     function automatic logic [31:0] override_read(
         input logic [SB_IDX_W-1:0] idx,
-        input logic [31:0]         stored_value
+        input logic [31:0]         stored_value,
+        input logic [31:0]         usp_value,
+        input logic [31:0]         ssp_value
     );
         case (idx)
             '0:      return 32'd0;
-            SB_USP:  return usp;
-            SB_SSP:  return ssp;
+            SB_USP:  return usp_value;
+            SB_SSP:  return ssp_value;
             default: return stored_value;
         endcase
     endfunction
 
-    assign o_rd_data_a = override_read(i_rd_idx_a, regs_a[i_rd_idx_a[3:0]]);
-    assign o_rd_data_b = override_read(i_rd_idx_b, regs_b[i_rd_idx_b[3:0]]);
+    assign o_rd_data_a = override_read(i_rd_idx_a, regs_a[i_rd_idx_a[3:0]], usp, ssp);
+    assign o_rd_data_b = override_read(i_rd_idx_b, regs_b[i_rd_idx_b[3:0]], usp, ssp);
 
     // -- Write logic ----------------------------------------------
     // Synchronous write to both array banks plus, for index 14/15, the selected
