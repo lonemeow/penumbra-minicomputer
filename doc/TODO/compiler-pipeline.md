@@ -730,6 +730,21 @@ enabled for that tuning; gen2.5 would add only
 `ReadAdvance<ReadGPR, -1, [WriteLoad]>` for its load-use interlock,
 which is little to gain for the cost of enabling the pass.
 
+**gen3 doubles the load's wait.**  A load's value forwards from the
+register behind the last memory stage, so its reader waits two cycles
+at distance 1 and one at distance 2
+([memory completion](../internals/penumbra3/memory-completion.md#load-hit--a-registered-load-use-hazard)).
+Counted 2026-10-03 on a single-issue timing model in the ISS, with
+every access a hit, those waits come to 131 cycles per 1000
+instructions on `pbench kernel` and 147 on Doom `demo3`, against 59
+and 71 at gen2.5's one cycle
+([penumbra4/load-use.md](../internals/penumbra4/load-use.md)).  In a
+model that is gen2.5's line with the wait doubled,
+`ReadAdvance<ReadGPR, -2, [WriteLoad]>`.  The count is the most a
+schedule could hide, not what one would: how often an independent
+instruction is there to move between a load and its reader is not
+measured, and that decides whether enabling the pass pays on gen3.
+
 ### Branch costs
 
 Measured on the RTL testbenches

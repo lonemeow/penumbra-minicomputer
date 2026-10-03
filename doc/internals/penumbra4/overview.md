@@ -12,6 +12,9 @@ design starts from numbers when it starts.
 - [`issue-pairing.md`](./issue-pairing.md) — what fusing and pairing
   instructions is worth on real workloads, measured with the ISS's
   pairing model, and the issue stage the numbers point to.
+- [`load-use.md`](./load-use.md) — what the two-cycle wait behind a
+  load costs, and what a second ALU behind the memory stages would
+  take back.
 
 ## Why dual issue
 
@@ -97,9 +100,10 @@ arrives with the two-wide front end that dual issue needs anyway.
 
 ## Open
 
-- **Stalls.** Every measurement here counts issue slots. How the
-  load-use distance, misses and redirects interact with pairing needs a
-  pipeline model.
+- **Stalls.** The pairing measurements count issue slots, and the
+  load-use wait is measured for a single-issue core
+  ([load-use](./load-use.md)). How waits, misses and redirects interact
+  with pairing needs one pipeline model.
 - **Fetch supply**, and what a taken branch costs a two-wide front end.
 - **The cost side:** the two-write-port register file, the forwarding
   network and the fused compare-and-branch's path, each to be timed on

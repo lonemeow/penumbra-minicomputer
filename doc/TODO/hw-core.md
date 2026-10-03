@@ -835,6 +835,58 @@ ending a cycle with no access presented, as the enable does
 Regression: an `l2_cache` unit test that issues INVAL_ALL during a
 fill and during a pass-through read.
 
+## Hardware: MUL and DIV iterate over every bit, whatever the operands
+
+The divmul unit walks all 32 bits of `Rd` for a multiply and produces
+all 32 quotient bits for a divide
+([divmul.md](../internals/divmul.md)): 10 cycles for a multiply at
+four bits a step and 34 for a divide, whatever the values.  Counted
+2026-10-03 with a scratch census in the ISS, not in the tree, over
+`pbench kernel` and Doom `demo3`, the operands seldom need that.
+Steps are those up to an operand's highest set bit, on magnitudes, as
+the unit works:
+
+| | `pbench kernel` | Doom `demo3` |
+|---|---|---|
+| `MUL`, `MULU` per 1000 instructions | 1.4 | 3.0 |
+| Steps needed of 8, walking `Rd` as built | 6.9 | 3.8 |
+| … walking `Rs` | 5.6 | 4.1 |
+| … walking the smaller operand | 5.6 | 2.6 |
+| `DIV`, `DIVU` per 1000 instructions | under 0.01 | 0.76 |
+| Steps needed of 32, past the dividend's leading zeros | — | 28.2 |
+| … with the dividend aligned to the divisor | — | 12.8 |
+
+- **On Doom, stopping early would halve what the two cost.**  They
+  take about 55 cycles per 1000 instructions there.  A multiply that stops
+  at `Rd`'s highest set bit saves 12 of them, 16 walking the smaller
+  operand; a divide aligned to its divisor saves 15.
+- **Skipping the dividend's leading zeros alone saves 3.**  Doom's
+  dividends mostly fill the word: each wall column divides
+  `0xffffffff` by a scale.  Aligned to the divisor, two thirds of its
+  divides need 16 steps or fewer, and 8 % need none: the dividend is
+  the smaller.
+- **The kernel paths gain 1–3 cycles per 1000.**
+- **The audio mixer is not counted.**  It multiplies an 8-bit sample
+  by a volume of at most 64, two steps of the eight, and the multiply
+  is 10 of its ~40 cycles per voice-sample (`workloads.md`, "Compiler:
+  hot-loop code review — software audio mixing").
+
+Open:
+
+- **The multiply shifts its product into place a step at a time,** so
+  one that stops early has the rest of the shift still to do: at once,
+  or by a walk that keeps the product in place.
+- **Aligning a divide** takes the highest set bit of both operands and
+  the dividend's upper bits preloaded as the remainder.  Whether that
+  is for the FPGA cores alone, as more than one multiplier bit a step
+  is, or within the discrete build's budget.
+- **Timing that depends on the operands** changes what
+  `doc/system/instruction-timing.md` states ("`MUL` and `DIV` take the
+  same time whatever their operands") and the single latencies the
+  compiler's scheduling models carry (`compiler-pipeline.md`,
+  "Compiler: per-generation tuning — models and their consumers").
+- **Count the mixer,** and a workload that divides small numbers.
+
 ## Ruled out
 
 - **Partial-line delivery for fills.**  Critical-word-first burst
