@@ -15,6 +15,8 @@ design starts from numbers when it starts.
 - [`load-use.md`](./load-use.md) — what the two-cycle wait behind a
   load costs, and what a second ALU behind the memory stages would
   take back.
+- [`regfile.md`](./regfile.md) — the structures that give a register
+  file four read ports and two write ports, compared on the ECP5.
 
 ## Why dual issue
 
@@ -81,7 +83,8 @@ around them:
 
 - **Fetch has to supply more than two instructions a cycle** on
   average, since a taken branch ends a pair and costs fetch a cycle.
-- **The register file needs two write ports** and four read ports.
+- **The register file needs two write ports** and four read ports
+  ([register file](./regfile.md)).
 - **Forwarding** reaches four operands from the results of two
   pipelines.
 - **Branch redirects and stalls cost two slots a cycle,** so prediction
