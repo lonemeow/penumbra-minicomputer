@@ -218,6 +218,8 @@ exposed external bus.
   or given. One state per quarter-period step, with a table of both
   lines in every state; open-drain pins in positive logic. No clock
   stretching: SCL held low is a bus error. Frees the bus after reset.
+  Its command port takes one consumer; sharing it is open work
+  (`doc/TODO/hw-devices.md`).
 - `sdram/sdram_pkg.sv` — command encoding + chip presets.
 - `sdram/sdram_ctrl.sv` — FSM core: init / refresh / ACT/RW/RECOVER.
   `PHY_OUT_LATENCY` / `PHY_IN_LATENCY` parameters absorb
