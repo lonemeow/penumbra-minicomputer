@@ -160,13 +160,16 @@ because it costs two register writes.
 
 ### The design
 
-- **The codec is the clock master.** Its PLL makes the 49.152 MHz core
-  clock (1024 × 48 kHz) from any MCLK in 8 to 27 MHz, and the codec
-  drives BCLK (64 × fs, 3.072 MHz) and LRCLK; the FPGA takes its frame
-  timing from LRCLK, so the sample rate depends on no FPGA clock. The
-  FPGA as master would need MCLK locked to its frame tick, which no
-  clock on the board gives: the display MMCM's 1000 MHz VCO has no
-  factor of 3, and the CPU clock is a one-number edit.
+- **The codec drives the serial clocks.** Its PLL makes the 49.152 MHz
+  core clock (1024 × 48 kHz) from any MCLK in 8 to 27 MHz, and the codec
+  drives BCLK (64 × fs, 3.072 MHz) and LRCLK from it; the FPGA takes its
+  frame timing from LRCLK, so the sample rate depends on no FPGA clock.
+  The datasheet calls this its serial port's master mode, which is
+  separate from I2C, where the FPGA is the master and the codec the
+  slave. The FPGA driving BCLK and LRCLK instead would need MCLK locked
+  to its frame tick, which no clock on the board gives: the display
+  MMCM's 1000 MHz VCO has no factor of 3, and the CPU clock is a
+  one-number edit.
 - **MCLK** is 12.5 MHz from a PLL of its own (a 1000 MHz VCO ÷ 80),
   forwarded through an `ODDR`. The codec's PLL multiplies it by
   3 + 2913/3125, exactly 49.152 MHz. The setup's PLL words depend on
@@ -179,7 +182,8 @@ because it costs two register writes.
   mode, and mixers 5 and 6 into LOUTP and ROUTP in line mode. Mixer 7
   and the mono output stay off.
 - **Levels** are fixed at setup, since `MASTER_VOL` gives software its
-  volume: the line out at 0 dB (920 mV rms full scale, under the 2 V
+  volume: the line out at 0 dB, with mixers 5 and 6 passing their one
+  input each at 0 dB (about 1 V rms full scale, 0 dBV, under the 2 V
   rms a line input takes), the headphones at −10 dB.
 - **Pops**: once biased, the playback path is never powered down; the
   setup mutes and unmutes instead, waiting the datasheet's 4 ms or more
@@ -196,27 +200,12 @@ because it costs two register writes.
 The device side landed first: it takes its frame timing from the
 output stage (e358bfc11c62), and reports readiness and a fault code
 in `STATUS` ("hw: report the audio device's readiness in STATUS").
+The I2C master (038a6a4487f9) and the codec's setup sequence ("hw:
+bring up the Nexys Video's codec over I2C") followed; the setup's
+fault codes go into the board's documentation with the rest of its
+facts.
 
-1. **I2C and the codec setup.** A generic I2C master (start, repeated
-   start, a byte written with its ACK checked, a byte read with ACK or
-   NACK, stop), since the EEPROM shares the bus. Over it, the setup
-   sequencer:
-   1. R0 and R1: the PLL off, its six bytes in one write, the lock
-      bit polled against a timeout, then `COREN`;
-   2. every output muted;
-   3. the serial port as I2S master at 64 BCLKs a frame, the routing,
-      the clock enables, and the DSP off;
-   4. the DACs, playback power and the mixers;
-   5. the precharge wait, then the unmute.
-
-   It drives `STATUS.BUSY` and `STATUS.FAULT` (a NACK, or no lock),
-   with a `FAULT_CODE` naming the step that failed and how, and
-   finishes inside the contract's 100 ms. The codes' meanings go in
-   the board's documentation, since the class gives them none. A
-   testbench with a codec model (an I2C slave with the register file,
-   and a lock bit that sets after a delay) checks the register image
-   the codec ends with, and both fault paths with their codes.
-2. **The I2S output stage**, `audio_i2s_out`, board-neutral because the
+1. **The I2S output stage**, `audio_i2s_out`, board-neutral because the
    clocks come in from the codec. BCLK and LRCLK are synchronized into
    the audio clock, the next frame is requested one frame ahead, and
    each channel's 16 bits go MSB-first, padded to 32, changing after
@@ -224,13 +213,14 @@ in `STATUS` ("hw: report the audio device's readiness in STATUS").
    a BCLK at 60 MHz, with a build check on that ratio; the rate no
    longer comes from this clock. A testbench decodes `DAC_SDATA`
    against the frames pushed.
-3. **The Nexys top**: the MCLK PLL; the device behind autoconfig after
+2. **The Nexys top**: the MCLK PLL; the device behind autoconfig after
    the display, with `AUDIO_CHANNELS` as on the ULX3S and the CPU clock
-   as its audio clock; the setup and the output stage; and the pins
-   copied from the master XDC with their false paths.
-   `tb_nexysvideo_penumbra2_top` lists the device, with a codec model
-   enough for the setup to finish.
-4. **Bring-up**: `paudio` attaches, `audioplay` plays a WAV and
+   as its audio clock; the I2C master, the setup and the output stage;
+   and the pins copied from the master XDC with their false paths. The
+   setup is held in reset until MCLK runs, since the codec answers no
+   I2C without it. `tb_nexysvideo_penumbra2_top` lists the device, with
+   a codec model enough for the setup to finish.
+3. **Bring-up**: `paudio` attaches, `audioplay` plays a WAV and
    `pmusic-test` its listening checks through the speakers. With the
    speakers on, listen through a board power-on, a bitstream load, a
    CPU RESET, and a reload while audio plays.

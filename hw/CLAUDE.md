@@ -372,6 +372,15 @@ the shared module.
 - `nexysvideo/nexysvideo_video_clk.sv` — the display's pixel and TMDS
   serial clocks (25 and 125 MHz) from an MMCM of their own, off a
   1000 MHz VCO.
+- `nexysvideo/nexysvideo_codec_setup.sv` — brings the ADAU1761 codec up
+  over I2C after every reset, as a table of steps (one register each):
+  a running codec muted before its clock stops, the PLL set and its
+  lock polled, the playback path configured, a precharge wait, then
+  the unmute. Reports BUSY, FAULT and a fault code naming what failed
+  and in which step, for the audio device's STATUS. Testbench
+  `tb_nexysvideo_codec_setup` (through `nexysvideo_codec_setup_test`,
+  a 1 MHz harness) puts a model of the codec's control port at its
+  I2C command port.
 - `nexysvideo/nexysvideo_ddr3_selftest.sv` — runs the controller's
   calibration and full-chip self-test over and over, one line per run
   on the console (verdict, reads checked, mismatches, calibration

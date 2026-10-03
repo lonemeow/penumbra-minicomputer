@@ -328,6 +328,7 @@ MODULE_TESTS = \
     xc7_mmcm_test \
     nexysvideo_uart_test_top \
     nexysvideo_ddr3_selftest_test \
+    nexysvideo_codec_setup_test:tb_nexysvideo_codec_setup \
     onchip_ram \
     unified_mem \
     uart \
