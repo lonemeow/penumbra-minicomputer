@@ -57,25 +57,22 @@ void bench_main(uint32_t bootdata) {
     bench_puts("Iterations:      ");
     bench_print_uint(DHRYSTONE_ITERATIONS);
     bench_puts("\n");
-    if (us > 0) {
-        uint32_t us_per_iter = us / DHRYSTONE_ITERATIONS;
-        uint32_t dhrystones_per_sec = us_per_iter > 0
-            ? 1000000 / us_per_iter : 0;
-        uint32_t dmips_x100 = dhrystones_per_sec * 100 / VAX_DMIPS_REF;
+    if (ticks > 0) {
+        /* In thousandths, each straight from the tick count. */
+        uint64_t us_per_iter_milli = (uint64_t)ticks * 1000000u * 1000u
+            / ((uint64_t)freq * DHRYSTONE_ITERATIONS);
+        uint64_t dhrystones_per_sec_milli =
+            (uint64_t)DHRYSTONE_ITERATIONS * 1000u * freq / ticks;
+        uint64_t dmips_milli = dhrystones_per_sec_milli / VAX_DMIPS_REF;
 
         bench_puts("us/iteration:    ");
-        bench_print_uint(us_per_iter);
+        bench_print_milli(us_per_iter_milli);
         bench_puts("\n");
         bench_puts("Dhrystones/sec:  ");
-        bench_print_uint(dhrystones_per_sec);
+        bench_print_milli(dhrystones_per_sec_milli);
         bench_puts("\n");
         bench_puts("DMIPS:           ");
-        bench_print_uint(dmips_x100 / 100);
-        bench_putchar('.');
-        uint32_t frac = dmips_x100 % 100;
-        if (frac < 10)
-            bench_putchar('0');
-        bench_print_uint(frac);
+        bench_print_milli(dmips_milli);
         bench_puts("\n");
     }
 
