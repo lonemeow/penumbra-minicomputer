@@ -137,5 +137,12 @@ and the measurements behind them.
 
 ---
 
+## 📊 Performance
+**Target:** Anyone asking how fast the machine is, and beside what.
+
+*   **[Dhrystone Comparison](./dhrystone-comparison.md)** — DMIPS/MHz of each generation beside historical and soft cores of the same microarchitecture class, how the peer figures were chosen, and what the scores are made of.
+
+---
+
 ## 🚀 [Roadmap](./TODO/README.md)
 *   **[TODO & Roadmap](./TODO/README.md)** — Current tasks and long-term project goals.
