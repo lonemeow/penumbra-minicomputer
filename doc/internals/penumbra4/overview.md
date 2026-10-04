@@ -18,6 +18,9 @@ design starts from numbers when it starts.
 - [`regfile.md`](./regfile.md) — the structures that give a register
   file four read ports and two write ports, compared on the ECP5 and
   the Artix-7, and the one chosen.
+- [`front-end.md`](./front-end.md) — how many instructions a cycle
+  fetch has to supply, what the cycle after a taken transfer costs,
+  and how far the fuser has to see.
 
 ## Why dual issue
 
@@ -82,8 +85,9 @@ The uncore, the store buffer, the split memory stage, branch prediction
 and the pre-decoded fetch FIFO carry over. Dual issue changes what sits
 around them:
 
-- **Fetch has to supply more than two instructions a cycle** on
-  average, since a taken branch ends a pair and costs fetch a cycle.
+- **Fetch has to supply two instructions a cycle,** and the fuser has
+  to see across fetches ([front end](./front-end.md)). Issue takes 1.5
+  to 1.6 a cycle on average.
 - **The register file needs two write ports** and four read ports
   ([register file](./regfile.md)).
 - **Forwarding** reaches four operands from the results of two
@@ -108,7 +112,8 @@ arrives with the two-wide front end that dual issue needs anyway.
   load-use wait is measured for a single-issue core
   ([load-use](./load-use.md)). How waits, misses and redirects interact
   with pairing needs one pipeline model.
-- **Fetch supply**, and what a taken branch costs a two-wide front end.
+- **Fetch after a misprediction or a miss,** when the queue is empty
+  ([front end](./front-end.md#open)).
 - **The cost side:** the two-write-port register file, the forwarding
   network and the fused compare-and-branch's path, each to be timed on
   the full top before anything is built on it, as gen3's
