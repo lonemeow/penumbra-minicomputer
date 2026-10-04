@@ -11,16 +11,18 @@ to see.
 
 ## Measurement setup
 
-Measured 2026-10-04 with scratch builds of the ISS, not in the tree, on
-the two windows issue-pairing uses: `pbench kernel` (720 M
-instructions) and Doom `demo3` (2.89 G). Figures are cycles per 1000
-instructions, as `pbench kernel` / Doom.
+Measured 2026-10-04 on the two windows issue-pairing uses:
+`pbench kernel` (720 M instructions) and Doom `demo3` (2.89 G). Figures
+are cycles per 1000 instructions, as `pbench kernel` / Doom. The
+fuser's reach is `+pairmodel`'s `reach:` modifier; the fetch simulation
+is a scratch build of the ISS, not in the tree.
 
 The issue stage is the design issue-pairing ends on: two slots with the
 older op in either, the immediate forward, and four fusions (`LLI`
 with `LUI`, a compare or other ALU op with the `Bcc` behind it, and
-`MOV` with the op that updates its copy). With every instruction always
-at hand it issues in 679 / 630 cycles.
+`MOV` with the op that updates its copy):
+`dual+fuse:lilui:cmpbr:movop:opbr+fw:imm+flex`. With every instruction
+always at hand it issues in 679 / 630 cycles.
 
 The fetch simulation puts a fetch stage and a queue ahead of it:
 
@@ -88,8 +90,8 @@ more than one entry a cycle.
 ## The fuser's reach
 
 A fetch of two delivers an aligned pair, and a fuser that looks only
-inside each fetch misses every pair that straddles two. Three reaches,
-with supply unlimited:
+inside each fetch misses every pair that straddles two. Three reaches
+(`reach:any`, `reach:line`, `reach:pair`), with supply unlimited:
 
 | Stage | Cycles |
 |---|---|
@@ -154,5 +156,5 @@ the clock. The same-cycle forwards would then earn the place
 - **The compiler's side of an aligned fuser.** Which word a pair starts
   on is a property of the code, so a pass could move pairs onto even
   words by swapping one with an independent neighbour.
-- **A fetch stage in the pairing model.** `+pairmodel` has none; these
-  figures came from scratch builds.
+- **A fetch stage in the pairing model.** `+pairmodel` has none; the
+  fetch-supply figures came from a scratch build.

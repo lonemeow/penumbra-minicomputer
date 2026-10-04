@@ -168,10 +168,10 @@ loops.
 
 ## A flag-setting op and its branch
 
-Measured 2026-10-01 with a scratch patch to the ISS, not in the tree: a
-count of every `Bcc` whose flags come from the instruction directly
-ahead, and a fourth fusion taking an ALU op that also writes a register
-with the `Bcc` behind it.
+A fourth fusion, `fuse:opbr`, takes an ALU op that also writes its
+register with the `Bcc` behind it. Beside its figures is a count, made
+2026-10-01 with a scratch patch to the ISS that is not in the tree, of
+every `Bcc` whose flags come from the instruction directly ahead.
 
 Per 1000 instructions:
 
@@ -184,7 +184,7 @@ Per 1000 instructions:
 | … the branch taken | 1.5 | 34.8 |
 | … a `MOV` or immediate could be moved between them | 0.1 | 0.0 |
 | … only a load or store could | 1.4 | 35.5 |
-| Issue cycles the fourth fusion removes | 3–4 | 36 |
+| Issue cycles `fuse:opbr` removes | 3–4 | 36 |
 
 - **On Doom these are loop ends:** a counter update and its `BNE`, once
   a pixel in the column and span loops.
@@ -241,8 +241,6 @@ two positions, so it is an upper bound.
 - **The stream behind a 256×2 TLB.** A report split by privilege, or
   one that leaves the refill handler's page out, would show what the
   handler's instructions hide.
-- **The op-and-branch fusion in the model.** Its `cmpbr` takes
-  flag-only compares; the figures above came from a scratch patch.
 - **Stalls.** A pair whose younger op waits on a load holds both ops,
   and the load-use distance decides how often.
 - **Greedy pairing.** With `flex`, a store ahead of a compare takes the
