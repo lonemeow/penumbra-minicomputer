@@ -443,6 +443,48 @@ PAIR_FLAGS_CASES = {
 }
 
 
+def fusing(insns, fused):
+    """A single-issue stage's expected counts where only fusion is at
+    stake: `fused` instructions by kind, and so the ops and issue cycles
+    left."""
+    ops = insns - sum(fused.values())
+    return {"pair": {"issued": (insns, ops, ops, 0, ops), "fused": fused}}
+
+
+# pair_opbr.s: 30 instructions, 11 of them DI or BREAK.
+#   single+fuse:opbr:        Q1, Q5's ADD, Q7 and Q6 fuse with their
+#                            branches; a compare, a shift and an ADC do not.
+#   single+fuse:cmpbr:       Q2 alone.
+#   single+fuse:cmpbr:opbr:  both sets.
+#   single+fuse:movop:opbr:  Q5's MOV takes its ADD first, and an instruction
+#                            is in one fusion only, so its branch stays; Q7's
+#                            MOV does not match, and its SUB fuses.
+#   dual+fuse:opbr:          Q7's MOV and its fused op pair, three
+#                            instructions in the cycle.  Q5's MOV feeds its
+#                            fused op; Q2's and Q3's branches wait for the
+#                            flags; Q4's ADC also has no slot ahead of its
+#                            branch.
+PAIR_OPBR = {
+    "pairing single+fuse:opbr": fusing(30, {"opbr": 4}),
+    "pairing single+fuse:cmpbr": fusing(30, {"cmpbr": 1}),
+    "pairing single+fuse:cmpbr:opbr": fusing(30, {"cmpbr": 1, "opbr": 4}),
+    "pairing single+fuse:movop:opbr": fusing(30, {"movop": 1, "opbr": 3}),
+    "pairing dual+fuse:opbr": pairing(
+        30, 1, fused={"opbr": 4}, forward={"none": 1}, younger={"br": 1},
+        alone={"system": 19, "end": 1}, one={"flags": 2, "operand": 1},
+        several=(1, {"slot-older": 1, "flags": 1})),
+}
+
+# pair_reach.s: 9 instructions, three LLI+LUI pairs: one aligned in a
+# line, one straddling two lines, one in a line from an odd word.
+PAIR_REACH = {
+    "pairing single+fuse:lilui": fusing(9, {"lilui": 3}),
+    "pairing single+fuse:lilui+reach:any": fusing(9, {"lilui": 3}),
+    "pairing single+fuse:lilui+reach:line": fusing(9, {"lilui": 2}),
+    "pairing single+fuse:lilui+reach:pair": fusing(9, {"lilui": 1}),
+}
+
+
 def pair_case(name, program, stages):
     """A case running `program` through the stages of `stages`, a dict
     of "pairing <item>" labels."""
@@ -571,6 +613,8 @@ CASES = [
     pair_case("pairmodel forwards", "pair_deps.s", PAIR_DEPS),
     pair_case("pairmodel fusions", "pair_fuse.s", PAIR_FUSE),
     pair_case("pairmodel traps", "pair_trap.s", PAIR_TRAP),
+    pair_case("pairmodel op-and-branch fusion", "pair_opbr.s", PAIR_OPBR),
+    pair_case("pairmodel fuser reach", "pair_reach.s", PAIR_REACH),
 ] + [
     pair_case(f"pairmodel flags: {rule}", "pair_flags.s", {f"pairing {item}": PAIR_FLAGS[item]})
     for item, rule in PAIR_FLAGS_CASES.items()
@@ -581,6 +625,8 @@ CASES = [
          error=r"unknown modifier 'fw:cond:xyz'"),
     Case("pairmodel unknown class", "pair_slots.s", ["+pairmodel=dual+x:alu:fpu"],
          error=r"unknown modifier 'x:alu:fpu'"),
+    Case("pairmodel unknown reach", "pair_reach.s", ["+pairmodel=dual+reach:far"],
+         error=r"unknown modifier 'reach:far'"),
     Case("sbmodel needs cachemodel", "sb_window.s", ["+sbmodel"],
          error=r"\+sbmodel needs \+cachemodel"),
     Case("sbmodel unknown policy", "sb_window.s", ["+cachemodel", "+sbmodel=8l/some/bus"],

@@ -44,14 +44,21 @@
 //  - fuse:LIST: fusions.
 //      lilui  LLI Rd; LUI Rd as one load of a 32-bit constant
 //      cmpbr  a flag-only compare; Bcc as one compare-and-branch
+//      opbr   an ALU op that writes its register; Bcc as one
+//             op-and-branch (no shift, and no ADC or SBC)
 //      movop  MOV Rd, Rs; an ALU op or shift updating Rd in place, as
 //             one three-operand op
+//  - reach:any | reach:line | reach:pair: which adjacent instructions
+//    the fuser sees.  Any two; two in one 16-byte line; or an aligned
+//    pair, the first at an even word, as a fuser that looks inside each
+//    fetch of two would.
 //  - mem:1 | mem:ld2 | mem:2: memory accesses a cycle.
 //  - flex: either op may take either slot.
 //  - yflags: only the younger op of a pair commits flags.
 //
 // A fused op has the class of its second instruction, except LLI+LUI,
-// which stays a mov.
+// which stays a mov.  Fusions do not chain: an instruction is part of at
+// most one, the first that matches in program order.
 
 #pragma once
 
@@ -97,9 +104,16 @@ static const char* const FORWARD_NAMES[FORWARDS] =
     { "cond", "carry", "mov", "imm", "data", "ea", "alu" };
 
 // Fusions (fuse:), as bits of IssueConfig::fusions.
-enum : uint32_t { FUSE_LILUI = 1 << 0, FUSE_CMPBR = 1 << 1, FUSE_MOVOP = 1 << 2 };
-static constexpr int FUSIONS = 3;
-static const char* const FUSION_NAMES[FUSIONS] = { "lilui", "cmpbr", "movop" };
+enum : uint32_t {
+    FUSE_LILUI = 1 << 0, FUSE_CMPBR = 1 << 1, FUSE_MOVOP = 1 << 2, FUSE_OPBR = 1 << 3,
+};
+static constexpr int FUSIONS = 4;
+static const char* const FUSION_NAMES[FUSIONS] = { "lilui", "cmpbr", "movop", "opbr" };
+
+// Which adjacent instructions the fuser sees (reach:): any two, two in
+// one cache line, or an aligned pair.
+enum class FuserReach { Any, Line, Pair };
+static constexpr uint32_t ISSUE_LINE_WORDS = 4;     // a 16-byte line
 
 // Why an op issued alone with no younger op to consider.
 enum class Alone { Taken, Break, System, End };
@@ -242,6 +256,7 @@ struct IssueConfig {
     uint32_t    x = 0, y = CLASSES_ALL;     // classes each slot issues, a bit per IssueClass
     uint32_t    forwards = 0;       // FW_* bits: the same-cycle forwards that exist
     uint32_t    fusions = 0;        // FUSE_* bits
+    FuserReach  reach = FuserReach::Any;
     MemoryLimit memory = MemoryLimit::One;
     bool        flex = false;       // the older op may take Y and the younger X
     bool        younger_commits_flags = false;  // yflags: the flag state takes only the younger op's write
@@ -321,11 +336,28 @@ private:
     }
 
     // ── Fusion ──
+    // An ALU op that writes its register and the flags: what a Bcc behind
+    // it can fuse with.  A compare writes no register, and is cmpbr's.
+    static bool feeds_branch(const IssueOp& op) {
+        return op.cls == IssueClass::Alu && op.writes_flags && op.writes;
+    }
+
+    // The fuser sees `first` and the instruction behind it together.
+    bool in_reach(const IssueOp& first) const {
+        uint32_t word = first.pc >> 2;
+        switch (cfg_.reach) {
+        case FuserReach::Line: return word % ISSUE_LINE_WORDS != ISSUE_LINE_WORDS - 1;
+        case FuserReach::Pair: return word % 2 == 0;
+        default:               return true;
+        }
+    }
+
     bool starts_fusion(const IssueOp& op) const {
-        if (op.trapped) return false;
+        if (op.trapped || !in_reach(op)) return false;
         return (op.shape == Shape::Lli && (cfg_.fusions & FUSE_LILUI))
             || (op.shape == Shape::Compare && (cfg_.fusions & FUSE_CMPBR))
-            || (op.shape == Shape::Mov && (cfg_.fusions & FUSE_MOVOP));
+            || (op.shape == Shape::Mov && (cfg_.fusions & FUSE_MOVOP))
+            || (feeds_branch(op) && (cfg_.fusions & FUSE_OPBR));
     }
 
     bool fuse(const IssueOp& first, const IssueOp& second, IssueOp& fused, int& kind) const {
@@ -345,6 +377,14 @@ private:
             fused.reads[int(Use::Operand)] =
                 (second.reads[int(Use::Operand)] & ~first.writes) | first.reads[int(Use::Operand)];
             kind = 2;
+        } else if (feeds_branch(first) && second.shape == Shape::CondBranch) {
+            fused = second;                 // a branch that also does the op
+            fused.reads[int(Use::Operand)] = first.reads[int(Use::Operand)];
+            fused.writes = first.writes;
+            fused.produces = first.produces;
+            fused.writes_flags = true;
+            fused.reads_cond = false;
+            kind = 3;
         } else {
             return false;
         }
@@ -609,6 +649,9 @@ private:
             else if (part == "mem:1")           c.memory = MemoryLimit::One;
             else if (part == "mem:ld2")         c.memory = MemoryLimit::TwoLoads;
             else if (part == "mem:2")           c.memory = MemoryLimit::Two;
+            else if (part == "reach:any")       c.reach = FuserReach::Any;
+            else if (part == "reach:line")      c.reach = FuserReach::Line;
+            else if (part == "reach:pair")      c.reach = FuserReach::Pair;
             else if (!list("x:").empty())       ok = parse_classes(list("x:"), c.x);
             else if (!list("y:").empty())       ok = parse_classes(list("y:"), c.y);
             else if (!list("fw:").empty())
@@ -622,7 +665,7 @@ private:
             else ok = false;
             if (!ok) {
                 err = "unknown modifier '" + part + "' (x:CLASSES, y:CLASSES, fw:FORWARDS,"
-                      " fuse:FUSIONS, mem:1|ld2|2, flex, yflags)";
+                      " fuse:FUSIONS, reach:any|line|pair, mem:1|ld2|2, flex, yflags)";
                 return false;
             }
             if (plus == std::string::npos) break;

@@ -384,8 +384,10 @@ rom.ld ──────────────────┘
   class lists (`alu`, `sh`, `mov`, `adc`, `ld`, `st`, `br`, `md`, or
   `simple`, `all`, `none`), `fw:` same-cycle forwards (`cond`,
   `carry`, `mov`, `imm`, `data`, `ea`, `alu`), `fuse:` fusions
-  (`lilui`, `cmpbr`, `movop`), `mem:1|ld2|2`, `flex` (either op in
-  either slot) and `yflags` (only the younger op commits flags):
+  (`lilui`, `cmpbr`, `opbr`, `movop`), `reach:any|line|pair` (which
+  adjacent instructions the fuser sees: any two, two in one line, or
+  an aligned pair), `mem:1|ld2|2`, `flex` (either op in either slot)
+  and `yflags` (only the younger op commits flags):
   `+pairmodel=dual,dual+fw:cond:mov:imm+fuse:lilui`.  Each window
   reports pairs by the forward they rely on and by the younger op's
   class, and singles by what kept the next op out: one cause alone, or
