@@ -111,13 +111,14 @@ audio through the Nexys Video's codec";
 `doc/internals/nexysvideo/audio.md`), with the kernel and image the
 ULX3S runs.
 
-What the path does to the speakers around power and reset events is
-not recorded. With the speakers on, listen through a board power-on, a
-bitstream load, a CPU RESET, and a reload while audio plays. The
-power-on listen also settles what the datasheet does not say: whether
-the output bias, and the one thump it costs, comes up at the codec's
-power-on or when the playback path is first enabled. What is heard
-goes into `audio.md`, "Setup".
+A CPU RESET during playback is clean (`audio.md`, "Setup"). What the
+path does to the speakers around power and configuration is not
+recorded: with the speakers on, listen through a board power-on, a
+bitstream load, and a reload while audio plays. The power-on listen
+also settles what the datasheet does not say: whether the output bias,
+and the one thump it costs, comes up at the codec's power-on or when
+the playback path is first enabled. What is heard goes into
+`audio.md`, "Setup".
 
 ## Clocking: CPU clock above 60 MHz
 

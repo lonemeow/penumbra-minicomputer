@@ -194,6 +194,11 @@ Once biased, the playback path is never powered down. The setup mutes
 and unmutes instead, which leaves at worst one thump per board power
 cycle, when the bias first comes up.
 
+A CPU RESET in the middle of playback makes no audible glitch on the
+board. The frame in progress goes out whole, silence follows it for
+the reset hold, and the setup mutes the codec before it stops its
+clock.
+
 ### Fault codes
 
 A failed setup stops where it stands and sets `FAULT`, and `paudio`
