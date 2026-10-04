@@ -351,15 +351,20 @@ the shared module.
   bring-up step: boot ROM, UART, the microSD slot over SPI (autoconfig,
   card power off during the reset hold), the display adapter on the
   HDMI output (autoconfig; its own MMCM, an ODDR and a TMDS_33 OBUFDS
-  per pair), and 512 MiB of DDR3 as system RAM through `ddr3_stack`.
+  per pair), the audio device in front of the ADAU1761 codec
+  (autoconfig; `audio_i2s_out` on the codec's serial clocks, the
+  codec's setup over `i2c_master` on open-drain pads, MCLK from
+  `nexysvideo_codec_mclk`; `doc/internals/nexysvideo/audio.md`), and
+  512 MiB of DDR3 as system RAM through `ddr3_stack`.
   The controller resets only with its clocks' lock; the machine is held
   in reset until it has calibrated, and LEDs show calibration and the
   RAM's longest wait (`bus_wait_meter`). Its boot testbench
   (`make -C hw/rom && make font8x16.hex && make sim
   MOD=nexysvideo_penumbra2_top`) runs the ROM to the monitor through
   the board pins, with the controller's and display clocks' simulation
-  stand-ins and a simulated card on the SD pins, and reads a frame of
-  DVI off the HDMI pins.
+  stand-ins and a simulated card on the SD pins, reads a frame of
+  DVI off the HDMI pins, and plays frames pushed from the monitor into
+  a codec model on the I2C and serial-port pins.
 - `nexysvideo/nexysvideo_uart_test_top.sv` — console bring-up top
   (`make fpga TOP=nexysvideo_uart_test_top`): banner and echo on the
   UART port, LEDs for lock, reset, a 1 Hz heartbeat, RX activity and
@@ -384,6 +389,9 @@ the shared module.
   `tb_nexysvideo_codec_setup` (through `nexysvideo_codec_setup_test`,
   a 1 MHz harness) puts a model of the codec's control port at its
   I2C command port.
+- `nexysvideo/nexysvideo_codec_mclk.sv` — the codec's 12.5 MHz master
+  clock, the oscillator divided in a counter: no clock manager, and no
+  reset, so it runs from configuration on.
 - `nexysvideo/nexysvideo_ddr3_selftest.sv` — runs the controller's
   calibration and full-chip self-test over and over, one line per run
   on the console (verdict, reads checked, mismatches, calibration

@@ -2,9 +2,10 @@
 //
 // Wires machine_penumbra2 to the board: the shared clocking and power-on
 // reset (nexysvideo_clk_rst), a 64 KB boot ROM, the UART on the UART USB
-// port, the microSD slot over SPI and the display adapter on the HDMI
-// output behind autoconfig, and system RAM in the board's 512 MiB of
-// DDR3. The top grows one device per bring-up step; the external
+// port, the microSD slot over SPI, the display adapter on the HDMI
+// output and the audio device in front of the board's codec behind
+// autoconfig, and system RAM in the board's 512 MiB of DDR3. The top
+// grows one device per bring-up step; the external
 // Penumbra Bus is assembled here the way the ULX3S top assembles it
 // (device decode, response fabric with its no-device watchdog), so what
 // simulates is what synthesizes.
@@ -13,6 +14,14 @@
 // (nexysvideo_video_clk), and resets with the machine or while they are
 // unlocked. Its four lanes leave through a DDR register in each pair's
 // I/O cell into a TMDS_33 differential buffer.
+//
+// The audio device plays through the board's ADAU1761 codec
+// (doc/internals/nexysvideo/audio.md). The codec drives the serial
+// link's clocks, so the device's output side runs on the CPU clock and
+// follows them from there. Its registers are set over I2C after every
+// reset of the machine, which the device reports as its STATUS, and its
+// master clock is the oscillator divided, running whatever the machine's
+// reset does.
 //
 // The DDR3 runs on clocks of its own (nexysvideo_ddr3_clk) behind the
 // line stack (ddr3_stack), which crosses to them. Its controller resets
@@ -37,6 +46,12 @@
 `define PENUMBRA_CPU_VARIANT 0
 `endif
 
+// Channels the audio device is built with, set by the build as on the
+// ULX3S.
+`ifndef AUDIO_CHANNELS
+`define AUDIO_CHANNELS 1
+`endif
+
 module nexysvideo_penumbra2_top (
     input  logic       clk,          // 100 MHz oscillator
     input  logic       cpu_resetn,   // CPU RESET button, low while pressed
@@ -55,6 +70,16 @@ module nexysvideo_penumbra2_top (
     output logic [2:0] hdmi_tx_n,
     output logic       hdmi_tx_clk_p,
     output logic       hdmi_tx_clk_n,
+
+    // ── Audio codec (ADAU1761) ─────────────────────────────
+    output logic       ac_mclk,      // the codec's master clock, 12.5 MHz
+    input  logic       ac_bclk,      // the serial link's bit clock, the codec's
+    input  logic       ac_lrclk,     // and its frame clock, the codec's too
+    output logic       ac_dac_sdata, // samples to the codec's DACs
+
+    // ── I2C: the codec, and the MAC-address EEPROM ─────────
+    inout  wire        scl,
+    inout  wire        sda,
 
     // ── DDR3 (MT41K256M16, x16) ───────────────────────────
     output logic [0:0]  ddr3_ck_p,
@@ -198,6 +223,7 @@ module nexysvideo_penumbra2_top (
 
     logic        uart_irq;
     logic        spi_irq;
+    logic        audio_irq;
 
     // ── Autoconfig control from the machine's bus controller ──
     logic        busctl_bus_rst;
@@ -213,7 +239,7 @@ module nexysvideo_penumbra2_top (
         .i_clk         (cpu_clk),
         .i_rst         (rst),
 
-        .i_irq         (uart_irq | spi_irq),
+        .i_irq         (uart_irq | spi_irq | audio_irq),
         .i_timer_irq   (1'b0),        // the internal timer is the source
 
         .o_bus_addr    (mem_addr),
@@ -506,11 +532,8 @@ module nexysvideo_penumbra2_top (
 
     logic [31:0] ac_disp_rdata;
     logic        ac_disp_ack, ac_disp_sel;
-    // Last device in the chain: the dangling cfg_out is the
-    // "no more devices" end the ROM's autoconfig loop probes.
-    /* verilator lint_off UNUSEDSIGNAL */
+    // cfg_out is the daisy-chain to the next autoconfig device (audio).
     logic        ac_disp_cfg_out;
-    /* verilator lint_on UNUSEDSIGNAL */
 
     autoconfig_dev #(
         .DEV_CLASS (ACFG_CLASS_DISPLAY),
@@ -600,13 +623,183 @@ module nexysvideo_penumbra2_top (
     assign hdmi_tx_clk_p = hdmi_pad_p[3];
     assign hdmi_tx_clk_n = hdmi_pad_n[3];
 
+    // ── Audio (third in chain) ──────────────────────────────
+    // The audio device as the ULX3S builds it, its output side on the
+    // CPU clock: the codec sets the sample rate, so no clock here has to
+    // divide to it.
+    logic [31:0] audio_dev_addr, audio_dev_wdata, audio_dev_rdata;
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic [3:0]  audio_dev_byte_en;
+    /* verilator lint_on UNUSEDSIGNAL */
+    logic        audio_dev_we, audio_dev_re, audio_dev_ack;
+    logic [31:0] ac_audio_rdata;
+    logic        ac_audio_ack, ac_audio_sel;
+    // Last device in the chain: the dangling cfg_out is the
+    // "no more devices" end the ROM's autoconfig loop probes.
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic        ac_audio_cfg_out;
+    /* verilator lint_on UNUSEDSIGNAL */
+
+    autoconfig_dev #(
+        .DEV_CLASS (ACFG_CLASS_AUDIO),
+        .DEV_SIZE  (32'd4096),
+        .DEV_ID    (32'd0),
+        .DEV_NAME0 (32'h49445541),     // "AUDI" packed LE
+        .DEV_NAME1 (32'h0000004F)      // "O\0\0\0"
+    ) u_ac_audio (
+        .i_clk        (cpu_clk),
+        .i_rst        (rst),
+        .i_bus_rst    (busctl_bus_rst),
+        .i_cfg_en     (busctl_cfg_en),
+        .i_cfg_in     (ac_disp_cfg_out),
+        .o_cfg_out    (ac_audio_cfg_out),
+        .i_addr       (mem_addr),
+        .i_wdata      (mem_wdata),
+        .i_byte_en    (mem_byte_en),
+        .i_we         (mem_we),
+        .i_re         (mem_re),
+        .o_rdata      (ac_audio_rdata),
+        .o_ack        (ac_audio_ack),
+        .o_sel        (ac_audio_sel),
+        .o_dev_addr   (audio_dev_addr),
+        .o_dev_wdata  (audio_dev_wdata),
+        .o_dev_byte_en(audio_dev_byte_en),
+        .o_dev_we     (audio_dev_we),
+        .o_dev_re     (audio_dev_re),
+        .i_dev_rdata  (audio_dev_rdata),
+        .i_dev_ack    (audio_dev_ack)
+    );
+
+    localparam int AUDIO_SAMPLE_HZ = 48_000;
+    // The serial link as the codec's setup configures it: 64 BCLKs a
+    // frame.
+    localparam int AUDIO_BCLK_HZ   = 64 * AUDIO_SAMPLE_HZ;
+    localparam int CODEC_MCLK_HZ   = 12_500_000;
+
+    logic signed [15:0] audio_frame_l, audio_frame_r;
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic               audio_frame_en;
+    /* verilator lint_on UNUSEDSIGNAL */
+    logic               audio_frame_req;
+
+    logic       codec_busy, codec_fault;
+    logic [7:0] codec_fault_code;
+
+    audio #(
+        .CHANNELS  (`AUDIO_CHANNELS),
+        .DEPTH     (1024),
+        .SAMPLE_HZ (AUDIO_SAMPLE_HZ)
+    ) u_audio (
+        .i_clk            (cpu_clk),
+        .i_rst            (rst),
+        .i_addr           (audio_dev_addr),
+        .i_wdata          (audio_dev_wdata),
+        .i_we             (audio_dev_we),
+        .i_re             (audio_dev_re),
+        .o_rdata          (audio_dev_rdata),
+        .o_ack            (audio_dev_ack),
+        .o_irq            (audio_irq),
+        .i_out_busy       (codec_busy),
+        .i_out_fault      (codec_fault),
+        .i_out_fault_code (codec_fault_code),
+        .i_aclk           (cpu_clk),
+        .i_arst           (rst),
+        .i_frame_req      (audio_frame_req),
+        .o_frame_l        (audio_frame_l),
+        .o_frame_r        (audio_frame_r),
+        .o_frame_en       (audio_frame_en)
+    );
+
+    audio_i2s_out #(
+        .CLK_HZ  (int'(CPU_HZ)),
+        .BCLK_HZ (AUDIO_BCLK_HZ)
+    ) u_audio_out (
+        .i_clk       (cpu_clk),
+        .i_rst       (rst),
+        .i_frame_l   (audio_frame_l),
+        .i_frame_r   (audio_frame_r),
+        .o_frame_req (audio_frame_req),
+        .i_bclk      (ac_bclk),
+        .i_lrclk     (ac_lrclk),
+        .o_sdata     (ac_dac_sdata)
+    );
+
+    // ── The codec's master clock and its setup ──────────────
+    // MCLK runs from configuration on, so the codec has had it for the
+    // whole reset hold by the time the setup first addresses it.
+    nexysvideo_codec_mclk #(
+        .MCLK_HZ (CODEC_MCLK_HZ)
+    ) u_codec_mclk (
+        .i_clk_100mhz (clk),
+        .o_mclk       (ac_mclk)
+    );
+
+    logic       i2c_cmd_valid, i2c_cmd_ready;
+    logic       i2c_cmd_start, i2c_cmd_stop, i2c_cmd_read, i2c_cmd_nack;
+    logic [7:0] i2c_cmd_wdata;
+    logic       i2c_rsp_valid, i2c_rsp_nack, i2c_rsp_error;
+    logic [7:0] i2c_rsp_rdata;
+
+    nexysvideo_codec_setup #(
+        .CLK_HZ  (int'(CPU_HZ)),
+        .MCLK_HZ (CODEC_MCLK_HZ)
+    ) u_codec_setup (
+        .i_clk        (cpu_clk),
+        .i_rst        (rst),
+        .o_cmd_valid  (i2c_cmd_valid),
+        .i_cmd_ready  (i2c_cmd_ready),
+        .o_cmd_start  (i2c_cmd_start),
+        .o_cmd_stop   (i2c_cmd_stop),
+        .o_cmd_read   (i2c_cmd_read),
+        .o_cmd_wdata  (i2c_cmd_wdata),
+        .o_cmd_nack   (i2c_cmd_nack),
+        .i_rsp_valid  (i2c_rsp_valid),
+        .i_rsp_rdata  (i2c_rsp_rdata),
+        .i_rsp_nack   (i2c_rsp_nack),
+        .i_rsp_error  (i2c_rsp_error),
+        .o_busy       (codec_busy),
+        .o_fault      (codec_fault),
+        .o_fault_code (codec_fault_code)
+    );
+
+    // What the master asks of each line: 1 lets it go, 0 pulls it low.
+    logic i2c_scl_release, i2c_sda_release;
+
+    i2c_master #(
+        .CLK_HZ (int'(CPU_HZ)),
+        .SCL_HZ (100_000)
+    ) u_i2c (
+        .i_clk       (cpu_clk),
+        .i_rst       (rst),
+        .i_cmd_valid (i2c_cmd_valid),
+        .o_cmd_ready (i2c_cmd_ready),
+        .i_cmd_start (i2c_cmd_start),
+        .i_cmd_stop  (i2c_cmd_stop),
+        .i_cmd_read  (i2c_cmd_read),
+        .i_cmd_wdata (i2c_cmd_wdata),
+        .i_cmd_nack  (i2c_cmd_nack),
+        .o_rsp_valid (i2c_rsp_valid),
+        .o_rsp_rdata (i2c_rsp_rdata),
+        .o_rsp_nack  (i2c_rsp_nack),
+        .o_rsp_error (i2c_rsp_error),
+        .o_scl       (i2c_scl_release),
+        .i_scl       (scl),
+        .o_sda       (i2c_sda_release),
+        .i_sda       (sda)
+    );
+
+    // I2C pads, open drain: the board's pull-ups make a line high
+    assign sda = i2c_sda_release ? 1'bz : 1'b0;
+    assign scl = i2c_scl_release ? 1'bz : 1'b0;
+
     // ── Response fabric ─────────────────────────────────────
-    localparam int SLV_RAM  = 0;
-    localparam int SLV_ROM  = 1;
-    localparam int SLV_UART = 2;
-    localparam int SLV_SPI  = 3;
-    localparam int SLV_DISP = 4;
-    localparam int NUM_SLV  = 5;
+    localparam int SLV_RAM   = 0;
+    localparam int SLV_ROM   = 1;
+    localparam int SLV_UART  = 2;
+    localparam int SLV_SPI   = 3;
+    localparam int SLV_DISP  = 4;
+    localparam int SLV_AUDIO = 5;
+    localparam int NUM_SLV   = 6;
 
     logic [NUM_SLV-1:0]       slv_sel;
     logic [NUM_SLV-1:0]       slv_ack;
@@ -631,6 +824,10 @@ module nexysvideo_penumbra2_top (
     assign slv_sel[SLV_DISP]   = ac_disp_sel;
     assign slv_ack[SLV_DISP]   = ac_disp_ack;
     assign slv_rdata[SLV_DISP] = ac_disp_rdata;
+
+    assign slv_sel[SLV_AUDIO]   = ac_audio_sel;
+    assign slv_ack[SLV_AUDIO]   = ac_audio_ack;
+    assign slv_rdata[SLV_AUDIO] = ac_audio_rdata;
 
     bus_response_fabric #(
         .NUM_SLAVES     (NUM_SLV),

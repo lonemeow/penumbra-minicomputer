@@ -6,9 +6,9 @@
 > [audio.md](audio.md).
 
 The Nexys Video is the machine's second board: an Artix-7 200T, a
-100 MHz oscillator, 512 MiB of DDR3, a microSD slot, a USB UART and an
-HDMI output, plus an HDMI input, Gigabit Ethernet, an audio codec, an
-OLED and Pmod headers the machine does not use yet
+100 MHz oscillator, 512 MiB of DDR3, a microSD slot, a USB UART, an
+HDMI output and an audio codec, plus an HDMI input, Gigabit Ethernet,
+an OLED and Pmod headers the machine does not use yet
 (`doc/TODO/hw-nexysvideo.md`). It runs the
 gen2 machine from the same boot ROM and NetBSD as the ULX3S. The CPU
 behaves functionally the same on both boards, and what differs,
@@ -29,8 +29,9 @@ every build passes its signoff gates before it can be flashed.
 | `nexysvideo_ddr3_test_top` | `make fpga TOP=nexysvideo_ddr3_test_top` | the DDR3 controller and its whole-chip self-test, no CPU |
 
 The machine top carries a 64 KiB boot ROM, the UART, the microSD slot
-over SPI and the display adapter on the HDMI output behind
-autoconfig, and system RAM in DDR3, and names itself "Nexys Video". It assembles the external bus around the machine as
+over SPI, the display adapter on the HDMI output and the audio device
+in front of the codec ([audio.md](audio.md)) behind autoconfig, and
+system RAM in DDR3, and names itself "Nexys Video". It assembles the external bus around the machine as
 the ULX3S top does: the device decode, and the response fabric with
 its 256-cycle watchdog.
 
@@ -59,6 +60,11 @@ to the second display mode's 40 and 200 MHz. Its output chain resets
 while the machine does or while that MMCM is unlocked. The reset is
 formed in the pixel domain, so the serial domain, related to it at
 5x, takes it on a timed path.
+
+The codec's master clock, 12.5 MHz, is the oscillator divided by eight
+in a counter (`nexysvideo_codec_mclk`), with no clock manager: it runs
+from configuration on and no reset stops it ([audio.md](audio.md),
+"Three clocks, and who drives each").
 
 All three clock managers take the oscillator straight from its pin
 (R4, in bank 34 and clock region X1Y2), and that region's clock
@@ -135,7 +141,8 @@ I/O standard from Digilent's master XDC unchanged: LVCMOS12 for the
 buttons and switches (the VADJ bank; with `set_vadj` and `vadj_en`
 undriven, the board's pull resistors set it to 1.2 V), LVCMOS15 for CPU
 RESET (the DDR3 bank), LVCMOS25 for the LEDs and Ethernet, LVCMOS33
-for the UART, SD and Pmods, and TMDS_33 for the HDMI output's pairs.
+for the UART, SD, audio codec, I2C and Pmods, and TMDS_33 for the HDMI
+output's pairs.
 
 A top's constraints can span several files:
 
@@ -143,7 +150,7 @@ A top's constraints can span several files:
   machine top uses, whatever its core, and the design's timing
   intent (false paths on the asynchronous pins and the HDMI pairs,
   the SD input timing, the bounds on the CPU/DDR3 and CPU/pixel-clock
-  crossings);
+  crossings, the pull-downs on the codec's serial clocks);
 - `hw/constraints/nexysvideo_ddr3.xdc`: the DDR3 pins, taken from
   Digilent's memory-interface project, shared by every top with the
   memory;

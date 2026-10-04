@@ -103,47 +103,21 @@ no card is a PS/2 device behind the PIC24's bridge. The network does
 not wait for USB (`hw-devices.md`, "Hardware + kernel: Ethernet MAC
 for an onboard PHY").
 
-## Devices: no audio
+## Devices: audio unheard through power-on and reset
 
-The audio device (`CLASS_AUDIO`) plays through a resistor ladder on
-the ULX3S. The Nexys Video's four jacks all belong to an ADAU1761
-codec, which takes I2S and needs its registers set over I2C before it
-plays anything. Software sees the same class on both boards: the top
-sets the codec up by itself, and NetBSD plays through `/dev/audio`
-with the kernel and image the ULX3S runs. The path's structure, its
-clocks, the frame on the wire, the setup and the board's wiring are in
-`doc/internals/nexysvideo/audio.md`.
+The audio device (`CLASS_AUDIO`) plays through the board's ADAU1761
+codec, which the machine top sets up over I2C by itself ("hw: play
+audio through the Nexys Video's codec";
+`doc/internals/nexysvideo/audio.md`), with the kernel and image the
+ULX3S runs.
 
-The pieces have landed, each tested alone: the device takes its frame
-timing from the output stage (e358bfc11c62) and reports readiness and
-a fault code in `STATUS` ("hw: report the audio device's readiness in
-STATUS"), and the I2C master (038a6a4487f9), the codec's setup
-sequence ("hw: bring up the Nexys Video's codec over I2C") and the I2S
-output stage ("hw: add an I2S output stage that follows the
-converter's clocks") followed. The machine top does not carry them
-yet.
-
-1. **The Nexys top**: the MCLK PLL, 12.5 MHz off a 1000 MHz VCO and
-   forwarded through an `ODDR`, in the X1Y1 clock tile, whose PLL is
-   free (`doc/internals/nexysvideo/overview.md`, "Clocking and
-   reset"); the device behind autoconfig after the display, with
-   `AUDIO_CHANNELS` as on the ULX3S and the CPU clock as its audio
-   clock; the I2C master, the setup and the output stage; and the pins
-   copied from the master XDC with their false paths, BCLK and LRCLK
-   pulled down, since they float until the setup has the codec drive
-   them. The setup is held in reset until MCLK runs, since the codec
-   answers no I2C without it. `tb_nexysvideo_penumbra2_top` lists the
-   device, with a codec model enough for the setup to finish.
-2. **Bring-up**: `paudio` attaches, `audioplay` plays a WAV and
-   `pmusic-test` its listening checks through the speakers. With the
-   speakers on, listen through a board power-on, a bitstream load, a
-   CPU RESET, and a reload while audio plays. The power-on listen also
-   settles what the datasheet does not say: whether the output bias,
-   and the one thump it costs, comes up at the codec's power-on or
-   when the playback path is first enabled.
-
-On completion `audio.md` loses its note that the top lacks the path,
-the overview's device list gains the codec, and this entry goes.
+What the path does to the speakers around power and reset events is
+not recorded. With the speakers on, listen through a board power-on, a
+bitstream load, a CPU RESET, and a reload while audio plays. The
+power-on listen also settles what the datasheet does not say: whether
+the output bias, and the one thump it costs, comes up at the codec's
+power-on or when the playback path is first enabled. What is heard
+goes into `audio.md`, "Setup".
 
 ## Clocking: CPU clock above 60 MHz
 

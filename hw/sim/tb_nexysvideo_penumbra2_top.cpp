@@ -34,13 +34,27 @@
 //    the pixel clock, every pair's N the inverse of its P, the syncs in
 //    blue's control tokens and green and red idle in theirs, each token
 //    exactly as often as the raster's blanking makes it. A swapped lane,
-//    pair, bit pair or bit order each breaks one of those.
+//    pair, bit pair or bit order each breaks one of those;
+//  - audio: MCLK an eighth of the oscillator from the first clock on,
+//    through the reset hold; the codec set up over the I2C pins, with
+//    the PLL words for that MCLK, and the device reporting it ready;
+//    the device found by autoconfig after the display; and four frames
+//    pushed into it from the monitor arriving at the codec's serial
+//    port whole, in order and with left and right as pushed. A swapped
+//    BCLK and LRCLK, a missing readiness or request wire, or an I2C pad
+//    driven high where it should be let go each breaks one of those.
+//    The I2C pads are open drain, so the top is built with its inouts'
+//    enables exposed and the testbench holds the bus: high unless the
+//    top or the codec pulls a line low.
 #include "Vnexysvideo_penumbra2_top.h"
+#include "i2c_slave.h"
 #include "sd_card_sim.h"
 #include "uart_host.h"
 #include "verilated.h"
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -147,6 +161,110 @@ struct HdmiPins {
 
 static HdmiPins hdmi;
 
+// The codec at its pins: its registers behind an I2C slave at 0x3B, its
+// PLL locked whenever it is enabled, and its serial port. A transfer
+// writes a 16-bit register address and then the register's bytes, and a
+// read returns the bytes last written there. Once the setup has the
+// codec drive them (its core clock on and R15's MS bit set), BCLK and
+// LRCLK run at 20 CPU clocks a bit and 64 bits a frame, and DAC_SDATA
+// is sampled on every BCLK rise as I2S: LRCLK low for the left word,
+// its MSB one BCLK after LRCLK changes. Until then both clocks sit low,
+// as the board's pull-downs hold them.
+struct CodecPins {
+    static const uint16_t R0_CLOCK = 0x4000, R1_PLL = 0x4002, R15_SERIAL = 0x4015;
+    static const int BCLK_HALF = 10;        // CPU clocks
+    static const int SLOT_BITS = 32;
+
+    I2cSlave i2c{0x3B};
+    std::map<uint16_t, std::vector<uint8_t>> reg;
+
+    bool bclk = false, lrclk = false;
+    int phase = 0;                  // CPU clocks into this half of BCLK
+    int pos = 0;                    // BCLK falls since LRCLK changed
+    uint16_t word = 0, left = 0;
+    std::vector<uint32_t> frames;   // every frame sampled: left, right << 16
+
+    CodecPins() {
+        i2c.on_boundary = [this] { boundary(); };
+    }
+
+    void boundary() {
+        std::vector<uint8_t>& w = i2c.written;
+        if (w.size() >= 2) {
+            uint16_t addr = (uint16_t)(w[0] << 8 | w[1]);
+            if (w.size() > 2)
+                reg[addr].assign(w.begin() + 2, w.end());
+            std::vector<uint8_t> r = bytes(addr);
+            if (addr == R1_PLL && r.size() == 6 && (r[5] & 1))
+                r[5] |= 2;          // locked
+            i2c.to_send.assign(r.begin(), r.end());
+        }
+        w.clear();
+    }
+
+    std::vector<uint8_t> bytes(uint16_t addr) const {
+        auto it = reg.find(addr);
+        return it == reg.end() ? std::vector<uint8_t>() : it->second;
+    }
+    bool bit0(uint16_t addr) const {
+        std::vector<uint8_t> r = bytes(addr);
+        return !r.empty() && (r[0] & 1);
+    }
+    bool driving() const { return bit0(R0_CLOCK) && bit0(R15_SERIAL); }
+
+    // One CPU clock of the serial port.
+    void step(bool sdata) {
+        if (!driving()) {
+            bclk = lrclk = false;
+            phase = pos = 0;
+            return;
+        }
+        if (++phase < BCLK_HALF)
+            return;
+        phase = 0;
+        bclk = !bclk;
+        if (!bclk) {
+            if (++pos == SLOT_BITS) {
+                pos = 0;
+                lrclk = !lrclk;
+            }
+        } else if (pos >= 1 && pos <= 16) {
+            word = (uint16_t)(word | (sdata ? 1u : 0u) << (16 - pos));
+            if (pos == 16) {
+                if (lrclk)
+                    frames.push_back(left | (uint32_t)word << 16);
+                else
+                    left = word;
+                word = 0;
+            }
+        }
+    }
+};
+
+static CodecPins codec;
+
+// MCLK at the pin: how long each level lasts, in testbench clocks. The
+// clock-manager stubs pass the oscillator through, so a testbench clock
+// is an oscillator cycle here as well as a CPU one.
+struct MclkPin {
+    bool level = false;
+    int run = 0;                    // clocks at this level so far
+    long edges = 0, bad = 0;        // edges seen, and levels not 4 clocks long
+
+    void step(bool mclk) {
+        if (mclk == level) {
+            run++;
+            return;
+        }
+        if (edges++ > 0 && run != 4)
+            bad++;
+        level = mclk;
+        run = 1;
+    }
+};
+
+static MclkPin mclk;
+
 static void chk(bool ok, const char* what) {
     checks++;
     if (!ok) {
@@ -155,10 +273,22 @@ static void chk(bool ok, const char* what) {
     }
 }
 
+// An open-drain pad as the top drives it: enabled, and driving low.
+// Enabled and driving high is a pad fighting whatever else holds the
+// line low, the codec or the EEPROM beside it.
+static bool pulls_low(bool en, bool out) { return en && !out; }
+static long i2c_driven_high = 0;    // clocks either I2C pad drove high
+
 static void tick() {
     bool powered = !top->sd_reset;
     top->uart_tx_in = host_tx.line(cycle);
-    top->sd_d = (top->sd_d & ~1u) | (sd.miso(powered) ? 1u : 0u);
+    top->sd_d = sd.miso(powered) ? 1u : 0u;
+    // The I2C lines rest high on the board's pull-ups: the top pulls
+    // either one low, the codec SDA.
+    top->scl = !pulls_low(top->scl__en, top->scl__out);
+    top->sda = !pulls_low(top->sda__en, top->sda__out) && !codec.i2c.drive_low;
+    top->ac_bclk = codec.bclk;
+    top->ac_lrclk = codec.lrclk;
     top->clk = 0;
     top->eval();
     hdmi.sample();
@@ -167,7 +297,12 @@ static void tick() {
     hdmi.sample();
     cycle++;
     host.step(top->uart_rx_out, cycle);
-    sd.step(!top->sd_reset, (top->sd_d >> 3) & 1, top->sd_cclk, top->sd_cmd);
+    sd.step(!top->sd_reset, (top->sd_d__out >> 3) & 1, top->sd_cclk, top->sd_cmd);
+    i2c_driven_high += (top->scl__en && top->scl__out) || (top->sda__en && top->sda__out);
+    codec.i2c.tick();
+    codec.i2c.observe(top->scl, top->sda);
+    codec.step(top->ac_dac_sdata);
+    mclk.step(top->ac_mclk);
 }
 
 // Run until the console output from mark on ends with the monitor's
@@ -278,6 +413,58 @@ static void check_hdmi_frame() {
     }
 }
 
+// The codec's setup as it arrived over the I2C pins, the device's
+// readiness, and four frames played through the whole machine.
+static void check_audio(const std::string& boot) {
+    // The PLL words for a 12.5 MHz MCLK: M 3125, N 2913, R 3, fractional,
+    // enabled. MCLK itself: every level four oscillator cycles.
+    const std::vector<uint8_t> pll = {0x0C, 0x35, 0x0B, 0x61, 0x19, 0x01};
+    chk(codec.bytes(CodecPins::R1_PLL) == pll, "the codec's PLL not written for a 12.5 MHz MCLK");
+    chk(mclk.bad == 0, "MCLK is not the oscillator over eight");
+    chk(codec.driving(), "the setup did not have the codec drive BCLK and LRCLK");
+    chk(i2c_driven_high == 0, "an I2C pad driven high: the bus is open drain");
+
+    const std::string tag = "  AUDIO Audio @ 0x";
+    size_t at = boot.find(tag);
+    if (at == std::string::npos)
+        return;
+    uint32_t base = (uint32_t)strtoul(boot.c_str() + at + tag.size(), nullptr, 16);
+    auto hex = [](uint32_t v) {
+        char buf[16];
+        snprintf(buf, sizeof buf, "%08x", v);
+        return std::string(buf);
+    };
+
+    // CAP: version 1, pitch, volume and STATUS, one channel as this
+    // build has it. STATUS: ready, no fault.
+    std::string out = command("x " + hex(base) + " 4");
+    expect(out, hex(base) + "    01 23 01 00");
+    out = command("x " + hex(base + 0x20) + " 4");
+    expect(out, hex(base + 0x20) + "    00 00 00 00");
+
+    // Four frames into channel 0's queue, right in the upper half, then
+    // the channel and the device enabled: they play back to back, and
+    // the last one holds.
+    const uint32_t played[4] = {0x56781234, 0x7FFF8000, 0x0001FFFF, 0xA5A50F0F};
+    for (uint32_t f : played)
+        command("w " + hex(base + 0x118) + " " + hex(f));
+    command("w " + hex(base + 0x00C) + " 1");
+    command("w " + hex(base + 0x008) + " 1");
+
+    std::vector<uint32_t> runs;     // the frames sampled, repeats folded
+    for (uint32_t f : codec.frames)
+        if (runs.empty() || runs.back() != f)
+            runs.push_back(f);
+    printf("  audio: %zu frames at the codec, the last runs:", codec.frames.size());
+    for (size_t i = runs.size() > 6 ? runs.size() - 6 : 0; i < runs.size(); i++)
+        printf(" %08x", runs[i]);
+    printf("\n");
+    bool ok = runs.size() >= 5 && runs[runs.size() - 5] == 0;
+    for (int i = 0; ok && i < 4; i++)
+        ok = runs[runs.size() - 4 + i] == played[i];
+    chk(ok, "the codec did not sample silence and then the four frames pushed, in order");
+}
+
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
     make_sd_image();
@@ -295,6 +482,7 @@ int main(int argc, char** argv) {
         off_in_reset &= top->sd_reset;
     }
     chk(off_in_reset, "sd_reset low (card powered) during the reset hold");
+    chk(mclk.edges > 200, "MCLK not running through the reset hold");
 
     // ── Boot to the monitor prompt ─────────────────────────────────
     // RAM detection probes each of the 131072 pages in turn.
@@ -316,7 +504,8 @@ int main(int argc, char** argv) {
     expect(boot, "Detecting base RAM... 512MB found");
     expect(boot, "  SD SD @ 0x");
     expect(boot, "  DISPLAY Display @ 0x");
-    expect(boot, "2 device(s) found");
+    expect(boot, "  AUDIO Audio @ 0x");
+    expect(boot, "3 device(s) found");
     expect(boot, "sd:0,0 ... card present");
     chk(!top->sd_reset, "sd_reset still high (card unpowered) after the reset hold");
 
@@ -336,6 +525,8 @@ int main(int argc, char** argv) {
 
         // The ROM has drawn its splash and enabled the display by now.
         check_hdmi_frame();
+
+        check_audio(boot);
     }
 
     // led[3] the DDR3 calibrated; led[6:4] the RAM's longest wait

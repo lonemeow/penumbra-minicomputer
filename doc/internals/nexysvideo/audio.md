@@ -13,10 +13,6 @@ It plays through the same `CLASS_AUDIO` device as on the ULX3S, with
 the same kernel and image: the board sets the codec up by itself after
 every reset and reports how that went in the device's `STATUS`.
 
-The machine top does not carry the path yet. The pieces in the table
-below exist and are tested alone; the top's own part, the MCLK PLL and
-the pins, is open (`doc/TODO/hw-nexysvideo.md`, "Devices: no audio").
-
 ## Structure
 
 ```mermaid
@@ -26,7 +22,7 @@ flowchart LR
         I2S["audio_i2s_out<br/>I2S output stage"]
         SETUP["nexysvideo_codec_setup<br/>register sequence"]
         I2CM["i2c_master"]
-        MPLL["MCLK PLL"]
+        MDIV["MCLK divider<br/>oscillator / 8"]
     end
     subgraph CODEC["ADAU1761 codec"]
         CTRL["control port:<br/>registers"]
@@ -39,7 +35,7 @@ flowchart LR
     SETUP -->|"busy, fault, code"| DEV
     SETUP -->|"byte commands"| I2CM
     I2CM -->|"I2C: SCL, SDA"| CTRL
-    MPLL -->|"MCLK, 12.5 MHz"| CPLL
+    MDIV -->|"MCLK, 12.5 MHz"| CPLL
     CPLL -->|"core clock"| SP
     SP -->|"BCLK, LRCLK"| I2S
     I2S -->|"DAC_SDATA"| SP
@@ -69,6 +65,13 @@ Every wire between the two chips, and who drives it:
 | `audio_i2s_out` | `hw/rtl/io/audio/` | follows BCLK and LRCLK, requests each frame, shifts it out |
 | `i2c_master` | `hw/rtl/io/i2c/` | the I2C bus, one byte per command |
 | `nexysvideo_codec_setup` | `hw/rtl/fpga/nexysvideo/` | the register sequence, and its progress as `STATUS` |
+| `nexysvideo_codec_mclk` | `hw/rtl/fpga/nexysvideo/` | MCLK, divided from the oscillator |
+
+The device is the third in the machine top's autoconfig chain, after
+the SD slot and the display, built with the same number of channels as
+on the ULX3S. Both of its clock domains are the CPU clock here: the
+codec sets the sample rate, so the output side needs no clock that
+divides to it.
 
 ## Three clocks, and who drives each
 
@@ -78,11 +81,16 @@ the driver of each clock instead.
 - **SCL: the FPGA.** On I2C the FPGA is the master and the codec a
   slave at address 0x3B, on a bus it shares with the MAC-address
   EEPROM (0x57). The codec never stretches the clock.
-- **MCLK: the FPGA.** A steady 12.5 MHz reference from a PLL of its
-  own (a 1000 MHz VCO ÷ 80). The codec's PLL multiplies it by
-  3 + 2913/3125 to exactly 49.152 MHz, which is 1024 × 48 kHz. The
-  codec answers no I2C without MCLK, and the setup's PLL words depend
-  on its frequency, so MCLK comes from a clock nothing else retunes.
+- **MCLK: the FPGA.** A steady 12.5 MHz reference, the board's
+  100 MHz oscillator divided by eight in a counter. The codec's PLL
+  multiplies it by 3 + 2913/3125 to exactly 49.152 MHz, which is
+  1024 × 48 kHz. The setup's PLL words depend on MCLK's frequency, so
+  it has to come from a clock nothing retunes, and the oscillator is
+  the one that is: the CPU clock is a one-number edit. A counter also
+  needs no clock manager, adds no jitter to the oscillator's own, and
+  runs from configuration on, whatever resets the machine. The codec
+  needs that: it answers no I2C without MCLK, and it plays on through
+  a reset.
 - **BCLK and LRCLK: the codec.** It divides them from its core clock:
   LRCLK at the sample rate, 48 kHz, and BCLK at 64 times that. The
   FPGA follows both and takes its frame timing from LRCLK, so the
@@ -91,7 +99,7 @@ the driver of each clock instead.
 
 The codec drives BCLK and LRCLK only once the setup has told it to.
 From power-on until then, both pins are inputs on the codec and
-nothing drives them.
+nothing drives them, so the FPGA's pins pull them down.
 
 The FPGA driving BCLK and LRCLK instead would need MCLK locked to its
 own frame tick, and no clock on the board gives that: the display
@@ -151,8 +159,10 @@ holds in reset, and only the frame requests stop.
 
 ## Setup
 
-`nexysvideo_codec_setup` runs after every reset and writes every
-register playback depends on, never relying on a default. The codec
+`nexysvideo_codec_setup` runs after every reset of the machine and
+writes every register playback depends on, never relying on a default.
+MCLK has been running for the whole reset hold by then, 10 ms at
+least. The codec
 has no reset pin: it keeps its registers from board power-on until the
 board loses power, through FPGA reloads and CPU resets, so it may
 still be playing what an earlier bitstream set up.

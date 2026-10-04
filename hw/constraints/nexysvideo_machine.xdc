@@ -43,6 +43,16 @@ set_property -dict { PACKAGE_PIN AA1   IOSTANDARD TMDS_33  } [get_ports { hdmi_t
 set_property -dict { PACKAGE_PIN AB2   IOSTANDARD TMDS_33  } [get_ports { hdmi_tx_n[2] }]; #IO_L8N_T1_34 Sch=hdmi_tx_n[2]
 set_property -dict { PACKAGE_PIN AB3   IOSTANDARD TMDS_33  } [get_ports { hdmi_tx_p[2] }]; #IO_L8P_T1_34 Sch=hdmi_tx_p[2]
 
+## Audio Codec
+set_property -dict { PACKAGE_PIN T5    IOSTANDARD LVCMOS33 } [get_ports { ac_bclk }]; #IO_L14P_T2_SRCC_34 Sch=ac_bclk
+set_property -dict { PACKAGE_PIN W6    IOSTANDARD LVCMOS33 } [get_ports { ac_dac_sdata }]; #IO_L15P_T2_DQS_34 Sch=ac_dac_sdata
+set_property -dict { PACKAGE_PIN U5    IOSTANDARD LVCMOS33 } [get_ports { ac_lrclk }]; #IO_L14N_T2_SRCC_34 Sch=ac_lrclk
+set_property -dict { PACKAGE_PIN U6    IOSTANDARD LVCMOS33 } [get_ports { ac_mclk }]; #IO_L16P_T2_34 Sch=ac_mclk
+
+## IIC
+set_property -dict { PACKAGE_PIN W5    IOSTANDARD LVCMOS33 } [get_ports { scl }]; #IO_L15N_T2_DQS_34 Sch=scl
+set_property -dict { PACKAGE_PIN V5    IOSTANDARD LVCMOS33 } [get_ports { sda }]; #IO_L16N_T2_34 Sch=sda
+
 ## Configuration options, can be used for all designs
 set_property CONFIG_VOLTAGE 3.3 [current_design]
 set_property CFGBVS VCCO [current_design]
@@ -95,3 +105,22 @@ set_false_path -to [get_ports { hdmi_tx_p[*] hdmi_tx_n[*] hdmi_tx_clk_p hdmi_tx_
 set pixel_clk [get_clocks -of_objects [get_pins u_video_clk/u_mmcm/CLKOUT1]]
 set video_cross_ns [expr {min([get_property PERIOD $cpu_clk], [get_property PERIOD $pixel_clk])}]
 set_max_delay -datapath_only -from $cpu_clk -to $pixel_clk $video_cross_ns
+
+# The codec drives BCLK and LRCLK only once its setup has told it to;
+# until then both are inputs at either end, and the pull-downs keep them
+# from floating. Both enter through two-flop synchronizers, and the
+# output stage answers a BCLK edge within three CPU clocks, where half a
+# BCLK is nearly ten: DAC_SDATA is timed against the codec's clock by
+# that count, never by a path delay.
+set_property PULLDOWN true [get_ports { ac_bclk ac_lrclk }]
+set_false_path -from [get_ports { ac_bclk ac_lrclk }]
+set_false_path -to [get_ports { ac_dac_sdata }]
+
+# MCLK is a clock to the codec alone: the oscillator divided, with
+# nothing in the FPGA timed against the pin.
+set_false_path -to [get_ports { ac_mclk }]
+
+# I2C runs at 100 kHz off the CPU clock, each line held for 150 CPU
+# clocks at a time and read back through two-flop synchronizers.
+set_false_path -from [get_ports { scl sda }]
+set_false_path -to [get_ports { scl sda }]

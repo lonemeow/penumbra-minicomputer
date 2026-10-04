@@ -110,6 +110,12 @@ BIN2HEX   = python3 sw/tools/bin2hex.py
 # the stack takes (shadowing the word adapter).
 SIM_DIRS_nexysvideo_penumbra2_top = hw/rtl/sim/nexysvideo hw/rtl/io/ddr3 hw/rtl/io/sdram_line
 
+# A module sim's own Verilator flags. The Nexys machine top's I2C pads
+# are open drain, driven low or let go: without the enables at the top
+# level Verilator resolves such a pin inside the model and never reads
+# it back, so the testbench could not hold the bus for it.
+SIM_FLAGS_nexysvideo_penumbra2_top = --pins-inout-enables
+
 .PHONY: sim
 sim:
 ifndef MOD
@@ -117,6 +123,7 @@ ifndef MOD
 endif
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
 	$(DOCKER_RUN) $(DOCKER_IMAGE) $(addprefix -I,$(SIM_DIRS_$(MOD))) $(VERILATOR_MODULE_FLAGS) \
+		$(SIM_FLAGS_$(MOD)) \
 		--top-module $(MOD) \
 		--Mdir $(BUILD_DIR)/$(MOD).verilator \
 		-o ../V$(MOD) \
@@ -1408,9 +1415,14 @@ FPGA_SRC_nexysvideo_penumbra2_top = $(SRC_COMMON) $(SRC_CORE) \
                                     hw/rtl/io/sdram_line/sdram_bus_adapter.sv \
                                     hw/rtl/io/ddr3/ddr3_stack.sv \
                                     $(SRC_VIDEO) \
+                                    $(SRC_AUDIO) \
+                                    hw/rtl/io/audio/audio_i2s_out.sv \
+                                    hw/rtl/io/i2c/i2c_master.sv \
                                     $(SRC_BOARD_nexysvideo) \
                                     $(SRC_DDR3_nexysvideo) \
                                     $(FPGA_RTL)/nexysvideo/nexysvideo_video_clk.sv \
+                                    $(FPGA_RTL)/nexysvideo/nexysvideo_codec_mclk.sv \
+                                    $(FPGA_RTL)/nexysvideo/nexysvideo_codec_setup.sv \
                                     $(FPGA_RTL)/nexysvideo/nexysvideo_penumbra2_top.sv \
                                     $(SRC_UBERDDR3)
 XDC_nexysvideo_penumbra2_top = $(XDC_MACHINE_nexysvideo)
