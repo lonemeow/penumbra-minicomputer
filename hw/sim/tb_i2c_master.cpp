@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 #include "Vi2c_master_test.h"
+#include "i2c_slave.h"
 
 namespace {
 
@@ -50,82 +51,7 @@ constexpr int T_HD_DAT = 300;
 constexpr uint8_t SLAVE_ADDR = 0x3B;
 
 // ── The slave ────────────────────────────────────────────────
-// Follows the bus one edge at a time: shifts a bit in on each SCL rise,
-// changes what it drives two cycles after each SCL fall.
-struct Slave {
-    enum St { IDLE, RECV, ACK_OUT_WAIT, ACK_OUT, SEND, ACK_IN, ACK_IN_DONE };
-    St      st = IDLE;
-    bool    is_addr = false;
-    int     bit = 0;
-    uint8_t sh = 0;
-    bool    ack = false;             // what the ninth bit will carry
-    St      after_ack = IDLE;
-    uint8_t cur = 0;                 // the byte being sent
-    bool    master_acked = false;
-
-    bool    drive_low = false;       // the slave's own pull on SDA
-    bool    pending = false;
-    int     pending_in = 0;
-
-    bool    ack_data = true;         // acknowledge data bytes written to it
-    uint8_t addr_byte = 0;           // the last address byte it answered
-    std::vector<uint8_t> written;    // data bytes it acknowledged
-    std::deque<uint8_t>  to_send;    // what a read returns, 0xFF once empty
-    int     acks = 0, nacks = 0;     // the master's answers to bytes read
-
-    void drive(bool low) { pending = low; pending_in = 2; }
-    void tick() { if (pending_in > 0 && --pending_in == 0) drive_low = pending; }
-
-    void load() {
-        cur = 0xFF;
-        if (!to_send.empty()) { cur = to_send.front(); to_send.pop_front(); }
-        bit = 0;
-        drive(!(cur & 0x80));
-    }
-
-    void on_start() { st = RECV; is_addr = true; bit = 0; sh = 0; drive(false); }
-    void on_stop()  { st = IDLE; drive(false); }
-
-    void on_scl_rise(bool sda) {
-        if (st == RECV) {
-            sh = uint8_t((sh << 1) | sda);
-            if (++bit < 8) return;
-            if (is_addr) {
-                ack = (sh >> 1) == SLAVE_ADDR;
-                after_ack = !ack ? IDLE : (sh & 1) ? SEND : RECV;
-                if (ack) addr_byte = sh;
-            } else {
-                ack = ack_data;
-                after_ack = ack ? RECV : IDLE;
-                if (ack) written.push_back(sh);
-            }
-            st = ACK_OUT_WAIT;
-        } else if (st == ACK_IN) {
-            master_acked = !sda;
-            (master_acked ? acks : nacks)++;
-            st = ACK_IN_DONE;
-        }
-    }
-
-    void on_scl_fall() {
-        switch (st) {
-            case ACK_OUT_WAIT: drive(ack); st = ACK_OUT; break;
-            case ACK_OUT:
-                st = after_ack; is_addr = false; bit = 0; sh = 0;
-                if (st == SEND) load(); else drive(false);
-                break;
-            case SEND:
-                if (bit == 7) { drive(false); st = ACK_IN; }
-                else { bit++; drive(!((cur << bit) & 0x80)); }
-                break;
-            case ACK_IN_DONE:
-                if (master_acked) { st = SEND; load(); }
-                else { st = IDLE; drive(false); }
-                break;
-            default: break;
-        }
-    }
-} slave;
+I2cSlave slave(SLAVE_ADDR);
 
 // ── The monitor ──────────────────────────────────────────────
 // Watches the two lines, tells the slave what happened, and holds every
@@ -347,7 +273,7 @@ int main() {
     check(mon.starts == starts + 1 && mon.stops == stops + 1,
           "write: %d STARTs and %d STOPs, expected one of each",
           mon.starts - starts, mon.stops - stops);
-    check(slave.st == Slave::IDLE, "slave not idle after the STOP");
+    check(slave.st == I2cSlave::IDLE, "slave not idle after the STOP");
 
     // ── A write nobody acknowledges ──────────────────────────
     // The master ends the transaction itself: the consumer is told, and
@@ -386,20 +312,20 @@ int main() {
           "slave saw %d ACKs and %d NACKs for two bytes, expected one of each",
           slave.acks, slave.nacks);
     check(slave.written == std::vector<uint8_t>({0x02}), "subaddress not what the slave received");
-    check(mon.stops == stops + 1 && slave.st == Slave::IDLE, "read not closed by a STOP");
+    check(mon.stops == stops + 1 && slave.st == I2cSlave::IDLE, "read not closed by a STOP");
 
     // ── Reset while a slave holds SDA ────────────────────────
     // A reset mid-read leaves the slave driving a 0 with no clock to
     // move it on. The clear clocks it until it lets go, then STOPs.
     // The monitor takes the held line as how the bus already stands: SDA
     // falling under a high SCL would otherwise read as a START.
-    slave.st = Slave::SEND; slave.cur = 0x00; slave.bit = 2;
+    slave.st = I2cSlave::SEND; slave.cur = 0x00; slave.bit = 2;
     slave.drive_low = true; slave.pending_in = 0;
     mon.sda = false; dut->i_sda = 0;
     starts = mon.starts; stops = mon.stops; mon.scl_falls = 0;
     reset();
     wait_ready();
-    check(slave.st == Slave::IDLE && !slave.drive_low, "slave still holds the bus after the clear");
+    check(slave.st == I2cSlave::IDLE && !slave.drive_low, "slave still holds the bus after the clear");
     check(mon.starts == starts && mon.stops == stops + 1,
           "clear of a held bus: %d STARTs and %d STOPs, expected a STOP alone",
           mon.starts - starts, mon.stops - stops);
@@ -422,7 +348,7 @@ int main() {
     wait_ready();
     check(slave.written.empty(), "slave took a byte cut short by a reset: %02X",
           slave.written.empty() ? 0 : slave.written[0]);
-    check(slave.st == Slave::IDLE, "slave not idle after a reset mid-byte");
+    check(slave.st == I2cSlave::IDLE, "slave not idle after a reset mid-byte");
     r = wr(ADDR_W, true, true);
     check(r.ok && !r.nack && !r.error, "no transfer after a reset mid-byte");
 

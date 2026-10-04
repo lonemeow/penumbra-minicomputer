@@ -45,7 +45,8 @@ hw/
 ├── microcode/   # microcode.uasm (single source — assemble via uasm.py)
 ├── rom/         # Boot ROM (C + asm) and its standalone Makefile
 ├── sim/         # tb_cpu_prog (program runner), sim_console + per-core shims, per-module tbs,
-│                #   uart_host.h (a serial host for tbs driving a board top's pins)
+│                #   uart_host.h (a serial host for tbs driving a board top's pins),
+│                #   i2c_slave.h (a slave for tbs holding an I2C bus)
 ├── third_party/ # vendored files under their own licenses (Digilent board XDCs, UberDDR3)
 └── tools/       # uasm.py (microcode), oss-cad-suite wrappers
 ```
