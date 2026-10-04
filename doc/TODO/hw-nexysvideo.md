@@ -107,120 +107,43 @@ for an onboard PHY").
 
 The audio device (`CLASS_AUDIO`) plays through a resistor ladder on
 the ULX3S. The Nexys Video's four jacks all belong to an ADAU1761
-codec (IC4), which takes I2S and needs its registers set over I2C
-before it plays anything. Software sees the same class on both
-boards: the top sets the codec up by itself, and NetBSD plays through
-`/dev/audio` with the kernel and image the ULX3S runs. The device
-already reports the setup's progress and failure in `STATUS`
-(`doc/system/devices/audio.md`, "STATUS (0x020)"), and `paudio` reads
-it at attach.
+codec, which takes I2S and needs its registers set over I2C before it
+plays anything. Software sees the same class on both boards: the top
+sets the codec up by itself, and NetBSD plays through `/dev/audio`
+with the kernel and image the ULX3S runs. The path's structure, its
+clocks, the frame on the wire, the setup and the board's wiring are in
+`doc/internals/nexysvideo/audio.md`.
 
-### The board
+The pieces have landed, each tested alone: the device takes its frame
+timing from the output stage (e358bfc11c62) and reports readiness and
+a fault code in `STATUS` ("hw: report the audio device's readiness in
+STATUS"), and the I2C master (038a6a4487f9), the codec's setup
+sequence ("hw: bring up the Nexys Video's codec over I2C") and the I2S
+output stage ("hw: add an I2S output stage that follows the
+converter's clocks") followed. The machine top does not carry them
+yet.
 
-From the schematic (sheet 4, rev A.0):
-
-- **Line out** (green, J5): LOUTP and ROUTP through 10 µF and 100 Ω,
-  with 10 kΩ to ground on the jack side; LOUTN and ROUTN are not
-  connected.
-- **Headphones** (black; J4 on the schematic, J3 in the reference
-  manual): LHP and RHP through 220 µF, the sleeve to ground. The
-  capless option is not fitted (R102 from MONOOUT to the sleeve, and
-  R103 and R105 across the capacitors, are all unloaded), so MONOOUT
-  drives nothing.
-- **Inputs**: line in (blue) to LAUX and RAUX, the microphone (pink)
-  to LINN and RINN with mic bias. Playback uses neither.
-- **Control**: I2C at 0x3B (ADR0 and ADR1 pulled up), 4.7 kΩ pull-ups
-  to 3.3 V, on a bus shared with the MAC-address EEPROM
-  (`hw-devices.md`, "Hardware + kernel: Ethernet MAC for an onboard
-  PHY"). MCLK comes straight from the FPGA. No jack detect (JDET is
-  pulled down).
-- **Supplies**: IOVDD at 3.3 V, and AVDD at 3.3 V from a regulator of
-  its own, so DAC full scale is 920 mV rms.
-- **No reset pin**: the codec keeps its registers across FPGA reloads
-  and CPU resets, from board power-on until the board loses power.
-
-The pins are `ac_mclk` (U6), `ac_bclk` (T5), `ac_lrclk` (U5),
-`ac_dac_sdata` (W6), `ac_adc_sdata` (T4, unused by playback), `scl`
-(W5) and `sda` (V5).
-
-### The load: amplified speakers on the line out
-
-External amplified speakers are the case that has to be right, and
-the line out is built for them. Into a 10 kΩ amplifier its coupling
-corner is about 2.6 Hz and it settles in about 60 ms, and the bleed
-resistors hold the jack at 0 V with nothing plugged in.
-
-The headphone jack's 220 µF is sized for 16 to 32 Ω (a 45 Hz corner at
-16 Ω), and into 10 kΩ it is a 2.2 s time constant: any move of the
-codec's 1.65 V output bias reaches an amplifier as a thump lasting
-seconds. With nothing plugged in, the jack side has no path to ground
-and rises with the bias, so it pops into whatever is plugged in next.
-Amplifiers go on the line out; the headphone jack is driven as well
-because it costs two register writes.
-
-### The design
-
-- **The codec drives the serial clocks.** Its PLL makes the 49.152 MHz
-  core clock (1024 × 48 kHz) from any MCLK in 8 to 27 MHz, and the codec
-  drives BCLK (64 × fs, 3.072 MHz) and LRCLK from it; the FPGA takes its
-  frame timing from LRCLK, so the sample rate depends on no FPGA clock.
-  The datasheet calls this its serial port's master mode, which is
-  separate from I2C, where the FPGA is the master and the codec the
-  slave. The FPGA driving BCLK and LRCLK instead would need MCLK locked
-  to its frame tick, which no clock on the board gives: the display
-  MMCM's 1000 MHz VCO has no factor of 3, and the CPU clock is a
-  one-number edit.
-- **MCLK** is 12.5 MHz from a PLL of its own (a 1000 MHz VCO ÷ 80),
-  forwarded through an `ODDR`. The codec's PLL multiplies it by
-  3 + 2913/3125, exactly 49.152 MHz. The setup's PLL words depend on
-  the MCLK frequency, so MCLK comes from a clock nothing else retunes.
-  The X1Y1 clock tile's PLL is free
-  (`doc/internals/nexysvideo/overview.md`, "Clocking and reset").
-- **The datapath**: R58 `SINRT = 0001` routes the serial input straight
-  to the DACs, so the SigmaDSP stays off and needs no program. The DACs
-  feed mixers 3 and 4; those drive the headphone outputs in headphone
-  mode, and mixers 5 and 6 into LOUTP and ROUTP in line mode. Mixer 7
-  and the mono output stay off.
-- **Levels** are fixed at setup, since `MASTER_VOL` gives software its
-  volume: the line out at 0 dB, with mixers 5 and 6 passing their one
-  input each at 0 dB (about 1 V rms full scale, 0 dBV, under the 2 V
-  rms a line input takes), the headphones at −10 dB.
-- **Pops**: once biased, the playback path is never powered down; the
-  setup mutes and unmutes instead, waiting the datasheet's 4 ms or more
-  between enabling the headphone outputs and unmuting them. That leaves
-  at worst one thump per board power cycle, when the bias first comes
-  up. Whether it comes up at the codec's power-on or when the playback
-  path is enabled, the datasheet does not say.
-- **The setup runs at every machine reset** and writes every register
-  it depends on, never relying on a default: the codec may still be
-  playing what an earlier bitstream set up.
-
-### Steps
-
-The device side landed first: it takes its frame timing from the
-output stage (e358bfc11c62), and reports readiness and a fault code
-in `STATUS` ("hw: report the audio device's readiness in STATUS").
-The I2C master (038a6a4487f9), the codec's setup sequence ("hw:
-bring up the Nexys Video's codec over I2C") and the I2S output stage
-("hw: add an I2S output stage that follows the converter's clocks")
-followed; the setup's fault codes go into the board's documentation
-with the rest of its facts.
-
-1. **The Nexys top**: the MCLK PLL; the device behind autoconfig after
-   the display, with `AUDIO_CHANNELS` as on the ULX3S and the CPU clock
-   as its audio clock; the I2C master, the setup and the output stage;
-   and the pins copied from the master XDC with their false paths, BCLK
-   and LRCLK pulled down, since they float until the setup has the
-   codec drive them. The setup is held in reset until MCLK runs, since
-   the codec answers no I2C without it. `tb_nexysvideo_penumbra2_top`
-   lists the device, with a codec model enough for the setup to finish.
+1. **The Nexys top**: the MCLK PLL, 12.5 MHz off a 1000 MHz VCO and
+   forwarded through an `ODDR`, in the X1Y1 clock tile, whose PLL is
+   free (`doc/internals/nexysvideo/overview.md`, "Clocking and
+   reset"); the device behind autoconfig after the display, with
+   `AUDIO_CHANNELS` as on the ULX3S and the CPU clock as its audio
+   clock; the I2C master, the setup and the output stage; and the pins
+   copied from the master XDC with their false paths, BCLK and LRCLK
+   pulled down, since they float until the setup has the codec drive
+   them. The setup is held in reset until MCLK runs, since the codec
+   answers no I2C without it. `tb_nexysvideo_penumbra2_top` lists the
+   device, with a codec model enough for the setup to finish.
 2. **Bring-up**: `paudio` attaches, `audioplay` plays a WAV and
    `pmusic-test` its listening checks through the speakers. With the
    speakers on, listen through a board power-on, a bitstream load, a
-   CPU RESET, and a reload while audio plays.
+   CPU RESET, and a reload while audio plays. The power-on listen also
+   settles what the datasheet does not say: whether the output bias,
+   and the one thump it costs, comes up at the codec's power-on or
+   when the playback path is first enabled.
 
-On completion the board facts above move to
-`doc/internals/nexysvideo/overview.md`, and this entry goes.
+On completion `audio.md` loses its note that the top lacks the path,
+the overview's device list gains the codec, and this entry goes.
 
 ## Clocking: CPU clock above 60 MHz
 

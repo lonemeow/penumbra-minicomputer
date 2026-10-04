@@ -88,6 +88,7 @@ honors.
 *   **[ULX3S](./internals/ulx3s/overview.md)** — The ECP5 reference board: tops, clocking and reset, memory, devices and connectors, and the routing-bound fabric's timing and placement.
 *   **[Nexys Video](./internals/nexysvideo/overview.md)** — The Artix-7 board: tops, clocking and reset, LEDs, console and SD, I/O standards and constraints, the thermal guard.
 *   **[Nexys Video DDR3 Memory](./internals/nexysvideo/ddr3.md)** — 512 MiB of DDR3 behind UberDDR3 and the line stack: the glue, the controller's configuration and license boundary, the crossing, calibration and reset.
+*   **[Nexys Video Audio](./internals/nexysvideo/audio.md)** — The ADAU1761 codec behind the audio device: the two interfaces and who drives each clock, the frame on the wire, the setup sequence and its fault codes, the jacks.
 
 ### Penumbra/1 (microcoded core)
 

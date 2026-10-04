@@ -1,8 +1,9 @@
 # Nexys Video
 
 > **Applies to:** the Digilent Nexys Video board (XC7A200T-1SBG484C) ·
-> its machine top and bring-up tops. The memory system has its own
-> document, [ddr3.md](ddr3.md).
+> its machine top and bring-up tops. The memory system and the audio
+> path have their own documents, [ddr3.md](ddr3.md) and
+> [audio.md](audio.md).
 
 The Nexys Video is the machine's second board: an Artix-7 200T, a
 100 MHz oscillator, 512 MiB of DDR3, a microSD slot, a USB UART and an
