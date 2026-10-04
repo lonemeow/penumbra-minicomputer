@@ -976,6 +976,53 @@ milliseconds per voice:
   it over 1–5 ms, as OpenMPT does, and ramp gain changes across a
   tick.
 
+## Hardware + kernel: the audio output rate is fixed at 48 kHz
+
+Low priority: nothing is planned. Tracker playback resamples every
+voice anyway and gains nothing from this.
+
+`RATE` is read-only, and a device presents one output rate
+([devices/audio.md](../system/devices/audio.md)): 48 kHz on both
+boards. A stream at another rate plays through its channel's `INC`,
+which `paudio` sets, so the pitch is right and the kernel converts
+nothing. The device resamples by holding the nearest source frame,
+without interpolation, and the hold's images fold back into the audio
+band. Calculated, not measured: a 1 kHz tone in a 44.1 kHz stream
+leaves a spur at 4.9 kHz about 33 dB down, and a 5 kHz tone one at
+8.9 kHz about 18 dB down.
+
+Playing such a stream untouched means the device running at the
+stream's rate: `RATE` writable, on a device whose `CAP` says so. What
+each board could offer:
+
+- **Nexys Video**: the codec makes both rate families from the same
+  12.5 MHz MCLK. Its PLL at 3 + 9573/15625 gives 45.1584 MHz, which is
+  1024 × 44.1 kHz, where 48 kHz takes 3 + 2913/3125. The setup already
+  works those words out from a target frequency, and already mutes a
+  running codec, stops its clock, reprograms it and unmutes; a rate
+  change is that sequence run again, with `BUSY` set meanwhile. The
+  I2S stage and the device follow whatever the codec clocks out
+  (`doc/internals/nexysvideo/audio.md`).
+- **ULX3S**: the ladder is paced by dividing 60 MHz, and 44.1 kHz does
+  not divide it ("Hardware: audio device (`CLASS_AUDIO`)", "Clock
+  source must not follow CPU_HZ"). It stays at 48 kHz, so the
+  capability is per device.
+
+The class already has the means to add it: `CAP` gates every feature
+past the baseline, so one more bit can say that `RATE` takes writes,
+and a consumer that does not know the bit goes on reading `RATE` as it
+does now. What is left to define is how software finds out which rates
+a device accepts. Frames queued across a change can stay undefined, as
+they are across a change of format: a consumer flushes first. Past the
+contract it is the register in `audio.sv`, which both boards share, so
+the ULX3S netlists move; `paudio`'s `query_format` and `set_format`;
+and the ISS model.
+
+The class's optional `INTERP` is the other lever, and it serves both
+boards without touching `RATE`: linear interpolation in the mixer
+roughly squares the images, to about 65 dB down for the 1 kHz tone and
+36 dB for the 5 kHz one.
+
 ## Hardware + kernel: die temperature and thermal warning for the kernel
 
 The Nexys Video's bitstreams arm the XADC's over-temperature shutdown
