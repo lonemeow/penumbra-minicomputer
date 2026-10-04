@@ -133,7 +133,7 @@ and the measurements behind them.
 *   **[Penumbra/4 Overview](./internals/penumbra4/overview.md)** — Start here. Why dual issue, the shape of the two pipelines, what carries over from gen3, and what is open.
 *   **[Penumbra/4 Fusion and Pairing](./internals/penumbra4/issue-pairing.md)** — What each instruction fusion and each pairing rule is worth on real workloads, measured with the ISS's pairing model, and the issue stage the numbers point to.
 *   **[Penumbra/4 Load-Use Wait](./internals/penumbra4/load-use.md)** — What the two-cycle wait behind a load costs on real workloads, and what a second ALU behind the memory stages would take back.
-*   **[Penumbra/4 Register File](./internals/penumbra4/regfile.md)** — The structures that give a register file four read ports and two write ports, compared on the ECP5.
+*   **[Penumbra/4 Register File](./internals/penumbra4/regfile.md)** — The structures that give a register file four read ports and two write ports, compared on the ECP5 and the Artix-7, and the one chosen.
 
 ---
 

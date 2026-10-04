@@ -16,7 +16,8 @@ design starts from numbers when it starts.
   load costs, and what a second ALU behind the memory stages would
   take back.
 - [`regfile.md`](./regfile.md) — the structures that give a register
-  file four read ports and two write ports, compared on the ECP5.
+  file four read ports and two write ports, compared on the ECP5 and
+  the Artix-7, and the one chosen.
 
 ## Why dual issue
 
