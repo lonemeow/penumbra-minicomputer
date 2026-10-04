@@ -347,6 +347,7 @@ MODULE_TESTS = \
     audio_sigma_delta_test \
     audio_test:tb_audio \
     audio_multi_test:tb_audio_multi \
+    audio_i2s_out \
     i2c_master_test:tb_i2c_master \
     timer \
     sdram_test \

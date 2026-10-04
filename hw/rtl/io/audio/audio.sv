@@ -76,7 +76,7 @@ module audio
     input  logic               i_aclk,
     input  logic               i_arst,
     input  logic               i_frame_req, // one i_aclk pulse per frame wanted
-    output logic signed [15:0] o_frame_l,
+    output logic signed [15:0] o_frame_l,   // held until the next frame
     output logic signed [15:0] o_frame_r,
     output logic               o_frame_en   // one i_aclk pulse per frame
 );

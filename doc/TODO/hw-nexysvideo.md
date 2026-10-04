@@ -200,27 +200,21 @@ because it costs two register writes.
 The device side landed first: it takes its frame timing from the
 output stage (e358bfc11c62), and reports readiness and a fault code
 in `STATUS` ("hw: report the audio device's readiness in STATUS").
-The I2C master (038a6a4487f9) and the codec's setup sequence ("hw:
-bring up the Nexys Video's codec over I2C") followed; the setup's
-fault codes go into the board's documentation with the rest of its
-facts.
+The I2C master (038a6a4487f9), the codec's setup sequence ("hw:
+bring up the Nexys Video's codec over I2C") and the I2S output stage
+("hw: add an I2S output stage that follows the converter's clocks")
+followed; the setup's fault codes go into the board's documentation
+with the rest of its facts.
 
-1. **The I2S output stage**, `audio_i2s_out`, board-neutral because the
-   clocks come in from the codec. BCLK and LRCLK are synchronized into
-   the audio clock, the next frame is requested one frame ahead, and
-   each channel's 16 bits go MSB-first, padded to 32, changing after
-   each BCLK falling edge. It runs on the CPU clock, about 20 samples
-   a BCLK at 60 MHz, with a build check on that ratio; the rate no
-   longer comes from this clock. A testbench decodes `DAC_SDATA`
-   against the frames pushed.
-2. **The Nexys top**: the MCLK PLL; the device behind autoconfig after
+1. **The Nexys top**: the MCLK PLL; the device behind autoconfig after
    the display, with `AUDIO_CHANNELS` as on the ULX3S and the CPU clock
    as its audio clock; the I2C master, the setup and the output stage;
-   and the pins copied from the master XDC with their false paths. The
-   setup is held in reset until MCLK runs, since the codec answers no
-   I2C without it. `tb_nexysvideo_penumbra2_top` lists the device, with
-   a codec model enough for the setup to finish.
-3. **Bring-up**: `paudio` attaches, `audioplay` plays a WAV and
+   and the pins copied from the master XDC with their false paths, BCLK
+   and LRCLK pulled down, since they float until the setup has the
+   codec drive them. The setup is held in reset until MCLK runs, since
+   the codec answers no I2C without it. `tb_nexysvideo_penumbra2_top`
+   lists the device, with a codec model enough for the setup to finish.
+2. **Bring-up**: `paudio` attaches, `audioplay` plays a WAV and
    `pmusic-test` its listening checks through the speakers. With the
    speakers on, listen through a board power-on, a bitstream load, a
    CPU RESET, and a reload while audio plays.
