@@ -65,6 +65,7 @@ paudio0		at pbbus?
 audio*		at audiobus?
 options 	WSEMUL_VT100
 options 	WSDISPLAY_DEFAULTSCREENS=1
+options 	WSDISPLAY_COMPAT_RAWKBD
 
 # MII/PHY support (ethernet internal PHYs)
 rlphy*		at mii? phy ?	# Realtek 8139/8201 internal PHYs
