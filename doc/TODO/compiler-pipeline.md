@@ -876,7 +876,12 @@ setting reported here), Dhrystone, CoreMark, Doom running
 - **Instructions for fixed work are the measure:** a Dhrystone run, a
   CoreMark iteration, Doom's own code from the first frame rendered
   to the end of the demo, and kernel instructions per operation for
-  four `pbench` rows, each run alone.
+  four `pbench` rows, each run alone.  A row's figure is every
+  kernel-text instruction in its profile over its operations, so it
+  carries whatever else the kernel did meanwhile: under 3% of the
+  total for three rows, and a fifth for `clock_gettime`, most of it
+  the SD driver.  `clock_gettime`'s figure is therefore taken from a
+  trace of the loop itself.
 - **Load-use pairs and stack traffic** are execution counts from
   `+pcprof` laid over the disassembly, per 1000 instructions of the
   image's own text.  A pair is a load whose value the next
@@ -906,10 +911,10 @@ four together.
 | Dhrystone, instructions | 0 | 0 | 0 | −1.33% | −1.33% |
 | CoreMark, instructions per iteration | +0.01% | 0 | −7.37% | −3.05% | −3.04% |
 | Doom, instructions in its own code | 0.00% | −0.06% | +0.01% | −0.02% | +0.06% |
-| Kernel instructions per `getpid` | +0.02% | −1.82% | −4.83% | +0.02% | −5.71% |
-| per `clock_gettime` | +0.06% | −0.39% | −0.15% | +0.12% | +3.00% |
-| per `pipe_pingpong` | −0.07% | −1.10% | −1.26% | +0.80% | −1.51% |
-| per `fork_exit` | +0.13% | −1.46% | −0.33% | −0.08% | −1.37% |
+| Kernel instructions per `getpid` | +0.02% | −1.82% | +4.12% | +0.02% | +2.35% |
+| per `clock_gettime` | 0.00% | −0.47% | +2.13% | 0.00% | +1.90% |
+| per `pipe_pingpong` | −0.07% | −1.10% | +3.54% | +0.80% | +2.85% |
+| per `fork_exit` | +0.13% | −1.46% | +1.48% | −0.08% | +0.27% |
 | Corpus `.text` | −0.12% | +0.11% | +0.01% | −0.40% | −0.40% |
 | Doom `.text` | 0.00% | +0.20% | −3.18% | −0.17% | −3.16% |
 | Kernel `.text` | −0.01% | +0.41% | −5.03% | −0.25% | −4.94% |
@@ -963,14 +968,20 @@ ALU operations: 150 in the inliner's unit.
 `TTI::getInlineCallPenalty` is the hook; the measurement used
 `-inline-call-penalty`.
 
-- **150 is where it pays.**  At 75 the kernel's rows move between
-  −0.4% and +1.2%.  At 300 CoreMark gains nothing more, two kernel
-  rows turn worse and one better, and Doom makes 1.7% more calls.
-- **Text shrinks:** 5.0% in the kernel, 3.2% in Doom.  The penalty is
-  both the credit for removing a call site and the price of every
-  call the inlined body makes, so a higher one favours leaves over
-  bodies that call on.  Which of the two shrinks the text was not
-  broken down.
+- **It makes every kernel path measured longer:** 1.5% to 4.1% more
+  instructions at 150.  The penalty is both the credit for removing a
+  call site and the price of every call the inlined body keeps, and
+  the kernel's small inline helpers keep calls.  `KPREEMPT_ENABLE`
+  holds two assertions and a call to `kpreempt`; at 150 it is no
+  longer inlined into `mi_userret`, and every return to user mode
+  takes 10 instructions more.  The kernel measured is
+  `GENERIC.DEBUG`, whose assertions are such calls; `GENERIC` was not
+  measured.
+- **Text shrinks for the same reason:** 5.0% in the kernel, 3.2% in
+  Doom.
+- **Neither neighbour is better.**  At 75 the kernel's rows move
+  between −0.4% and +1.6%.  At 300 they are 2.4% to 6.3% longer,
+  CoreMark gains nothing more and Doom makes 1.7% more calls.
 - **CoreMark's 7.4% is one decision:** `core_state_transition` is
   inlined into `core_bench_state`, at an inliner cost of 205 against
   a threshold of 225, and its saves go with it (22 saves and restores
@@ -994,7 +1005,7 @@ the corpus changes by 8 bytes.
   instructions and other stack traffic rises from 34 to 44: the
   allocator spills or splits instead, and comes out 14 per 1000
   ahead.
-- **The four kernel rows take 0.4% to 1.8% fewer instructions,** for
+- **The four kernel rows take 0.5% to 1.8% fewer instructions,** for
   0.4% more kernel text.  Doom moves by 0.06%.
 - **The value is not settled.**  A save and its restore are two
   memory operations per call, which on this scale is 32768.  There
@@ -1031,9 +1042,8 @@ threshold moves inlining too.  The inliner's own remarks for
 
 Its switch costs 30 more as a compare tree, which puts it 10 over.
 That is why all four settings together give CoreMark 3.0% where the
-call penalty alone gives 7.4%.  `clock_gettime` is 3.0% longer under
-all four and no worse than 0.12% under any one; that was not looked
-into.
+call penalty alone gives 7.4%.  On the kernel rows the four together
+land between the call penalty's loss and the first-use cost's gain.
 
 ### Open
 
@@ -1041,8 +1051,13 @@ into.
    scheduler after allocation** for the pipelined generations.
    gen3's model needs the longer wait.  gen1 has nothing to
    schedule.  The two stack-slot hooks go in with it.
-2. **Answer the call penalty from the model:** call, return, store
-   and load cycles, and a stated number of registers saved per call.
+2. **The call penalty is not ready.**  At the value the reference
+   gives it shrinks text and lengthens every kernel path measured.
+   Open: whether the price of a call the body keeps and the credit
+   for the call removed can be told apart, and what `GENERIC` does
+   without the assertions.  Only then a value from the model: call,
+   return, store and load cycles, and a stated number of registers
+   saved per call.
 3. **Settle the first-use cost** by measuring 32768 on instructions
    for fixed work, then state it from the model as well.
 4. **Hold the jump-table threshold back** until its effect on
@@ -1052,8 +1067,7 @@ into.
    copy coalescing alone was not measured either.
 6. **Spill weights count a store and a reload alike,** where the
    store costs 6 cycles and the reload 2.  Not measured.
-7. **Find what makes `clock_gettime` longer** under all four.
-8. **Measure on hardware.**  Every figure here is an instruction or
+7. **Measure on hardware.**  Every figure here is an instruction or
    event count from the ISS.
 
 ## Compiler: interprocedural register allocation miscompiles six tests
