@@ -54,6 +54,21 @@ AUDIO_CAP = 1 | (1 << 8) | (1 << 9) | (1 << 13) | (4 << 16)
 AUDIO_HELD = AUDIO_DEPTH - 2
 ST_BUSY, ST_FAULT = 1, 2
 
+# The Ethernet model as the cases attach it: four receive slots and two
+# transmit slots of 2048 bytes, a link the device manages itself at
+# 100 Mbit/s, and a factory station address.  The values follow
+# doc/system/devices/ethernet.md: CAP is version 1 with ADDR and the
+# 100 Mbit/s bit of SPEEDS, a GEOM is the slot count under the slot
+# size, and LINK is UP with SPEED 1.
+ETH_ARGS = ["+eth=loop,rx=4,tx=2"]
+ETH_RX_SLOTS, ETH_TX_SLOTS, ETH_SLOT_SIZE = 4, 2, 2048
+ETH_CAP = 1 | (1 << 9) | (1 << 17)
+ETH_LINK = 1 | (1 << 8)
+ETH_IRQ_RX, ETH_IRQ_TX = 1, 2
+# The first word of a receive slot holding a frame to the model's
+# station address, 02:50:..., padded to the 60-byte minimum.
+ETH_PADDED_TO_STATION = 60 | (0x02 << 16) | (0x50 << 24)
+
 
 def hierarchy(l1i=(0, 0), l1d=(0, 0, 0, 0), l2=(0, 0, 0, 0), fills=None, prediction=None):
     """A cache model's expected counts for one hierarchy over one window:
@@ -666,6 +681,36 @@ CASES = [
          error=r"bad \+audio_status= 'busy:0'"),
     Case("audio fault code out of range", "audio_status.s", ["+audio_status=fault:256"],
          error=r"bad \+audio_status= 'fault:256'"),
+    # Seven frames to the station, each looped back.  The first six find
+    # nothing released, so the ring takes four and two are dropped;
+    # releasing two slots lets the seventh in.
+    Case("ethernet loopback", "eth_loop.s", ETH_ARGS,
+         regs={2: 5, 3: ETH_CAP,
+               4: ETH_RX_SLOTS | (ETH_SLOT_SIZE << 16),
+               5: ETH_TX_SLOTS | (ETH_SLOT_SIZE << 16),
+               6: ETH_LINK, 7: ETH_PADDED_TO_STATION,
+               8: ETH_RX_SLOTS, 9: 6 - ETH_RX_SLOTS, 10: ETH_RX_SLOTS + 1, 11: 7}),
+    # RX_PROD after each frame: it steps only for a frame the checks let
+    # through.  In order: the station (in), another station (out),
+    # broadcast (in), a group address (out), the group with ALLMULTI
+    # (in), the other station with PROMISC (in), the station with RX_EN
+    # clear (out), 1519 bytes (out).  None is dropped for want of a slot.
+    Case("ethernet receive filter", "eth_filter.s", ETH_ARGS,
+         regs={2: 1, 3: 1, 4: 2, 5: 2, 6: 3, 7: 4, 8: 4, 9: 4, 10: 0}),
+    # IRQ_STATUS, RX while the receive ring holds a frame and TX while
+    # the transmit ring holds fewer frames than TX_WM.  R2-R3: an empty
+    # ring is fewer than 1 but not fewer than 0.  R4-R5: two queued is
+    # not fewer than 2, and once both are sent and back both bits hold.
+    # R6: released, threshold 0.  R7: two queued is fewer than 3.
+    # R8-R9: the handler saw RX alone, and releasing ended it.
+    # R10-R11: the same two comparisons with the counts wrapped.
+    Case("ethernet interrupt sources", "eth_irq.s", ETH_ARGS,
+         regs={2: 0, 3: ETH_IRQ_TX, 4: 0, 5: ETH_IRQ_RX | ETH_IRQ_TX, 6: 0,
+               7: ETH_IRQ_TX, 8: ETH_IRQ_RX, 9: 0, 10: 0, 11: ETH_IRQ_TX}),
+    Case("ethernet slot count not a power of two", "eth_loop.s", ["+eth=loop,rx=3"],
+         error=r"bad \+eth= 'loop,rx=3'"),
+    Case("ethernet transmit ring past its aperture", "eth_loop.s", ["+eth=loop,tx=32"],
+         error=r"bad \+eth= 'loop,tx=32'"),
     Case("cachemodel data", "cache_data.s",
          ["+cachemodel=penumbra1,penumbra2,penumbra2_5,1k/1:1k/1:64k/4,4k/2:4k/2:64k/4"],
          windows=[("reset to exit", {

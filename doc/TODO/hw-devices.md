@@ -1105,8 +1105,17 @@ Open:
   the codec's setup ("Hardware: the I2C master serves one consumer and
   no stretched clock"). The interface allows the read 200 ms from
   reset: check that against the codec setup that runs first.
-- **An ISS model** of the class, with no PHY and a link that is always
-  up, so the driver runs under `make simulate`.
+- **A host network for the ISS model.** The model is `+eth=loop` in
+  `sw/sim/penumbra_iss.cpp`: no PHY, a link that is always up, and
+  every frame sent handed back to the receive side, which exercises
+  the interface but carries no traffic. The driver needs a backend
+  that exchanges real packets with the host. A TAP device does, and
+  needs no root inside a user and network namespace (`unshare -rn`
+  creates one and a TAP in it on the development machine); the
+  namespace's own Linux stack is then the peer, and `slirp4netns` can
+  give it an uplink. Guest time counts instructions, so timeouts run
+  at a different rate from the host's: such a run checks that packets
+  flow, not how fast.
 - **The driver**: an `ifnet` driver at `pbbus` over the slot rings,
   attaching `mii(4)` where the device has MDIO. `rgephy(4)` covers the
   RTL8211 family; `GENERIC` lists only `rlphy` and `ukphy`.

@@ -319,6 +319,11 @@ rom.ld ──────────────────┘
   `penumbra2_5`): its CPU name and the geometry its caches report.
   The table is `sw/sim/penumbra_cores.h`; a generation's cache or
   TLB geometry or CPU name changing in RTL has to change there too.
+  `+eth=loop[,rx=N][,tx=N][,speed=MBIT]` attaches an Ethernet adapter
+  (`CLASS_ETHERNET`, `doc/system/devices/ethernet.md`) with N slots in
+  each ring; the machine has none without it. The `loop` backend hands
+  every frame the device sends to its own receive side, which is what
+  the `eth_*.s` cases of `make test-iss-options` drive.
   Measurement options: `+opstats` (instruction-class histogram),
   `+branchstats`, `+pcprof`, `+cachemodel`, `+tlbmodel`, `+sbmodel`,
   `+bpmodel` and `+pairmodel` — see below.

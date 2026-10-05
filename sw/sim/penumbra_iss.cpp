@@ -16,6 +16,7 @@
 //
 // Usage: penumbra-iss [program.hex] [+ram=size] [+sdcard=path] [+trace=path]
 //                     [+raw] [+trap-pc0] [+halt-on-break] [+core=generation]
+//                     [+eth=backend]
 //
 // +ram= takes a byte count with an optional K, M or G suffix (powers of
 // 1024), e.g. +ram=512M for the Nexys Video's DDR3.
@@ -23,6 +24,11 @@
 // +core= names the hardware generation the ISS presents, spelled as
 // `make CORE=` spells it (penumbra_cores.h): its CPU name and the
 // geometry its caches report.  The default is penumbra1.
+//
+// +eth=loop[,rx=N][,tx=N][,speed=MBIT] attaches an Ethernet adapter
+// (CLASS_ETHERNET) at the end of the autoconfig chain, with N slots in
+// each ring; the machine has none without it.  The loop backend hands
+// every frame the device sends to the device's own receive side.
 //
 // +cachemodel[=list] runs every access through shadow cache hierarchies
 // (cache_model.h), and +tlbmodel[=list] every main-TLB translation through
@@ -733,7 +739,8 @@ static struct {
 
 // --- Autoconfig device chain ---
 // The machine_sim chain order: SPI/SD first, then the USB host
-// controller. The config window shows the first unconfigured device;
+// controller. The Ethernet adapter ends the chain when +eth= attaches
+// one. The config window shows the first unconfigured device;
 // once every device is configured, config-space reads fall through to
 // a bus fault — "no more devices" to the autoconfig loop.
 struct AcfgSlot {
@@ -743,6 +750,7 @@ struct AcfgSlot {
     uint32_t name1;         // ACFG_NAME1, packed LE (NAME2-3 read zero)
     bool     configured;
     uint32_t base_addr;
+    bool     absent = false;    // not in the chain; the config window skips it
 
     bool dev_sel(uint32_t addr) const {
         return configured && ((addr & ~(size - 1)) == base_addr);
@@ -750,7 +758,7 @@ struct AcfgSlot {
 };
 
 enum { ACFG_SLOT_SPI = 0, ACFG_SLOT_USB = 1, ACFG_SLOT_DISPLAY = 2,
-       ACFG_SLOT_AUDIO = 3, ACFG_SLOT_COUNT = 4 };
+       ACFG_SLOT_AUDIO = 3, ACFG_SLOT_ETH = 4, ACFG_SLOT_COUNT = 5 };
 
 static struct {
     AcfgSlot slot[ACFG_SLOT_COUNT] = {
@@ -759,6 +767,9 @@ static struct {
         { 6 /*CLASS_DISPLAY*/, 262144,
           0x50534944 /*"DISP"*/, 0x0059414C /*"LAY\0"*/, false, 0 },
         { 7 /*CLASS_AUDIO*/,   4096, 0x4F445541 /*"AUDO"*/, 0, false, 0 },
+        // Sized, and made present, by +eth=.
+        { 5 /*CLASS_ETHERNET*/, 0x20000, 0x00485445 /*"ETH\0"*/, 0, false, 0,
+          true },
     };
 
     void reset() {
@@ -768,7 +779,7 @@ static struct {
     AcfgSlot* cfg_slot(bool cfg_en, uint32_t addr) {
         if (!cfg_en || (addr >> 5) != (ACFG_BASE >> 5)) return nullptr;
         for (auto& s : slot)
-            if (!s.configured) return &s;
+            if (!s.absent && !s.configured) return &s;
         return nullptr;
     }
 } acfg;
@@ -1066,6 +1077,296 @@ static struct {
 
     bool irq() const { return (irq_status & irq_enable) != 0; }
 } audio;
+
+// --- Ethernet adapter (CLASS_ETHERNET) ---
+// Register contract: doc/system/devices/ethernet.md.  +eth=<backend>
+// attaches the device at the end of the autoconfig chain; without it
+// the machine has none.  The model manages its own link, which is
+// always up, and has no MDIO: it is the class's minimum.
+//
+// The one backend, loop, hands every frame sent to the receive side,
+// through the receive checks, so a program exercises the whole device
+// with nothing on the host: +eth=loop[,rx=N][,tx=N][,speed=MBIT], with
+// N slots in each ring.
+//
+// Unlike the audio model this one keeps time, because the contract's
+// transmit side is about waiting: a ring that never filled would leave
+// TX_WM and the TX interrupt source unreachable.  A frame occupies the
+// transmitter for its length on the wire at the link's speed, counted
+// in instructions at the timer's rate (TIMER_PRESCALE a microsecond),
+// and a looped frame arrives when it has left the wire.  The device is
+// brought up to date at each access to it and each time its interrupt
+// output is sampled, so what a program observes depends only on how
+// many instructions it has run.  The timing orders events; it measures
+// nothing.
+static constexpr uint32_t ETH_SLOT_SIZE     = 2048;
+static constexpr uint32_t ETH_TX_APERTURE   = 0x8000;
+static constexpr uint32_t ETH_RX_APERTURE   = 0x10000;
+static constexpr uint32_t ETH_RX_SLOTS_MAX  = 1024;
+static constexpr uint32_t ETH_MIN_FRAME     = 60;     // without the FCS
+static constexpr uint32_t ETH_MAX_FRAME     = 1518;
+// What a frame costs on the wire beyond its own bytes: preamble and
+// start delimiter, FCS, and the gap before the next frame.
+static constexpr uint32_t ETH_WIRE_OVERHEAD = 8 + 4 + 12;
+static constexpr uint32_t ETH_SPEED_MBIT[3] = { 10, 100, 1000 };  // by SPEED code
+static constexpr uint32_t ETH_CAP_ADDR      = 1u << 9;
+static constexpr uint32_t ETH_CTRL_RX_EN    = 1u << 0, ETH_CTRL_TX_EN    = 1u << 1,
+                          ETH_CTRL_PROMISC  = 1u << 2, ETH_CTRL_ALLMULTI = 1u << 3;
+static constexpr uint32_t ETH_IRQ_RX        = 1u << 0, ETH_IRQ_TX        = 1u << 1;
+static constexpr uint32_t ETH_FACTORY_VALID = 1u << 31;
+// Locally administered, so it collides with no real adapter's.
+static constexpr uint8_t  ETH_FACTORY_ADDR[6] = { 0x02, 0x50, 0x45, 0x4E, 0x00, 0x01 };
+enum : uint32_t {
+    ETH_R_CAP = 0x000, ETH_R_IRQ_STATUS = 0x004, ETH_R_IRQ_ENABLE = 0x008,
+    ETH_R_CTRL = 0x00C, ETH_R_LINK = 0x010, ETH_R_MDIO = 0x014,
+    ETH_R_ADDR_LO = 0x018, ETH_R_ADDR_HI = 0x01C,
+    ETH_R_FACTORY_LO = 0x020, ETH_R_FACTORY_HI = 0x024,
+    ETH_R_RX_GEOM = 0x040, ETH_R_RX_PROD = 0x044, ETH_R_RX_CONS = 0x048,
+    ETH_R_RX_DROP = 0x04C, ETH_R_TX_GEOM = 0x050, ETH_R_TX_PROD = 0x054,
+    ETH_R_TX_CONS = 0x058, ETH_R_TX_WM = 0x05C,
+};
+
+static struct {
+    enum class Backend { none, loop };
+    Backend  backend  = Backend::none;
+    uint32_t rx_slots = 32, tx_slots = 8;   // powers of two
+    uint32_t speed    = 1;                  // the link's SPEED code
+
+    uint32_t ctrl, irq_enable, addr_lo, addr_hi, rx_drop;
+    // Frame counts, each written by one side: the device advances
+    // rx_prod and tx_cons, software writes rx_cons and tx_prod.  All
+    // four wrap from 65535 to 0, and a ring holds prod - cons frames
+    // taken modulo 65536: from 0 up to its slot count.
+    uint16_t rx_prod, rx_cons, tx_prod, tx_cons;
+    // TX_WM as software wrote it: the TX interrupt source's threshold
+    // on the frames queued in the transmit ring.  A level, not an event.
+    uint16_t tx_wm;
+    std::vector<uint8_t> rx_mem, tx_mem;
+
+    // The transmitter.  While tx_busy, wire[0..wire_len) is on the wire
+    // until the instruction count reaches tx_done_at.  tx_flush is set
+    // when TX_EN is cleared and stands until the queue is discarded.
+    bool     tx_busy, tx_flush;
+    uint64_t tx_done_at;
+    uint8_t  wire[ETH_SLOT_SIZE];
+    uint32_t wire_len;
+
+    bool present() const { return backend != Backend::none; }
+
+    void reset() {
+        ctrl = irq_enable = addr_lo = addr_hi = rx_drop = 0;
+        rx_prod = rx_cons = tx_prod = tx_cons = tx_wm = 0;
+        tx_busy = tx_flush = false;
+        tx_done_at = 0;
+        wire_len = 0;
+    }
+
+    // "+eth=loop[,rx=N][,tx=N][,speed=10|100|1000]", N a power of two.
+    // False on anything else, which the caller refuses.
+    bool configure(const char* spec) {
+        if (strncmp(spec, "loop", 4) != 0) return false;
+        const char* p = spec + 4;
+        uint32_t rx = rx_slots, tx = tx_slots, sp = speed;
+        while (*p == ',') {
+            const char* value = strchr(p, '=');
+            if (!value) return false;
+            char* end;
+            unsigned long n = strtoul(++value, &end, 10);
+            if (end == value) return false;
+            bool pow2 = n != 0 && (n & (n - 1)) == 0;
+            if (strncmp(p, ",rx=", 4) == 0) {
+                if (!pow2 || n > ETH_RX_SLOTS_MAX) return false;
+                rx = uint32_t(n);
+            } else if (strncmp(p, ",tx=", 4) == 0) {
+                if (!pow2 || n * ETH_SLOT_SIZE > ETH_RX_APERTURE - ETH_TX_APERTURE)
+                    return false;
+                tx = uint32_t(n);
+            } else if (strncmp(p, ",speed=", 7) == 0) {
+                sp = 0;
+                while (sp < 3 && ETH_SPEED_MBIT[sp] != n) sp++;
+                if (sp == 3) return false;
+            } else {
+                return false;
+            }
+            p = end;
+        }
+        if (*p != '\0') return false;
+
+        backend = Backend::loop;
+        rx_slots = rx; tx_slots = tx; speed = sp;
+        rx_mem.assign(rx * ETH_SLOT_SIZE, 0);
+        tx_mem.assign(tx * ETH_SLOT_SIZE, 0);
+        // The window reaches the end of the receive ring.
+        AcfgSlot& slot = acfg.slot[ACFG_SLOT_ETH];
+        slot.absent = false;
+        slot.size = ETH_RX_APERTURE;
+        while (slot.size < ETH_RX_APERTURE + rx * ETH_SLOT_SIZE) slot.size <<= 1;
+        return true;
+    }
+
+    // IRQ_STATUS: ETH_IRQ_RX and ETH_IRQ_TX, each a condition on the
+    // counts above ("IRQ_STATUS" in the contract).  Read-only, and
+    // independent of IRQ_ENABLE.
+    uint32_t irq_status() const {
+        // The narrowing takes the difference modulo 65536.
+        uint16_t tx_pending = tx_prod - tx_cons;
+
+        uint32_t status = 0;
+        if (tx_pending < tx_wm)
+            status |= ETH_IRQ_TX;
+        if (rx_cons != rx_prod)
+            status |= ETH_IRQ_RX;
+        return status;
+    }
+
+    // The device's interrupt output, sampled before each instruction.
+    bool irq() {
+        if (!present()) return false;
+        if (tx_busy && cpu.insn_count >= tx_done_at) service();
+        return (irq_status() & irq_enable) != 0;
+    }
+
+    // Instructions a frame of len bytes occupies the wire for.
+    uint64_t wire_insns(uint32_t len) const {
+        uint64_t bits = uint64_t(len + ETH_WIRE_OVERHEAD) * 8;
+        uint32_t mbit = ETH_SPEED_MBIT[speed];
+        return (bits * TIMER_PRESCALE + mbit - 1) / mbit;
+    }
+
+    // Whether a frame to this destination is addressed to the station.
+    bool accepts(const uint8_t* dst) const {
+        static const uint8_t broadcast[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+        if (ctrl & ETH_CTRL_PROMISC) return true;
+        if (dst[0] & 1)     // a group address
+            return (ctrl & ETH_CTRL_ALLMULTI) || memcmp(dst, broadcast, 6) == 0;
+        const uint8_t station[6] = {
+            uint8_t(addr_lo), uint8_t(addr_lo >> 8), uint8_t(addr_lo >> 16),
+            uint8_t(addr_lo >> 24), uint8_t(addr_hi), uint8_t(addr_hi >> 8) };
+        return memcmp(dst, station, 6) == 0;
+    }
+
+    // A frame arriving from the wire, without preamble or FCS.
+    void receive(const uint8_t* frame, uint32_t len) {
+        if (!(ctrl & ETH_CTRL_RX_EN)) return;
+        if (len < ETH_MIN_FRAME || len > ETH_MAX_FRAME) return;
+        if (!accepts(frame)) return;
+        if (uint16_t(rx_prod - rx_cons) >= rx_slots) { rx_drop++; return; }
+        uint8_t* slot = &rx_mem[(rx_prod % rx_slots) * ETH_SLOT_SIZE];
+        slot[0] = uint8_t(len);
+        slot[1] = uint8_t(len >> 8);
+        memcpy(slot + 2, frame, len);
+        rx_prod++;
+    }
+
+    // Brings the transmitter up to date: ends each frame whose time on
+    // the wire is over, discards the queue once TX_EN has been cleared,
+    // and starts the next queued frame.  Frames queued back to back go
+    // out back to back, however late the device is brought up to date.
+    void service() {
+        uint64_t now = cpu.insn_count;
+        uint64_t free_at = now;     // when the transmitter last became free
+        for (;;) {
+            if (tx_busy) {
+                if (now < tx_done_at) return;
+                tx_busy = false;
+                free_at = tx_done_at;
+                tx_cons++;
+                if (backend == Backend::loop) receive(wire, wire_len);
+            }
+            if (tx_flush) { tx_cons = tx_prod; tx_flush = false; }
+            if (!(ctrl & ETH_CTRL_TX_EN) || tx_cons == tx_prod) return;
+
+            const uint8_t* slot = &tx_mem[(tx_cons % tx_slots) * ETH_SLOT_SIZE];
+            uint32_t len = slot[0] | (uint32_t(slot[1]) << 8);
+            if (len == 0 || len > ETH_SLOT_SIZE - 2) {  // sends nothing
+                tx_cons++;
+                continue;
+            }
+            memcpy(wire, slot + 2, len);
+            if (len < ETH_MIN_FRAME) {
+                memset(wire + len, 0, ETH_MIN_FRAME - len);
+                len = ETH_MIN_FRAME;
+            }
+            wire_len = len;
+            tx_busy = true;
+            tx_done_at = free_at + wire_insns(len);
+        }
+    }
+
+    // The slot apertures behave as plain memory: an access of 1 << size
+    // bytes at its natural alignment, little-endian.
+    uint32_t aperture_read(const std::vector<uint8_t>& mem, uint32_t p, int size) const {
+        uint32_t n = 1u << size, v = 0;
+        p &= ~(n - 1);
+        for (uint32_t i = 0; i < n; i++)
+            if (p + i < mem.size()) v |= uint32_t(mem[p + i]) << (8 * i);
+        return v;
+    }
+    void aperture_write(std::vector<uint8_t>& mem, uint32_t p, uint32_t data, int size) {
+        uint32_t n = 1u << size;
+        p &= ~(n - 1);
+        for (uint32_t i = 0; i < n; i++)
+            if (p + i < mem.size()) mem[p + i] = uint8_t(data >> (8 * i));
+    }
+
+    uint32_t read(uint32_t addr, int size) {
+        service();
+        uint32_t off = addr & (acfg.slot[ACFG_SLOT_ETH].size - 1);
+        if (off >= ETH_RX_APERTURE)
+            return aperture_read(rx_mem, off - ETH_RX_APERTURE, size);
+        if (off >= ETH_TX_APERTURE) return 0;   // write-only
+        switch (off & ~3u) {
+            case ETH_R_CAP:        return 1u | ETH_CAP_ADDR | (1u << (16 + speed));
+            case ETH_R_IRQ_STATUS: return irq_status();
+            case ETH_R_IRQ_ENABLE: return irq_enable;
+            case ETH_R_CTRL:       return ctrl;
+            case ETH_R_LINK:       return 1u | (speed << 8);
+            case ETH_R_ADDR_LO:    return addr_lo;
+            case ETH_R_ADDR_HI:    return addr_hi;
+            case ETH_R_FACTORY_LO:
+                return ETH_FACTORY_ADDR[0] | (ETH_FACTORY_ADDR[1] << 8) |
+                       (ETH_FACTORY_ADDR[2] << 16) | (uint32_t(ETH_FACTORY_ADDR[3]) << 24);
+            case ETH_R_FACTORY_HI:
+                return ETH_FACTORY_ADDR[4] | (ETH_FACTORY_ADDR[5] << 8) | ETH_FACTORY_VALID;
+            case ETH_R_RX_GEOM:    return rx_slots | (ETH_SLOT_SIZE << 16);
+            case ETH_R_RX_PROD:    return rx_prod;
+            case ETH_R_RX_CONS:    return rx_cons;
+            case ETH_R_RX_DROP:    return rx_drop;
+            case ETH_R_TX_GEOM:    return tx_slots | (ETH_SLOT_SIZE << 16);
+            case ETH_R_TX_PROD:    return tx_prod;
+            case ETH_R_TX_CONS:    return tx_cons;
+            case ETH_R_TX_WM:      return tx_wm;
+            default:               return 0;    // MDIO absent, the rest reserved
+        }
+    }
+
+    void write(uint32_t addr, uint32_t data, int size) {
+        service();
+        uint32_t off = addr & (acfg.slot[ACFG_SLOT_ETH].size - 1);
+        if (off >= ETH_RX_APERTURE) return;     // read-only
+        if (off >= ETH_TX_APERTURE) {
+            aperture_write(tx_mem, off - ETH_TX_APERTURE, data, size);
+            return;
+        }
+        switch (off & ~3u) {
+            case ETH_R_IRQ_ENABLE: irq_enable = data & (ETH_IRQ_RX | ETH_IRQ_TX); break;
+            case ETH_R_CTRL: {
+                bool sending = ctrl & ETH_CTRL_TX_EN;
+                ctrl = data & (ETH_CTRL_RX_EN | ETH_CTRL_TX_EN |
+                               ETH_CTRL_PROMISC | ETH_CTRL_ALLMULTI);
+                if (sending && !(ctrl & ETH_CTRL_TX_EN)) tx_flush = true;
+                break;
+            }
+            case ETH_R_ADDR_LO:    addr_lo = data; break;
+            case ETH_R_ADDR_HI:    addr_hi = data & 0xFFFF; break;
+            case ETH_R_RX_CONS:    rx_cons = uint16_t(data); break;
+            case ETH_R_TX_PROD:    tx_prod = uint16_t(data); break;
+            case ETH_R_TX_WM:      tx_wm = uint16_t(data); break;
+            default: break;
+        }
+        service();
+    }
+} eth;
 
 // --- Display adapter (CLASS_DISPLAY, character console) ---
 // Register contract: doc/system/devices/display.md; the executable
@@ -2005,6 +2306,11 @@ static uint32_t phys_read(uint32_t addr, int size, bool& bus_fault) {
         return audio.read(addr);
     }
 
+    // Ethernet adapter at dynamic base
+    if (acfg.slot[ACFG_SLOT_ETH].dev_sel(addr)) {
+        return eth.read(addr, size);
+    }
+
     // UART: 0xFF000000 – 0xFF000FFF
     if ((addr >> 12) == (UART_BASE >> 12)) {
         return uart_read(addr);
@@ -2086,6 +2392,12 @@ static void phys_write(uint32_t addr, uint32_t data, int size, bool& bus_fault) 
     // Audio output at dynamic base
     if (acfg.slot[ACFG_SLOT_AUDIO].dev_sel(addr)) {
         audio.write(addr, data);
+        return;
+    }
+
+    // Ethernet adapter at dynamic base
+    if (acfg.slot[ACFG_SLOT_ETH].dev_sel(addr)) {
+        eth.write(addr, data, size);
         return;
     }
 
@@ -2172,7 +2484,7 @@ static void sysreg_write(int dev, int reg, uint32_t val) {
             // Bus RST unconfigures the chain and resets the SPI; the
             // USBHC core sees only power-on reset (the machine wiring).
             if (busctl.rst()) { acfg.reset(); spi.reset(); display.reset();
-    audio.reset(); }
+    audio.reset(); eth.reset(); }
         }
         break;
     case SYSDEV_TIMER:
@@ -2612,11 +2924,11 @@ static void execute_one() {
             exception_entry(VEC_TIMER);
             return;
         }
-        // External IRQ: shared wired-OR of UART + SPI + USBHC
+        // External IRQ: shared wired-OR of UART + SPI + USBHC + Ethernet
         bool spi_irq = (spi.xfer_done && (spi.irq_enable & 1))
                      || (spi.rx_thresh() && (spi.irq_enable & 2))
                      || (spi.tx_thresh() && (spi.irq_enable & 4));
-        if (uart.irq() || spi_irq || usb.irq()) {
+        if (uart.irq() || spi_irq || usb.irq() || eth.irq()) {
             exception_entry(VEC_EXT_IRQ);
             return;
         }
@@ -3261,6 +3573,7 @@ static void cpu_reset() {
     usb.reset();
     display.reset();
     audio.reset();
+    eth.reset();
     cache_devices_reset();
     // An enumerable full-speed device sits attached from power-on,
     // exactly as the RTL program runner presents it.
@@ -3428,6 +3741,15 @@ int main(int argc, char** argv) {
                 return 1;
             }
         }
+        else if (strncmp(argv[i], "+eth=", 5) == 0) {
+            if (!eth.configure(argv[i] + 5)) {
+                fprintf(stderr, "penumbra-iss: bad +eth= '%s' "
+                        "(loop[,rx=N][,tx=N][,speed=10|100|1000], N a power "
+                        "of two, tx at most %u)\n", argv[i] + 5,
+                        (ETH_RX_APERTURE - ETH_TX_APERTURE) / ETH_SLOT_SIZE);
+                return 1;
+            }
+        }
         else if (strncmp(argv[i], "+max-insn=", 10) == 0) max_insns = strtoull(argv[i] + 10, nullptr, 0);
         else if (strcmp(argv[i], "+raw") == 0) full_raw = true;
         else if (strcmp(argv[i], "+hosted") == 0) hosted_mode = true;
@@ -3474,7 +3796,7 @@ int main(int argc, char** argv) {
     }
 
     if (!hex_path) {
-        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+ram=size] [+sdcard=path] [+usbdev=type:config] [+audiofile=path] [+audio_status=busy[:N]|fault[:CODE]] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+pcprof=path [+pcprof_start=addr]] [+irq_at_pc=addr[,period]] [+core=generation] [+cachemodel[=list]] [+tlbmodel[=list]] [+sbmodel[=list] [+sbmodel_cpi=N]] [+bpmodel[=list]] [+pairmodel[=list]] [+model_start=addr] [+model_stop=addr] [+model_report=path]\n");
+        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+ram=size] [+sdcard=path] [+usbdev=type:config] [+eth=loop[,rx=N][,tx=N][,speed=MBIT]] [+audiofile=path] [+audio_status=busy[:N]|fault[:CODE]] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+pcprof=path [+pcprof_start=addr]] [+irq_at_pc=addr[,period]] [+core=generation] [+cachemodel[=list]] [+tlbmodel[=list]] [+sbmodel[=list] [+sbmodel_cpi=N]] [+bpmodel[=list]] [+pairmodel[=list]] [+model_start=addr] [+model_stop=addr] [+model_report=path]\n");
         return 1;
     }
 
