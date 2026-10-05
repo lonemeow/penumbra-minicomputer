@@ -11,11 +11,11 @@ to see.
 
 ## Measurement setup
 
-Measured 2026-10-04 on the two windows issue-pairing uses:
-`pbench kernel` (720 M instructions) and Doom `demo3` (2.89 G). Figures
-are cycles per 1000 instructions, as `pbench kernel` / Doom. The
-fuser's reach is `+pairmodel`'s `reach:` modifier; the fetch simulation
-is a scratch build of the ISS, not in the tree.
+Measured 2026-10-04 with `+pairmodel` on the two windows issue-pairing
+uses: `pbench kernel` (720 M instructions) and Doom `demo3` (2.89 G).
+Figures are cycles per 1000 instructions, as `pbench kernel` / Doom.
+The fetch stage is the model's `fetch:`, `bubble:` and `queue:`
+modifiers, and the fuser's reach its `reach:`.
 
 The issue stage is the design issue-pairing ends on: two slots with the
 older op in either, the immediate forward, and four fusions (`LLI`
@@ -24,11 +24,12 @@ with `LUI`, a compare or other ALU op with the `Bcc` behind it, and
 `dual+fuse:lilui:cmpbr:movop:opbr+fw:imm+flex`. With every instruction
 always at hand it issues in 679 / 630 cycles.
 
-The fetch simulation puts a fetch stage and a queue ahead of it:
+The model's fetch stage puts a queue ahead of issue and fills it:
 
-- **A fetch** delivers up to its width in instructions, stopping at a
-  taken transfer and, where stated, at the end of its 16-byte line. It
-  runs only when the queue has room for a full one.
+- **A fetch** delivers up to its width in instructions, stopping behind
+  a taken transfer, a trap or an interrupt and, where stated, at the
+  end of its 16-byte line. It runs only when the queue has room for a
+  full one.
 - **After a taken transfer** fetch idles for the bubble, one cycle
   where gen3 redirects from its pre-decode
   ([gen3 branch prediction](../penumbra3/branch-prediction.md)).
@@ -37,8 +38,9 @@ The fetch simulation puts a fetch stage and a queue ahead of it:
   instructions sit next to each other in it. It waits for nothing that
   has not arrived.
 
-With unlimited supply the simulation takes the pairing model's own
-cycles. It leaves out mispredictions, which it charges only the bubble,
+A fetch wider and a queue deeper than issue can use, with no bubble,
+take the cycles the stage takes with every instruction at hand. The
+model leaves out mispredictions, which it charges only the bubble,
 cache misses and the wait behind a load.
 
 ## What issue takes
@@ -57,18 +59,20 @@ two fused pairs that also pair with each other, and is rare.
 
 ## Fetch supply
 
-| Front end | Cycles | Over unlimited |
-|---|---|---|
-| Unlimited supply | 679 / 630 | — |
-| 1 a cycle, bubble (gen3's front end) | 1,085 / 1,076 | 60–70 % |
-| 2 a cycle within a line, bubble | 704 / 655 | 4 % |
-| 2 a cycle across lines, bubble | 696 / 645 | 2–3 % |
-| A line (up to 4), bubble, 8-entry queue | 693 / 635 | 1–2 % |
-| A line (up to 4), bubble, 16-entry queue | 681 / 631 | under 0.5 % |
-| 2 a cycle within a line, no bubble | 683 / 633 | 0.5 % |
-| A line (up to 4), no bubble | 679 / 631 | none |
+| Front end | Modifiers | Cycles | Over unlimited |
+|---|---|---|---|
+| Unlimited supply | none | 679 / 630 | — |
+| 1 a cycle (gen3's front end) | `fetch:1` | 1,085 / 1,076 | 60–70 % |
+| 2 a cycle within a line | `fetch:2l` | 704 / 655 | 4 % |
+| 2 a cycle across lines | `fetch:2` | 696 / 645 | 2–3 % |
+| 2 a cycle within a line, 16-entry queue | `fetch:2l+queue:16` | 694 / 649 | 2–3 % |
+| A line (up to 4) | `fetch:4l` | 693 / 635 | 1–2 % |
+| A line (up to 4), 16-entry queue | `fetch:4l+queue:16` | 681 / 631 | under 0.5 % |
+| 2 a cycle within a line, no bubble | `fetch:2l+bubble:0` | 683 / 633 | 0.5 % |
+| A line (up to 4), no bubble | `fetch:4l+bubble:0` | 679 / 631 | none |
 
-The two-a-cycle rows have an 8-entry queue.
+A row has the one-cycle bubble and an 8-entry queue unless it says
+otherwise.
 
 - **Two a cycle is enough.** It is within 4 % of unlimited supply while
   paying a bubble on every taken transfer, and within 0.5 % without the
@@ -78,6 +82,11 @@ The two-a-cycle rows have an 8-entry queue.
 - **Width past two and the bubble are each worth 10–25 cycles per
   1000, and overlap.** A whole line into a 16-entry queue hides the
   bubble; so does removing it at two a cycle.
+- **A deeper queue does little for two a cycle:** 16 entries take back
+  7–10 of the 25 cycles it loses. Where issue takes two or more
+  instructions a cycle, a fetch of two cannot get ahead of it, whatever
+  the queue could hold; where issue is slower, sixteen entries fill
+  nearly as often as eight do.
 - **Doom's short loops are not the hard case.** Its pixel loops end in
   a taken branch every dozen or so instructions, but they are serial
   chains that pair little, so fetch has slack.
@@ -147,14 +156,10 @@ the clock. The same-cycle forwards would then earn the place
 ## Open
 
 - **Mispredictions and misses.** Each empties the queue, and refilling
-  it favours a wider fetch; neither is in the simulation.
+  it favours a wider fetch; neither is in the model.
 - **Waiting for a partner.** Issue here takes the op at the queue's
   head at once. Holding it a cycle for an instruction it could fuse
   with was not tried.
-- **Two a cycle into a deeper queue** was not run; the 16-entry row is
-  a whole line's.
 - **The compiler's side of an aligned fuser.** Which word a pair starts
   on is a property of the code, so a pass could move pairs onto even
   words by swapping one with an independent neighbour.
-- **A fetch stage in the pairing model.** `+pairmodel` has none; the
-  fetch-supply figures came from a scratch build.
