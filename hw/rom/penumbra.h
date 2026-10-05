@@ -176,6 +176,7 @@ typedef unsigned int uint32_t;
 #define ACFG_CLASS_UART     2
 #define ACFG_CLASS_SPI      3
 #define ACFG_CLASS_SD       4
+#define ACFG_CLASS_ETHERNET 5
 #define ACFG_CLASS_DISPLAY  6
 #define ACFG_CLASS_AUDIO    7
 #define ACFG_CLASS_USBHC    8
