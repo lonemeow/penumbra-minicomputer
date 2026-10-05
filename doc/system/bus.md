@@ -16,35 +16,20 @@ The `BUSCTL` register bits are defined in
 
 ## Address Map
 
-The physical address space uses a fixed layout decoded from the top
-address bits. RAM occupies the low addresses; I/O and boot ROM
-occupy the top.
+Four ranges of the physical address space are fixed, because each has
+to work before anything has been discovered:
 
-```
-0x0000_0000 ┌─────────────────────┐
-            │ System RAM          │  Cached, hardwired at base 0
-            │  (size probed)      │  Probed upward until bus fault
-            ├─────────────────────┤
-            │ Expansion RAM       │  Autoconfigured, assigned by ROM
-            ├─────────────────────┤
-            │ (unmapped)          │  Bus fault if accessed
-0xFDFF_FFFF └─────────────────────┘
-0xFE00_0000 ┌─────────────────────┐
-            │ Config Space (32 B) │  Autoconfig registers
-            │                     │   — only when CFG_EN set
-0xFE00_001F └─────────────────────┘
-            │ (unmapped)          │
-0xFEFF_FFFF └─────────────────────┘
-0xFF00_0000 ┌─────────────────────┐
-            │ I/O Region (16 MB)  │  Always uncached (C=0)
-            │   0xFF00_0000 UART  │  Hardwired console
-            │   (elsewhere in     │  Autoconfigured — any
-            │    region)          │  4 KB-aligned free range
-0xFFFE_FFFF └─────────────────────┘
-0xFFFF_0000 ┌─────────────────────┐
-            │ Boot ROM (64 KB)    │  Always uncached (C=0), hardwired
-0xFFFF_FFFF └─────────────────────┘
-```
+| Address       | Size     | What                    | Notes                                          |
+|---------------|----------|-------------------------|------------------------------------------------|
+| `0x0000_0000` | probed   | System RAM              | At least 8 KB; probed upward until a bus fault |
+| `0xFE00_0000` | 32 bytes | Autoconfig config space | Responds only while `BUSCTL.CFG_EN` is set     |
+| `0xFF00_0000` | 4 KB     | Console UART            | See [devices/uart.md](./devices/uart.md)       |
+| `0xFFFF_0000` | 64 KB    | Boot ROM                | Holds the reset vector                         |
+
+Everything else on the bus is an autoconfigured device, a memory board
+or a peripheral alike, and the boot ROM decides where each one goes
+(see [Device Addresses](#device-addresses)). The address space has no
+region set aside for peripherals and none for memory.
 
 - **Reset vector:** `0xFFFF_0000` (base of boot ROM). CPU starts
   here with MMU in flat mode (`MMUCR.M=0`). This is a hardwired PC
@@ -52,8 +37,13 @@ occupy the top.
 - **Exception vector table:** 16 words at physical `0x0000_0000`.
   Each entry is a 32-bit handler address (not an instruction).
   The CPU fetches the handler via MMU bypass, then jumps.
-- **Unmapped regions:** accessing an unmapped address raises
-  `EXC_BUS_FAULT` (vector 0) — see [Bus Faults](#bus-faults).
+- **Unassigned addresses:** an access to an address that no device
+  has been given raises `EXC_BUS_FAULT` (vector 0) — see
+  [Bus Faults](#bus-faults).
+- **Cacheability:** an address does not decide whether an access is
+  cached. With the MMU off nothing is, and with it on each page's `C`
+  bit decides, so software maps every device that is not memory with
+  `C=0` — see [mmu.md](./mmu.md#uncached-access).
 
 ### Minimum RAM Requirement
 
@@ -78,26 +68,25 @@ RAM layout from the boot data instead and relies on none of this —
 see [boot-protocol.md: Boot
 Interfaces](./boot-protocol.md#boot-interfaces).
 
-### I/O Peripheral Map
+### Device Addresses
 
-Only the console UART has a fixed I/O address. Every other peripheral
-receives its base address at boot from the autoconfig protocol, which
-allocates from any free range in the 16 MB I/O region (or from free
-RAM-region space for memory-class devices).
+Among the peripherals only the console UART has a fixed address. Every
+other device receives its base from the boot ROM through the
+autoconfig protocol (see
+[Device Discovery](#device-discovery-autoconfig)), and asks for the
+address space it needs in `CFG_SIZE`.
 
-| Base         | Size | Device   | Hardwired / AC | Notes                        |
-|--------------|------|----------|:--------------:|------------------------------|
-| `0xFF00_0000`| 4 KB | UART     | HW             | Console — see [devices/uart.md](./devices/uart.md) |
-| *(assigned)* | 4 KB | SPI      | AC             | SD card, flash               |
-| *(assigned)* |64 KB | Ethernet | AC             | Network adapter              |
-| *(assigned)* | 4 KB | GPIO     | AC             | General-purpose I/O          |
+The bus puts one rule on where a device goes: its base is a multiple
+of its size, and its range overlaps neither the four fixed ranges nor
+another device. Within that rule the placement is the boot ROM's
+choice, and a different ROM, or the same ROM on a different machine,
+may choose differently. Software therefore assumes no placement. It
+takes each device's base and size from the boot data (see
+[boot-protocol.md](./boot-protocol.md#boot-data)).
 
-HW = hardwired (fixed address). AC = autoconfigured at boot.
-
-Each simple peripheral receives a **4 KB page-aligned region**
-regardless of how many registers it uses. This guarantees each device
-occupies exactly one MMU page, so cacheability and protection can be
-set per device without aliasing.
+No device asks for less than a 4 KB page, however few registers it
+has. A device therefore never shares an MMU page with another, so
+cacheability and protection can be set per device without aliasing.
 
 ---
 

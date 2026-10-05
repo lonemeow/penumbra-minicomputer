@@ -47,7 +47,7 @@ struct btag_hdr {
 struct btag_device {
     struct btag_hdr hdr;   /* type=BTAG_DEVICE, size=40 */
     uint32_t cls;          /* ACFG_CLASS_* */
-    uint32_t base;         /* MMIO base address */
+    uint32_t base;         /* base address: a device's registers, or RAM */
     uint32_t dev_size;     /* device size in bytes */
     uint32_t id;           /* device ID from autoconfig */
     char     name[16];     /* null-terminated, padded */

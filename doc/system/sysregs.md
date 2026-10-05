@@ -49,8 +49,9 @@ CPU identity is invariant for a given RTL release; machine identity
 varies by integration (board name, PLL frequency, board feature word).
 
 > **Note:** I/O peripherals (UART, SPI, GPIO, Ethernet) are **not** on
-> the sysreg bus. They are memory-mapped at `0xFF00_0000`+ and accessed
-> via `LDW`/`STW`. See [bus.md](./bus.md#io-peripheral-map).
+> the sysreg bus. They are bus devices, memory-mapped at the addresses
+> autoconfig assigns and accessed via `LDW`/`STW`. See
+> [bus.md](./bus.md#device-addresses).
 
 ---
 

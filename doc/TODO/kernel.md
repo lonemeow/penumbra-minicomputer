@@ -58,14 +58,15 @@ on the current scheduler.  Revisit once one of:
 
 `bus_space_mmap()` (`netbsd/sys/arch/penumbra/penumbra/bus_space.c`)
 returns a bare page frame, relying on "the I/O region is uncached by
-the address map". Nothing enforces that. The TLB's cacheable output is
-the PTE's `C` bit as stored, with no address-based override, and
-`PTE_MAKE` sets `PTE_C` unless the caller passes `PMAP_NOCACHE`. The
-device pager enters user mappings with `pmap_mmap_flags(cookie)`,
-which penumbra leaves at the MI default of 0. So every user mmap of
-device memory is cacheable, contrary to `doc/system/bus.md` ("Always
-uncached"). The kernel's own `bus_space_map()` passes `PMAP_NOCACHE`
-and is unaffected.
+the address map". No such region exists, and nothing enforces the
+attribute. The TLB's cacheable output is the PTE's `C` bit as stored,
+with no address-based override, and `PTE_MAKE` sets `PTE_C` unless the
+caller passes `PMAP_NOCACHE`. The device pager enters user mappings
+with `pmap_mmap_flags(cookie)`, which penumbra leaves at the MI
+default of 0. So every user mmap of device memory is cacheable, where
+`doc/system/bus.md` ("Address Map", under cacheability) leaves it to
+software to map devices uncached. The kernel's own `bus_space_map()`
+passes `PMAP_NOCACHE` and is unaffected.
 
 The only mmap-able device is the display framebuffer
 (`pdisplay_mmap()`), and there the result happens to be coherent: the

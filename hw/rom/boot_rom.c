@@ -163,6 +163,9 @@ static uint32_t bus_probe_read(uint32_t addr) {
 
 static int autoconfig(uint32_t *cursor) {
     int ndevs = 0;
+    /* Peripherals go upward from the page after the console UART.
+     * That is this ROM's choice: the bus sets no region aside for
+     * them (doc/system/bus.md, "Device Addresses"). */
     uint32_t next_io_addr = 0xFF001000;
 
     /* Assert bus reset to clear any stale device configs */
