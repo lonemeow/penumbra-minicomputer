@@ -1077,25 +1077,39 @@ the CPU some 1,500 cycles, 25 µs at 60 MHz: inside a 100 Mbit/s frame
 time (120 µs), so there the link is not the limit; at gigabit the CPU
 is.
 
+The programming interface is `doc/system/devices/ethernet.md`
+(`CLASS_ETHERNET`): frames in fixed-size slots the CPU reads and
+writes, a filter on one station address, and a PHY that software
+manages through an MDIO register and reports the speed of.
+
 Open:
 
-- **The interface**, in `doc/system/devices/` before any RTL: frame
-  buffers and their ownership, link and interrupt status, address
-  filtering, and PHY management over MDIO, so NetBSD's `mii(4)` and
-  its PHY drivers manage the link (`rgephy(4)` covers the RTL8211
-  family). `CLASS_NIC` (`doc/system/bus.md`) names a NIC protocol
-  with no document yet; this device's interface becomes it.
-- **The Nexys Video's RTL**: the RGMII stages (DDR input and output
+- **The device's RTL**, board-neutral above the PHY's data interface
+  as the USB controller is above its PHY
+  (`doc/internals/usb-host-controller.md`), with the class constant
+  in the package and the ROM's header. The receive ring's size is the
+  free choice: 32 slots hold a whole default TCP receive window
+  (32 KB, 22 full frames) while the CPU drains nothing, for 64 KB of
+  block RAM.
+- **The Nexys Video's side**: the RGMII stages (DDR input and output
   registers, and the receive clock's alignment, which depends on how
-  the PHY's RGMII delays are strapped), the PHY's reset and interrupt,
-  and the board's MAC address. A 24AA025E48 EEPROM holds it, on the
-  I2C bus the audio codec also uses; the schematic straps the
-  EEPROM's A0 to A2 high, so it answers at 0x57, where the reference
-  manual gives 1010000b (0x50). Reading it needs the I2C master's
-  command port shared with the codec's setup ("Hardware: the I2C
-  master serves one consumer and no stretched clock").
-- **The driver**: an `ifnet` driver over the frame buffers, attaching
-  `mii(4)`.
+  the PHY's RGMII delays are strapped; `rgephy(4)` leaves them so
+  unless its `no-rx-delay` property is set), the PHY's reset, and the
+  board's MAC address. The PHY's interrupt pin has no use: the
+  interface has no link interrupt, and `mii(4)` polls. A 24AA025E48
+  EEPROM holds the address, on the I2C bus the audio codec also uses;
+  the schematic straps the EEPROM's A0 to A2 high, so it answers at
+  0x57, where the reference manual gives 1010000b (0x50). Hardware
+  reads it after reset and presents it as the device's factory
+  address, which needs the I2C master's command port handed over from
+  the codec's setup ("Hardware: the I2C master serves one consumer and
+  no stretched clock"). The interface allows the read 200 ms from
+  reset: check that against the codec setup that runs first.
+- **An ISS model** of the class, with no PHY and a link that is always
+  up, so the driver runs under `make simulate`.
+- **The driver**: an `ifnet` driver at `pbbus` over the slot rings,
+  attaching `mii(4)` where the device has MDIO. `rgephy(4)` covers the
+  RTL8211 family; `GENERIC` lists only `rlphy` and `ukphy`.
 
 ## Hardware: the I2C master serves one consumer and no stretched clock
 
@@ -1108,14 +1122,14 @@ board's MAC address. Two things it does not do:
   reset until it finishes or faults. The EEPROM shares the pins, so a
   second master is no answer; reading the MAC address needs the one
   master's command port handed over once the setup is done, to
-  whatever reads the EEPROM: hardware that copies the address into the
-  Ethernet device at reset, or a driver behind an I2C device ("Hardware
-  + kernel: Ethernet MAC for an onboard PHY" decides which). The read
-  itself needs nothing new: the EUI-48 sits at 0xFA-0xFF, a START, the
-  control byte, the address, a repeated START and six reads, the last
-  NACKed with a STOP, all commands the master takes. The EEPROM's
-  5 ms write cycle is signalled by not acknowledging its control byte,
-  which the master reports as a NACK, so a writer polls by retrying.
+  hardware that reads the EEPROM and presents the address as the
+  Ethernet device's factory address ("Hardware + kernel: Ethernet MAC
+  for an onboard PHY"). The read itself needs nothing new: the EUI-48
+  sits at 0xFA-0xFF, a START, the control byte, the address, a
+  repeated START and six reads, the last NACKed with a STOP, all
+  commands the master takes. The EEPROM's 5 ms write cycle is
+  signalled by not acknowledging its control byte, which the master
+  reports as a NACK, so a writer polls by retrying.
 - **Wait out a stretched clock.** A slave that holds SCL low past the
   first step the master releases it in ends the command with a bus
   error, so a stretched clock fails a command rather than hanging or
@@ -1125,3 +1139,31 @@ board's MAC address. Two things it does not do:
   releases SCL until SCL reads high, under a timeout so a stuck bus
   still fails. Open only once a device that stretches joins a bus the
   master drives.
+
+## Ruled out
+
+- **Ethernet frames through FIFO data ports.** Weighed against slots
+  mapped in the device's window while drafting
+  `doc/system/devices/ethernet.md`. Both cost about 4 cycles a word
+  and sit on the same dual-port block RAM. Declined because a pop on
+  read is a side effect the mapped form does without: software reads a
+  length, drops a frame or re-reads a word without consuming anything,
+  and stores the odd-length pieces of an `mbuf` chain as they lie
+  rather than carrying bytes from one write to the next. A FIFO's one
+  advantage, that any backend can present it, matters only to a chip
+  behind an adapter, which the next item leaves out.
+- **A class contract that a MAC chip board can implement.** No chip
+  exposes frames as bus-addressable slots: the RTL8019AS streams them
+  through a data port from an address software sets, the LAN9118 and
+  LAN9218 have FIFOs only, and a Wiznet keeps a packed byte ring. Nor
+  does any meet a class contract with glue alone, since each needs its
+  own setup and commands. Such a board reports `CLASS_UNKNOWN` and
+  runs the chip's stock driver behind a `pbbus` frontend; `ne(4)` and
+  `smsh(4)` are in the tree. Making a chip's register model the class,
+  so that one stock driver ran both, was declined for the machinery it
+  brings that an FPGA device has no use for.
+- **An Ethernet device that follows its PHY's speed by itself.** On
+  RMII neither the clock nor the data says whether the link runs at 10
+  or 100 Mbit/s, so the device would have to poll the PHY over MDIO
+  and resolve the negotiation, which `mii(4)` already does. The driver
+  writes the speed, as the tree's other drivers do.

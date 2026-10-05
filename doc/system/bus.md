@@ -170,7 +170,7 @@ protocol it understands, with no device-specific driver needed.
 | 2     | `CLASS_UART`     | NS16450 register layout        | Boot ROM can use as console       |
 | 3     | `CLASS_SPI`      | Penumbra SPI master            | Generic SPI controller            |
 | 4     | `CLASS_SD`       | Penumbra SPI master, SD wired  | SD card attached via SPI          |
-| 5     | `CLASS_NIC`      | Penumbra NIC protocol          | Network adapter                   |
+| 5     | `CLASS_ETHERNET` | Penumbra Ethernet protocol     | Ethernet adapter                  |
 | 6     | `CLASS_DISPLAY`     | Penumbra display registers     | Character-cell console + optional framebuffer |
 | 7     | `CLASS_AUDIO`       | Penumbra audio registers       | PCM output; optional extra mixing channels |
 | 8     | `CLASS_USBHC`       | Penumbra USB host-controller   | Local USB host (low / full speed) |
@@ -190,13 +190,12 @@ device-specific driver. When a class defines one, every device claiming
 that class **must** implement it after reset, so firmware always finds
 the minimum even if software had switched the device into a richer mode;
 extra capabilities are opt-in behind `CFG_ID` (as with `CLASS_SPI` /
-`CLASS_SD`). Not every class defines a minimum protocol — some families
-(e.g., network adapters) share no subset worth standardizing, and the OS
-matches a specific driver through `CFG_ID`; the class still serves as the
-family identifier. `CLASS_UNKNOWN` is for a device that fits no family at
-all; a genuinely new family gets a fresh class number — its minimum
-protocol, if any, fixed by its first device — rather than stretching an
-existing class's contract.
+`CLASS_SD`). A device that does not implement a class's minimum
+protocol does not claim the class, however alike its purpose: it reports
+`CLASS_UNKNOWN`, and the OS matches a driver for it through `CFG_ID`. A
+genuinely new family gets a fresh class number — its minimum protocol
+fixed by its first device — rather than stretching an existing class's
+contract.
 
 ### CFG_EN Toggle Protocol
 

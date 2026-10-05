@@ -33,6 +33,7 @@ architecture and its standard peripherals.
 *   **[Display Adapter](./system/devices/display.md)** — Character-cell console + optional framebuffer (`CLASS_DISPLAY`).
 *   **[Audio Device](./system/devices/audio.md)** — Pushed-PCM output with optional mixing channels (`CLASS_AUDIO`).
 *   **[USB Host Controller](./system/devices/usb-host.md)** — Transaction-level USB host (`CLASS_USBHC`).
+*   **[Ethernet Adapter](./system/devices/ethernet.md)** — Whole frames through slot rings in device memory (`CLASS_ETHERNET`).
 
 ### Operating System
 *   **[NetBSD Port Status](./system/netbsd/porting-status.md)** — Current status of the NetBSD 10 port.
