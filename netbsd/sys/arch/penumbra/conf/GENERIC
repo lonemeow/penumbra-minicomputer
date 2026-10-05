@@ -63,6 +63,9 @@ wsdisplay*	at pdisplay? console ?
 # Audio device -> MI audio(4)
 paudio0		at pbbus?
 audio*		at audiobus?
+
+# Ethernet adapter -> ifnet
+peth0		at pbbus?
 options 	WSEMUL_VT100
 options 	WSDISPLAY_DEFAULTSCREENS=1
 options 	WSDISPLAY_COMPAT_RAWKBD

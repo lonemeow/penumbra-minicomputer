@@ -369,7 +369,10 @@ Clearing `TX_EN` discards the queued frames the device has not begun:
 once the frame on the wire, if any, has ended, `TX_CONS` advances to
 `TX_PROD`. The frames were copied into the slots, so a consumer holds
 nothing that needs releasing, and a ring emptied at stop is one that
-cannot send stale frames at the next start.
+cannot send stale frames at the next start. A frame queued before
+that moment is discarded with the rest, so a consumer that stops and
+starts again waits for `TX_CONS` to reach `TX_PROD` before it queues
+anything.
 
 ## Link Management
 

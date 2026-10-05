@@ -1116,9 +1116,13 @@ Open:
   give it an uplink. Guest time counts instructions, so timeouts run
   at a different rate from the host's: such a run checks that packets
   flow, not how fast.
-- **The driver**: an `ifnet` driver at `pbbus` over the slot rings,
-  attaching `mii(4)` where the device has MDIO. `rgephy(4)` covers the
-  RTL8211 family; `GENERIC` lists only `rlphy` and `ukphy`.
+- **The driver's PHY side.** `peth`
+  (`netbsd/sys/arch/penumbra/penumbra/peth.c`) drives a device that
+  manages its own link, which is what the ISS presents, and refuses
+  one with `CAP.MDIO`. The Nexys device needs the rest: `mii(4)`
+  attached over the `MDIO` register, with its status-change callback
+  writing `CTRL.SPEED`. `rgephy(4)` covers the RTL8211 family;
+  `GENERIC` lists only `rlphy` and `ukphy`.
 
 ## Hardware + kernel: PS/2 port (`CLASS_PS2`)
 
