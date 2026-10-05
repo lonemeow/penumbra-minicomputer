@@ -174,7 +174,8 @@ protocol it understands, with no device-specific driver needed.
 | 6     | `CLASS_DISPLAY`     | Penumbra display registers     | Character-cell console + optional framebuffer |
 | 7     | `CLASS_AUDIO`       | Penumbra audio registers       | PCM output; optional extra mixing channels |
 | 8     | `CLASS_USBHC`       | Penumbra USB host-controller   | Local USB host (low / full speed) |
-| 9–255 | —                   | —                              | Reserved for future protocols     |
+| 9     | `CLASS_PS2`         | Penumbra PS/2 port             | One keyboard or pointing device per port |
+| 10–255 | —                  | —                              | Reserved for future protocols     |
 
 **Extended devices.** A device with extra capabilities (e.g., an SPI
 controller with word-wide FIFO access) still reports the base class and

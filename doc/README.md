@@ -34,6 +34,7 @@ architecture and its standard peripherals.
 *   **[Audio Device](./system/devices/audio.md)** — Pushed-PCM output with optional mixing channels (`CLASS_AUDIO`).
 *   **[USB Host Controller](./system/devices/usb-host.md)** — Transaction-level USB host (`CLASS_USBHC`).
 *   **[Ethernet Adapter](./system/devices/ethernet.md)** — Whole frames through slot rings in device memory (`CLASS_ETHERNET`).
+*   **[PS/2 Port](./system/devices/ps2.md)** — Bytes to and from one keyboard or pointing device (`CLASS_PS2`).
 
 ### Operating System
 *   **[NetBSD Port Status](./system/netbsd/porting-status.md)** — Current status of the NetBSD 10 port.

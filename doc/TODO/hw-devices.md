@@ -1111,6 +1111,67 @@ Open:
   attaching `mii(4)` where the device has MDIO. `rgephy(4)` covers the
   RTL8211 family; `GENERIC` lists only `rlphy` and `ukphy`.
 
+## Hardware + kernel: PS/2 port (`CLASS_PS2`)
+
+The Nexys Video has no keyboard until its USB card exists
+(`hw-nexysvideo.md`, "Devices: no USB host, so no keyboard or USB
+storage"). Its USB socket belongs to the board's PIC24, which presents
+one keyboard or mouse to the FPGA as a PS/2 device on two pins. A PS/2
+port on the bus gives the machine that keyboard, and gives a board
+with a PS/2 socket one the same way. The goal is a `wscons` keyboard
+beside the display: a login on `ttyE0`, and Doom, which reads the
+keyboard in raw mode (`sw/doom/i_input_netbsd.c`).
+
+The programming interface is `doc/system/devices/ps2.md`
+(`CLASS_PS2`): single bytes each way, a flag on a byte that fails its
+parity or stop bit, and a receive side that holds the device off
+rather than lose a byte. Everything above a byte is software's, so
+the kernel's part is a back-end for `pckbport(9)` under the
+machine-independent `pckbd(4)`; `dev/ic/pl050.c` is the closest
+existing one.
+
+Open:
+
+- **The port's RTL**, with the class constant in the package and the
+  ROM's header, a unit testbench against a bit-level model of the
+  attached device, and its microarchitecture under `doc/internals/`.
+  Clock and data pass through the same synchronizer and filter: the
+  board's manual gives data 5 µs of setup and of hold around the
+  falling clock edge, so a longer filter on the clock alone would
+  sample the next bit. The manual gives the clock as 20 to 30 kHz in
+  its text and as 30 to 50 µs, drawn twice a cycle, in its timing
+  table; the receiver follows the device's clock and has only to
+  bound it.
+- **The Nexys Video's side**: `ps2_clk` and `ps2_data` (W17, N13) as
+  open-drain pins with pull-ups, and the device in the machine top.
+- **Three checks on the board**, from the ROM monitor and before any
+  driver, because the manual describes the bridge only as a PS/2
+  keyboard in general:
+  - Whether it keeps bytes while the clock is held low, and how many.
+    The manual calls the clock a clear-to-send signal and gives no
+    depth. If keys are lost, the interface needs a receive queue and
+    a count of dropped bytes.
+  - Whether it acknowledges the enable command (`0xF4`) for a
+    keyboard. The manual lists `ED`, `EE`, `F3`, `FE` and `FF` as
+    "some common commands" and `F4` for a mouse only, and `pckbd`
+    fails to enable a keyboard that does not acknowledge it.
+  - What a transmission meets with nothing plugged in. The interface
+    reports an empty port through `TX_DATA.ERR`, which assumes the
+    bridge leaves the link idle then.
+- **The driver**: the six port operations over the registers,
+  reporting scan code translation as unavailable so that `pckbd`
+  converts set 2 itself, with `pckbd` and its `wskbd` in `GENERIC`.
+  `pckbd`'s probe needs the keyboard to answer a reset, so one
+  plugged in after boot is not seen; the driver can instead attach
+  the keyboard when the port first hears a device announce itself.
+
+Left out: a pointing device (the bridge carries one device at a time,
+so a mouse beside the keyboard needs a second port, Doom's mouse input
+is a stub and `GENERIC` has no `wsmouse`), an ISS model (the driver is
+checked on the board), and a console on this keyboard in the ROM, the
+loader and the kernel (the ROM's console and the kernel's are both
+UART-only).
+
 ## Hardware: the I2C master serves one consumer and no stretched clock
 
 `hw/rtl/io/i2c/i2c_master.sv` drives the Nexys Video's I2C bus, which
