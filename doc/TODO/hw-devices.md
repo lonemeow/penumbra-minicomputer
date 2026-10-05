@@ -1105,17 +1105,12 @@ Open:
   the codec's setup ("Hardware: the I2C master serves one consumer and
   no stretched clock"). The interface allows the read 200 ms from
   reset: check that against the codec setup that runs first.
-- **A host network for the ISS model.** The model is `+eth=loop` in
-  `sw/sim/penumbra_iss.cpp`: no PHY, a link that is always up, and
-  every frame sent handed back to the receive side, which exercises
-  the interface but carries no traffic. The driver needs a backend
-  that exchanges real packets with the host. A TAP device does, and
-  needs no root inside a user and network namespace (`unshare -rn`
-  creates one and a TAP in it on the development machine); the
-  namespace's own Linux stack is then the peer, and `slirp4netns` can
-  give it an uplink. Guest time counts instructions, so timeouts run
-  at a different rate from the host's: such a run checks that packets
-  flow, not how fast.
+- **A route out for the ISS's network.** `sw/tools/iss-net.sh` gives
+  the ISS's TAP backend a network of two stations, the guest and the
+  host's stack in a namespace of its own, which is enough for the
+  driver but reaches nothing else. `slirp4netns`, which the
+  development machine has, can give such a namespace an uplink; the
+  guest then needs the namespace to forward for it.
 - **The driver's PHY side.** `peth`
   (`netbsd/sys/arch/penumbra/penumbra/peth.c`) drives a device that
   manages its own link, which is what the ISS presents, and refuses

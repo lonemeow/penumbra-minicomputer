@@ -25,10 +25,12 @@
 // `make CORE=` spells it (penumbra_cores.h): its CPU name and the
 // geometry its caches report.  The default is penumbra1.
 //
-// +eth=loop[,rx=N][,tx=N][,speed=MBIT] attaches an Ethernet adapter
+// +eth=backend[,rx=N][,tx=N][,speed=MBIT] attaches an Ethernet adapter
 // (CLASS_ETHERNET) at the end of the autoconfig chain, with N slots in
 // each ring; the machine has none without it.  The loop backend hands
-// every frame the device sends to the device's own receive side.
+// every frame the device sends to the device's own receive side, and
+// tap[:name] exchanges frames with a Linux TAP device (tap0 unless
+// named), which sw/tools/iss-net.sh sets up without root.
 //
 // +cachemodel[=list] runs every access through shadow cache hierarchies
 // (cache_model.h), and +tlbmodel[=list] every main-TLB translation through
@@ -64,7 +66,15 @@
 #include <unistd.h>
 #include <termios.h>
 #include <poll.h>
+#include <algorithm>
+#ifdef __linux__
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <net/if.h>
+#include <linux/if_tun.h>
+#endif
 #include <map>
+#include <string>
 #include <vector>
 
 // Byte-level USB device responder shared with the RTL testbenches —
@@ -1084,10 +1094,12 @@ static struct {
 // the machine has none.  The model manages its own link, which is
 // always up, and has no MDIO: it is the class's minimum.
 //
-// The one backend, loop, hands every frame sent to the receive side,
-// through the receive checks, so a program exercises the whole device
-// with nothing on the host: +eth=loop[,rx=N][,tx=N][,speed=MBIT], with
-// N slots in each ring.
+// Two backends carry the frames, chosen by
+// +eth=backend[,rx=N][,tx=N][,speed=MBIT], with N slots in each ring.
+// loop hands every frame sent to the receive side, through the receive
+// checks, so a program exercises the whole device with nothing on the
+// host.  tap[:name] exchanges frames with a Linux TAP device, where the
+// host's own network stack is the peer.
 //
 // Unlike the audio model this one keeps time, because the contract's
 // transmit side is about waiting: a ring that never filled would leave
@@ -1108,6 +1120,8 @@ static constexpr uint32_t ETH_MAX_FRAME     = 1518;
 // What a frame costs on the wire beyond its own bytes: preamble and
 // start delimiter, FCS, and the gap before the next frame.
 static constexpr uint32_t ETH_WIRE_OVERHEAD = 8 + 4 + 12;
+// Instructions between looks at the host's network: a power of two.
+static constexpr uint64_t ETH_POLL_INSNS    = 1024;
 static constexpr uint32_t ETH_SPEED_MBIT[3] = { 10, 100, 1000 };  // by SPEED code
 static constexpr uint32_t ETH_CAP_ADDR      = 1u << 9;
 static constexpr uint32_t ETH_CTRL_RX_EN    = 1u << 0, ETH_CTRL_TX_EN    = 1u << 1,
@@ -1127,8 +1141,10 @@ enum : uint32_t {
 };
 
 static struct {
-    enum class Backend { none, loop };
+    enum class Backend { none, loop, tap };
     Backend  backend  = Backend::none;
+    std::string tap_name = "tap0";
+    int      tap_fd   = -1;
     uint32_t rx_slots = 32, tx_slots = 8;   // powers of two
     uint32_t speed    = 1;                  // the link's SPEED code
 
@@ -1151,6 +1167,11 @@ static struct {
     uint8_t  wire[ETH_SLOT_SIZE];
     uint32_t wire_len;
 
+    // The receive side of the wire, for frames from the host: the
+    // instruction count at which the last one to arrive has passed, had
+    // it come in at the link's speed.
+    uint64_t rx_free_at;
+
     bool present() const { return backend != Backend::none; }
 
     void reset() {
@@ -1159,13 +1180,29 @@ static struct {
         tx_busy = tx_flush = false;
         tx_done_at = 0;
         wire_len = 0;
+        rx_free_at = 0;
     }
 
-    // "+eth=loop[,rx=N][,tx=N][,speed=10|100|1000]", N a power of two.
-    // False on anything else, which the caller refuses.
+    // "+eth=loop|tap[:name][,rx=N][,tx=N][,speed=10|100|1000]", N a
+    // power of two.  False on anything else, which the caller refuses.
     bool configure(const char* spec) {
-        if (strncmp(spec, "loop", 4) != 0) return false;
-        const char* p = spec + 4;
+        const char* p = spec;
+        Backend chosen;
+        if (strncmp(p, "loop", 4) == 0) {
+            chosen = Backend::loop;
+            p += 4;
+        } else if (strncmp(p, "tap", 3) == 0) {
+            chosen = Backend::tap;
+            p += 3;
+            if (*p == ':') {
+                size_t n = strcspn(++p, ",");
+                if (n == 0 || n >= IFNAMSIZ) return false;
+                tap_name.assign(p, n);
+                p += n;
+            }
+        } else {
+            return false;
+        }
         uint32_t rx = rx_slots, tx = tx_slots, sp = speed;
         while (*p == ',') {
             const char* value = strchr(p, '=');
@@ -1192,7 +1229,7 @@ static struct {
         }
         if (*p != '\0') return false;
 
-        backend = Backend::loop;
+        backend = chosen;
         rx_slots = rx; tx_slots = tx; speed = sp;
         rx_mem.assign(rx * ETH_SLOT_SIZE, 0);
         tx_mem.assign(tx * ETH_SLOT_SIZE, 0);
@@ -1202,6 +1239,78 @@ static struct {
         slot.size = ETH_RX_APERTURE;
         while (slot.size < ETH_RX_APERTURE + rx * ETH_SLOT_SIZE) slot.size <<= 1;
         return true;
+    }
+
+    // Opens the TAP device the tap backend names.  The device may exist
+    // already, set up by whoever owns the network it is on, or be
+    // created here; either takes the right to administer that network.
+    bool attach() {
+        if (backend != Backend::tap) return true;
+#ifdef __linux__
+        int fd = open("/dev/net/tun", O_RDWR | O_NONBLOCK);
+        struct ifreq ifr;
+        memset(&ifr, 0, sizeof ifr);
+        ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
+        snprintf(ifr.ifr_name, IFNAMSIZ, "%s", tap_name.c_str());
+        if (fd < 0 || ioctl(fd, TUNSETIFF, &ifr) < 0) {
+            fprintf(stderr, "penumbra-iss: +eth=tap: cannot open TAP device "
+                    "'%s': %s\n  (sw/tools/iss-net.sh runs a command where "
+                    "one can be made without root)\n",
+                    tap_name.c_str(), strerror(errno));
+            if (fd >= 0) close(fd);
+            return false;
+        }
+        tap_fd = fd;
+        return true;
+#else
+        fprintf(stderr, "penumbra-iss: +eth=tap needs a Linux host\n");
+        return false;
+#endif
+    }
+
+    // A frame that has left the wire reaches whatever is on it.  A TAP
+    // device that cannot take the frame loses it, as a wire would.
+    void deliver() {
+        if (backend == Backend::loop) {
+            receive(wire, wire_len);
+        } else if (backend == Backend::tap) {
+            if (::write(tap_fd, wire, wire_len) < 0) { /* lost */ }
+        }
+    }
+
+    // Whether the next frame the host has sent may arrive now.  The
+    // host hands frames over far faster than the link the model
+    // presents could carry them.  Arriving at the link's pace, they
+    // overrun the receive ring only when the guest is slower than its
+    // link, which is when a device on a wire would be overrun too.
+    bool tap_may_deliver(uint64_t now) const {
+        return now >= rx_free_at;
+    }
+
+    // Takes the frames the host has sent, as far as they may arrive.
+    // The host does not pad a short frame as a sender on a wire has
+    // to, so that is done here.
+    void poll_host() {
+        if (backend != Backend::tap) return;
+        service();
+        uint8_t frame[ETH_SLOT_SIZE];
+        while (tap_may_deliver(cpu.insn_count)) {
+            ssize_t n = ::read(tap_fd, frame, sizeof frame);
+            if (n <= 0) break;
+            uint32_t len = uint32_t(n);
+            if (len < ETH_MIN_FRAME) {
+                memset(frame + len, 0, ETH_MIN_FRAME - len);
+                len = ETH_MIN_FRAME;
+            }
+            receive(frame, len);
+            // A frame found waiting may have reached the host's side at
+            // any point since the last look, so it is taken to follow
+            // the one before it from no later than that: the pace is
+            // the link's, not the polling's.
+            uint64_t now = cpu.insn_count;
+            uint64_t last_look = now > ETH_POLL_INSNS ? now - ETH_POLL_INSNS : 0;
+            rx_free_at = std::max(rx_free_at, last_look) + wire_insns(len);
+        }
     }
 
     // IRQ_STATUS: ETH_IRQ_RX and ETH_IRQ_TX, each a condition on the
@@ -1271,7 +1380,7 @@ static struct {
                 tx_busy = false;
                 free_at = tx_done_at;
                 tx_cons++;
-                if (backend == Backend::loop) receive(wire, wire_len);
+                deliver();
             }
             if (tx_flush) { tx_cons = tx_prod; tx_flush = false; }
             if (!(ctrl & ETH_CTRL_TX_EN) || tx_cons == tx_prod) return;
@@ -3744,8 +3853,8 @@ int main(int argc, char** argv) {
         else if (strncmp(argv[i], "+eth=", 5) == 0) {
             if (!eth.configure(argv[i] + 5)) {
                 fprintf(stderr, "penumbra-iss: bad +eth= '%s' "
-                        "(loop[,rx=N][,tx=N][,speed=10|100|1000], N a power "
-                        "of two, tx at most %u)\n", argv[i] + 5,
+                        "(loop|tap[:name][,rx=N][,tx=N][,speed=10|100|1000], "
+                        "N a power of two, tx at most %u)\n", argv[i] + 5,
                         (ETH_RX_APERTURE - ETH_TX_APERTURE) / ETH_SLOT_SIZE);
                 return 1;
             }
@@ -3796,7 +3905,7 @@ int main(int argc, char** argv) {
     }
 
     if (!hex_path) {
-        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+ram=size] [+sdcard=path] [+usbdev=type:config] [+eth=loop[,rx=N][,tx=N][,speed=MBIT]] [+audiofile=path] [+audio_status=busy[:N]|fault[:CODE]] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+pcprof=path [+pcprof_start=addr]] [+irq_at_pc=addr[,period]] [+core=generation] [+cachemodel[=list]] [+tlbmodel[=list]] [+sbmodel[=list] [+sbmodel_cpi=N]] [+bpmodel[=list]] [+pairmodel[=list]] [+model_start=addr] [+model_stop=addr] [+model_report=path]\n");
+        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+ram=size] [+sdcard=path] [+usbdev=type:config] [+eth=loop|tap[:name][,rx=N][,tx=N][,speed=MBIT]] [+audiofile=path] [+audio_status=busy[:N]|fault[:CODE]] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+pcprof=path [+pcprof_start=addr]] [+irq_at_pc=addr[,period]] [+core=generation] [+cachemodel[=list]] [+tlbmodel[=list]] [+sbmodel[=list] [+sbmodel_cpi=N]] [+bpmodel[=list]] [+pairmodel[=list]] [+model_start=addr] [+model_stop=addr] [+model_report=path]\n");
         return 1;
     }
 
@@ -3906,6 +4015,7 @@ int main(int argc, char** argv) {
     SdCardSim sd(sd_path);
     sd_card = sd.is_present() ? &sd : nullptr;
     if (sd_card) fprintf(stderr, "[SD] card emulation active\n");
+    if (!eth.attach()) return 1;
 
     // The attached USB device's personality: "+usbdev=<type>:<config>"
     // selects a device function; without one the port carries the bare
@@ -3987,6 +4097,8 @@ int main(int argc, char** argv) {
 
         // Poll stdin periodically for UART RX
         if ((cpu.insn_count & 0xFF) == 0) poll_uart_rx();
+        // And the host's network for frames, a little less often
+        if ((cpu.insn_count & (ETH_POLL_INSNS - 1)) == 0) eth.poll_host();
     }
 
     // Restore terminal before printing exit summary so \n works normally

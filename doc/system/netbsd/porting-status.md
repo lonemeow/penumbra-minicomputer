@@ -136,14 +136,15 @@ bootinfo — `boot sd:0,0` reaches single-user with no prompts.
   problem.
 
 - **Ethernet (peth):** `CLASS_ETHERNET` driver over the device's
-  slot rings.  It runs on the ISS's adapter (`make simulate
-  ETH=loop`), whose loop backend returns each frame sent: the
-  interface attaches with the device's factory address, `ifconfig`
-  brings it up, and frames go out, come back and are counted, with
-  output resuming by interrupt after a full transmit ring.  No board
-  carries the device, and the ISS adapter reaches no network, so no
-  traffic has crossed it.  A device whose PHY needs managing is
-  refused at attach.
+  slot rings.  It runs on the ISS's adapter: the interface attaches
+  with the device's factory address, and with the adapter on a TAP
+  device (`sw/tools/iss-net.sh make simulate ... ETH=tap`) ARP
+  resolves and ping is answered in both directions against the
+  host's Linux stack.  The adapter's loop backend (`ETH=loop`)
+  exercises a full transmit ring, after which output resumes by
+  interrupt.  No board carries the device, so the driver has run on
+  no hardware.  A device whose PHY needs managing is refused at
+  attach.
 
 - **Audio (paudio):** `CLASS_AUDIO` driver on the four-channel
   device.  Channel 0 plays a PCM stream under MI `audio(4)`

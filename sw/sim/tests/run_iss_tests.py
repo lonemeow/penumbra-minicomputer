@@ -68,6 +68,25 @@ ETH_IRQ_RX, ETH_IRQ_TX = 1, 2
 # The first word of a receive slot holding a frame to the model's
 # station address, 02:50:..., padded to the 60-byte minimum.
 ETH_PADDED_TO_STATION = 60 | (0x02 << 16) | (0x50 << 24)
+# eth_tap_peer.py answers the guest from 02:00:00:00:00:02 with type
+# 0x88B5 and the payload "PEER", in a frame of 18 bytes.  The fourth
+# word of the slot holds the source's last two bytes and the type, the
+# fifth the payload, and the sixth is the padding to 60 bytes.
+ETH_TAP_ARGS = ["+eth=tap:tap0,rx=4,tx=2"]
+ETH_PEER_TAIL_AND_TYPE = 0x00 | (0x02 << 8) | (0x88 << 16) | (0xB5 << 24)
+ETH_PEER_PAYLOAD = int.from_bytes(b"PEER", "little")
+ETH_PEER_BURST = 8      # eth_tap_peer.py's BURST
+
+# A user and network namespace of a case's own, where an unprivileged
+# user may make a TAP device.
+NAMESPACE = ["unshare", "-rn"]
+
+
+def can_make_namespace():
+    try:
+        return subprocess.run(NAMESPACE + ["true"], capture_output=True).returncode == 0
+    except OSError:
+        return False
 
 
 def hierarchy(l1i=(0, 0), l1d=(0, 0, 0, 0), l2=(0, 0, 0, 0), fills=None, prediction=None):
@@ -649,11 +668,16 @@ class Case:
     model's labelled by its hierarchy with hierarchy(...) and a TLB
     model's by "tlb <shadow>" with tlb_misses(...); `error` instead
     expects the ISS to refuse the options with a message matching the
-    pattern."""
+    pattern.  `peer` names a script in this directory that is given the
+    ISS's command line and runs it, inside a network namespace of its
+    own, as the other station on the ISS's Ethernet; such a case is
+    skipped where no namespace can be made."""
 
-    def __init__(self, name, program, plusargs, regs=None, windows=None, error=None):
+    def __init__(self, name, program, plusargs, regs=None, windows=None, error=None,
+                 peer=None):
         self.name, self.program, self.plusargs = name, program, plusargs
         self.regs, self.windows, self.error = regs or {}, windows, error
+        self.peer = peer
 
 
 CASES = [
@@ -711,6 +735,18 @@ CASES = [
          error=r"bad \+eth= 'loop,rx=3'"),
     Case("ethernet transmit ring past its aperture", "eth_loop.s", ["+eth=loop,tx=32"],
          error=r"bad \+eth= 'loop,tx=32'"),
+    # One frame each way through a TAP device.  The peer checks the
+    # guest's frame byte for byte; the guest's registers show the
+    # peer's 18-byte answer arriving padded to 60.
+    Case("ethernet tap", "eth_tap.s", ETH_TAP_ARGS, peer="eth_tap_peer.py",
+         regs={2: 1, 3: ETH_PADDED_TO_STATION, 4: ETH_PEER_TAIL_AND_TYPE,
+               5: ETH_PEER_PAYLOAD, 6: 0}),
+    # Eight frames from the peer at once.  They arrive at the link's
+    # pace, not the host's, so the guest first sees one frame however
+    # many are waiting; then the ring holds four and four are dropped.
+    Case("ethernet tap burst", "eth_tap_burst.s", [ETH_TAP_ARGS[0] + ",speed=10"],
+         peer="eth_tap_peer.py",
+         regs={2: 1, 3: ETH_RX_SLOTS, 4: ETH_PEER_BURST - ETH_RX_SLOTS}),
     Case("cachemodel data", "cache_data.s",
          ["+cachemodel=penumbra1,penumbra2,penumbra2_5,1k/1:1k/1:64k/4,4k/2:4k/2:64k/4"],
          windows=[("reset to exit", {
@@ -969,8 +1005,13 @@ def run_case(case, iss, asm, outdir):
                    stdout=subprocess.DEVNULL)
     report = outdir / (re.sub(r"\W+", "_", case.name) + ".report")
     plusargs = case.plusargs + ([f"+model_report={report}"] if case.windows else [])
+    command = [iss, str(hexfile), "+halt-on-break"] + plusargs
+    if case.peer:
+        if not can_make_namespace():
+            return None
+        command = NAMESPACE + [sys.executable, str(HERE / case.peer)] + command
     try:
-        proc = subprocess.run([iss, str(hexfile), "+halt-on-break"] + plusargs,
+        proc = subprocess.run(command,
                               stdin=subprocess.DEVNULL, capture_output=True,
                               text=True, timeout=RUN_TIMEOUT)
     except subprocess.TimeoutExpired:
@@ -999,15 +1040,21 @@ def main():
     args = ap.parse_args()
     args.outdir.mkdir(parents=True, exist_ok=True)
 
-    failed = 0
+    failed = skipped = 0
     for case in CASES:
         problems = run_case(case, args.iss, shlex.split(args.asm), args.outdir)
+        if problems is None:
+            print(f"  \033[33mSKIP\033[0m  {case.name} (no network namespace to be had)")
+            skipped += 1
+            continue
         verdict = "\033[31mFAIL\033[0m" if problems else "\033[32mPASS\033[0m"
         print(f"  {verdict}  {case.name}")
         for p in problems:
             print(f"          {p}")
         failed += bool(problems)
-    print(f"{len(CASES) - failed}/{len(CASES)} ISS option tests passed")
+    ran = len(CASES) - skipped
+    print(f"{ran - failed}/{ran} ISS option tests passed" +
+          (f", {skipped} skipped" if skipped else ""))
     sys.exit(1 if failed else 0)
 
 
