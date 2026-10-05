@@ -386,13 +386,19 @@ rom.ld ──────────────────┘
   `carry`, `mov`, `imm`, `data`, `ea`, `alu`), `fuse:` fusions
   (`lilui`, `cmpbr`, `opbr`, `movop`), `reach:any|line|pair` (which
   adjacent instructions the fuser sees: any two, two in one line, or
-  an aligned pair), `mem:1|ld2|2`, `flex` (either op in either slot)
-  and `yflags` (only the younger op commits flags):
-  `+pairmodel=dual,dual+fw:cond:mov:imm+fuse:lilui`.  Each window
-  reports pairs by the forward they rely on and by the younger op's
-  class, and singles by what kept the next op out: one cause alone, or
-  several.  **Counts are issue slots only:** no stall, miss or redirect
-  is modelled, and fetch always has the next instruction ready.
+  an aligned pair), `mem:1|ld2|2`, `flex` (either op in either slot),
+  `yflags` (only the younger op commits flags), and a fetch stage:
+  `fetch:N` or `fetch:Nl` (up to N instructions a cycle into a queue,
+  `l` ending a fetch at the end of its line), with `bubble:N` (cycles
+  fetch idles after a redirect, 1 unless given) and `queue:N` (8):
+  `+pairmodel=dual,dual+fw:cond:mov:imm+fuse:lilui+fetch:2l`.  Each
+  window reports cycles by instructions issued, pairs by the forward
+  they rely on and by the younger op's class, and singles by what kept
+  the next op out: one cause alone, or several.  A stage with a fetch
+  stage also reports its idle cycles, fetches, bubbles and cycles the
+  queue was full.  **Counts are issue slots only:** no stall, miss or
+  misprediction is modelled, and without `fetch:` every instruction is
+  at hand when issue wants it.
 - **Execution profiles** (`+pcprof=file` plus
   `sw/tools/pcprof-report.py`) — buckets executed instructions by PC,
   exceptions by vector and TLB misses by faulting page.

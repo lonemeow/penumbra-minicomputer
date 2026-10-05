@@ -5,15 +5,16 @@
 // issue cycles the stream would take: which instructions issue as a
 // pair, which fuse into one op, and what kept the rest apart.  The
 // counts are exact for the architectural stream.  They are issue slots
-// only: no stall, miss or redirect is modelled, and fetch always has the
-// next sequential instruction ready.
+// only: no stall, miss or misprediction is modelled, and every
+// instruction is at hand when issue wants it unless the item gives the
+// stage a fetch stage.
 //
 // An *op* is one instruction, or two adjacent ones a configured fusion
 // combines.  Ops issue in order, one a cycle, or two when the younger
 // may join the older:
 //
 //  - Sequence.  The younger directly follows the older: the older is not
-//    a taken transfer, no trap or interrupt came between them, and
+//    a taken transfer, no exception was entered between them, and
 //    neither trapped.  System instructions (WRSYS, RDSYS, WRSPR, RDSPR,
 //    EI, DI, ERET, SYSCALL, BREAK) issue alone.
 //  - Slots.  The older takes X and the younger Y, each slot issuing only
@@ -55,16 +56,37 @@
 //  - mem:1 | mem:ld2 | mem:2: memory accesses a cycle.
 //  - flex: either op may take either slot.
 //  - yflags: only the younger op of a pair commits flags.
+//  - fetch:N | fetch:Nl: a fetch stage ahead of issue, delivering up to N
+//    instructions a cycle into a queue; `l` also ends a fetch at the end
+//    of its 16-byte line.
+//  - bubble:N: cycles fetch idles after a redirect (1 unless given).
+//  - queue:N: instructions the queue holds (8 unless given).
 //
 // A fused op has the class of its second instruction, except LLI+LUI,
 // which stays a mov.  Fusions do not chain: an instruction is part of at
 // most one, the first that matches in program order.
+//
+// With a fetch stage, a cycle issues from what the queue held when it
+// began, and then fetches:
+//
+//  - Issue takes one op or a pair from the head of the queue and waits
+//    for nothing that has not arrived.  Two instructions fuse only when
+//    both are in the queue; an op with nothing behind it issues alone
+//    ("fetch", among the singles with no candidate); and a cycle that
+//    finds the queue empty is idle, and counts as an issue cycle.
+//  - Fetch delivers one group, when the queue has room for a full one.
+//    A group ends behind a taken transfer, and behind an instruction
+//    that trapped or that an exception was entered behind.  Fetch is
+//    then redirected, and idles for the bubble before the next group.
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -115,10 +137,15 @@ static const char* const FUSION_NAMES[FUSIONS] = { "lilui", "cmpbr", "movop", "o
 enum class FuserReach { Any, Line, Pair };
 static constexpr uint32_t ISSUE_LINE_WORDS = 4;     // a 16-byte line
 
-// Why an op issued alone with no younger op to consider.
-enum class Alone { Taken, Break, System, End };
-static constexpr int ALONES = 4;
-static const char* const ALONE_NAMES[ALONES] = { "taken", "break", "system", "end" };
+// Why an op issued alone with no younger op to consider.  Fetch: the
+// instruction behind it had not reached the queue.
+enum class Alone { Taken, Break, System, End, Fetch };
+static constexpr int ALONES = 5;
+static const char* const ALONE_NAMES[ALONES] = { "taken", "break", "system", "end", "fetch" };
+
+// The most instructions one cycle issues: two ops of two instructions.
+static constexpr size_t CYCLE_INSNS = 4;
+static const char* const CYCLE_INSNS_NAMES[CYCLE_INSNS] = { "one", "two", "three", "four" };
 
 // What kept a younger op from joining, as bits: any number can hold at once.
 enum : uint32_t {
@@ -144,11 +171,23 @@ struct IssueOp {
     bool       reads_carry = false; // ADC, SBC or CMPC: it adds in the C an earlier op wrote
     bool       taken = false;       // a control transfer that left the sequential path
     bool       trapped = false;     // it raised an exception instead of completing
+    bool       interrupted = false; // an exception it did not raise was entered behind it: an
+                                    // interrupt, or a fault ahead of the next instruction's execution
     Shape      shape = Shape::Other;
     int        rd = 0, rs = 0;      // register fields, for the shapes that name them
+    int        fusion = -1;         // the fusion that made it, an index into FUSION_NAMES; -1 when not fused
 };
 
 static inline uint16_t issue_reg_bit(int r) { return (r == 0 || r == 15) ? 0 : uint16_t(1u << r); }
+
+// The instruction executed after `op` is not the one behind it in memory.
+static inline bool leaves_path(const IssueOp& op) { return op.taken || op.trapped || op.interrupted; }
+
+// The words from an instruction to the end of its 16-byte line, its own
+// among them.
+static inline size_t issue_words_to_line_end(const IssueOp& op) {
+    return ISSUE_LINE_WORDS - (op.pc / 4) % ISSUE_LINE_WORDS;
+}
 
 // The op one instruction word makes, before the run says whether it was
 // taken or trapped.
@@ -250,6 +289,111 @@ static inline IssueOp issue_decode(uint32_t pc, uint32_t word) {
 // loads, or any two.
 enum class MemoryLimit { One, TwoLoads, Two };
 
+// A first-in, first-out buffer of instructions, of a fixed capacity.
+class InsnFifo {
+public:
+    explicit InsnFifo(size_t capacity) : slots_(capacity) {}
+    size_t size() const { return count_; }
+    bool   empty() const { return count_ == 0; }
+    // The `i`-th oldest instruction held.
+    const IssueOp& operator[](size_t i) const { return slots_[wrap(head_ + i)]; }
+    IssueOp& newest() { return slots_[wrap(head_ + count_ - 1)]; }
+    void push(const IssueOp& op) { slots_[wrap(head_ + count_++)] = op; }
+    // Drop the `n` oldest.
+    void pop(size_t n) { head_ = wrap(head_ + n); count_ -= n; }
+
+private:
+    size_t wrap(size_t i) const { return i < slots_.size() ? i : i - slots_.size(); }
+
+    std::vector<IssueOp> slots_;
+    size_t head_ = 0, count_ = 0;
+};
+
+// ── The fetch stage ──────────────────────────────────────────────
+struct FetchConfig {
+    size_t width = 1;           // fetch:N — the most instructions one fetch delivers
+    bool   within_line = false; // fetch:Nl — a fetch also ends at the end of its 16-byte line
+    size_t bubble = 1;          // bubble:N — cycles fetch idles after a redirect
+    size_t queue = 8;           // queue:N — instructions the issue queue holds
+};
+
+class FetchStage {
+public:
+    explicit FetchStage(const FetchConfig& c) : cfg_(c), stream_(c.width + 1) {}
+
+    // One executed instruction, in order.
+    void insn(const IssueOp& op) { stream_.push(op); }
+
+    // A cycle can run: the stream holds a full fetch and one instruction
+    // more.  The newest instruction is never fetched while more may come,
+    // since an exception may yet be entered behind it.
+    bool ready() const { return stream_.size() > cfg_.width; }
+
+    bool empty() const { return stream_.empty(); }
+
+    // The instructions executed and not yet fetched, oldest first.
+    InsnFifo& stream() { return stream_; }
+
+    // One cycle's fetch, into the issue queue.
+    void cycle(InsnFifo& queue) {
+        if (bubble_left_) { bubble_left_--; counts_.bubbles++; return; }
+        if (stream_.empty()) return;
+        if (queue.size() + cfg_.width > cfg_.queue) { counts_.full++; return; }
+        Group g = group();
+        if (g.count < 1 || g.count > cfg_.width || g.count > stream_.size()) {
+            fprintf(stderr, "pair_model: a fetch of %zu instructions, with a width of %zu and %zu to fetch\n",
+                    g.count, cfg_.width, stream_.size());
+            abort();
+        }
+        for (size_t i = 0; i < g.count; i++) queue.push(stream_[i]);
+        stream_.pop(g.count);
+        counts_.fetches++;
+        if (g.redirected) bubble_left_ = cfg_.bubble;
+    }
+
+    void clear_counts() { counts_ = Counts(); }
+
+    void report(FILE* out) const {
+        auto n = [](uint64_t v) { return (unsigned long long)v; };
+        fprintf(out, "  fetch: fetches %llu, bubbles %llu, full %llu\n",
+                n(counts_.fetches), n(counts_.bubbles), n(counts_.full));
+    }
+
+private:
+    // What one fetch delivers.
+    struct Group {
+        size_t count;       // instructions, taken in order from the oldest in the stream
+        bool   redirected;  // the last of them leaves the path: fetch continues elsewhere
+    };
+
+    // The group this cycle's fetch delivers from the stream, which is not
+    // empty.  A fetch reaches as far as its width and as the stream
+    // holds, and with within_line no further than the end of its first
+    // instruction's line: any adjacent words of a line make a group.  The
+    // stream's instructions are consecutive in memory up to the first
+    // that leaves the path, so the line's end is a count of them.  The
+    // group ends sooner behind an instruction that leaves the path, which
+    // is in it; fetch is then redirected.
+    Group group() const {
+        size_t reach = std::min(cfg_.width, stream_.size());
+        if (cfg_.within_line) reach = std::min(reach, issue_words_to_line_end(stream_[0]));
+        for (size_t i = 0; i < reach; i++)
+            if (leaves_path(stream_[i])) return { i + 1, true };
+        return { reach, false };
+    }
+
+    struct Counts {
+        uint64_t fetches = 0;   // cycles a fetch delivered a group
+        uint64_t bubbles = 0;   // cycles fetch idled after a redirect
+        uint64_t full = 0;      // cycles the queue had no room for a full fetch
+    };
+
+    FetchConfig cfg_;
+    InsnFifo    stream_;
+    size_t      bubble_left_ = 0;   // cycles fetch still idles after the last redirect
+    Counts      counts_;
+};
+
 // ── One issue stage ──────────────────────────────────────────────
 struct IssueConfig {
     std::string label;
@@ -260,46 +404,59 @@ struct IssueConfig {
     MemoryLimit memory = MemoryLimit::One;
     bool        flex = false;       // the older op may take Y and the younger X
     bool        younger_commits_flags = false;  // yflags: the flag state takes only the younger op's write
+    std::optional<FetchConfig> fetch;   // the fetch stage ahead of the queue, when the item names one
 };
 
 class IssueStage {
 public:
-    explicit IssueStage(IssueConfig c) : cfg_(std::move(c)) {}
-
-    // One executed instruction, in order.
-    void insn(const IssueOp& op) {
-        if (have_first_) {
-            have_first_ = false;
-            IssueOp fused;
-            int kind;
-            if (follows(first_, op) && fuse(first_, op, fused, kind)) {
-                counts_.fused[kind]++;
-                issue(fused);
-                return;
-            }
-            issue(first_);
-        }
-        if (starts_fusion(op)) { first_ = op; have_first_ = true; }
-        else                   issue(op);
+    explicit IssueStage(IssueConfig c)
+        : cfg_(std::move(c)), queue_(cfg_.fetch ? cfg_.fetch->queue : CYCLE_INSNS) {
+        if (cfg_.fetch) fetch_.emplace(*cfg_.fetch);
     }
 
-    // A trap or interrupt is entered: what is waiting issues without
-    // whatever follows it.
-    void boundary() { drain(Alone::Break); }
+    // One executed instruction, in order.  With no fetch stage it is in
+    // the queue at once, and a cycle runs when the queue holds as much as
+    // one can issue: what the cycle does is then settled.
+    void insn(const IssueOp& op) {
+        if (fetch_) {
+            fetch_->insn(op);
+            while (fetch_->ready()) cycle();
+        } else {
+            queue_.push(op);
+            while (queue_.size() == CYCLE_INSNS) cycle();
+        }
+    }
+
+    // An exception was entered behind the newest instruction, which did
+    // not raise it.
+    void interrupted() {
+        InsnFifo& held = fetch_ ? fetch_->stream() : queue_;
+        if (!held.empty()) held.newest().interrupted = true;
+    }
 
     // The window ends: what is waiting issues, and is counted in it.
-    void end_window() { drain(Alone::End); }
+    void end_window() { drain(); }
 
-    void clear_counts() { drain(Alone::End); counts_ = Counts(); }
+    void clear_counts() {
+        drain();
+        counts_ = Counts();
+        if (fetch_) fetch_->clear_counts();
+    }
 
     void report(FILE* out) const {
         const Counts& c = counts_;
         auto n = [](uint64_t v) { return (unsigned long long)v; };
+        uint64_t cycles = c.pairs + c.singles + c.idle;
         fprintf(out, "-- pairing %s\n", cfg_.label.c_str());
-        fprintf(out, "  instructions %llu, ops %llu, issue cycles %llu: %llu pairs, %llu singles\n",
-                n(c.insns), n(c.ops), n(c.pairs + c.singles), n(c.pairs), n(c.singles));
+        fprintf(out, "  instructions %llu, ops %llu, issue cycles %llu: %llu pairs, %llu singles, %llu idle\n",
+                n(c.insns), n(c.ops), n(cycles), n(c.pairs), n(c.singles), n(c.idle));
         fprintf(out, "  issue cycles per 1000 instructions: %.1f\n",
-                c.insns ? (c.pairs + c.singles) * 1000.0 / c.insns : 0.0);
+                c.insns ? cycles * 1000.0 / c.insns : 0.0);
+        fprintf(out, "  cycles by instructions issued:");
+        for (size_t i = 0; i < CYCLE_INSNS; i++)
+            fprintf(out, "%s %s %llu", i ? "," : "", CYCLE_INSNS_NAMES[i], n(c.cycle_insns[i]));
+        fprintf(out, "\n");
+        if (fetch_) fetch_->report(out);
         fprintf(out, "  fused:");
         for (int i = 0; i < FUSIONS; i++)
             fprintf(out, "%s %s %llu", i ? "," : "", FUSION_NAMES[i], n(c.fused[i]));
@@ -331,7 +488,7 @@ private:
 
     // `younger` is the instruction after `older` on the sequential path.
     static bool follows(const IssueOp& older, const IssueOp& younger) {
-        return !older.taken && !older.trapped && !younger.trapped
+        return !leaves_path(older) && !younger.trapped
             && younger.pc == older.pc + 4 * uint32_t(older.insns);
     }
 
@@ -360,23 +517,23 @@ private:
             || (feeds_branch(op) && (cfg_.fusions & FUSE_OPBR));
     }
 
-    bool fuse(const IssueOp& first, const IssueOp& second, IssueOp& fused, int& kind) const {
+    bool fuse(const IssueOp& first, const IssueOp& second, IssueOp& fused) const {
         if (first.shape == Shape::Lli && second.shape == Shape::Lui && first.rd == second.rd) {
             fused = first;                  // a constant, written to Rd
             fused.shape = Shape::Other;
-            kind = 0;
+            fused.fusion = 0;
         } else if (first.shape == Shape::Compare && second.shape == Shape::CondBranch) {
             fused = second;                 // a branch that reads the compare's registers
             fused.reads[int(Use::Operand)] = first.reads[int(Use::Operand)];
             fused.writes_flags = true;
             fused.reads_cond = false;
-            kind = 1;
+            fused.fusion = 1;
         } else if (first.shape == Shape::Mov && second.shape == Shape::TiedAlu
                    && second.rd == first.rd && first.writes) {
             fused = second;                 // the op, reading the MOV's source in Rd's place
             fused.reads[int(Use::Operand)] =
                 (second.reads[int(Use::Operand)] & ~first.writes) | first.reads[int(Use::Operand)];
-            kind = 2;
+            fused.fusion = 2;
         } else if (feeds_branch(first) && second.shape == Shape::CondBranch) {
             fused = second;                 // a branch that also does the op
             fused.reads[int(Use::Operand)] = first.reads[int(Use::Operand)];
@@ -384,13 +541,29 @@ private:
             fused.produces = first.produces;
             fused.writes_flags = true;
             fused.reads_cond = false;
-            kind = 3;
+            fused.fusion = 3;
         } else {
             return false;
         }
         fused.pc = first.pc;
         fused.insns = 2;
+        // What is executed after the fused op is what follows its second
+        // instruction.
+        fused.taken = second.taken;
+        fused.interrupted = second.interrupted;
         return true;
+    }
+
+    // The op that starts at the queue's `at`-th instruction: that
+    // instruction, or it fused with the one behind it when that one is in
+    // the queue.
+    IssueOp op_at(size_t at) const {
+        const IssueOp& first = queue_[at];
+        IssueOp fused;
+        if (at + 1 < queue_.size() && starts_fusion(first) && follows(first, queue_[at + 1])
+            && fuse(first, queue_[at + 1], fused))
+            return fused;
+        return first;
     }
 
     // ── Pairing ──
@@ -453,7 +626,8 @@ private:
     // ── Whether this stage issues it ──
     Verdict judge(const IssueOp& older, const IssueOp& younger) const {
         Verdict v;
-        if (older.trapped || younger.trapped)        { v.alone = Alone::Break;  return v; }
+        if (older.trapped || older.interrupted || younger.trapped)
+                                                     { v.alone = Alone::Break;  return v; }
         if (older.cls == IssueClass::System || younger.cls == IssueClass::System)
                                                      { v.alone = Alone::System; return v; }
         if (older.taken)                             { v.alone = Alone::Taken;  return v; }
@@ -492,21 +666,75 @@ private:
         return v;
     }
 
-    void issue(const IssueOp& op) {
-        if (!have_older_) { older_ = op; have_older_ = true; return; }
-        Verdict v = judge(older_, op);
-        if (v.pairs) {
-            have_older_ = false;
-            counts_.insns += older_.insns + op.insns;
-            counts_.ops += 2;
-            counts_.pairs++;
-            counts_.pair_younger[int(op.cls)]++;
-            if (!v.forwards) counts_.pair_plain++;
-            for (int i = 0; i < FORWARDS; i++)
-                if (v.forwards & (1u << i)) counts_.pair_forward[i]++;
-            return;
+    // Why an op issues alone when the queue holds nothing behind it.
+    Alone alone_at_tail(const IssueOp& op) const {
+        if (!fetch_ || fetch_->empty())     return Alone::End;      // nothing more was executed
+        if (op.trapped || op.interrupted)   return Alone::Break;
+        if (op.cls == IssueClass::System)   return Alone::System;
+        if (op.taken)                       return Alone::Taken;
+        return Alone::Fetch;
+    }
+
+    // ── A cycle ──
+    // Issue from what the queue holds, then fetch into it.
+    void cycle() {
+        if (queue_.empty()) counts_.idle++;
+        else                queue_.pop(issue());
+        if (fetch_) fetch_->cycle(queue_);
+    }
+
+    // Issue one op, or a pair, from the head of the queue.  Returns the
+    // instructions that leave it.
+    size_t issue() {
+        IssueOp older = op_at(0);
+        size_t issued = older.insns;
+        if (issued == queue_.size()) {
+            count_single(older);
+            counts_.single_alone[int(alone_at_tail(older))]++;
+        } else {
+            IssueOp younger = op_at(issued);
+            Verdict v = judge(older, younger);
+            if (v.pairs) {
+                count_pair(older, younger, v);
+                issued += younger.insns;
+            } else {
+                count_single(older);
+                count_kept_out(v);
+            }
         }
-        count_single(older_);
+        counts_.cycle_insns[issued - 1]++;
+        return issued;
+    }
+
+    // Run until everything executed has issued.
+    void drain() {
+        while (!queue_.empty() || (fetch_ && !fetch_->empty())) cycle();
+    }
+
+    void count_op(const IssueOp& op) {
+        counts_.insns += op.insns;
+        counts_.ops++;
+        if (op.fusion >= 0) counts_.fused[op.fusion]++;
+    }
+
+    void count_pair(const IssueOp& older, const IssueOp& younger, const Verdict& v) {
+        count_op(older);
+        count_op(younger);
+        counts_.pairs++;
+        counts_.pair_younger[int(younger.cls)]++;
+        if (!v.forwards) counts_.pair_plain++;
+        for (int i = 0; i < FORWARDS; i++)
+            if (v.forwards & (1u << i)) counts_.pair_forward[i]++;
+    }
+
+    void count_single(const IssueOp& op) {
+        count_op(op);
+        counts_.singles++;
+        counts_.single_class[int(op.cls)]++;
+    }
+
+    // A single that the op behind it did not join: why.
+    void count_kept_out(const Verdict& v) {
         if (!v.candidate) {
             counts_.single_alone[int(v.alone)]++;
         } else if (v.causes & (v.causes - 1)) {
@@ -516,27 +744,12 @@ private:
         } else {
             counts_.single_sole[__builtin_ctz(v.causes)]++;
         }
-        older_ = op;
-    }
-
-    void count_single(const IssueOp& op) {
-        counts_.insns += op.insns;
-        counts_.ops++;
-        counts_.singles++;
-        counts_.single_class[int(op.cls)]++;
-    }
-
-    void drain(Alone why) {
-        if (have_first_) { have_first_ = false; issue(first_); }
-        if (have_older_) {
-            have_older_ = false;
-            count_single(older_);
-            counts_.single_alone[int(why)]++;
-        }
     }
 
     struct Counts {
         uint64_t insns = 0, ops = 0, pairs = 0, singles = 0;
+        uint64_t idle = 0;                      // cycles that found the queue empty
+        uint64_t cycle_insns[CYCLE_INSNS] = {}; // cycles by instructions issued, from one up
         uint64_t fused[FUSIONS] = {};
         uint64_t pair_plain = 0, pair_forward[FORWARDS] = {};   // a pair counts under each forward it uses
         uint64_t pair_younger[ISSUE_CLASSES] = {}, single_class[ISSUE_CLASSES] = {};
@@ -546,10 +759,8 @@ private:
     };
 
     IssueConfig cfg_;
-    IssueOp     first_;                 // an instruction held to see whether the next fuses with it
-    bool        have_first_ = false;
-    IssueOp     older_;                 // an op waiting to see whether the next joins it
-    bool        have_older_ = false;
+    InsnFifo    queue_;                 // instructions issue can take, oldest first
+    std::optional<FetchStage> fetch_;   // what fills the queue, when the item names a fetch stage
     Counts      counts_;
 };
 
@@ -587,9 +798,19 @@ public:
         IssueOp op = issue_decode(pc, word);
         op.taken = taken;
         op.trapped = trapped;
-        for (auto& s : stages_) s.insn(op);
+        // An exception entered since the last instruction, other than the
+        // one this instruction raised, was entered behind the last one.
+        bool behind_last = exceptions_ > (trapped ? 1u : 0u);
+        exceptions_ = 0;
+        for (auto& s : stages_) {
+            if (behind_last) s.interrupted();
+            s.insn(op);
+        }
     }
-    void boundary() { for (auto& s : stages_) s.boundary(); }
+    // An exception is entered, a boundary in the stream: an interrupt, a
+    // fault ahead of an instruction's execution, or the trap of the
+    // instruction that insn() brings next.
+    void boundary() { exceptions_++; }
     void end_window() { for (auto& s : stages_) s.end_window(); }
     void clear_counts() { for (auto& s : stages_) s.clear_counts(); }
     void report(FILE* out) const { for (const auto& s : stages_) s.report(out); }
@@ -626,10 +847,20 @@ private:
         });
     }
 
+    // A decimal count of at least `least`.
+    static bool parse_count(const std::string& text, size_t least, size_t& count) {
+        if (text.empty() || text.size() > 5 || text.find_first_not_of("0123456789") != std::string::npos)
+            return false;
+        count = std::stoul(text);
+        return count >= least;
+    }
+
     static bool parse_item(const std::string& item, IssueConfig& c, std::string& err) {
         c.label = item;
         size_t pos = 0;
         bool based = false;
+        FetchConfig fetch;
+        bool fetches = false, shapes_fetch = false;     // fetch: was given; bubble: or queue: was
         while (pos <= item.size()) {
             size_t plus = item.find('+', pos);
             std::string part = item.substr(pos, plus == std::string::npos ? std::string::npos : plus - pos);
@@ -662,17 +893,43 @@ private:
                 ok = for_each_part(list("fuse:"), [&](const std::string& name) {
                     return named_bit(name, FUSION_NAMES, FUSIONS, c.fusions);
                 });
+            else if (!list("fetch:").empty()) {
+                std::string width = list("fetch:");
+                fetch.within_line = width.back() == 'l';
+                if (fetch.within_line) width.pop_back();
+                ok = parse_count(width, 1, fetch.width);
+                fetches = true;
+            }
+            else if (!list("bubble:").empty()) {
+                ok = parse_count(list("bubble:"), 0, fetch.bubble);
+                shapes_fetch = true;
+            }
+            else if (!list("queue:").empty()) {
+                ok = parse_count(list("queue:"), 1, fetch.queue);
+                shapes_fetch = true;
+            }
             else ok = false;
             if (!ok) {
                 err = "unknown modifier '" + part + "' (x:CLASSES, y:CLASSES, fw:FORWARDS,"
-                      " fuse:FUSIONS, reach:any|line|pair, mem:1|ld2|2, flex, yflags)";
+                      " fuse:FUSIONS, reach:any|line|pair, mem:1|ld2|2, flex, yflags,"
+                      " fetch:N[l], bubble:N, queue:N)";
                 return false;
             }
             if (plus == std::string::npos) break;
             pos = plus + 1;
         }
+        if (shapes_fetch && !fetches) {
+            err = "bubble: and queue: shape a fetch stage, and need fetch:";
+            return false;
+        }
+        if (fetches && fetch.queue < fetch.width) {
+            err = "the queue holds less than one fetch delivers";
+            return false;
+        }
+        if (fetches) c.fetch = fetch;
         return true;
     }
 
     std::vector<IssueStage> stages_;
+    unsigned exceptions_ = 0;   // exceptions entered since the last instruction
 };

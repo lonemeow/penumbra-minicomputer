@@ -256,7 +256,7 @@ BP_BASIC = {
 
 
 def pairing(insns, pairs=0, fused=None, forward=None, younger=None, alone=None, one=None,
-            several=(0, {})):
+            several=(0, {}), idle=0, fetch=None, sizes=None):
     """An issue stage's expected counts over one window, each a dict of
     the report's names holding only what is not zero: instructions
     `fused` away by kind; `pairs` by the `forward` each relies on ("none"
@@ -264,14 +264,22 @@ def pairing(insns, pairs=0, fused=None, forward=None, younger=None, alone=None, 
     singles that had no candidate to pair with, by why (`alone`); singles
     whose candidate was kept out by `one` cause; and `several` as (singles
     kept out by more than one cause, how often each cause was among
-    them)."""
+    them).  `idle` cycles issue nothing, which takes a fetch stage;
+    `fetch` is that stage's fetches, bubbles and cycles with a full
+    queue.  `sizes`, checked where given, is the cycles by instructions
+    issued."""
     fused = fused or {}
     ops = insns - sum(fused.values())
     singles = ops - 2 * pairs
-    return {"pair": {"issued": (insns, ops, pairs + singles, pairs, singles),
-                     "fused": fused, "pairs by forward": forward or {},
-                     "pairs by younger": younger or {}, "singles, no candidate": alone or {},
-                     "singles, one cause": one or {}, "singles, several causes": several}}
+    counts = {"issued": (insns, ops, pairs + singles + idle, pairs, singles, idle),
+              "fused": fused, "pairs by forward": forward or {},
+              "pairs by younger": younger or {}, "singles, no candidate": alone or {},
+              "singles, one cause": one or {}, "singles, several causes": several}
+    if fetch is not None:
+        counts["fetch"] = fetch
+    if sizes is not None:
+        counts["cycles by instructions issued"] = sizes
+    return {"pair": counts}
 
 
 # Every pair_*.s probe ends in a DI, which issues alone, and so does a
@@ -448,7 +456,7 @@ def fusing(insns, fused):
     stake: `fused` instructions by kind, and so the ops and issue cycles
     left."""
     ops = insns - sum(fused.values())
-    return {"pair": {"issued": (insns, ops, ops, 0, ops), "fused": fused}}
+    return {"pair": {"issued": (insns, ops, ops, 0, ops, 0), "fused": fused}}
 
 
 # pair_opbr.s: 30 instructions, 11 of them DI or BREAK.
@@ -485,10 +493,124 @@ PAIR_REACH = {
 }
 
 
-def pair_case(name, program, stages):
+# pair_fetch.s: 12 instructions: six MOVs, a taken B, four MOVs and the
+# BREAK.  With every instruction at hand, `dual` pairs the MOVs two by
+# two, and the B ("taken") and the BREAK ("end") issue alone.  The third
+# MOV of the B's target line reads the second, which keeps `single`'s
+# second from it for two reasons and would keep `dual`'s, were those two
+# ever older and younger.  A fetch stage's first cycle finds the queue
+# empty and is idle.  Fetch runs a cycle ahead of issue, so where the
+# stage does not say otherwise the two-wide ones pair as `dual` does.
+#   single+fetch:1:   the queue never holds two instructions, so each
+#                     issues with nothing behind it ("fetch").  The cycle
+#                     after the B's fetch is a bubble, and the one after
+#                     that idle.
+#   single+fetch:2+queue:4:  fetch outruns issue, and twice finds the
+#                     queue without room for two.
+#   dual+fetch:2:     the B is fetched alone, the next fetch waits out the
+#                     bubble, and issue is idle for a cycle behind the B.
+#   +fetch:2l:        the target line's first two MOVs arrive together,
+#                     from an odd word, and pair.  Its third is fetched
+#                     alone and issues with nothing behind it; the MOV
+#                     after it is left with the BREAK ("system").
+#   +fetch:4l:        the B arrives with the two MOVs ahead of it, and the
+#                     bubble passes while they issue.
+#   +fetch:4l+queue:4:  a fetch waits for an empty queue, twice a cycle
+#                     longer than without the limit; the target line's
+#                     last MOV again issues alone.
+#   +fetch:4+queue:4:  across the line, that MOV arrives with the one
+#                     behind it, and they pair.
+#   +bubble:0, +bubble:2:  the idle cycle behind the B goes, or is two.
+PAIR_FETCH_AS_DUAL = dict(pairs=5, forward={"none": 5}, younger={"mov": 5},
+                          alone={"taken": 1, "end": 1}, sizes={"one": 2, "two": 5})
+PAIR_FETCH_LINE_END = dict(pairs=4, forward={"none": 4}, younger={"mov": 4},
+                           alone={"taken": 1, "system": 1, "end": 1, "fetch": 1},
+                           sizes={"one": 4, "two": 4})
+PAIR_FETCH_SINGLE = dict(alone={"taken": 1, "system": 1, "end": 1}, one={"slot-older": 8},
+                         several=(1, {"slot-older": 1, "operand": 1}))
+PAIR_FETCH = {
+    "pairing single": pairing(12, **PAIR_FETCH_SINGLE, sizes={"one": 12}),
+    "pairing dual": pairing(12, **PAIR_FETCH_AS_DUAL),
+    "pairing single+fetch:1": pairing(12, alone={"taken": 1, "end": 1, "fetch": 10}, idle=2,
+                                      fetch={"fetches": 12, "bubbles": 1}, sizes={"one": 12}),
+    "pairing single+fetch:2+queue:4": pairing(
+        12, **PAIR_FETCH_SINGLE, idle=1, fetch={"fetches": 7, "bubbles": 1, "full": 2}),
+    "pairing dual+fetch:2": pairing(12, **PAIR_FETCH_AS_DUAL, idle=2,
+                                    fetch={"fetches": 7, "bubbles": 1}),
+    "pairing dual+fetch:2l": pairing(12, **PAIR_FETCH_LINE_END, idle=2,
+                                     fetch={"fetches": 7, "bubbles": 1}),
+    "pairing dual+fetch:4l": pairing(12, **PAIR_FETCH_AS_DUAL, idle=1,
+                                     fetch={"fetches": 4, "bubbles": 1}),
+    "pairing dual+fetch:4l+queue:4": pairing(12, **PAIR_FETCH_LINE_END, idle=1,
+                                             fetch={"fetches": 4, "bubbles": 1, "full": 2}),
+    "pairing dual+fetch:4+queue:4": pairing(12, **PAIR_FETCH_AS_DUAL, idle=1,
+                                            fetch={"fetches": 4, "bubbles": 1, "full": 2}),
+    "pairing dual+fetch:2+bubble:0": pairing(12, **PAIR_FETCH_AS_DUAL, idle=1,
+                                             fetch={"fetches": 7}),
+    "pairing dual+fetch:2+bubble:2": pairing(12, **PAIR_FETCH_AS_DUAL, idle=3,
+                                             fetch={"fetches": 7, "bubbles": 2}),
+}
+
+# pair_reach.s behind a fetch stage: two instructions fuse only when the
+# queue holds both.
+#   fetch:1:  it never does: nine singles, each LLI and LUI with nothing
+#             behind it.
+#   fetch:2:  all three pairs fuse, the straddling one too: its LUI
+#             arrives while the DI ahead of its LLI issues.  The first
+#             fused op issues with nothing behind it, the second ahead of
+#             the third pair's LLI, which X cannot issue.
+PAIR_FETCH_FUSE = {
+    "pairing single+fuse:lilui+fetch:1": pairing(
+        9, alone={"system": 2, "end": 1, "fetch": 6}, idle=1, fetch={"fetches": 9}),
+    "pairing single+fuse:lilui+fetch:2": pairing(
+        9, fused={"lilui": 3}, alone={"system": 3, "end": 1, "fetch": 1}, one={"slot-older": 1},
+        idle=1, fetch={"fetches": 5}, sizes={"one": 3, "two": 3}),
+}
+
+# pair_trap.s behind a fetch stage: the trapping LDW ends its fetch and
+# redirects it, as the handler's ERET does, so two bubbles; each op issues
+# as it does with every instruction at hand.
+#   fetch:2:   seven fetches.
+#   fetch:4l:  the handler's first three instructions end their line, and
+#              the ERET is the first word of the next.  It is fetched
+#              alone: a fetch crosses no line, not even for the
+#              instruction that would end it.  Six fetches, and issue
+#              falls far enough behind that two find the queue full.
+PAIR_FETCH_TRAP_ISSUE = dict(alone={"break": 2, "system": 7, "end": 1},
+                             one={"slot-older": 1, "operand": 1, "data": 1}, idle=1)
+PAIR_FETCH_TRAP = {
+    "pairing dual+fetch:2": pairing(13, **PAIR_FETCH_TRAP_ISSUE,
+                                    fetch={"fetches": 7, "bubbles": 2}),
+    "pairing dual+fetch:4l": pairing(13, **PAIR_FETCH_TRAP_ISSUE,
+                                     fetch={"fetches": 6, "bubbles": 2, "full": 2}),
+}
+
+# pair_irq.s: 12 instructions.  The MOV the interrupt is entered behind
+# issues alone ("break"), though the handler's first instruction is no
+# system one.  STW, EI, the handler's LUI ahead of its WRSPR, WRSPR and
+# ERET count under "system"; the two MOVs after the return pair.
+#   dual:        each LLI feeds its LUI, and the first LUI the STW's data.
+#   fuse:lilui:  both constants fuse; the first feeds the STW's data and
+#                the second issues ahead of the WRSPR.
+#   fetch:2:     the interrupted MOV ends its fetch and redirects it, as
+#                the ERET does: two bubbles.
+PAIR_IRQ_ALONE = {"break": 1, "system": 5, "end": 1}
+PAIR_IRQ = {
+    "pairing dual": pairing(12, 1, forward={"none": 1}, younger={"mov": 1}, alone=PAIR_IRQ_ALONE,
+                            one={"operand": 2, "data": 1}),
+    "pairing dual+fuse:lilui": pairing(12, 1, fused={"lilui": 2}, forward={"none": 1},
+                                       younger={"mov": 1}, alone=PAIR_IRQ_ALONE, one={"data": 1}),
+    "pairing dual+fetch:2": pairing(12, 1, forward={"none": 1}, younger={"mov": 1},
+                                    alone=PAIR_IRQ_ALONE, one={"operand": 2, "data": 1}, idle=1,
+                                    fetch={"fetches": 7, "bubbles": 2}),
+}
+
+
+def pair_case(name, program, stages, plusargs=()):
     """A case running `program` through the stages of `stages`, a dict
     of "pairing <item>" labels."""
-    return Case(name, program, ["+pairmodel=" + ",".join(k[len("pairing "):] for k in stages)],
+    items = ",".join(k[len("pairing "):] for k in stages)
+    return Case(name, program, ["+pairmodel=" + items, *plusargs],
                 windows=[("reset to exit", stages)])
 
 
@@ -615,6 +737,10 @@ CASES = [
     pair_case("pairmodel traps", "pair_trap.s", PAIR_TRAP),
     pair_case("pairmodel op-and-branch fusion", "pair_opbr.s", PAIR_OPBR),
     pair_case("pairmodel fuser reach", "pair_reach.s", PAIR_REACH),
+    pair_case("pairmodel fetch stage", "pair_fetch.s", PAIR_FETCH),
+    pair_case("pairmodel fusion behind a fetch stage", "pair_reach.s", PAIR_FETCH_FUSE),
+    pair_case("pairmodel trap behind a fetch stage", "pair_trap.s", PAIR_FETCH_TRAP),
+    pair_case("pairmodel interrupt", "pair_irq.s", PAIR_IRQ, ["+irq_at_pc=0xFFFF0014"]),
 ] + [
     pair_case(f"pairmodel flags: {rule}", "pair_flags.s", {f"pairing {item}": PAIR_FLAGS[item]})
     for item, rule in PAIR_FLAGS_CASES.items()
@@ -627,6 +753,13 @@ CASES = [
          error=r"unknown modifier 'x:alu:fpu'"),
     Case("pairmodel unknown reach", "pair_reach.s", ["+pairmodel=dual+reach:far"],
          error=r"unknown modifier 'reach:far'"),
+    Case("pairmodel fetch of nothing", "pair_fetch.s", ["+pairmodel=dual+fetch:0"],
+         error=r"unknown modifier 'fetch:0'"),
+    Case("pairmodel queue with no fetch stage", "pair_fetch.s", ["+pairmodel=dual+queue:16"],
+         error=r"bubble: and queue: shape a fetch stage"),
+    Case("pairmodel queue smaller than a fetch", "pair_fetch.s",
+         ["+pairmodel=dual+fetch:4+queue:2"],
+         error=r"the queue holds less than one fetch delivers"),
     Case("sbmodel needs cachemodel", "sb_window.s", ["+sbmodel"],
          error=r"\+sbmodel needs \+cachemodel"),
     Case("sbmodel unknown policy", "sb_window.s", ["+cachemodel", "+sbmodel=8l/some/bus"],
@@ -686,7 +819,7 @@ def parse_report(text):
             counts = windows[-1][1].setdefault(f"pairing {m.group(1)}", {"pair": {}})
             continue
         m = re.match(r"\s+instructions (\d+), ops (\d+), issue cycles (\d+): (\d+) pairs,"
-                     r" (\d+) singles", line)
+                     r" (\d+) singles, (\d+) idle", line)
         if m:
             counts["pair"]["issued"] = tuple(int(v) for v in m.groups())
             continue
@@ -694,8 +827,9 @@ def parse_report(text):
         if m:
             counts["pair"]["singles, several causes"] = (int(m.group(1)), named_counts(m.group(2)))
             continue
-        m = re.match(r"\s+(fused|pairs by forward|pairs by younger|singles by class"
-                     r"|singles, no candidate|singles, one cause): (.*)", line)
+        m = re.match(r"\s+(cycles by instructions issued|fetch|fused|pairs by forward"
+                     r"|pairs by younger|singles by class|singles, no candidate"
+                     r"|singles, one cause): (.*)", line)
         if m:
             counts["pair"][m.group(1)] = named_counts(m.group(2))
             continue
