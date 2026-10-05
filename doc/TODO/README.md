@@ -11,6 +11,7 @@ open entries plus the findings that motivate them.
 | [hw-build.md](hw-build.md) | Build system and test matrix, shared by every board |
 | [hw-ulx3s.md](hw-ulx3s.md) | Work bound to the ULX3S board |
 | [hw-nexysvideo.md](hw-nexysvideo.md) | Work bound to the Nexys Video board |
+| [rom.md](rom.md) | Boot ROM: bring-up, autoconfig, monitor, loading the first program |
 | [compiler.md](compiler.md) | LLVM backend: ranked levers and the per-area files below |
 | [compiler-selection.md](compiler-selection.md) | Compares, flags, booleans, extensions |
 | [compiler-addressing.md](compiler-addressing.md) | Global addresses, PIC, constants, rematerialization |
