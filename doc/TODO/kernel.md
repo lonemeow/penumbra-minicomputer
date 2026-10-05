@@ -461,6 +461,73 @@ Open, either of:
   sequences from the vector page covers `tlb_subr.S` but not the
   inlined `pmap_pin_slot()`.
 
+## Kernel: the TLB refill handler waits on six of its own reads
+
+`_real_miss_handler` reads a value and uses it in the very next
+instruction in six places.  On `penumbra2_5` a load and an `RDSYS`
+both issue in 2 cycles with a latency of 3
+([instruction-timing.md](../system/instruction-timing.md)), so each
+of those readers waits a cycle.  No compiler change reaches them.
+The handler is hand-written, and it runs from the pinned vector page,
+so the kernel's load-use counts in
+[compiler-pipeline.md](compiler-pipeline.md#compiler-the-costs-the-compiler-is-not-told)
+leave it out.
+
+Counted 2026-10-04 on the ISS, from the execution profiles of that
+entry's baseline builds:
+
+| | Doom `demo3` | `pbench kernel` |
+|---|---:|---:|
+| Refills | 8.10 M | 3.23 M |
+| The handler's share of all instructions executed | 15.6% | 23.9% |
+| Readers that wait, per refill | 5.94 | 5.12 |
+| Refills of a non-global page | 94% | 12% |
+
+At a cycle each that is about 6 cycles of a ~137-cycle refill
+([memory-performance.md](../internals/penumbra3/memory-performance.md#tlb-sets-and-a-cheaper-refill)),
+and 48 M cycles over the Doom demo.  The waits are the reference's
+figures applied to instruction counts; nothing here was measured in
+cycles.
+
+The six, in handler order:
+
+| Read | Its reader | What hides the wait |
+|---|---|---|
+| `rdsys r1, MMU_FAULT_ADDR`, at entry | `mov r2, r1` | reading once `r1` is saved, ahead of the other two saves |
+| `ldw r3, [r3]`, the L1 entry | `test r3, #PTE_V` | `lli r2, #PTLB_L2WIN` moved between them |
+| `ldw r3, [r3]`, the PTE | `test r3, #PTE_V` | the `CPU_CYCLES` read moved between them |
+| `rdsys r2, CPU_CYCLES` | `and r2, #0x20` | the same move |
+| `rdsys r1, MMU_FAULT_ADDR`, the second | `shr r1, #12` | reading into `r2` ahead of the `MMU_TLB_INDEX` write, with `r1` and `r2` trading roles after it |
+| `rdsys r2, MMU_MMUCR`, non-global pages only | `shr r2, #MMUCR_ASID_SHIFT` | nothing free |
+
+The first five cost nothing:
+
+- **They add no instruction,** so the handler's size and everything
+  placed after it on the vector page stay where they are.
+- **They write only `r1`–`r3` ahead of the validity checks,** and the
+  fault path restores all three from the scratch SPRs.
+- **A refill that ends in a fault discards what was moved ahead of
+  its check.**  That is the `CPU_CYCLES` read when the PTE is
+  invalid: 95 of Doom's 8.1 M refills, and 6,272 of `pbench kernel`'s
+  3.2 M.
+
+The sixth is a trade.  Reading `MMU_MMUCR` ahead of the `PTE_G` test
+hides the wait on a non-global page and costs a global page a 2-cycle
+read it throws away, and the two workloads sit at opposite ends of
+that mix.
+
+Open:
+
+- Make the five moves, and measure a refill before and after on the
+  machine trace that gave the ~137-cycle figure.
+- Decide the sixth from the global and non-global mix of the
+  workloads that matter.
+- gen3 doubles a load's wait
+  ([memory completion](../internals/penumbra3/memory-completion.md#load-hit--a-registered-load-use-hazard)),
+  so there the two page-table loads want two instructions between
+  each and its reader.  Whether `RDSYS` waits longer on gen3 too is
+  not stated in its documents.
+
 ## Kernel: networking — first NIC through the USB host controller
 
 Decision: the first network adapter is a **USB NIC on the CLASS_USBHC
