@@ -181,15 +181,15 @@ targets opt into are silently off.  Status per item:
   reference's two figures map onto a model directly — issue onto the
   resource cycles an instruction occupies, latency onto its `WriteRes`
   latency — where today's models state issue as the latency and carry
-  `penumbra2`'s extra wait as a `ReadAdvance`.  Doom's column loop pays the wait twice per
-  pixel, on its texel and colormap loads; unrolling it first
-  (`getUnrollingPreferences` is not implemented) gives a scheduler
-  independent work to place between each load and its use.  The model's
-  `WriteMul`/`WriteDiv` also state 10 and 34 where the reference
-  measures 11 and 35 — the old figures were measured beside a loop's
-  closing branch, which hides a cycle — and `compiler-arith.md`'s
-  penumbra2_5 cycle column, computed at the model's rate, moves with
-  them.
+  `penumbra2`'s extra wait as a `ReadAdvance`.
+
+  **Measured 2026-10-04 on `penumbra2_5`, and not the scheduler to
+  enable.**  With the load and store figures in the model, this
+  scheduler adds instructions and register saves to Doom and hides no
+  more load-use waits than the one after register allocation does
+  alone
+  ([the costs the compiler is not told](#compiler-the-costs-the-compiler-is-not-told)).
+  What is left to try is in that entry's open list.
 - **Tail calls**: `PenumbraCallLowering.cpp` hardcodes
   `Info.IsTailCall = false` (`// TODO: tail calls`).  Wrapper-heavy
   kernel code pays a full frame per hop.  Measured opportunity and a
@@ -244,7 +244,11 @@ targets opt into are silently off.  Status per item:
 - **PostRA scheduler** (no Penumbra scheduling model sets
   `PostRAScheduler`): pointless for gen1 (single-cycle, no pipeline);
   belongs in a pipelined generation's own scheduling model (hide
-  load-use and divmul latency).
+  load-use and divmul latency).  Measured 2026-10-04 on
+  `penumbra2_5`: with the load and store figures in the model it
+  removes half of Doom's and Dhrystone's load-use pairs and changes
+  no instruction count
+  ([the costs the compiler is not told](#compiler-the-costs-the-compiler-is-not-told)).
 - **MachineCombiner** (`getMachineCombinerPatterns` + sched model):
   reassociation for ILP — little to gain at IssueWidth=1; revisit
   with gen2.
@@ -727,8 +731,11 @@ path rather than summing — cannot see distance.
 the constant proves too coarse.  So a gen2 model is
 `ReadAdvance<ReadGPR, -3>` on every GPR read plus MachineScheduler
 enabled for that tuning; gen2.5 would add only
-`ReadAdvance<ReadGPR, -1, [WriteLoad]>` for its load-use interlock,
-which is little to gain for the cost of enabling the pass.
+`ReadAdvance<ReadGPR, -1, [WriteLoad]>` for its load-use interlock.
+Measured 2026-10-04, that one fact is worth half of Doom's load-use
+pairs once a scheduler runs after register allocation, and the
+scheduler before it costs more than it gains
+([the costs the compiler is not told](#compiler-the-costs-the-compiler-is-not-told)).
 
 **gen3 doubles the load's wait.**  A load's value forwards from the
 register behind the last memory stage, so its reader waits two cycles
@@ -741,9 +748,11 @@ and 71 at gen2.5's one cycle
 ([penumbra4/load-use.md](../internals/penumbra4/load-use.md)).  In a
 model that is gen2.5's line with the wait doubled,
 `ReadAdvance<ReadGPR, -2, [WriteLoad]>`.  The count is the most a
-schedule could hide, not what one would: how often an independent
-instruction is there to move between a load and its reader is not
-measured, and that decides whether enabling the pass pays on gen3.
+schedule could hide, not what one would.  A schedule made for
+`penumbra2_5` hides 30% of Doom's gen3 waits, by a count of adjacent
+load-use pairs; what one made for gen3's own wait hides is not
+measured
+([the costs the compiler is not told](#compiler-the-costs-the-compiler-is-not-told)).
 
 ### Branch costs
 
@@ -824,6 +833,257 @@ on the ULX3S, not the ISS.
 - Default-generation policy lives in `generic`'s definition in
   `Penumbra.td` (it follows the most-used variant);
   `PenumbraSubtarget::DefaultCPU` only names `generic`.
+
+## Compiler: the costs the compiler is not told
+
+The scheduling models state how long an ALU operation, a multiply and
+a divide take ([scheduling-models.md](../llvm/scheduling-models.md)).
+Every other cost is LLVM's default, and the defaults describe a
+machine where a load, a store, a call and a register save each cost
+about what an ALU operation does.  On the pipelined generations they
+do not ([instruction-timing.md](../system/instruction-timing.md)):
+
+| Cost | What the compiler assumes | `penumbra2_5` |
+|---|---|---|
+| Load | no scheduling class, `LoadLatency = 1` | issues in 2 cycles, latency 3 |
+| Store | no scheduling class | 6 cycles |
+| Call and return | the inliner's call penalty of 25, five instructions' worth | 7 cycles, and 8 more for each register the callee saves and restores |
+| Jump-table dispatch | preferred from 4 cases | 11 cycles: five instructions, one a load whose reader waits, one a jump that is never predicted |
+| First use of a callee-saved register | free: `getCSRFirstUseCost` returns 0 | a store and a load on every call, 8 cycles |
+
+The traffic those costs fall on, counted from execution profiles of
+code built by the compiler at `3f0f7412a3dd`:
+
+| | Kernel, `pbench kernel` | Doom, `demo3` |
+|---|---:|---:|
+| Saves and restores of callee-saved registers, per 1000 instructions | 128 | 24 |
+| Other loads and stores through SP, per 1000 instructions | 34 | 24 |
+| Callee-saved registers saved per call | 2.74 | 3.44 |
+| Calls whose callee saves all seven | 16% | 14% |
+| Loads whose value the next instruction reads, per 1000 instructions | 101 | 127 |
+
+One kernel instruction in eight saves or restores a register.
+
+### How it was measured
+
+Measured 2026-10-04 on the ISS.  Each cost was given to the compiler
+as a command-line setting over a whole build of five workloads: the
+`test-compiler` corpus at `-O2` (1,623 tests, which pass under every
+setting reported here), Dhrystone, CoreMark, Doom running
+`-timedemo demo3`, and the `GENERIC.DEBUG` kernel running
+`pbench kernel`.
+
+- **Instructions for fixed work are the measure:** a Dhrystone run, a
+  CoreMark iteration, Doom's own code from the first frame rendered
+  to the end of the demo, and kernel instructions per operation for
+  four `pbench` rows, each run alone.
+- **Load-use pairs and stack traffic** are execution counts from
+  `+pcprof` laid over the disassembly, per 1000 instructions of the
+  image's own text.  A pair is a load whose value the next
+  instruction reads.  It is a different count from the cycles waited
+  that [penumbra4/load-use.md](../internals/penumbra4/load-use.md)
+  takes from a timing model, and the two do not compare.
+- **Nothing here is a cycle count, and nothing has run on hardware.**
+  The cache and TLB models' counts follow code layout more than they
+  follow any setting: the Doom build with the first-use cost has 0.2%
+  more text and takes 17% more misses in a 4 KiB L1-I.  They are left
+  out.
+
+The baseline is `3f0f7412a3dd` with `isLoadFromStackSlot` and
+`isStoreToStackSlot` implemented.  Without them no pass can recognize
+a spill or a reload the allocator wrote.  Alone they take 0.27% off
+CoreMark and move nothing else.  The baseline also has the load and
+store figures in `penumbra2_5`'s model; the first column adds the
+scheduler that reads them.
+
+### What each cost moves
+
+Each column is one setting against the baseline; the last is all
+four together.
+
+| | Load and store timing, scheduled after allocation | First-use cost 16384 | Call penalty 150 | Jump tables from 8 cases | All four |
+|---|---:|---:|---:|---:|---:|
+| Dhrystone, instructions | 0 | 0 | 0 | −1.33% | −1.33% |
+| CoreMark, instructions per iteration | +0.01% | 0 | −7.37% | −3.05% | −3.04% |
+| Doom, instructions in its own code | 0.00% | −0.06% | +0.01% | −0.02% | +0.06% |
+| Kernel instructions per `getpid` | +0.02% | −1.82% | −4.83% | +0.02% | −5.71% |
+| per `clock_gettime` | +0.06% | −0.39% | −0.15% | +0.12% | +3.00% |
+| per `pipe_pingpong` | −0.07% | −1.10% | −1.26% | +0.80% | −1.51% |
+| per `fork_exit` | +0.13% | −1.46% | −0.33% | −0.08% | −1.37% |
+| Corpus `.text` | −0.12% | +0.11% | +0.01% | −0.40% | −0.40% |
+| Doom `.text` | 0.00% | +0.20% | −3.18% | −0.17% | −3.16% |
+| Kernel `.text` | −0.01% | +0.41% | −5.03% | −0.25% | −4.94% |
+| Load-use pairs: Dhrystone | −53% | 0 | 0 | −5% | −59% |
+| CoreMark | −27% | 0 | −12% | −7% | −35% |
+| Doom | −54% | +0.1% | +0.5% | 0 | −53% |
+| kernel | −18% | +1% | −3% | 0 | −26% |
+| Registers saved per call: kernel, from 2.74 | 2.74 | 2.23 | 2.64 | 2.78 | 2.15 |
+| Doom, from 3.44 | 3.45 | 3.28 | 3.27 | 3.44 | 3.28 |
+
+### Load and store timing, and a scheduler to read it
+
+Loads and stores get scheduling classes, and a model states the two
+figures the reference gives for each instruction: issue as the cycles
+it holds a one-unit, unbuffered resource, and latency as the write's
+latency.  Only a scheduler reads them, and the one that runs after
+register allocation is the one that pays:
+
+- **It changes no instruction count by more than 0.13%** and removes
+  54% of Doom's load-use pairs, 53% of Dhrystone's, 27% of CoreMark's
+  and 18% of the kernel's.  Why the last two keep more of theirs was
+  not broken down.
+- **Most pairs move to distance 2:** in Doom's own code, 10 per 1000
+  instructions become 68.  That is free on `penumbra2_5`.  gen3 waits
+  two cycles at distance 1 and one at distance 2, so the same
+  schedule takes 30% of Doom's waits there rather than 54%, and a
+  gen3 model has to ask for two instructions between a load and its
+  reader.
+- **The scheduler before register allocation adds instructions.**
+  In its bidirectional mode, with the cross-block copy coalescing its
+  hook turns on and the later scheduler as well, it removes no more
+  of Doom's pairs (53.4% against 53.7%) and adds 0.49% to Doom's own
+  instructions, and 1.4% to the loads and 2.4% to the stores of the
+  whole run.
+  `R_DrawColumn` saves `r5`–`r8` where it saved `r5` and `r6`.  The
+  scheduler holds register pressure under the 12 allocatable
+  registers, and only five of them, `r1`–`r4` and `r11`, cost nothing
+  to use.
+
+Turning the later scheduler on alone takes two steps, because
+`enablePostRAMachineScheduler()` defaults to requiring the earlier
+one: substitute `PostMachineScheduler` for the legacy post-RA
+scheduler, as AArch64 and RISC-V do, and override that hook.
+
+### The cost of a call
+
+The inliner counts 5 for an instruction and 25 for a call.  By the
+reference a call and its return are 7 cycles and each register saved
+is 8, so at the kernel's 2.74 saves a call is about 30 cycles, or 30
+ALU operations: 150 in the inliner's unit.
+`TTI::getInlineCallPenalty` is the hook; the measurement used
+`-inline-call-penalty`.
+
+- **150 is where it pays.**  At 75 the kernel's rows move between
+  −0.4% and +1.2%.  At 300 CoreMark gains nothing more, two kernel
+  rows turn worse and one better, and Doom makes 1.7% more calls.
+- **Text shrinks:** 5.0% in the kernel, 3.2% in Doom.  The penalty is
+  both the credit for removing a call site and the price of every
+  call the inlined body makes, so a higher one favours leaves over
+  bodies that call on.  Which of the two shrinks the text was not
+  broken down.
+- **CoreMark's 7.4% is one decision:** `core_state_transition` is
+  inlined into `core_bench_state`, at an inliner cost of 205 against
+  a threshold of 225, and its saves go with it (22 saves and restores
+  per 1000 instructions become 7).
+
+The same arithmetic gives `penumbra1` about 19 ALU operations for a
+call, so this is a figure for each model to state, not a constant.
+
+### The first use of a callee-saved register
+
+`getCSRFirstUseCost` is compared with the cost of spilling the value
+instead: the summed frequency of the blocks that use it, on a scale
+where the function's entry is 16384.  At 16384 a callee-saved
+register is taken only for a value whose uses together run at least
+once per call.
+AArch64 and RISC-V return 5, three ten-thousandths of an entry; at 5
+the corpus changes by 8 bytes.
+
+- **At 16384 the kernel saves 2.23 registers per call instead of
+  2.74.**  Saves and restores fall from 128 to 105 per 1000
+  instructions and other stack traffic rises from 34 to 44: the
+  allocator spills or splits instead, and comes out 14 per 1000
+  ahead.
+- **The four kernel rows take 0.4% to 1.8% fewer instructions,** for
+  0.4% more kernel text.  Doom moves by 0.06%.
+- **The value is not settled.**  A save and its restore are two
+  memory operations per call, which on this scale is 32768.  There
+  the saves fall further (kernel 2.06 per call, Doom 3.10);
+  instructions for fixed work were not measured.
+
+"shrink-wrapping — what still limits it" names this hook for its
+argument-copy limit; whether a value this size splits that shape was
+not checked.
+
+### Jump tables, and where the settings collide
+
+By the reference's figures a dispatch through a table costs 11 cycles
+whatever the case count; a compare and a branch not taken cost 2, so
+a tree three compares deep is 6 to 9 cycles when its branches are
+predicted.  `setMinimumJumpTableEntries` is the hook; the measurement
+used `-min-jump-table-entries`.  From 8 cases, Dhrystone takes 1.3%
+fewer instructions and CoreMark 3.1%, Doom does not move, and the
+kernel rows are flat to 0.8% worse.  From 16 the two benchmarks are
+the same and the kernel rows move a little either way.  At 8,
+CoreMark's seven-state switch, the one "jump tables stay
+base-relative in a static link" counts, is no longer a table.
+
+The inliner prices a switch by whether it will be a table, so this
+threshold moves inlining too.  The inliner's own remarks for
+`core_state_transition`, against its threshold of 225:
+
+| Setting | Inliner cost | Inlined |
+|---|---:|---|
+| Baseline | 330 | no |
+| Call penalty 150 | 205 | yes |
+| Jump tables from 8 cases | 360 | no |
+| Both | 235 | no |
+
+Its switch costs 30 more as a compare tree, which puts it 10 over.
+That is why all four settings together give CoreMark 3.0% where the
+call penalty alone gives 7.4%.  `clock_gettime` is 3.0% longer under
+all four and no worse than 0.12% under any one; that was not looked
+into.
+
+### Open
+
+1. **Give each model the load and store figures and turn on the
+   scheduler after allocation** for the pipelined generations.
+   gen3's model needs the longer wait.  gen1 has nothing to
+   schedule.  The two stack-slot hooks go in with it.
+2. **Answer the call penalty from the model:** call, return, store
+   and load cycles, and a stated number of registers saved per call.
+3. **Settle the first-use cost** by measuring 32768 on instructions
+   for fixed work, then state it from the model as well.
+4. **Hold the jump-table threshold back** until its effect on
+   inlining is a decision, not a side effect.
+5. **The scheduler before allocation, told that only five registers
+   are free.**  `getRegPressureSetLimit` is the override.  Cross-block
+   copy coalescing alone was not measured either.
+6. **Spill weights count a store and a reload alike,** where the
+   store costs 6 cycles and the reload 2.  Not measured.
+7. **Find what makes `clock_gettime` longer** under all four.
+8. **Measure on hardware.**  Every figure here is an instruction or
+   event count from the ISS.
+
+## Compiler: interprocedural register allocation miscompiles six tests
+
+With `-enable-ipra` a caller keeps values in caller-saved registers
+across a call whose callee is known not to write them.  Six of the
+1,623 `test-compiler` programs then fail at `-O2`
+(`make test-compiler OPT="-O2 -mllvm -enable-ipra"`, 2026-10-04):
+
+- `gcc-c-torture/execute/20090113-3.c`
+- `gcc-c-torture/execute/20170401-1.c`
+- `gcc-c-torture/execute/pr37573.c`
+- `gcc-c-torture/execute/pr43784.c` (times out)
+- `gcc-c-torture/execute/pr45070.c`
+- `penumbra-codegen/narrowed-constant-halves.c`
+
+Not root-caused.  The pass trusts each function's list of registers
+written, collected from its instructions' operands, so the first
+suspect is an instruction or an expansion that writes a register it
+does not declare.  The pass is off by default and nothing built
+today is affected, but any other pass that trusts operand lists
+would be misled the same way.
+
+Open:
+
+- Reduce one failure to the instruction whose write is missing.
+- Then measure the pass: with five registers free of a save, values
+  kept in them across calls to small functions are where it could
+  pay ([the costs the compiler is not
+  told](#compiler-the-costs-the-compiler-is-not-told)).
 
 ## Compiler: 16-bit jump-table entries when offsets fit
 
@@ -930,3 +1190,26 @@ Variadic byval is separate and handled (`normalizeVarArgByVal()` in
 `CCIfByVal<CCPassByVal<4,4>>` plus the register-slot copy — or reject
 `byval` with a fatal error, so the miscompile cannot happen quietly.
 Not re-verified since the rework.
+
+## Ruled out
+
+Both were measured 2026-10-04 the way
+[the costs the compiler is not told](#compiler-the-costs-the-compiler-is-not-told)
+describes, against the same baseline.
+
+- **Turning every select into a branch before selection.**  With no
+  conditional move a `select` ends as a branch either way, and
+  `isSelectSupported()` returning false has CodeGenPrepare make it
+  one early.  CoreMark then takes 9.7% more instructions and Doom's
+  own code 4.0% more.  With selection looking through the `freeze`
+  CodeGenPrepare puts on each condition it is 8.4% and 2.3%, with
+  1.9% more text in the `test-compiler` corpus, against 0.8% fewer
+  instructions on Dhrystone.  Not root-caused past the `freeze`.
+  The change was never committed.
+- **Runtime and partial loop unrolling by default**
+  (`-unroll-runtime -unroll-allow-partial`).  Text grows 52% in the
+  `test-compiler` corpus, 12.5% in Doom and 5.5% in the kernel.
+  Doom's own code runs 0.67% more instructions and CoreMark 0.71%
+  fewer.  A preference for particular loops through
+  `getUnrollingPreferences` is a different proposal, and nothing
+  measured here argues for one.
