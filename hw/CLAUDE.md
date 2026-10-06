@@ -230,6 +230,12 @@ exposed external bus.
   start, MDC divided from the bus clock, a read's bits taken just
   ahead of MDC's rise, the data pin as value and output enable for the
   board to make a pad of. No reset: a frame in flight runs to its end.
+- `eth/eth_tx.sv` — the Ethernet transmitter, on the transmit clock:
+  reads a queued slot's `LEN` and words through the slot memory's read
+  port and puts preamble, bytes, padding and check sequence on the
+  seam a byte per enable, twelve byte times apart; steps `TX_CONS` one
+  count a cycle, for frames sent, slots passed over and a queue
+  discarded.
 - `sdram/sdram_pkg.sv` — command encoding + chip presets.
 - `sdram/sdram_ctrl.sv` — FSM core: init / refresh / ACT/RW/RECOVER.
   `PHY_OUT_LATENCY` / `PHY_IN_LATENCY` parameters absorb
