@@ -236,6 +236,12 @@ exposed external bus.
   seam a byte per enable, twelve byte times apart; steps `TX_CONS` one
   count a cycle, for frames sent, slots passed over and a queue
   discarded.
+- `eth/eth_rx.sv` — the Ethernet receiver, on the receive clock: takes
+  byte times from the seam, writes a frame into the slot at `RX_PROD`
+  as it arrives, and counts it only once it has ended well formed and
+  addressed to the station, the slot's first word (`LEN`) written
+  last. A frame that finds the ring full is checked unstored and
+  reported for `RX_DROP`.
 - `sdram/sdram_pkg.sv` — command encoding + chip presets.
 - `sdram/sdram_ctrl.sv` — FSM core: init / refresh / ACT/RW/RECOVER.
   `PHY_OUT_LATENCY` / `PHY_IN_LATENCY` parameters absorb
