@@ -77,6 +77,7 @@ subdirectory owns its realization.
 *   **[SDRAM Optimization](./internals/sdram-optimization.md)** — Controller strategies for bandwidth improvement.
 *   **[Display Adapter](./internals/display.md)** — FPGA microarchitecture of the `CLASS_DISPLAY` adapter: pixel generator + TMDS output PHY.
 *   **[USB Host Controller](./internals/usb-host-controller.md)** — FPGA microarchitecture of the `CLASS_USBHC` controller: SIE, transaction FSM, and the NetBSD HCD mapping.
+*   **[Ethernet Adapter](./internals/ethernet.md)** — FPGA microarchitecture of the `CLASS_ETHERNET` adapter: the module split, the clock domains and what crosses between them, and the seam a board's PHY attaches at.
 *   **[Coding Standards](./internals/coding-standards.md)** — RTL naming and style conventions for hardware.
 *   **[Build & Test Structure](./internals/build-system.md)** — The BOARD×CORE build matrix, the machine integration layer, and the `isa/` conformance split for test programs.
 *   **[Development Setup](./internals/setup.md)** — How to build and simulate the RTL.
@@ -91,6 +92,7 @@ honors.
 *   **[Nexys Video](./internals/nexysvideo/overview.md)** — The Artix-7 board: tops, clocking and reset, LEDs, console and SD, I/O standards and constraints, the thermal guard.
 *   **[Nexys Video DDR3 Memory](./internals/nexysvideo/ddr3.md)** — 512 MiB of DDR3 behind UberDDR3 and the line stack: the glue, the controller's configuration and license boundary, the crossing, calibration and reset.
 *   **[Nexys Video Audio](./internals/nexysvideo/audio.md)** — The ADAU1761 codec behind the audio device: the two interfaces and who drives each clock, the frame on the wire, the setup sequence and its fault codes, the jacks.
+*   **[Nexys Video Ethernet](./internals/nexysvideo/ethernet.md)** — The RTL8211E PHY behind the Ethernet adapter: the RGMII adapter and the speeds it carries, the clocks, the PHY's reset, the station address.
 
 ### Penumbra/1 (microcoded core)
 

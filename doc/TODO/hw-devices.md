@@ -1091,14 +1091,21 @@ Open:
   free choice: 32 slots hold a whole default TCP receive window
   (32 KB, 22 full frames) while the CPU drains nothing, for 64 KB of
   block RAM.
-- **The Nexys Video's side**: the RGMII stages (DDR input and output
-  registers, and the receive clock's alignment, which depends on how
-  the PHY's RGMII delays are strapped; `rgephy(4)` leaves them so
-  unless its `no-rx-delay` property is set), the PHY's reset, and the
-  board's MAC address. The PHY's interrupt pin has no use: the
-  interface has no link interrupt, and `mii(4)` polls. `GENERIC`
-  lists only `rlphy` and `ukphy`, so `rgephy` has to join them for
-  this PHY. A 24AA025E48 EEPROM holds the address, on the I2C bus
+- **The Nexys Video's side**
+  (`doc/internals/nexysvideo/ethernet.md`): the RGMII adapter at 10
+  and 100 Mbit/s, the PHY's reset, and the board's MAC address. The
+  PHY runs under `ukphy`. `rgephy(4)`, which knows the RTL8211
+  family, writes the full gigabit advertisement at every media
+  change, whatever capabilities `mii(4)` was attached with, so under
+  it the PHY settles on a speed this device does not carry. `ukphy`
+  leaves Energy Efficient Ethernet advertised at 100 Mbit/s, as the
+  PHY powers up, where `rgephy` turns it off: check on hardware that
+  a link in that mode loses no frame. The receive capture relies on
+  the clock reaching the input cells after the data: check that the
+  tools add no hold-time delay on the data pins, and that the
+  constraints make them check the capture. The PHY's interrupt pin
+  has no use: the interface has no link interrupt, and `mii(4)`
+  polls. A 24AA025E48 EEPROM holds the address, on the I2C bus
   the audio codec also uses, at 0x57: the schematic straps the
   EEPROM's A0 to A2 high, and the reference manual gives 1010111b.
   Hardware reads it after reset and presents it as the device's
@@ -1107,6 +1114,16 @@ Open:
   consumer and no stretched clock"). The interface allows the read
   200 ms from reset: check that against the codec setup that runs
   first.
+- **Gigabit on the Nexys Video**, not yet. The board's adapter
+  carries 10 and 100 Mbit/s only. The PHY is strapped to add no delay
+  to either RGMII clock, so at 1000 Mbit/s the FPGA has to add both:
+  an input delay cell on the receive clock, whose calibration needs
+  the 200 MHz reference the DDR3 clocking makes, and a 125 MHz
+  transmit clock with a copy a quarter cycle late. It waits for a
+  machine that can use the rate, a faster core or a faster FPGA:
+  copying a full frame costs this CPU about twice a gigabit frame
+  time. The work is the board's adapter alone, with the device as it
+  is, and the PHY then runs under `rgephy(4)`.
 - **A route out for the ISS's network.** `sw/tools/iss-net.sh` gives
   the ISS's TAP backend a network of two stations, the guest and the
   host's stack in a namespace of its own, which is enough for the
