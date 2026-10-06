@@ -20,8 +20,11 @@
  * has fewer frames queued than TX_WM, which the driver leaves at 0,
  * and so off, except while it waits for room in a full ring.
  *
- * Only a device that manages its own link is driven.  One whose PHY is
- * software's to manage (CAP.MDIO) is refused at attach.
+ * The link takes one of two forms.  A device that manages its own
+ * reports it in LINK, which the once-a-second tick reads.  One with a
+ * PHY for software to manage (CAP.MDIO) gets mii(4) attached over the
+ * MDIO register, and has to be told in CTRL.SPEED what speed the
+ * PHY's link settled on before any frame passes.
  */
 
 #include <sys/cdefs.h>
@@ -46,6 +49,9 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #include <net/if_media.h>
 #include <net/bpf.h>
 
+#include <dev/mii/mii.h>
+#include <dev/mii/miivar.h>
+
 #include <machine/bootinfo.h>
 #include <machine/bus_defs.h>
 #include <machine/bus_funcs.h>
@@ -56,6 +62,7 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #define	 PE_CAP_VERSION(x)	((u_int)__SHIFTOUT((x), __BITS(7, 0)))
 #define	 PE_CAP_MDIO		__BIT(8)
 #define	 PE_CAP_ADDR		__BIT(9)
+#define	 PE_CAP_SPEEDS(x)	((u_int)__SHIFTOUT((x), __BITS(18, 16)))
 #define	PE_IRQ_STATUS		0x004
 #define	PE_IRQ_ENABLE		0x008
 #define	 PE_IRQ_RX		__BIT(0)
@@ -65,9 +72,16 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #define	 PE_CTRL_TX_EN		__BIT(1)
 #define	 PE_CTRL_PROMISC	__BIT(2)
 #define	 PE_CTRL_ALLMULTI	__BIT(3)
+#define	 PE_CTRL_SPEED		__BITS(9, 8)
 #define	PE_LINK			0x010
 #define	 PE_LINK_UP		__BIT(0)
 #define	 PE_LINK_SPEED(x)	((u_int)__SHIFTOUT((x), __BITS(9, 8)))
+#define	PE_MDIO			0x014
+#define	 PE_MDIO_DATA		__BITS(15, 0)
+#define	 PE_MDIO_REG		__BITS(20, 16)
+#define	 PE_MDIO_PHY		__BITS(28, 24)
+#define	 PE_MDIO_WRITE		__BIT(30)
+#define	 PE_MDIO_BUSY		__BIT(31)
 #define	PE_ADDR_LO		0x018
 #define	PE_ADDR_HI		0x01c
 #define	PE_FACTORY_LO		0x020
@@ -96,6 +110,17 @@ __KERNEL_RCSID(0, "$NetBSD$");
  */
 __CTASSERT(PE_SLOT_PAD == ETHER_ALIGN);
 
+/*
+ * Speeds, as the codes CTRL.SPEED and LINK.SPEED hold.  Bit n of
+ * CAP.SPEEDS says the device carries the speed with code n.
+ */
+#define	PE_SPEED_10		0
+#define	PE_SPEED_100		1
+#define	PE_SPEED_1000		2
+#define	PE_CARRIES(sc, speed)	(((sc)->sc_speeds & __BIT(speed)) != 0)
+
+/* A management transaction is over within this long. */
+#define	PE_MDIO_WAIT_US		1000
 /* The device has this long after reset to produce a factory address. */
 #define	PE_FACTORY_WAIT_MS	200
 /*
@@ -114,7 +139,8 @@ struct peth_softc {
 	void			*sc_ih;
 
 	struct ethercom		sc_ec;
-	struct ifmedia		sc_media;
+	struct ifmedia		sc_media;	/* a device running its own link */
+	struct mii_data		sc_mii;		/* one with a PHY to manage */
 	callout_t		sc_tick;
 	krndsource_t		sc_rnd;
 	uint8_t			sc_enaddr[ETHER_ADDR_LEN];
@@ -124,6 +150,12 @@ struct peth_softc {
 	u_int			sc_rx_slot_size;
 	u_int			sc_tx_slots;
 	u_int			sc_tx_slot_size;
+
+	/* From CAP: whether the PHY is the driver's to manage, and SPEEDS. */
+	bool			sc_mdio;
+	u_int			sc_speeds;
+	/* The speed code CTRL carries.  A device without MDIO ignores it. */
+	u_int			sc_speed;
 
 	/* The counts the driver writes, as it last wrote them. */
 	uint16_t		sc_rx_cons;
@@ -152,6 +184,10 @@ static int	peth_ifm_change(struct ifnet *);
 static void	peth_ifm_status(struct ifnet *, struct ifmediareq *);
 static int	peth_intr(void *);
 static void	peth_tick(void *);
+static void	peth_set_filter(struct peth_softc *);
+static int	peth_mii_readreg(device_t, int, int, uint16_t *);
+static int	peth_mii_writereg(device_t, int, int, uint16_t);
+static void	peth_mii_statchg(struct ifnet *);
 
 CFATTACH_DECL_NEW(peth, sizeof(struct peth_softc),
     peth_match, peth_attach, NULL, NULL);
@@ -202,6 +238,55 @@ peth_station_address(struct peth_softc *sc, uint32_t cap)
 	return factory;
 }
 
+/*
+ * Attach mii(4) to the PHY behind MDIO, offering it what the device
+ * can use: full duplex only, at speeds the device carries.
+ *
+ * The mask is what holds the PHY to the device's 10 and 100 Mbit/s
+ * modes: each has a bit in it, and mii(4) rewrites the PHY's
+ * advertisement of them from the masked capabilities every time
+ * negotiation starts.  1000 Mbit/s has no bit of its own.  Leaving the
+ * extended status out hides those modes from mii(4) altogether, which
+ * stops it offering them and also stops it writing their
+ * advertisement, which peth_phy_disable_1000() clears instead.
+ */
+static void
+peth_mii_attach(struct peth_softc *sc)
+{
+	struct mii_data *mii = &sc->sc_mii;
+	struct mii_softc *phy;
+	int capmask = ~(BMSR_100T4 | BMSR_100TXHDX | BMSR_10THDX |
+	    BMSR_100T2FDX | BMSR_100T2HDX);
+
+	if (!PE_CARRIES(sc, PE_SPEED_10))
+		capmask &= ~BMSR_10TFDX;
+	if (!PE_CARRIES(sc, PE_SPEED_100))
+		capmask &= ~BMSR_100TXFDX;
+	if (!PE_CARRIES(sc, PE_SPEED_1000))
+		capmask &= ~BMSR_EXTSTAT;
+
+	mii->mii_ifp = &sc->sc_ec.ec_if;
+	mii->mii_readreg = peth_mii_readreg;
+	mii->mii_writereg = peth_mii_writereg;
+	mii->mii_statchg = peth_mii_statchg;
+	sc->sc_ec.ec_mii = mii;
+	ifmedia_init(&mii->mii_media, IFM_IMASK, ether_mediachange,
+	    ether_mediastatus);
+	mii_attach(sc->sc_dev, mii, capmask, MII_PHY_ANY, MII_OFFSET_ANY, 0);
+
+	if (LIST_EMPTY(&mii->mii_phys)) {
+		aprint_error_dev(sc->sc_dev, "no PHY answers\n");
+		ifmedia_add(&mii->mii_media, IFM_ETHER | IFM_NONE, 0, NULL);
+		ifmedia_set(&mii->mii_media, IFM_ETHER | IFM_NONE);
+		return;
+	}
+
+	/* 1000 Mbit/s at half duplex is out of the mask's reach. */
+	LIST_FOREACH(phy, &mii->mii_phys, mii_list)
+		phy->mii_extcapabilities &= ~EXTSR_1000THDX;
+	ifmedia_set(&mii->mii_media, IFM_ETHER | IFM_AUTO);
+}
+
 static void
 peth_attach(device_t parent, device_t self, void *aux)
 {
@@ -230,17 +315,16 @@ peth_attach(device_t parent, device_t self, void *aux)
 	sc->sc_tx_slots = PE_GEOM_SLOTS(tx);
 	sc->sc_tx_slot_size = PE_GEOM_SLOT_SIZE(tx);
 
+	sc->sc_mdio = (cap & PE_CAP_MDIO) != 0;
+	sc->sc_speeds = PE_CAP_SPEEDS(cap);
+
 	aprint_naive("\n");
-	aprint_normal(": Penumbra Ethernet (v%u, rx %u, tx %u)\n",
-	    PE_CAP_VERSION(cap), sc->sc_rx_slots, sc->sc_tx_slots);
+	aprint_normal(": Penumbra Ethernet (v%u, rx %u, tx %u%s)\n",
+	    PE_CAP_VERSION(cap), sc->sc_rx_slots, sc->sc_tx_slots,
+	    sc->sc_mdio ? ", MDIO" : "");
 
 	if (PE_CAP_VERSION(cap) != 1) {
 		aprint_error_dev(self, "unsupported version\n");
-		return;
-	}
-	if ((cap & PE_CAP_MDIO) != 0) {
-		aprint_error_dev(self,
-		    "the device's PHY needs managing, which is not supported\n");
 		return;
 	}
 	if (!powerof2(sc->sc_rx_slots) || !powerof2(sc->sc_tx_slots) ||
@@ -276,11 +360,16 @@ peth_attach(device_t parent, device_t self, void *aux)
 	/* A slot holds 1518 bytes, an Ethernet frame with one VLAN tag. */
 	sc->sc_ec.ec_capabilities |= ETHERCAP_VLAN_MTU;
 
-	/* The device runs its own link, so there is one medium. */
-	sc->sc_ec.ec_ifmedia = &sc->sc_media;
-	ifmedia_init(&sc->sc_media, 0, peth_ifm_change, peth_ifm_status);
-	ifmedia_add(&sc->sc_media, IFM_ETHER | IFM_AUTO, 0, NULL);
-	ifmedia_set(&sc->sc_media, IFM_ETHER | IFM_AUTO);
+	if (sc->sc_mdio) {
+		peth_mii_attach(sc);
+	} else {
+		/* The device runs its own link, so there is one medium. */
+		sc->sc_ec.ec_ifmedia = &sc->sc_media;
+		ifmedia_init(&sc->sc_media, 0, peth_ifm_change,
+		    peth_ifm_status);
+		ifmedia_add(&sc->sc_media, IFM_ETHER | IFM_AUTO, 0, NULL);
+		ifmedia_set(&sc->sc_media, IFM_ETHER | IFM_AUTO);
+	}
 
 	if_attach(ifp);
 	if_deferred_start_init(ifp, NULL);
@@ -300,9 +389,9 @@ peth_attach(device_t parent, device_t self, void *aux)
 }
 
 /*
- * Write the filter modes to CTRL, with both directions enabled.  The
- * device takes group addresses all or none, so any membership at all
- * selects all.
+ * Write CTRL: both directions enabled, the filter modes, and the
+ * speed.  The device takes group addresses all or none, so any
+ * membership at all selects all.
  */
 static void
 peth_set_filter(struct peth_softc *sc)
@@ -311,7 +400,8 @@ peth_set_filter(struct peth_softc *sc)
 	struct ifnet *ifp = &ec->ec_if;
 	struct ether_multistep step;
 	struct ether_multi *enm;
-	uint32_t ctrl = PE_CTRL_RX_EN | PE_CTRL_TX_EN;
+	uint32_t ctrl = PE_CTRL_RX_EN | PE_CTRL_TX_EN |
+	    __SHIFTIN(sc->sc_speed, PE_CTRL_SPEED);
 
 	if ((ifp->if_flags & IFF_PROMISC) != 0)
 		ctrl |= PE_CTRL_PROMISC;
@@ -327,6 +417,121 @@ peth_set_filter(struct peth_softc *sc)
 	ETHER_UNLOCK(ec);
 
 	PE_WR(sc, PE_CTRL, ctrl);
+}
+
+/* Wait out the management transaction in progress; leave MDIO in *vp. */
+static int
+peth_mdio_wait(struct peth_softc *sc, uint32_t *vp)
+{
+	int us;
+
+	for (us = 0; us <= PE_MDIO_WAIT_US; us += 10) {
+		*vp = PE_RD(sc, PE_MDIO);
+		if ((*vp & PE_MDIO_BUSY) == 0)
+			return 0;
+		delay(10);
+	}
+	aprint_error_dev(sc->sc_dev, "management transaction did not end\n");
+	return ETIMEDOUT;
+}
+
+static int
+peth_mii_readreg(device_t self, int phy, int reg, uint16_t *val)
+{
+	struct peth_softc *sc = device_private(self);
+	uint32_t v;
+	int error;
+
+	PE_WR(sc, PE_MDIO, __SHIFTIN(phy, PE_MDIO_PHY) |
+	    __SHIFTIN(reg, PE_MDIO_REG));
+	if ((error = peth_mdio_wait(sc, &v)) != 0)
+		return error;
+	*val = __SHIFTOUT(v, PE_MDIO_DATA);
+	return 0;
+}
+
+static int
+peth_mii_writereg(device_t self, int phy, int reg, uint16_t val)
+{
+	struct peth_softc *sc = device_private(self);
+	uint32_t v;
+
+	PE_WR(sc, PE_MDIO, PE_MDIO_WRITE | __SHIFTIN(phy, PE_MDIO_PHY) |
+	    __SHIFTIN(reg, PE_MDIO_REG) | __SHIFTIN(val, PE_MDIO_DATA));
+	return peth_mdio_wait(sc, &v);
+}
+
+/*
+ * Clear the 1000 Mbit/s advertisement in every PHY that has one, to
+ * take effect when negotiation next starts.  mii(4) never writes it
+ * once peth_mii_attach() has hidden gigabit from it.
+ */
+static void
+peth_phy_disable_1000(struct peth_softc *sc)
+{
+	struct mii_softc *phy;
+	uint16_t bmsr;
+
+	LIST_FOREACH(phy, &sc->sc_mii.mii_phys, mii_list) {
+		if (peth_mii_readreg(sc->sc_dev, phy->mii_phy, MII_BMSR,
+		    &bmsr) == 0 && (bmsr & BMSR_EXTSTAT) != 0)
+			(void)peth_mii_writereg(sc->sc_dev, phy->mii_phy,
+			    MII_100T2CR, 0);
+	}
+}
+
+/*
+ * The speed code for the medium the PHY's link settled on, or -1 for a
+ * medium the device has no code for.
+ */
+static int
+peth_mii_media_speed(const struct peth_softc *sc)
+{
+
+	switch (IFM_SUBTYPE(sc->sc_mii.mii_media_active)) {
+	case IFM_10_T:
+		return PE_SPEED_10;
+	case IFM_100_TX:
+		return PE_SPEED_100;
+	case IFM_1000_T:
+		return PE_SPEED_1000;
+	default:
+		return -1;
+	}
+}
+
+/*
+ * mii(4) calls this, at splnet, whenever the PHY's link changes, up or
+ * down, and when a medium is selected, which can be while the
+ * interface is down.  The device passes no frame until it has been
+ * told the link's speed.
+ *
+ * CTRL.SPEED always holds some speed, and peth_init() writes it from
+ * sc_speed, so while the interface runs the two agree.  A speed equal
+ * to sc_speed is therefore already the device's, and writing CTRL
+ * again would only risk a frame in transit.
+ */
+static void
+peth_mii_statchg(struct ifnet *ifp)
+{
+	struct peth_softc *sc = ifp->if_softc;
+	int speed;
+
+	/* With no link there is no speed to take, and the last stands. */
+	if ((sc->sc_mii.mii_media_status & IFM_ACTIVE) == 0)
+		return;
+
+	/* peth_mii_attach() keeps the PHY to speeds the device carries. */
+	speed = peth_mii_media_speed(sc);
+	KASSERT(speed >= 0 && PE_CARRIES(sc, speed));
+	if (speed < 0 || !PE_CARRIES(sc, speed))
+		return;
+
+	if ((u_int)speed == sc->sc_speed)
+		return;
+	sc->sc_speed = speed;
+	if ((ifp->if_flags & IFF_RUNNING) != 0)
+		peth_set_filter(sc);
 }
 
 static int
@@ -355,6 +560,13 @@ peth_init(struct ifnet *ifp)
 
 	ifp->if_flags |= IFF_RUNNING;
 	ifp->if_flags &= ~IFF_OACTIVE;
+
+	/* Start the PHY negotiating, within what the device carries. */
+	if (sc->sc_mdio) {
+		if (!PE_CARRIES(sc, PE_SPEED_1000))
+			peth_phy_disable_1000(sc);
+		(void)mii_mediachg(&sc->sc_mii);
+	}
 
 	/* A value LINK never reads, so the first tick reports the link. */
 	sc->sc_link = ~0U;
@@ -593,11 +805,16 @@ peth_tick(void *arg)
 
 	s = splnet();
 
-	link = PE_RD(sc, PE_LINK);
-	if (link != sc->sc_link) {
-		sc->sc_link = link;
-		if_link_state_change(ifp, (link & PE_LINK_UP) != 0 ?
-		    LINK_STATE_UP : LINK_STATE_DOWN);
+	if (sc->sc_mdio) {
+		/* mii(4) reads the PHY and reports what it finds. */
+		mii_tick(&sc->sc_mii);
+	} else {
+		link = PE_RD(sc, PE_LINK);
+		if (link != sc->sc_link) {
+			sc->sc_link = link;
+			if_link_state_change(ifp, (link & PE_LINK_UP) != 0 ?
+			    LINK_STATE_UP : LINK_STATE_DOWN);
+		}
 	}
 
 	drop = PE_RD(sc, PE_RX_DROP);

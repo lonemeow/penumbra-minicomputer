@@ -86,7 +86,7 @@ file	arch/penumbra/penumbra/paudio.c			paudio
 file	arch/penumbra/penumbra/pmusic.c			paudio
 
 # Ethernet adapter (CLASS_ETHERNET slot rings) -> ifnet
-device	peth: arp, ether, ifnet
+device	peth: arp, ether, ifnet, mii
 attach	peth at pbbus
 file	arch/penumbra/penumbra/peth.c			peth
 

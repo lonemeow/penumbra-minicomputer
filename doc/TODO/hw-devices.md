@@ -1096,31 +1096,23 @@ Open:
   the PHY's RGMII delays are strapped; `rgephy(4)` leaves them so
   unless its `no-rx-delay` property is set), the PHY's reset, and the
   board's MAC address. The PHY's interrupt pin has no use: the
-  interface has no link interrupt, and `mii(4)` polls. A 24AA025E48
-  EEPROM holds the address, on the I2C bus the audio codec also uses;
-  the schematic straps the EEPROM's A0 to A2 high, so it answers at
-  0x57, where the reference manual gives 1010000b (0x50). Hardware
-  reads it after reset and presents it as the device's factory
-  address, which needs the I2C master's command port handed over from
-  the codec's setup ("Hardware: the I2C master serves one consumer and
-  no stretched clock"). The interface allows the read 200 ms from
-  reset: check that against the codec setup that runs first.
+  interface has no link interrupt, and `mii(4)` polls. `GENERIC`
+  lists only `rlphy` and `ukphy`, so `rgephy` has to join them for
+  this PHY. A 24AA025E48 EEPROM holds the address, on the I2C bus
+  the audio codec also uses, at 0x57: the schematic straps the
+  EEPROM's A0 to A2 high, and the reference manual gives 1010111b.
+  Hardware reads it after reset and presents it as the device's
+  factory address, which needs the I2C master's command port handed
+  over from the codec's setup ("Hardware: the I2C master serves one
+  consumer and no stretched clock"). The interface allows the read
+  200 ms from reset: check that against the codec setup that runs
+  first.
 - **A route out for the ISS's network.** `sw/tools/iss-net.sh` gives
   the ISS's TAP backend a network of two stations, the guest and the
   host's stack in a namespace of its own, which is enough for the
   driver but reaches nothing else. `slirp4netns`, which the
   development machine has, can give such a namespace an uplink; the
   guest then needs the namespace to forward for it.
-- **The driver's PHY side.** `peth`
-  (`netbsd/sys/arch/penumbra/penumbra/peth.c`) drives a device that
-  manages its own link, and refuses one with `CAP.MDIO`. The Nexys
-  device needs the rest: `mii(4)` attached over the `MDIO` register,
-  with its status-change callback writing `CTRL.SPEED`, and the PHY
-  kept from advertising a speed the device does not carry. The ISS
-  presents such a device to run that against (`+eth=...,mdio`, a
-  generic PHY that `ukphy` fits; with `speed=100` one that settles on
-  a speed the device cannot follow). `rgephy(4)` covers the RTL8211
-  family; `GENERIC` lists only `rlphy` and `ukphy`.
 
 ## Hardware + kernel: PS/2 port (`CLASS_PS2`)
 
