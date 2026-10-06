@@ -30,7 +30,7 @@ flowchart LR
     BUS["system bus"] --> REGS["eth_regs<br/>registers, apertures, IRQ"]
     REGS --> TXM["transmit slots<br/>block RAM"]
     RXM["receive slots<br/>block RAM"] --> REGS
-    REGS <--> CDC["eth_counts<br/>frame counts across domains"]
+    REGS <--> CDC["eth_cdc, one per PHY-side clock<br/>counts, control and reset across"]
     CDC <--> RX["eth_rx<br/>checks, filter, slot writes"]
     CDC <--> TX["eth_tx<br/>slot reads, pad, FCS"]
     RX --> RXM
@@ -51,8 +51,9 @@ flowchart LR
 
 The receive slots are written in the receive domain and read on the
 bus clock; the transmit slots are written on the bus clock and read in
-the transmit domain. `eth_counts` belongs to no one domain: it is the
-crossing.
+the transmit domain. `eth_cdc` belongs to no one domain: it is the
+crossing, one instance for the receive clock and one for the transmit
+clock.
 
 ## Module Decomposition
 
@@ -60,7 +61,7 @@ crossing.
 |--------|--------|------|
 | `eth` | all | The device: instantiates the rest, holds the two slot memories |
 | `eth_regs` | bus | Register block, aperture decode, interrupt output |
-| `eth_counts` | crossing | The four frame counts and the control values, each carried to the domain that reads it |
+| `eth_cdc` | crossing | The bus clock joined to one PHY-side clock: that side's two frame counts, what software wrote for it, and its reset. One instance for each of the two clocks |
 | `eth_rx` | receive | Preamble strip, length and FCS check, address filter, slot writes, commit |
 | `eth_tx` | transmit | Slot reads, preamble, padding, FCS, the gap between frames |
 | `eth_crc32` | either | The frame check sequence, a byte at a time; one instance each way |
@@ -90,7 +91,7 @@ whole.
 | `o_tx_clk` | out | Transmit clock |
 | `o_tx_ce` | out | The adapter takes a byte this cycle |
 | `i_txd[7:0]`, `i_tx_en` | in | The byte, frame in progress |
-| `i_speed[1:0]` | in | `CTRL.SPEED`, held while frames flow |
+| `i_rx_speed[1:0]`, `i_tx_speed[1:0]` | in | `CTRL.SPEED` in each clock's domain, held while frames flow |
 | `o_speeds[2:0]` | out | The speeds the adapter carries, constant |
 
 The receiver and transmitter advance only on their enables, so they
@@ -105,8 +106,8 @@ pins' own clocks do.
 | Frame bytes | receive → bus, bus → transmit | The slot memories' two ports |
 | `RX_PROD`, `TX_CONS` | device → bus | Gray code, two flip-flops |
 | `RX_CONS`, `TX_PROD` | bus → device | The value held still, a toggle saying it is new |
+| `CTRL` bits, station address, speed | bus → device | In the same held bundle as that side's count |
 | Frames dropped | receive → bus | A toggle per frame, counted on the bus side |
-| `CTRL` bits, station address, speed | bus → device | Two flip-flops |
 | Reset | bus → device | A request held until the far side answers |
 
 The counts cross in two ways because they change in two ways. A gray
@@ -116,7 +117,15 @@ step by one, so they cross as gray codes, as the audio queues' pointers
 do. `RX_CONS` and `TX_PROD` are software's, and software may release or
 queue several frames in one write: those jump, so the register side
 holds the new value still and flips a toggle, and the far side takes
-the value once it has seen the toggle change.
+the value once it has seen the toggle change. The toggle comes back
+before the next value is sent, so the scheme asks nothing of how the
+two clocks compare.
+
+Everything else software writes for a side rides in that bundle with
+its count: the enables, the filter settings, the speed and the station
+address. The device side takes a bundle whole, so it never acts on
+half of a new address or on an enable ahead of the count written with
+it.
 
 One step in the contract would make a device count jump: clearing
 `TX_EN` moves `TX_CONS` to `TX_PROD`. The transmitter does that one
@@ -140,7 +149,9 @@ PHY with the machine may leave that clock stopped for longer than the
 machine's reset lasts. So the reset crosses to each side as a request
 that stays up until that side has answered it, however long its clock
 takes to return, and until then the bus side reads that side's count
-as zero.
+as zero. The machine's reset lasts far longer than the request takes
+to cross and be taken, so with that side's clock running it is always
+taken within the reset.
 
 ## Receive
 

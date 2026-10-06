@@ -242,6 +242,12 @@ exposed external bus.
   addressed to the station, the slot's first word (`LEN`) written
   last. A frame that finds the ring full is checked unstored and
   reported for `RX_DROP`.
+- `eth/eth_cdc.sv` — the Ethernet adapter's crossing between the bus
+  clock and one PHY-side clock, one instance for each: software's
+  values down as a held bundle under a toggle handshake, the device's
+  count up as a registered Gray code, pulses up as a toggle, and the
+  reset down as a request held until answered, so a stopped clock only
+  delays it.
 - `sdram/sdram_pkg.sv` — command encoding + chip presets.
 - `sdram/sdram_ctrl.sv` — FSM core: init / refresh / ACT/RW/RECOVER.
   `PHY_OUT_LATENCY` / `PHY_IN_LATENCY` parameters absorb

@@ -405,6 +405,7 @@ MODULE_TESTS = \
     eth_mdio_test:tb_eth_mdio \
     eth_tx \
     eth_rx \
+    eth_cdc \
     usb_crc5 \
     usb_crc16 \
     usb_bit_stuff_tx \
