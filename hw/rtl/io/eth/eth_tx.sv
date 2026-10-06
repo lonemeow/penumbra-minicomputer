@@ -113,11 +113,11 @@ module eth_tx #(
     logic [POS_W-1:0] pos_d;
 
     logic frame_start;      // a slot with a good LEN is taken up
-    logic body_byte;        // a byte of the slot or of the padding goes up
+    logic put_body;         // a byte of the slot or of the padding goes up
     logic frame_end;        // the wire goes idle behind a frame
 
     assign frame_start = (state_q == S_LEN) && slot_len_ok;
-    assign body_byte   = i_ce && (state_q == S_DATA || state_q == S_PAD);
+    assign put_body    = i_ce && (state_q == S_DATA || state_q == S_PAD);
     assign frame_end   = i_ce && (state_q == S_END);
 
     always_comb begin
@@ -126,7 +126,7 @@ module eth_tx #(
             pos_d = POS_W'(LEN_BYTES);
         else if (frame_end)
             pos_d = '0;
-        else if (body_byte)
+        else if (put_body)
             pos_d = pos_q + 1;
     end
 
@@ -148,7 +148,7 @@ module eth_tx #(
     eth_crc32 u_crc (
         .i_clk   (i_clk),
         .i_init  (state_q == S_PREAMBLE),
-        .i_valid (body_byte),
+        .i_valid (put_body),
         .i_data  (crc_data),
         .o_crc   (crc)
     );
