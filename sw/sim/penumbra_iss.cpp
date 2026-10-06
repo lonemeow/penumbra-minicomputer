@@ -25,12 +25,14 @@
 // `make CORE=` spells it (penumbra_cores.h): its CPU name and the
 // geometry its caches report.  The default is penumbra1.
 //
-// +eth=backend[,rx=N][,tx=N][,speed=MBIT] attaches an Ethernet adapter
-// (CLASS_ETHERNET) at the end of the autoconfig chain, with N slots in
-// each ring; the machine has none without it.  The loop backend hands
-// every frame the device sends to the device's own receive side, and
-// tap[:name] exchanges frames with a Linux TAP device (tap0 unless
-// named), which sw/tools/iss-net.sh sets up without root.
+// +eth=backend[,mdio][,rx=N][,tx=N][,speed=MBIT] attaches an Ethernet
+// adapter (CLASS_ETHERNET) at the end of the autoconfig chain, with N
+// slots in each ring; the machine has none without it.  The loop
+// backend hands every frame the device sends to the device's own
+// receive side, and tap[:name] exchanges frames with a Linux TAP device
+// (tap0 unless named), which sw/tools/iss-net.sh sets up without root.
+// The device manages its own link unless mdio gives it a PHY, which
+// software then has to manage.
 //
 // +cachemodel[=list] runs every access through shadow cache hierarchies
 // (cache_model.h), and +tlbmodel[=list] every main-TLB translation through
@@ -1140,15 +1142,133 @@ enum : uint32_t {
     ETH_R_TX_CONS = 0x058, ETH_R_TX_WM = 0x05C,
 };
 
+// A PHY for the adapter that software manages (+eth=...,mdio), as
+// clause 22 presents one: the standard registers of a gigabit PHY and
+// nothing a vendor adds, so the driver that fits it is the generic
+// one.  It answers at management address ETH_PHY_ADDR.  The link
+// partner is taken to advertise every mode, so the link settles on the
+// best mode the PHY itself advertised when negotiation last started,
+// ETH_PHY_ANEG_INSNS after it started.
+static constexpr uint32_t ETH_CAP_MDIO   = 1u << 8;
+static constexpr uint32_t ETH_MDIO_BUSY  = 1u << 31, ETH_MDIO_WRITE = 1u << 30;
+static constexpr uint32_t ETH_MDIO_FIELDS = 0x1F1FFFFFu;   // PHY, REG and DATA
+static constexpr int      ETH_PHY_ADDR   = 1;
+// A management frame: 64 bits at 2.5 MHz, in instructions.
+static constexpr uint64_t ETH_MDIO_INSNS = 64 * TIMER_PRESCALE * 2 / 5;
+// Negotiation: 100 ms, long enough that a driver which looks once
+// finds no link yet and has to look again.
+static constexpr uint64_t ETH_PHY_ANEG_INSNS = 100000 * TIMER_PRESCALE;
+
+struct EthPhy {
+    enum : uint16_t {
+        BMCR_RESET = 0x8000, BMCR_SPEED100 = 0x2000, BMCR_ANEG = 0x1000,
+        BMCR_PDOWN = 0x0800, BMCR_RESTART = 0x0200, BMCR_FDX = 0x0100,
+        BMCR_SPEED1000 = 0x0040,
+        // 100 and 10 Mbit/s at both duplexes, extended status,
+        // negotiation, extended registers.
+        BMSR_ABILITY = 0x7909, BMSR_ANEG_DONE = 0x0020, BMSR_LINK = 0x0004,
+        ANAR_DEFAULT = 0x01E1, ANAR_100 = 0x0180, ANAR_10 = 0x0060,
+        GTCR_1000 = 0x0300,
+        // What the partner is taken to advertise, and to have negotiated.
+        ANLPAR_ALL = 0x41E1, ANER_PARTNER = 0x0003, GTSR_ALL = 0x3C00,
+        EXTSR_1000T = 0x3000,
+    };
+    static constexpr uint16_t ID1 = 0x5045, ID2 = 0x4E01;   // no vendor's
+
+    uint16_t bmcr, anar, gtcr;
+    // What the PHY advertised when negotiation last started: ANAR and
+    // GTCR take effect only then.
+    uint16_t neg_anar, neg_gtcr;
+    uint64_t settle_at;     // negotiation ends at this instruction count
+    bool     link_dropped;  // BMSR's link bit reads 0 once after a drop
+
+    void restart(uint64_t now) {
+        neg_anar = anar;
+        neg_gtcr = gtcr;
+        settle_at = now + ETH_PHY_ANEG_INSNS;
+        link_dropped = true;
+    }
+    void power_on(uint64_t now) {
+        bmcr = BMCR_ANEG | BMCR_FDX | BMCR_SPEED1000;
+        anar = ANAR_DEFAULT;
+        gtcr = GTCR_1000;
+        restart(now);
+    }
+
+    // The speed the link settles on, as a SPEED code, or -1 for none.
+    int speed() const {
+        if (!(bmcr & BMCR_ANEG))
+            return (bmcr & BMCR_SPEED1000) ? 2 : (bmcr & BMCR_SPEED100) ? 1 : 0;
+        if (neg_gtcr & GTCR_1000) return 2;
+        if (neg_anar & ANAR_100) return 1;
+        if (neg_anar & ANAR_10) return 0;
+        return -1;
+    }
+    // Whether the link is established at instruction count `now`.
+    bool link_up(uint64_t now) const {
+        return !(bmcr & BMCR_PDOWN) && now >= settle_at && speed() >= 0;
+    }
+
+    uint16_t read(int reg, uint64_t now) {
+        bool up = link_up(now);
+        bool negotiated = (bmcr & BMCR_ANEG) && now >= settle_at;
+        switch (reg) {
+            case 0:  return bmcr;
+            case 1: {
+                uint16_t v = BMSR_ABILITY | (negotiated ? BMSR_ANEG_DONE : 0) |
+                             (up && !link_dropped ? BMSR_LINK : 0);
+                link_dropped = !up;
+                return v;
+            }
+            case 2:  return ID1;
+            case 3:  return ID2;
+            case 4:  return anar;
+            case 5:  return negotiated ? ANLPAR_ALL : 0;
+            case 6:  return negotiated ? ANER_PARTNER : 0;
+            case 9:  return gtcr;
+            case 10: return negotiated && (neg_gtcr & GTCR_1000) ? GTSR_ALL : 0;
+            case 15: return EXTSR_1000T;
+            default: return 0;
+        }
+    }
+
+    void write(int reg, uint16_t v, uint64_t now) {
+        switch (reg) {
+            case 0: {
+                if (v & BMCR_RESET) { power_on(now); break; }
+                uint16_t was = bmcr;
+                bmcr = v & ~(BMCR_RESET | BMCR_RESTART);
+                if ((v & BMCR_RESTART) || bmcr != was) restart(now);
+                break;
+            }
+            case 4:  anar = v; break;
+            case 9:  gtcr = v & GTCR_1000; break;
+            default: break;
+        }
+    }
+};
+
 static struct {
     enum class Backend { none, loop, tap };
     Backend  backend  = Backend::none;
     std::string tap_name = "tap0";
     int      tap_fd   = -1;
     uint32_t rx_slots = 32, tx_slots = 8;   // powers of two
-    uint32_t speed    = 1;                  // the link's SPEED code
+    // A SPEED code: the link's on a device that manages its own, and
+    // the fastest the device carries on one with a PHY.
+    uint32_t speed    = 1;
+    // With a PHY, the link is software's to manage: CAP.MDIO.
+    bool     has_phy  = false;
+    EthPhy   phy;
 
     uint32_t ctrl, irq_enable, addr_lo, addr_hi, rx_drop;
+    // CTRL.SPEED as software wrote it: the speed the device runs at when
+    // it has a PHY.  A level.
+    uint32_t ctrl_speed;
+    // MDIO as last written, DATA replaced by what a read returned.  The
+    // transaction it started ends at mdio_done_at.
+    uint32_t mdio;
+    uint64_t mdio_done_at;
     // Frame counts, each written by one side: the device advances
     // rx_prod and tx_cons, software writes rx_cons and tx_prod.  All
     // four wrap from 65535 to 0, and a ring holds prod - cons frames
@@ -1176,6 +1296,8 @@ static struct {
 
     void reset() {
         ctrl = irq_enable = addr_lo = addr_hi = rx_drop = 0;
+        ctrl_speed = mdio = 0;
+        mdio_done_at = 0;
         rx_prod = rx_cons = tx_prod = tx_cons = tx_wm = 0;
         tx_busy = tx_flush = false;
         tx_done_at = 0;
@@ -1183,8 +1305,9 @@ static struct {
         rx_free_at = 0;
     }
 
-    // "+eth=loop|tap[:name][,rx=N][,tx=N][,speed=10|100|1000]", N a
-    // power of two.  False on anything else, which the caller refuses.
+    // "+eth=loop|tap[:name][,mdio][,rx=N][,tx=N][,speed=10|100|1000]",
+    // N a power of two.  False on anything else, which the caller
+    // refuses.
     bool configure(const char* spec) {
         const char* p = spec;
         Backend chosen;
@@ -1204,7 +1327,13 @@ static struct {
             return false;
         }
         uint32_t rx = rx_slots, tx = tx_slots, sp = speed;
+        bool with_phy = false;
         while (*p == ',') {
+            if (strncmp(p, ",mdio", 5) == 0 && (p[5] == ',' || p[5] == '\0')) {
+                with_phy = true;
+                p += 5;
+                continue;
+            }
             const char* value = strchr(p, '=');
             if (!value) return false;
             char* end;
@@ -1231,6 +1360,10 @@ static struct {
 
         backend = chosen;
         rx_slots = rx; tx_slots = tx; speed = sp;
+        // The PHY powers up with the machine, and no reset of the device
+        // or the bus touches it afterwards.
+        has_phy = with_phy;
+        if (has_phy) phy.power_on(0);
         rx_mem.assign(rx * ETH_SLOT_SIZE, 0);
         tx_mem.assign(tx * ETH_SLOT_SIZE, 0);
         // The window reaches the end of the receive ring.
@@ -1335,10 +1468,27 @@ static struct {
         return (irq_status() & irq_enable) != 0;
     }
 
-    // Instructions a frame of len bytes occupies the wire for.
+    // Whether the link is ready to pass the device's frames at
+    // instruction count `now`.  A device that manages its own link
+    // always has one that is.  With a PHY the link has to be up and
+    // the device running at its speed: until software has written
+    // that speed to CTRL.SPEED, in the contract's words, "frames do
+    // not get through".
+    bool link_ready(uint64_t now) const {
+        if (!has_phy)
+            return true;
+        if (!phy.link_up(now))
+            return false;
+        if ((uint32_t)phy.speed() != ctrl_speed)
+            return false;
+        return true;
+    }
+
+    // Instructions a frame of len bytes occupies the wire for, at the
+    // speed the device runs at.
     uint64_t wire_insns(uint32_t len) const {
         uint64_t bits = uint64_t(len + ETH_WIRE_OVERHEAD) * 8;
-        uint32_t mbit = ETH_SPEED_MBIT[speed];
+        uint32_t mbit = ETH_SPEED_MBIT[has_phy ? ctrl_speed : speed];
         return (bits * TIMER_PRESCALE + mbit - 1) / mbit;
     }
 
@@ -1356,6 +1506,7 @@ static struct {
 
     // A frame arriving from the wire, without preamble or FCS.
     void receive(const uint8_t* frame, uint32_t len) {
+        if (!link_ready(cpu.insn_count)) return;
         if (!(ctrl & ETH_CTRL_RX_EN)) return;
         if (len < ETH_MIN_FRAME || len > ETH_MAX_FRAME) return;
         if (!accepts(frame)) return;
@@ -1380,7 +1531,7 @@ static struct {
                 tx_busy = false;
                 free_at = tx_done_at;
                 tx_cons++;
-                deliver();
+                if (link_ready(now)) deliver();
             }
             if (tx_flush) { tx_cons = tx_prod; tx_flush = false; }
             if (!(ctrl & ETH_CTRL_TX_EN) || tx_cons == tx_prod) return;
@@ -1425,11 +1576,18 @@ static struct {
             return aperture_read(rx_mem, off - ETH_RX_APERTURE, size);
         if (off >= ETH_TX_APERTURE) return 0;   // write-only
         switch (off & ~3u) {
-            case ETH_R_CAP:        return 1u | ETH_CAP_ADDR | (1u << (16 + speed));
+            case ETH_R_CAP:
+                // A device with a PHY carries every speed up to its own.
+                return 1u | ETH_CAP_ADDR |
+                       (has_phy ? ETH_CAP_MDIO | (((2u << speed) - 1) << 16)
+                                : 1u << (16 + speed));
             case ETH_R_IRQ_STATUS: return irq_status();
             case ETH_R_IRQ_ENABLE: return irq_enable;
-            case ETH_R_CTRL:       return ctrl;
-            case ETH_R_LINK:       return 1u | (speed << 8);
+            case ETH_R_CTRL:       return ctrl | (ctrl_speed << 8);
+            case ETH_R_LINK:       return has_phy ? 0 : 1u | (speed << 8);
+            case ETH_R_MDIO:
+                if (!has_phy) return 0;
+                return mdio | (cpu.insn_count < mdio_done_at ? ETH_MDIO_BUSY : 0);
             case ETH_R_ADDR_LO:    return addr_lo;
             case ETH_R_ADDR_HI:    return addr_hi;
             case ETH_R_FACTORY_LO:
@@ -1445,7 +1603,7 @@ static struct {
             case ETH_R_TX_PROD:    return tx_prod;
             case ETH_R_TX_CONS:    return tx_cons;
             case ETH_R_TX_WM:      return tx_wm;
-            default:               return 0;    // MDIO absent, the rest reserved
+            default:               return 0;    // reserved
         }
     }
 
@@ -1464,6 +1622,25 @@ static struct {
                 ctrl = data & (ETH_CTRL_RX_EN | ETH_CTRL_TX_EN |
                                ETH_CTRL_PROMISC | ETH_CTRL_ALLMULTI);
                 if (sending && !(ctrl & ETH_CTRL_TX_EN)) tx_flush = true;
+                // SPEED takes only a speed the device carries.
+                uint32_t sp = (data >> 8) & 3;
+                if (has_phy && sp <= speed) ctrl_speed = sp;
+                break;
+            }
+            case ETH_R_MDIO: {
+                uint64_t now = cpu.insn_count;
+                if (!has_phy || now < mdio_done_at) break;  // absent, or busy
+                int phy_addr = (data >> 24) & 0x1F, reg = (data >> 16) & 0x1F;
+                mdio = data & (ETH_MDIO_WRITE | ETH_MDIO_FIELDS);
+                if (data & ETH_MDIO_WRITE) {
+                    if (phy_addr == ETH_PHY_ADDR) phy.write(reg, uint16_t(data), now);
+                } else {
+                    // Nothing answers at any other address, and the
+                    // line's pull-up reads as ones.
+                    uint16_t v = phy_addr == ETH_PHY_ADDR ? phy.read(reg, now) : 0xFFFF;
+                    mdio = (mdio & ~0xFFFFu) | v;
+                }
+                mdio_done_at = now + ETH_MDIO_INSNS;
                 break;
             }
             case ETH_R_ADDR_LO:    addr_lo = data; break;
@@ -3853,7 +4030,7 @@ int main(int argc, char** argv) {
         else if (strncmp(argv[i], "+eth=", 5) == 0) {
             if (!eth.configure(argv[i] + 5)) {
                 fprintf(stderr, "penumbra-iss: bad +eth= '%s' "
-                        "(loop|tap[:name][,rx=N][,tx=N][,speed=10|100|1000], "
+                        "(loop|tap[:name][,mdio][,rx=N][,tx=N][,speed=10|100|1000], "
                         "N a power of two, tx at most %u)\n", argv[i] + 5,
                         (ETH_RX_APERTURE - ETH_TX_APERTURE) / ETH_SLOT_SIZE);
                 return 1;
@@ -3905,7 +4082,7 @@ int main(int argc, char** argv) {
     }
 
     if (!hex_path) {
-        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+ram=size] [+sdcard=path] [+usbdev=type:config] [+eth=loop|tap[:name][,rx=N][,tx=N][,speed=MBIT]] [+audiofile=path] [+audio_status=busy[:N]|fault[:CODE]] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+pcprof=path [+pcprof_start=addr]] [+irq_at_pc=addr[,period]] [+core=generation] [+cachemodel[=list]] [+tlbmodel[=list]] [+sbmodel[=list] [+sbmodel_cpi=N]] [+bpmodel[=list]] [+pairmodel[=list]] [+model_start=addr] [+model_stop=addr] [+model_report=path]\n");
+        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+ram=size] [+sdcard=path] [+usbdev=type:config] [+eth=loop|tap[:name][,mdio][,rx=N][,tx=N][,speed=MBIT]] [+audiofile=path] [+audio_status=busy[:N]|fault[:CODE]] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+pcprof=path [+pcprof_start=addr]] [+irq_at_pc=addr[,period]] [+core=generation] [+cachemodel[=list]] [+tlbmodel[=list]] [+sbmodel[=list] [+sbmodel_cpi=N]] [+bpmodel[=list]] [+pairmodel[=list]] [+model_start=addr] [+model_stop=addr] [+model_report=path]\n");
         return 1;
     }
 

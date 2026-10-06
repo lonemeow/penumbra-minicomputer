@@ -76,6 +76,20 @@ ETH_TAP_ARGS = ["+eth=tap:tap0,rx=4,tx=2"]
 ETH_PEER_TAIL_AND_TYPE = 0x00 | (0x02 << 8) | (0x88 << 16) | (0xB5 << 24)
 ETH_PEER_PAYLOAD = int.from_bytes(b"PEER", "little")
 ETH_PEER_BURST = 8      # eth_tap_peer.py's BURST
+# With a PHY to manage (+eth=...,mdio) CAP gains MDIO and lists every
+# speed up to the device's own, here 10 and 100 Mbit/s.  The PHY model
+# answers at address 1 with the standard registers: its first ID word,
+# and a status register that reads its abilities plus "negotiation
+# complete" and "link up" once the link has settled.
+ETH_CAP_MANAGED = 1 | (1 << 8) | (1 << 9) | (0b011 << 16)
+ETH_PHY_ID1 = 0x5045
+ETH_PHY_STATUS_UP = 0x7909 | 0x0020 | 0x0004
+ETH_MDIO_BUSY = 1 << 31
+
+
+def mdio_read(phy, reg, value):
+    """MDIO once a read of `reg` at address `phy` has returned `value`."""
+    return (phy << 24) | (reg << 16) | value
 
 # A user and network namespace of a case's own, where an unprivileged
 # user may make a TAP device.
@@ -741,6 +755,18 @@ CASES = [
     Case("ethernet tap", "eth_tap.s", ETH_TAP_ARGS, peer="eth_tap_peer.py",
          regs={2: 1, 3: ETH_PADDED_TO_STATION, 4: ETH_PEER_TAIL_AND_TYPE,
                5: ETH_PEER_PAYLOAD, 6: 0}),
+    # A PHY that software manages.  Nothing answers at address 0; the
+    # PHY is at 1.  It first settles on 1000 Mbit/s, which this device
+    # does not carry, so a frame sent then is lost, as is one sent
+    # while it negotiates again without gigabit.  It then settles on
+    # 100, and frames pass while CTRL.SPEED says 100 and not while it
+    # says 10.  All four frames leave the transmit ring whether or not
+    # they arrive.
+    Case("ethernet managed PHY", "eth_mdio.s", ["+eth=loop,mdio,rx=4,tx=2"],
+         regs={2: ETH_CAP_MANAGED, 3: 0,
+               4: mdio_read(0, 2, 0xFFFF), 5: mdio_read(1, 2, ETH_PHY_ID1),
+               6: ETH_MDIO_BUSY, 7: 0, 8: 1, 9: 1,
+               10: mdio_read(1, 1, ETH_PHY_STATUS_UP), 11: 4}),
     # Eight frames from the peer at once.  They arrive at the link's
     # pace, not the host's, so the guest first sees one frame however
     # many are waiting; then the ring holds four and four are dropped.

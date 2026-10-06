@@ -1113,11 +1113,14 @@ Open:
   guest then needs the namespace to forward for it.
 - **The driver's PHY side.** `peth`
   (`netbsd/sys/arch/penumbra/penumbra/peth.c`) drives a device that
-  manages its own link, which is what the ISS presents, and refuses
-  one with `CAP.MDIO`. The Nexys device needs the rest: `mii(4)`
-  attached over the `MDIO` register, with its status-change callback
-  writing `CTRL.SPEED`. `rgephy(4)` covers the RTL8211 family;
-  `GENERIC` lists only `rlphy` and `ukphy`.
+  manages its own link, and refuses one with `CAP.MDIO`. The Nexys
+  device needs the rest: `mii(4)` attached over the `MDIO` register,
+  with its status-change callback writing `CTRL.SPEED`, and the PHY
+  kept from advertising a speed the device does not carry. The ISS
+  presents such a device to run that against (`+eth=...,mdio`, a
+  generic PHY that `ukphy` fits; with `speed=100` one that settles on
+  a speed the device cannot follow). `rgephy(4)` covers the RTL8211
+  family; `GENERIC` lists only `rlphy` and `ukphy`.
 
 ## Hardware + kernel: PS/2 port (`CLASS_PS2`)
 
