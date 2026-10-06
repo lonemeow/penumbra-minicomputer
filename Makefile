@@ -401,6 +401,7 @@ MODULE_TESTS = \
     video_textgen \
     video_pixel_chain \
     video_display \
+    eth_crc32 \
     usb_crc5 \
     usb_crc16 \
     usb_bit_stuff_tx \

@@ -38,7 +38,8 @@ hw/
 │   ├── soc/       # Bus controller, autoconfig, caches (L1 VIPT, L1 PIPT, L2), boot ROM, cpuid/machid
 │   ├── io/        # Real UART, real SPI, SDRAM v2 controller/adapter/PHY/CDC
 │   │              #   (+ sdram_line/, the whole-line adapter variant),
-│   │              #   usb/ (SIE cells + MAC + host controller), video/
+│   │              #   usb/ (SIE cells + MAC + host controller), video/,
+│   │              #   eth/ (the Ethernet adapter's cells)
 │   ├── sim/       # machine_sim + machine_penumbra2_sim, sim devices, memory models
 │   └── fpga/      # FPGA helpers (ECP5 PLL package, lint stubs); board tops under <board>/,
 │                  #   Xilinx 7-series helpers under xc7/ (MMCM package, lint stubs)
@@ -221,6 +222,10 @@ exposed external bus.
   stretching: SCL held low is a bus error. Frees the bus after reset.
   Its command port takes one consumer; sharing it is open work
   (`doc/TODO/hw-devices.md`).
+- `eth/eth_crc32.sv` — the Ethernet frame check sequence, a byte per
+  cycle: the bare remainder, held reflected so that the check sequence
+  is its bytes in wire order. The adapter's receiver and transmitter
+  each hold one (`doc/internals/ethernet.md`).
 - `sdram/sdram_pkg.sv` — command encoding + chip presets.
 - `sdram/sdram_ctrl.sv` — FSM core: init / refresh / ACT/RW/RECOVER.
   `PHY_OUT_LATENCY` / `PHY_IN_LATENCY` parameters absorb
