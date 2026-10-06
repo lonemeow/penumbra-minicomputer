@@ -226,6 +226,10 @@ exposed external bus.
   cycle: the bare remainder, held reflected so that the check sequence
   is its bytes in wire order. The adapter's receiver and transmitter
   each hold one (`doc/internals/ethernet.md`).
+- `eth/eth_mdio.sv` — PHY management master: one clause-22 frame per
+  start, MDC divided from the bus clock, a read's bits taken just
+  ahead of MDC's rise, the data pin as value and output enable for the
+  board to make a pad of. No reset: a frame in flight runs to its end.
 - `sdram/sdram_pkg.sv` — command encoding + chip presets.
 - `sdram/sdram_ctrl.sv` — FSM core: init / refresh / ACT/RW/RECOVER.
   `PHY_OUT_LATENCY` / `PHY_IN_LATENCY` parameters absorb
@@ -279,6 +283,9 @@ exposed external bus.
 - `i2c_master_test.sv` — `i2c_master` at a 4 MHz clock, so a step is
   ten cycles, for `tb_i2c_master`: a slave model on the two lines and a
   monitor holding the bus to the standard-mode minimums.
+- `eth_mdio_test.sv` — `eth_mdio` at a 25 MHz clock, where MDC's period
+  is the 400 ns minimum, for `tb_eth_mdio`: a PHY model on the two
+  pins and a monitor holding them to the minimums a PHY asks for.
 - `sdram_test.sv` — DUT wrapper exposing controller req/rsp for
   `tb_sdram_test`; `BURST_LEN` selects the read burst.
 - `sdram_bl8_test.sv` — the same chain at an eight-beat burst, named as
