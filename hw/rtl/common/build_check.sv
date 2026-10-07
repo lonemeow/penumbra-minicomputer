@@ -22,6 +22,18 @@
 // default parameters as it reads the file: a failing default would stop
 // every build that merely lists this file.
 //
+// The same copy is why a check on a parameter that has no default lets
+// zero through:
+//
+//     .COND (CLK_HZ == 0 || CLK_HZ >= MIN_HZ),
+//
+// A parameter with no default has to be given, and Verilator and sv2v
+// both stop on an instance that leaves it out. sv2v's output still needs
+// a default to be Verilog, and writes zero, so the copy yosys elaborates
+// with defaults sees zero where no instance ever can. A check that failed
+// there would print its message in every build and, from a module that
+// hands the parameter on to one below it, stop the build.
+//
 // A failing check instantiates build_check_failed, which no file defines.
 // Every tool treats the missing module as fatal (Verilator MODMISSING,
 // yosys hierarchy -check, Vivado [Synth 8-439]), whatever its lint or

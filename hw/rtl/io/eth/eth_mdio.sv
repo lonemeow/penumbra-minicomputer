@@ -27,7 +27,9 @@
 // register block, which does reset, starts nothing while it is held.
 
 module eth_mdio #(
-    parameter int CLK_HZ       = 60_000_000,
+    // The rate of i_clk. It has no default: the clock is the
+    // integration's, so the integration says what it is.
+    parameter int CLK_HZ,
     parameter int MDC_HZ       = 2_500_000,  // a ceiling: MDC never runs above it
     parameter int PHY_VALID_NS = 300,        // MDC's rise to a PHY's answer, at most
     parameter int PIN_NS       = 20          // out of MDC's pin and in at the data pin's, at most
@@ -95,12 +97,13 @@ module eth_mdio #(
     localparam int SAMPLE_CYCLE = 1;
 
     build_check #(
-        .COND (HALF_CYCLES > SAMPLE_CYCLE),
+        .COND (CLK_HZ == 0 || HALF_CYCLES > SAMPLE_CYCLE),
         .MSG  ("eth_mdio: CLK_HZ leaves half an MDC period too short to take a read's bit in")
     ) u_check_half ();
 
     build_check #(
-        .COND (longint'(2 * HALF_CYCLES - 1) * 64'd1_000_000_000
+        .COND (CLK_HZ == 0 ||
+               longint'(2 * HALF_CYCLES - 1) * 64'd1_000_000_000
                >= (longint'(PHY_VALID_NS) + longint'(PIN_NS)) * longint'(CLK_HZ)),
         .MSG  ("eth_mdio: a PHY's answer is not yet on the pin where a read takes it; lower MDC_HZ")
     ) u_check_valid ();

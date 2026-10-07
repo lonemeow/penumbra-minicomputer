@@ -14,7 +14,9 @@
 // clock, which also gives that side its reset.
 
 module eth #(
-    parameter int CLK_HZ       = 60_000_000,   // the bus clock's rate, for PHY management
+    // The bus clock's rate, for PHY management. It has no default: the
+    // clock is the integration's, so the integration says what it is.
+    parameter int CLK_HZ,
     parameter int RX_SLOTS     = 32,           // slots in the receive ring, a power of two
     parameter int TX_SLOTS     = 8,            // slots in the transmit ring, a power of two
     parameter int SLOT_BYTES   = 2048,         // bytes in a slot, a power of two

@@ -65,7 +65,7 @@ module usbhc #(
     // count all take one rate for granted. A clock retuned for another of
     // its consumers fails here, where otherwise it would detune the line.
     build_check #(
-        .COND (USB_CLK_HZ == 32'(usb_pkg::USB_SIE_HZ)),
+        .COND (USB_CLK_HZ == 0 || USB_CLK_HZ == 32'(usb_pkg::USB_SIE_HZ)),
         .MSG  ("usbhc: USB_CLK_HZ is not the rate the USB oversampling is built for")
     ) u_check_usb_clk ();
 
