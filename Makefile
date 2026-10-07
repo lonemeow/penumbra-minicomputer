@@ -411,6 +411,7 @@ MODULE_TESTS = \
     eth_loop_test:tb_eth_loop \
     eth_phy_rgmii_xc7_test:tb_eth_phy_rgmii_xc7 \
     eth_phy_reset_test:tb_eth_phy_reset \
+    eth_addr_eeprom_test:tb_eth_addr_eeprom \
     usb_crc5 \
     usb_crc16 \
     usb_bit_stuff_tx \

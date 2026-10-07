@@ -1109,8 +1109,8 @@ Open:
   the audio codec also uses, at 0x57: the schematic straps the
   EEPROM's A0 to A2 high, and the reference manual gives 1010111b.
   Hardware reads it after reset and presents it as the device's
-  factory address, sharing the bus's master with the codec's setup
-  (`i2c_shared_master`).
+  factory address: `eth_addr_eeprom`, on an `i2c_shared_master` with
+  the codec's setup. Both are built and wait for the board top.
 - **Gigabit on the Nexys Video**, not yet. The board's adapter
   carries 10 and 100 Mbit/s only. The PHY is strapped to add no delay
   to either RGMII clock, so at 1000 Mbit/s the FPGA has to add both:

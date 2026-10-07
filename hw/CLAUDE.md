@@ -250,6 +250,10 @@ exposed external bus.
   the reset pin low for the time the PHY asks, then `o_ready` once it
   has settled, for a board to hold its machine in reset on. Both times
   are parameters with no default, the PHY's from its datasheet.
+- `eth/eth_addr_eeprom.sv` — the device's factory address from a
+  Microchip 24AAxxxE48 EEPROM: one read of the part's EUI-48 through
+  an `i2c_master`'s command port, begun at reset, and the six bytes
+  held with a valid bit. A failed read leaves the bit clear.
 - `eth/eth_crc32.sv` — the Ethernet frame check sequence, a byte per
   cycle: the bare remainder, held reflected so that the check sequence
   is its bytes in wire order. The adapter's receiver and transmitter
@@ -346,6 +350,9 @@ exposed external bus.
   30 ms at a 102.35 kHz clock, where neither is a whole number of
   cycles and the two come to one cycle short of a power of two, for
   `tb_eth_phy_reset`.
+- `eth_addr_eeprom_test.sv` — `eth_addr_eeprom` on an `i2c_master`,
+  the bus's lines brought out, for `tb_eth_addr_eeprom`: a model of the
+  EEPROM on them, a memory behind an address pointer.
 - `i2c_shared_master_test.sv` — `i2c_shared_master` with three
   consumers' ports, for `tb_i2c_shared_master`: consumer models at the
   ports, a slave for each on the bus's lines, and a monitor reading

@@ -138,10 +138,16 @@ driver left it.
 ## Station Address
 
 A 24AA025E48 EEPROM on the board's I2C bus holds a unique address in
-its read-only part, at bus address 1010111b. The audio codec's setup
-owns the I2C master from reset, for about 30 ms. A reader takes the
-master over when the setup lets go, reads the six bytes, and presents
-them to the device with a valid bit, which the device reports as its
-factory address. That is well inside the 200 ms the interface gives a
-device to produce one. If the read fails the valid bit stays clear,
-and the driver makes an address up.
+its read-only part, at bus address 1010111b. `eth_addr_eeprom` reads
+the six bytes in one transaction, begun at reset, and presents them to
+the device with a valid bit, which the device reports as its factory
+address. If the read fails the valid bit stays clear, and the driver
+makes an address up.
+
+The audio codec is on the same bus, and its setup begins at the same
+reset. The bus's master is an `i2c_shared_master` with a command port
+for each of the two: one of them has it for a transaction, then the
+other. Neither knows of the other. The read is one transaction of
+under a millisecond and waits for one of the setup's at most, so the
+address is held within a few milliseconds of reset, where the
+interface gives a device 200 ms.
