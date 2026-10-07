@@ -100,9 +100,9 @@ column count, and Yosys folds only power-of-two constant multiplies, so
 the shifts its constant implies stays necessary either way, and a slang
 trial that appears to remove it means something else changed.
 
-The toolchain image is the prerequisite: the pinned OSS CAD Suite build
-has no slang plugin (`read_slang` is not a command), so this needs the
-container the wrapper scripts drive rebuilt or updated. The build-time
+The pinned OSS CAD Suite build carries the plugin: `yosys -m slang`
+loads it, and `read_slang` is a command only once it is loaded. Nothing
+larger than one module has been read through it. The build-time
 defines the flow passes at the sv2v step (`SDRAM_PHASE_DEG`,
 `PENUMBRA_CPU_VARIANT`) need an equivalent on the new frontend.
 
@@ -147,6 +147,59 @@ Open:
   carrying the rate the module was told, and a gate that fails where
   the period of the clock reaching it differs. nextpnr derives no PLL
   output rates, so the ECP5 flow would go on relying on construction.
+
+## Hardware: the lint gate does not check SystemVerilog's type rules
+
+Every simulation build and `make fpga-lint` check the RTL with
+Verilator `-Wall`, and the coding standards name no other checker.
+Verilator warns about what simulates or synthesizes wrongly: widths,
+signals unused or undriven, latches. Where the language's types
+disagree and the bits still come out right it says nothing, so code
+that passes the build can carry a list of warnings in an editor that
+checks with slang.
+
+A sample: fifteen modules that pass Verilator (the Ethernet cells,
+`i2c_master`, the Nexys codec setup, `uart`, `spi`) through
+`slang-server` 0.3.0 with no configuration gave 69 warnings.
+
+| Warning | Count | Where |
+|---------|-------|-------|
+| `sign-compare`, `arith-op-mismatch` | 48 | 43 of them on a size cast of a plain integer |
+| `case-enum-explicit` | 5 | a `case` on an enum that leaves values to its `default` |
+| `case-redundant-default` | 4 | a `unique case` with a `default` |
+| `sign-conversion` | 4 | `longint` arithmetic in a parameter |
+| `empty-output-connection` | 3 | an output left open, `.o_x ()` |
+| others | 5 | an import or a signal not used, a `case` with no `default` |
+
+The commonest comes from a spelling the tree uses throughout, a
+constant sized where it is used: `COUNT_W'(1)`. A cast with a width in
+front resizes its operand and keeps its signedness, so the constant is
+signed beside an unsigned register. The operation is still done
+unsigned, as the language does whenever one operand is; only the types
+disagree. A cast to a type (`typedef logic [W-1:0] count_t`, then
+`count_t'(1)`) or a constant declared with its type satisfies both
+checkers.
+
+Open:
+
+- **A target.** The FPGA container's yosys loads its slang plugin
+  (`yosys -m slang`), and `read_slang -Wextra -Wconversion` on one
+  module printed the type warnings the editor shows for it. A target
+  would read each registered top's fileset that way, as `fpga-lint`
+  does through Verilator. No whole top has been read through it, so
+  what the primitive stubs and the build-time defines need is unknown.
+  The same reader is the synthesis front end under evaluation (this
+  file, "Hardware: evaluate yosys-slang as the SystemVerilog
+  frontend"); a build that reads the design through it gets these
+  warnings with it.
+- **Which warnings stop a build.** Some of slang's argue with how the
+  tree is written on purpose: an output left open (Verilator's
+  equivalent is switched off for `fpga-lint`), a state `case` ended by
+  a `default`. The set has to be chosen, and named in the coding
+  standards beside Verilator's.
+- **The backlog.** Size casts of integers are in about forty files
+  under `hw/rtl`. Until they are cleared the target can report but not
+  gate.
 
 ## Ruled out
 
