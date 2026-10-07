@@ -106,6 +106,48 @@ container the wrapper scripts drive rebuilt or updated. The build-time
 defines the flow passes at the sv2v step (`SDRAM_PHASE_DEG`,
 `PENUMBRA_CPU_VARIANT`) need an equivalent on the new frontend.
 
+## Hardware: a module's stated clock rate is never compared with the clock built
+
+A module whose logic depends on its clock's rate (a baud divider, an
+oversampling count, a management clock) is told the rate in a
+parameter. Nothing ties that parameter to the clock on the module's
+port, so a clock retuned for one consumer can detune another in a
+build that succeeds.
+
+What holds today:
+
+- The CPU clock is right by construction. A top states `CPU_HZ` once,
+  computes the PLL or MMCM dividers from it (`ecp5_pll_pkg`,
+  `xc7_mmcm_pkg`, exact or the build stops) and passes the same
+  constant to every consumer.
+- A clock shared for its rate has one consumer that checks. The
+  ULX3S's 60 MHz clock serves the USB host and the audio output, and
+  `usbhc` stops a build whose `USB_CLK_HZ` is not the rate its
+  oversampling is built for. The ECP5 PHY counts by the same factors
+  with no check of its own, and is covered only because both tops put
+  it on the controller's clock.
+- A rate parameter with no default has to be given: Verilator and
+  sv2v both stop on an instance that leaves it out. `usbhc`, `eth` and
+  `eth_mdio` are written so, with their checks letting through the
+  zero sv2v writes as a stand-in (`build_check`'s header has why).
+
+Open:
+
+- **Rate parameters that default.** `uart`, `spi`, `i2c_master`,
+  `audio_i2s_out` and `audio_rate_divider` each default their clock's
+  rate, so a top that leaves it out builds at a plausible wrong one.
+  Dropping the defaults means giving the rate wherever a testbench
+  takes one of them as its top.
+- **The clock as built.** The right constant does not help a top that
+  wires another clock to the port, or a clock module with fixed
+  dividers (`nexysvideo_ddr3_clk`) edited without its consumers.
+  Vivado knows every clock's period once it has read the MMCM and PLL
+  attributes and the XDC, so a signoff gate
+  (`hw/tools/vivado/gates.tcl`) can compare: a marker on the clock
+  carrying the rate the module was told, and a gate that fails where
+  the period of the clock reaching it differs. nextpnr derives no PLL
+  output rates, so the ECP5 flow would go on relying on construction.
+
 ## Ruled out
 
 - **One device module shared by the board tops.** Extracting the
