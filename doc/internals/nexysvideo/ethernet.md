@@ -112,22 +112,28 @@ what it is sent.
 
 ## Reset
 
-The PHY is reset with the machine. Its registers are software's to
-write, and only the reset pin puts all of them back: the reset bit in
-its control register restores that register and the status register
-and no other (datasheet, "BMCR"). Without the pin a driver would
-inherit what the last one wrote, the selected register page and the
-receive clock's output enable among it. With it, a driver finds the
-PHY as its configuration pins set it. The link drops at each reset
+The PHY is reset with the board, by its reset pin. Its registers are
+software's to write, and only the pin puts all of them back: the reset
+bit in its control register restores that register and the status
+register and no other (datasheet, "BMCR"). Without the pin a driver
+would inherit what the last one wrote, the selected register page and
+the receive clock's output enable among it. With it, a driver finds
+the PHY as its configuration pins set it. The link drops at each reset
 and negotiates again while the machine boots.
 
-The pin goes low with the board's reset and stays low for no less
-than 10 ms, the pulse the PHY asks for (datasheet, "PHY Reset"). The
-adapter counts that for itself on the oscillator and does not rely on
-how long the board's reset lasts. The PHY then answers no management
-frame for a further 30 ms. The machine is held in reset until those
-have passed, as it is until the memory has calibrated, so software
-never meets a PHY that is not ready.
+The pin is low from configuration and through the board's reset, and
+stays low for no less than 10 ms beyond it, the pulse the PHY asks for
+(datasheet, "PHY Reset"). `eth_phy_reset` counts that for itself, on
+the machine's clock, and does not rely on how long the board's reset
+lasts. The PHY then answers no management frame for a further 30 ms.
+The machine is held in reset until those have passed, as it is until
+the memory has calibrated, so software never meets a PHY that is not
+ready.
+
+Only the board's reset does this. Software's bus reset runs device
+discovery again and leaves each device's state to its driver, so a
+machine restarted without the board's reset finds the PHY as its last
+driver left it.
 
 ## Station Address
 

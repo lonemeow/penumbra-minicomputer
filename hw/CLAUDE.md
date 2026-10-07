@@ -241,6 +241,10 @@ exposed external bus.
   clock a pattern on its pin and the data pins changing a quarter
   period ahead of its rise. Why this and not 1000 is in
   `doc/internals/nexysvideo/ethernet.md`.
+- `eth/eth_phy_reset.sv` — a PHY's hardware reset with the board's:
+  the reset pin low for the time the PHY asks, then `o_ready` once it
+  has settled, for a board to hold its machine in reset on. Both times
+  are parameters with no default, the PHY's from its datasheet.
 - `eth/eth_crc32.sv` — the Ethernet frame check sequence, a byte per
   cycle: the bare remainder, held reflected so that the check sequence
   is its bytes in wire order. The adapter's receiver and transmitter
@@ -333,6 +337,10 @@ exposed external bus.
   transmit clock, for `tb_eth_phy_rgmii_xc7`: a PHY model on the RGMII
   pins and the device's two halves at the seam, through the 7-series
   stubs' behavioral I/O cells.
+- `eth_phy_reset_test.sv` — `eth_phy_reset` with the RTL8211E's 10 and
+  30 ms at a 102.35 kHz clock, where neither is a whole number of
+  cycles and the two come to one cycle short of a power of two, for
+  `tb_eth_phy_reset`.
 - `eth_mdio_test.sv` — `eth_mdio` at a 25 MHz clock, where MDC's period
   is the 400 ns minimum, for `tb_eth_mdio`: a PHY model on the two
   pins and a monitor holding them to the minimums a PHY asks for.
