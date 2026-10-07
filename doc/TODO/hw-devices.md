@@ -1109,11 +1109,8 @@ Open:
   the audio codec also uses, at 0x57: the schematic straps the
   EEPROM's A0 to A2 high, and the reference manual gives 1010111b.
   Hardware reads it after reset and presents it as the device's
-  factory address, which needs the I2C master's command port handed
-  over from the codec's setup ("Hardware: the I2C master serves one
-  consumer and no stretched clock"). The interface allows the read
-  200 ms from reset: check that against the codec setup that runs
-  first.
+  factory address, sharing the bus's master with the codec's setup
+  (`i2c_shared_master`).
 - **Gigabit on the Nexys Video**, not yet. The board's adapter
   carries 10 and 100 Mbit/s only. The PHY is strapped to add no delay
   to either RGMII clock, so at 1000 Mbit/s the FPGA has to add both:
@@ -1192,34 +1189,22 @@ checked on the board), and a console on this keyboard in the ROM, the
 loader and the kernel (the ROM's console and the kernel's are both
 UART-only).
 
-## Hardware: the I2C master serves one consumer and no stretched clock
+## Hardware: the I2C master does not wait out a stretched clock
 
 `hw/rtl/io/i2c/i2c_master.sv` drives the Nexys Video's I2C bus, which
 carries the ADAU1761 codec and the 24AA025E48 EEPROM that holds the
-board's MAC address. Two things it does not do:
+board's MAC address. Sharing its command port among consumers landed
+as `i2c_shared_master`, beside it.
 
-- **Share its command port.** One consumer drives it: the codec's
-  setup (`hw/rtl/fpga/nexysvideo/nexysvideo_codec_setup.sv`), from
-  reset until it finishes or faults. The EEPROM shares the pins, so a
-  second master is no answer; reading the MAC address needs the one
-  master's command port handed over once the setup is done, to
-  hardware that reads the EEPROM and presents the address as the
-  Ethernet device's factory address ("Hardware + kernel: Ethernet MAC
-  for an onboard PHY"). The read itself needs nothing new: the EUI-48
-  sits at 0xFA-0xFF, a START, the control byte, the address, a
-  repeated START and six reads, the last NACKed with a STOP, all
-  commands the master takes. The EEPROM's 5 ms write cycle is
-  signalled by not acknowledging its control byte, which the master
-  reports as a NACK, so a writer polls by retrying.
-- **Wait out a stretched clock.** A slave that holds SCL low past the
-  first step the master releases it in ends the command with a bus
-  error, so a stretched clock fails a command rather than hanging or
-  misreading it. Neither device on this bus stretches: the codec's
-  datasheet describes no stretching, and the EEPROM signals its write
-  cycle as above. Support would hold the step in each state that
-  releases SCL until SCL reads high, under a timeout so a stuck bus
-  still fails. Open only once a device that stretches joins a bus the
-  master drives.
+A slave that holds SCL low past the first step the master releases it
+in ends the command with a bus error, so a stretched clock fails a
+command rather than hanging or misreading it. Neither device on this
+bus stretches: the codec's datasheet describes no stretching, and the
+EEPROM signals its 5 ms write cycle by not acknowledging its control
+byte, which the master reports as a NACK, so a writer polls by
+retrying. Support would hold the step in each state that releases SCL
+until SCL reads high, under a timeout so a stuck bus still fails. Open
+only once a device that stretches joins a bus the master drives.
 
 ## Ruled out
 

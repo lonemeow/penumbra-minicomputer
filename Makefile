@@ -356,6 +356,7 @@ MODULE_TESTS = \
     audio_multi_test:tb_audio_multi \
     audio_i2s_out \
     i2c_master_test:tb_i2c_master \
+    i2c_shared_master_test:tb_i2c_shared_master \
     timer \
     sdram_test \
     sdram_bl8_test:tb_sdram_bl8_test \

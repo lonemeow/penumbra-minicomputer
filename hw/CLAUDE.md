@@ -220,8 +220,13 @@ exposed external bus.
   or given. One state per quarter-period step, with a table of both
   lines in every state; open-drain pins in positive logic. No clock
   stretching: SCL held low is a bus error. Frees the bus after reset.
-  Its command port takes one consumer; sharing it is open work
-  (`doc/TODO/hw-devices.md`).
+  Its command port takes one driver; a bus with several takes an
+  `i2c_shared_master`.
+- `i2c/i2c_shared_master.sv` — an `i2c_master` with a command port
+  for each of `CONSUMERS` drivers, which have it a transaction at a
+  time and in turn. Each port is `i2c_master`'s own and needs nothing
+  more: a consumer not being served sees its command not taken yet.
+  Where a transaction ends is read off the master's responses.
 - `eth/eth.sv` — the Ethernet adapter (`CLASS_ETHERNET`), from the bus
   to the seam a board's PHY adapter attaches at: instantiates the
   cells below, one `eth_cdc` and one `eth_slot_ram` for each PHY-side
@@ -341,6 +346,10 @@ exposed external bus.
   30 ms at a 102.35 kHz clock, where neither is a whole number of
   cycles and the two come to one cycle short of a power of two, for
   `tb_eth_phy_reset`.
+- `i2c_shared_master_test.sv` — `i2c_shared_master` with three
+  consumers' ports, for `tb_i2c_shared_master`: consumer models at the
+  ports, a slave for each on the bus's lines, and a monitor reading
+  whose each transaction is.
 - `eth_mdio_test.sv` — `eth_mdio` at a 25 MHz clock, where MDC's period
   is the 400 ns minimum, for `tb_eth_mdio`: a PHY model on the two
   pins and a monitor holding them to the minimums a PHY asks for.

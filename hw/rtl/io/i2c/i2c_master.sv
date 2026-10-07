@@ -27,6 +27,17 @@
 // where a START needs it high, ends the command with a bus error, so a
 // stuck bus fails a command rather than hanging it.
 //
+// So a response ends its transaction in three cases:
+//
+//   * the command it answers carried a STOP;
+//   * that command was a write the slave did not acknowledge
+//     (o_rsp_nack), and the master has put its own STOP behind it;
+//   * it reports a bus error (o_rsp_error).
+//
+// Behind any of them the master holds no transaction and has let both
+// lines go, and the next command needs a START. An i2c_shared_master
+// gives several consumers a command port each on that rule.
+//
 // After reset the master frees the bus before it takes a command. A
 // reset can land in the middle of a transfer and leave a slave part way
 // through a byte: one that was sending still holds SDA and is clocked
