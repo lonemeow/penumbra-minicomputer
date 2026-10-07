@@ -59,7 +59,8 @@ clock.
 
 | Module | Domain | Role |
 |--------|--------|------|
-| `eth` | all | The device: instantiates the rest, holds the two slot memories |
+| `eth` | all | The device: instantiates the rest, and the one place the three clocks meet |
+| `eth_slot_ram` | crossing | One ring's slots: a block RAM written on one clock and read on another. One for each ring |
 | `eth_regs` | bus | Register block, aperture decode, interrupt output |
 | `eth_cdc` | crossing | The bus clock joined to one PHY-side clock: that side's two frame counts, what software wrote for it, and its reset. One instance for each of the two clocks |
 | `eth_rx` | receive | Preamble strip, length and FCS check, address filter, slot writes, commit |

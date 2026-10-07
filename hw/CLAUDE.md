@@ -222,6 +222,17 @@ exposed external bus.
   stretching: SCL held low is a bus error. Frees the bus after reset.
   Its command port takes one consumer; sharing it is open work
   (`doc/TODO/hw-devices.md`).
+- `eth/eth.sv` — the Ethernet adapter (`CLASS_ETHERNET`), from the bus
+  to the seam a board's PHY adapter attaches at: instantiates the
+  cells below, one `eth_cdc` and one `eth_slot_ram` for each PHY-side
+  clock. Board-neutral; microarchitecture in
+  `doc/internals/ethernet.md`.
+- `eth/eth_slot_ram.sv` — one ring's slots: a block RAM in four byte
+  banks, written on one clock (a write enable for each lane) and read
+  on another.
+- `eth/eth_phy_loop.sv` — a loopback in a PHY adapter's place at the
+  seam, for simulation: every byte time the transmitter puts up goes
+  to the receiver.
 - `eth/eth_crc32.sv` — the Ethernet frame check sequence, a byte per
   cycle: the bare remainder, held reflected so that the check sequence
   is its bytes in wire order. The adapter's receiver and transmitter
@@ -306,6 +317,10 @@ exposed external bus.
 - `i2c_master_test.sv` — `i2c_master` at a 4 MHz clock, so a step is
   ten cycles, for `tb_i2c_master`: a slave model on the two lines and a
   monitor holding the bus to the standard-mode minimums.
+- `eth_loop_test.sv` — the whole Ethernet adapter with `eth_phy_loop`
+  at its seam, for `tb_eth_loop`: frames written through the transmit
+  aperture come back through the receive aperture, driven from the
+  bus alone.
 - `eth_mdio_test.sv` — `eth_mdio` at a 25 MHz clock, where MDC's period
   is the 400 ns minimum, for `tb_eth_mdio`: a PHY model on the two
   pins and a monitor holding them to the minimums a PHY asks for.

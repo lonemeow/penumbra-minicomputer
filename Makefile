@@ -407,6 +407,7 @@ MODULE_TESTS = \
     eth_rx \
     eth_cdc \
     eth_regs \
+    eth_loop_test:tb_eth_loop \
     usb_crc5 \
     usb_crc16 \
     usb_bit_stuff_tx \
