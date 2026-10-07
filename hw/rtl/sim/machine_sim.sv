@@ -441,7 +441,10 @@ module machine_sim
 
     logic [15:0] usb_phy_dbg;
 
-    usbhc u_usbhc (
+    // A simulation's USB clock is whatever rate the SIE takes it for.
+    usbhc #(
+        .USB_CLK_HZ (32'(usb_pkg::USB_SIE_HZ))
+    ) u_usbhc (
         .i_clk        (i_clk),
         .i_rst        (i_rst),
         .i_addr       (usb_dev_addr),

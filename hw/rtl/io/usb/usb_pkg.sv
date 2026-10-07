@@ -14,6 +14,11 @@ package usb_pkg;
 /* verilator lint_off UNUSEDPARAM */
     localparam int USB_OS_FS = 5;
     localparam int USB_OS_LS = 40;
+
+    // The clock those factors are for: either one times its speed's bit
+    // rate. Every cell that counts by them runs on a clock of this rate
+    // and no other, which the controller checks of the clock it is given.
+    localparam int USB_SIE_HZ = USB_OS_FS * 12_000_000;
 /* verilator lint_on UNUSEDPARAM */
 
     // Speed / transceiver select, the UTMI+ XcvrSelect encoding — one coding

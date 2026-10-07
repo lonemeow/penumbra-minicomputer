@@ -815,7 +815,9 @@ module ulx3s_penumbra1_top (
 
     logic [15:0] usb_phy_dbg;
 
-    usbhc u_usbhc (
+    usbhc #(
+        .USB_CLK_HZ (32'(CLK60_HZ))
+    ) u_usbhc (
         .i_clk        (clk),
         .i_rst        (rst),
         .i_addr       (usb_dev_addr),

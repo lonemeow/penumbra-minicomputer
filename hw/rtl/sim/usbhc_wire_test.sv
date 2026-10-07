@@ -57,7 +57,9 @@ module usbhc_wire_test (
     logic [15:0] phy_dbg;
     logic       a_clk_unused, b_clk_unused;
 
+    // A simulation's USB clock is whatever rate the SIE takes it for.
     usbhc #(
+        .USB_CLK_HZ    (32'(usb_pkg::USB_SIE_HZ)),
         .CLKS_PER_MS   (4000),
         .DEBOUNCE_CLKS (30)
     ) u_usbhc (

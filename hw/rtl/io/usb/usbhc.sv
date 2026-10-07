@@ -12,6 +12,11 @@
 // to sample — the data-before-toggle discipline, applied to a request.
 
 module usbhc #(
+    // The rate of i_usb_clk, as the integration made it. It has no
+    // default: the clock is the integration's, shared there with whatever
+    // else wants its rate, so the integration has to say what it is, and
+    // a build where it is not the SIE's rate stops.
+    parameter int unsigned USB_CLK_HZ,
     parameter int          BUF_BYTES     = 64,
     // Passed to the MAC; overridable so testbenches can run short frames
     // and fast connect detection.
@@ -55,6 +60,14 @@ module usbhc #(
     input  logic [15:0] i_dbg
 );
     import penumbra_pkg::*;
+
+    // The oversampling factors, a millisecond's clocks and the debounce
+    // count all take one rate for granted. A clock retuned for another of
+    // its consumers fails here, where otherwise it would detune the line.
+    build_check #(
+        .COND (USB_CLK_HZ == 32'(usb_pkg::USB_SIE_HZ)),
+        .MSG  ("usbhc: USB_CLK_HZ is not the rate the USB oversampling is built for")
+    ) u_check_usb_clk ();
 
     // Register tier <-> CDC, CPU domain
     logic [6:0]  cbuf_addr;
