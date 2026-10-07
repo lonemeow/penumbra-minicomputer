@@ -185,11 +185,15 @@ Open work lives in `doc/TODO/`, one file per area; the table in
   `tb_interactive`) are intentionally excluded. Add new entries when
   introducing modules with a `tb_<mod>.cpp` or `<mod>_test.sv` wrapper.
 - `make test-gate` — gate-level event simulation of the synthesized
-  `sdram_cdc` with a routing delay on every cell input (Icarus, via the
-  FPGA container). Guards clock-domain crossings against combinational
-  glitch hazards, which a zero-delay simulator cannot represent at all.
-  Harness in `hw/sim/gate/`; `GATE_SEEDS`/`GATE_CYCLES` size the run
-  and `GATE_WIDTHS` lists the response payload widths to cover.
+  crossing modules (`sdram_cdc`, `eth_cdc`) with a routing delay on
+  every cell input (Icarus, via the FPGA container). Guards
+  clock-domain crossings against combinational glitch hazards, which a
+  zero-delay simulator cannot represent at all. Harness in
+  `hw/sim/gate/`, a testbench for each module;
+  `GATE_SEEDS`/`GATE_CYCLES` size the run, `GATE_WIDTHS` lists
+  `sdram_cdc`'s response payload widths to cover, and
+  `GATE_ETH_WIDTHS`/`GATE_ETH_CLOCKS` `eth_cdc`'s bundle widths and
+  pairs of clock periods.
 - `make test-all` — `make test` then `make test-modules`, `test-rom`
   and `test-gate`.
 - `make test-compiler` — `llvm-test-suite` C tests on ISS in `+hosted`

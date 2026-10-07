@@ -520,21 +520,22 @@ test-modules-variant:
 	done
 
 # ── Gate-level CDC hazard test (Icarus, via the FPGA container) ──
-# Synthesizes sdram_cdc to ECP5 cells and event-simulates the mapped
-# netlist with a routing delay on every cell input.  A clock-domain
-# crossing whose failure mode is a combinational glitch is invisible to
-# a zero-delay simulator, which evaluates a multi-bit encode atomically;
-# reproducing one needs the netlist, per-pin delays and an event
-# simulator together.  Harness in hw/sim/gate/.
+# Synthesizes each crossing module (sdram_cdc, eth_cdc) to ECP5 cells
+# and event-simulates the mapped netlist with a routing delay on every
+# cell input.  A clock-domain crossing whose failure mode is a
+# combinational glitch is invisible to a zero-delay simulator, which
+# evaluates a multi-bit encode atomically; reproducing one needs the
+# netlist, per-pin delays and an event simulator together.  Harness in
+# hw/sim/gate/, a testbench for each module.
 #
 # Runs GATE_SEEDS routing-delay draws of GATE_CYCLES system cycles each,
 # plus a zero-delay control that must stay clean -- a violation there
 # means the harness is measuring itself rather than the design.  A deep
 # sweep is GATE_SEEDS=8 GATE_CYCLES=200000.
 #
-# GATE_WIDTHS lists the response payload widths to cover.  The pointer
-# handshake is width-independent, but the routing a wide payload needs
-# is not, so every width the design ships belongs in the list.
+# GATE_WIDTHS lists sdram_cdc's response payload widths to cover.  The
+# pointer handshake is width-independent, but the routing a wide payload
+# needs is not, so every width the design ships belongs in the list.
 GATE_DIR     = $(BUILD_DIR)/gate
 GATE_SEEDS  ?= 2
 GATE_CYCLES ?= 20000
@@ -560,13 +561,56 @@ $(GATE_DIR)/sim_%.vvp: $(GATE_DIR)/cdc_gate_%.v $(GATE_CELLS) $(GATE_TB)
 		-Ptb_sdram_cdc_gate.RSP_BITS=$* \
 		-o $@ $(GATE_CELLS) $(GATE_DIR)/cdc_gate_$*.v $(GATE_TB)
 
+# eth_cdc.  GATE_ETH_WIDTHS lists the widths of the bundle it carries
+# down, for the reason GATE_WIDTHS has: the Ethernet adapter builds a
+# narrow crossing for its transmitter and a wide one for its receiver
+# (the two structs in eth.sv).
+#
+# GATE_ETH_CLOCKS lists pairs of clock periods in ns, the bus clock's
+# first.  This crossing's two clocks stand in no fixed relation, and
+# what a run can catch depends on it: a device clock over three times
+# the bus clock's rate always takes a bundle within the bus cycle that
+# sent it, before anything on the bus side can change again, so a
+# bundle that was not held still for it would pass.  The list holds a
+# device clock much faster than the bus clock, one slower, and one just
+# off twice its rate, where the phase between the two creeps through
+# every alignment.
+GATE_ETH_TB      = hw/sim/gate/tb_eth_cdc_gate.v
+GATE_ETH_WIDTHS ?= 19 69
+GATE_ETH_CLOCKS ?= 26.667:7.993 16.667:40.021 20.000:10.007
+
+$(GATE_DIR)/eth_cdc_sv2v.v: hw/rtl/io/eth/eth_cdc.sv
+	@mkdir -p $(GATE_DIR)
+	$(FPGA_TOOLS)/sv2v $< -w $@
+
+.SECONDARY: $(GATE_ETH_WIDTHS:%=$(GATE_DIR)/eth_cdc_gate_%.v) \
+            $(GATE_ETH_WIDTHS:%=$(GATE_DIR)/eth_cdc_sim_%.vvp)
+
+$(GATE_DIR)/eth_cdc_gate_%.v: $(GATE_DIR)/eth_cdc_sv2v.v
+	$(FPGA_TOOLS)/yosys -p "read_verilog $<; chparam -set DOWN_W $* eth_cdc; synth_ecp5 -top eth_cdc; write_verilog -noattr $@"
+
+$(GATE_DIR)/eth_cdc_sim_%.vvp: $(GATE_DIR)/eth_cdc_gate_%.v $(GATE_CELLS) $(GATE_ETH_TB)
+	$(FPGA_TOOLS)/iverilog -g2012 -s tb_eth_cdc_gate -s ecp5_delay_cfg \
+		-Ptb_eth_cdc_gate.DOWN_W=$* \
+		-o $@ $(GATE_CELLS) $(GATE_DIR)/eth_cdc_gate_$*.v $(GATE_ETH_TB)
+
 .PHONY: test-gate
-test-gate: $(GATE_WIDTHS:%=$(GATE_DIR)/sim_%.vvp)
+test-gate: $(GATE_WIDTHS:%=$(GATE_DIR)/sim_%.vvp) \
+           $(GATE_ETH_WIDTHS:%=$(GATE_DIR)/eth_cdc_sim_%.vvp)
 	@fail=0; \
 	for w in $(GATE_WIDTHS); do \
 		for s in $$(seq 1 $(GATE_SEEDS)) zero; do \
 			if [ "$$s" = zero ]; then a="+zero"; else a="+seed=$$s"; fi; \
 			$(FPGA_TOOLS)/vvp $(GATE_DIR)/sim_$$w.vvp $$a +cycles=$(GATE_CYCLES) || fail=1; \
+		done; \
+	done; \
+	for w in $(GATE_ETH_WIDTHS); do \
+		for c in $(GATE_ETH_CLOCKS); do \
+			for s in $$(seq 1 $(GATE_SEEDS)) zero; do \
+				if [ "$$s" = zero ]; then a="+zero"; else a="+seed=$$s"; fi; \
+				$(FPGA_TOOLS)/vvp $(GATE_DIR)/eth_cdc_sim_$$w.vvp $$a +cycles=$(GATE_CYCLES) \
+					+tbus=$${c%%:*} +tdev=$${c##*:} || fail=1; \
+			done; \
 		done; \
 	done; \
 	if [ $$fail -ne 0 ]; then echo "  *** gate-level CDC test FAILED ***"; exit 1; fi
