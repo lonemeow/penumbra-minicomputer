@@ -329,6 +329,40 @@ package penumbra_pkg;
     localparam int USBHC_IRQ_PORT_CHANGE = 1;
     localparam int USBHC_IRQ_SOF         = 2;
 
+    // ── Ethernet adapter (CLASS_ETHERNET) ──────────────────────
+    // Register contract: doc/system/devices/ethernet.md.
+
+    // Register offsets (word-strided within the device window)
+    localparam logic [6:0] ETH_REG_CAP        = 7'h00;
+    localparam logic [6:0] ETH_REG_IRQ_STATUS = 7'h04;
+    localparam logic [6:0] ETH_REG_IRQ_ENABLE = 7'h08;
+    localparam logic [6:0] ETH_REG_CTRL       = 7'h0C;
+    localparam logic [6:0] ETH_REG_LINK       = 7'h10;
+    localparam logic [6:0] ETH_REG_MDIO       = 7'h14;
+    localparam logic [6:0] ETH_REG_ADDR_LO    = 7'h18;
+    localparam logic [6:0] ETH_REG_ADDR_HI    = 7'h1C;
+    localparam logic [6:0] ETH_REG_FACTORY_LO = 7'h20;
+    localparam logic [6:0] ETH_REG_FACTORY_HI = 7'h24;
+    localparam logic [6:0] ETH_REG_RX_GEOM    = 7'h40;
+    localparam logic [6:0] ETH_REG_RX_PROD    = 7'h44;
+    localparam logic [6:0] ETH_REG_RX_CONS    = 7'h48;
+    localparam logic [6:0] ETH_REG_RX_DROP    = 7'h4C;
+    localparam logic [6:0] ETH_REG_TX_GEOM    = 7'h50;
+    localparam logic [6:0] ETH_REG_TX_PROD    = 7'h54;
+    localparam logic [6:0] ETH_REG_TX_CONS    = 7'h58;
+    localparam logic [6:0] ETH_REG_TX_WM      = 7'h5C;
+
+    // The slot apertures, as offsets into the device window. The
+    // transmit ring fits between the two.
+    localparam int ETH_TX_APERTURE = 'h0_8000;
+    localparam int ETH_RX_APERTURE = 'h1_0000;
+
+    localparam logic [7:0] ETH_VERSION = 8'd1;     // CAP.VERSION
+
+    // IRQ_STATUS / IRQ_ENABLE bit positions
+    localparam int ETH_IRQ_RX = 0;
+    localparam int ETH_IRQ_TX = 1;
+
     // ── Physical address map (bus base addresses) ──────────────
     // Fixed base addresses for memory-mapped devices.
     // UART_BASE already defined above (32'hFF00_0000).

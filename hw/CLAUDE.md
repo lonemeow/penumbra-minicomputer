@@ -248,6 +248,11 @@ exposed external bus.
   count up as a registered Gray code, pulses up as a toggle, and the
   reset down as a request held until answered, so a stopped clock only
   delays it.
+- `eth/eth_regs.sv` — the Ethernet adapter's register block, on the bus
+  clock: the register page (offsets `ETH_REG_*` in `penumbra_pkg`), the
+  two slot apertures onto the slot memories' bus-side ports, byte lanes
+  honoured in the transmit aperture alone, and the interrupt as two
+  conditions on the counts. A simple bus device.
 - `sdram/sdram_pkg.sv` — command encoding + chip presets.
 - `sdram/sdram_ctrl.sv` — FSM core: init / refresh / ACT/RW/RECOVER.
   `PHY_OUT_LATENCY` / `PHY_IN_LATENCY` parameters absorb

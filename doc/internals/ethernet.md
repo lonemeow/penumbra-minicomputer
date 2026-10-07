@@ -185,11 +185,17 @@ word a cycle before it needs the first byte of it.
 
 ## Bus Side
 
-`eth_regs` answers the registers in one cycle and the apertures in
-two: a slot memory's read is registered, so a read of the receive
-aperture holds the bus for one wait before its `ack`. A write to the
-transmit aperture commits the enabled byte lanes, which is what lets a
-driver store the odd ends of an mbuf chain as they lie.
+`eth_regs` is a simple bus device: every access does its work in its
+first cycle and is acknowledged in the next. A slot memory's read is
+registered, which is that same one cycle, so a read of the receive
+aperture answers as a register does and holds the bus no longer. A
+write to the transmit aperture commits the enabled byte lanes, which
+is what lets a driver store the odd ends of an mbuf chain as they lie.
+
+The register block holds what software writes as plain registers and
+knows nothing of the other clocks. The values for each side leave it
+for that side's crossing, and each side's own count comes back from
+there.
 
 Both interrupt sources are comparisons on counts already in the bus
 domain, so the interrupt output is combinational from registers there
