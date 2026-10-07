@@ -1,9 +1,10 @@
-// Xilinx 7-series primitive stubs for Verilator lint
+// Xilinx 7-series primitive stubs for Verilator
 //
-// Minimal blackbox modules matching the 7-series primitives the board
-// tops instantiate, with the ports and parameters of Vivado's own
-// simulation models. Only for `verilator --lint-only`; synthesis uses
-// the real primitives via Vivado.
+// Minimal modules matching the 7-series primitives the board tops and
+// PHY adapters instantiate, with the ports and parameters of Vivado's
+// own simulation models. For lint, and behavioral where a testbench
+// reads or drives pins through one; synthesis uses the real primitives
+// via Vivado.
 
 /* verilator lint_off DECLFILENAME */
 /* verilator lint_off UNUSEDSIGNAL */
@@ -124,6 +125,53 @@ module ODDR #(
             d2_fall_q <= D2;
 
     assign Q = C ? d1_q : (DDR_CLK_EDGE == "SAME_EDGE" ? d2_rise_q : d2_fall_q);
+endmodule
+
+// ── IDDR: input DDR register, in the I/O cell ───────────────
+// Behavioral, since a testbench drives a module's pins through it: D is
+// captured on both of C's edges. OPPOSITE_EDGE shows each capture as it
+// is made, Q1 from the rising edge and Q2 from the falling. SAME_EDGE
+// holds the falling edge's back to the rising edge after it.
+// SAME_EDGE_PIPELINED holds both to that edge, so Q1 and Q2 change
+// together and are the two halves of one cycle of C. Set and reset are
+// not modeled.
+module IDDR #(
+    parameter DDR_CLK_EDGE = "OPPOSITE_EDGE",
+    parameter INIT_Q1      = 1'b0,
+    parameter INIT_Q2      = 1'b0,
+    parameter SRTYPE       = "SYNC"
+) (
+    output Q1,
+    output Q2,
+    input  C,
+    input  CE,
+    input  D,
+    input  R,
+    input  S
+);
+    logic rise_q, fall_q;               // D as each edge found it
+    logic rise_held_q, fall_held_q;     // those, at the rising edge after
+
+    initial begin
+        rise_q      = INIT_Q1;
+        rise_held_q = INIT_Q1;
+        fall_q      = INIT_Q2;
+        fall_held_q = INIT_Q2;
+    end
+
+    always_ff @(posedge C)
+        if (CE) begin
+            rise_q      <= D;
+            rise_held_q <= rise_q;
+            fall_held_q <= fall_q;
+        end
+
+    always_ff @(negedge C)
+        if (CE)
+            fall_q <= D;
+
+    assign Q1 = (DDR_CLK_EDGE == "SAME_EDGE_PIPELINED") ? rise_held_q : rise_q;
+    assign Q2 = (DDR_CLK_EDGE == "OPPOSITE_EDGE")       ? fall_q      : fall_held_q;
 endmodule
 
 // ── OBUFDS: differential output buffer ──────────────────────

@@ -51,10 +51,21 @@ same at every speed.
 **Receive.** The receive clock, 25 or 2.5 MHz, comes in on a
 clock-capable pin and drives the receive domain through a global
 buffer. The data and control pins are captured in their input cells on
-both of its edges: the rising edge takes the nibble and whether it is
-valid, and the falling edge the control pin's second half, which
-differs from the first when the PHY reports an error. The adapter
-pairs nibbles into bytes and enables every other cycle.
+both of its edges: the rising edge takes the nibble and data valid,
+and the falling edge the control pin's second half, which differs from
+the first when the PHY reports an error.
+
+Data valid marks the nibbles of a packet: a preamble, the start
+delimiter and then the frame. A PHY may hand over any number of the
+preamble's nibbles, odd or even, so nibbles paired from where data
+valid rises can put the two halves of every byte in different pairs.
+The adapter presents nothing of a preamble, and asks nothing of one:
+whatever a packet holds ahead of its delimiter is passed over. It
+waits for the two nibbles of the start delimiter, presents that byte,
+and pairs nibbles from there, a byte on every other cycle. A nibble
+left over when data valid falls is dropped. Between packets it
+presents a byte time with data valid clear on every cycle, which is
+how the device learns that a frame has ended.
 
 The PHY changes those pins on the clock's own edges, so the capture
 relies on the clock reaching the input cells after the data has. The
@@ -74,9 +85,15 @@ control pins have. It takes a byte from the transmitter every 8 or 80
 cycles and holds each nibble for 4 or 40.
 
 The data and control pins change a quarter of the clock pin's period
-after it rises, which puts every change a quarter period, 10 ns at
-100 Mbit/s, from both of the edges the PHY samples on. That stands in
-for the delay the PHY does not add.
+before it rises. The PHY reads the control pin twice in a nibble: on
+the clock's rise for transmit enable, which marks a packet's nibbles
+as data valid does, and on the fall after it for an error, which it
+finds when the two readings differ. So a nibble has to span a rise and
+the fall behind it, in that order. Spanning a fall and then a rise,
+the first and last nibbles of every packet would each read as an
+error. A quarter period, 10 ns at 100 Mbit/s, then lies between every
+change and both of the edges the PHY samples on, which stands in for
+the delay the PHY does not add.
 
 Changing speed switches no clock: the device's `i_speed` changes how
 the adapter counts, and nothing else.

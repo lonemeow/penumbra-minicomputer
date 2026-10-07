@@ -233,6 +233,14 @@ exposed external bus.
 - `eth/eth_phy_loop.sv` — a loopback in a PHY adapter's place at the
   seam, for simulation: every byte time the transmitter puts up goes
   to the receiver.
+- `eth/eth_phy_rgmii_xc7.sv` — a PHY adapter for the seam: an RGMII
+  PHY at 10 and 100 Mbit/s on 7-series I/O cells, with no delay cell
+  or clock manager. Receive on the PHY's clock through a global
+  buffer, nibbles paired into bytes from the start delimiter on;
+  transmit on a board clock that is a multiple of 100 MHz, the pin
+  clock a pattern on its pin and the data pins changing a quarter
+  period ahead of its rise. Why this and not 1000 is in
+  `doc/internals/nexysvideo/ethernet.md`.
 - `eth/eth_crc32.sv` — the Ethernet frame check sequence, a byte per
   cycle: the bare remainder, held reflected so that the check sequence
   is its bytes in wire order. The adapter's receiver and transmitter
@@ -321,6 +329,10 @@ exposed external bus.
   at its seam, for `tb_eth_loop`: frames written through the transmit
   aperture come back through the receive aperture, driven from the
   bus alone.
+- `eth_phy_rgmii_xc7_test.sv` — `eth_phy_rgmii_xc7` with a 100 MHz
+  transmit clock, for `tb_eth_phy_rgmii_xc7`: a PHY model on the RGMII
+  pins and the device's two halves at the seam, through the 7-series
+  stubs' behavioral I/O cells.
 - `eth_mdio_test.sv` — `eth_mdio` at a 25 MHz clock, where MDC's period
   is the 400 ns minimum, for `tb_eth_mdio`: a PHY model on the two
   pins and a monitor holding them to the minimums a PHY asks for.

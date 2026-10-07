@@ -408,6 +408,7 @@ MODULE_TESTS = \
     eth_cdc \
     eth_regs \
     eth_loop_test:tb_eth_loop \
+    eth_phy_rgmii_xc7_test:tb_eth_phy_rgmii_xc7 \
     usb_crc5 \
     usb_crc16 \
     usb_bit_stuff_tx \
