@@ -1092,25 +1092,29 @@ Open:
   (32 KB, 22 full frames) while the CPU drains nothing, for 64 KB of
   block RAM.
 - **The Nexys Video's side**
-  (`doc/internals/nexysvideo/ethernet.md`): the RGMII adapter at 10
-  and 100 Mbit/s, the PHY's reset, and the board's MAC address. The
-  PHY runs under `ukphy`. `rgephy(4)`, which knows the RTL8211
-  family, writes the full gigabit advertisement at every media
-  change, whatever capabilities `mii(4)` was attached with, so under
-  it the PHY settles on a speed this device does not carry. `ukphy`
-  leaves Energy Efficient Ethernet advertised at 100 Mbit/s, as the
-  PHY powers up, where `rgephy` turns it off: check on hardware that
-  a link in that mode loses no frame. The receive capture relies on
-  the clock reaching the input cells after the data: check that the
-  tools add no hold-time delay on the data pins, and that the
-  constraints make them check the capture. The PHY's interrupt pin
-  has no use: the interface has no link interrupt, and `mii(4)`
-  polls. A 24AA025E48 EEPROM holds the address, on the I2C bus
-  the audio codec also uses, at 0x57: the schematic straps the
-  EEPROM's A0 to A2 high, and the reference manual gives 1010111b.
-  Hardware reads it after reset and presents it as the device's
-  factory address: `eth_addr_eeprom`, on an `i2c_shared_master` with
-  the codec's setup. Both are built and wait for the board top.
+  (`doc/internals/nexysvideo/ethernet.md`) runs on the board: under
+  NetBSD's `peth` the PHY links at 100 Mbit/s full duplex and the
+  interface carries traffic. Open there:
+  - A DHCP exchange takes about 30 s on the one network tried.
+    `dhcpcd` sends at about 0, 4, 12 and 28 s after it starts, and
+    the lease comes with the fourth: nothing earlier is answered.
+    Every `ifconfig up` has the PHY negotiate again, and `dhcpcd` was
+    started during or just after that each time. Not established:
+    whether frames fail to pass for a while after the link comes up,
+    on the board's side or the network's, or the router is slow.
+  - 10 Mbit/s and frames of full length have not been tried.
+  - `eth_mdio` allows 20 ns for its two pins' delays (`PIN_NS`), and
+    the constraints leave both pins untimed.
+  - The PHY runs under `ukphy`. `rgephy(4)`, which knows the RTL8211
+    family, writes the full gigabit advertisement at every media
+    change, whatever capabilities `mii(4)` was attached with, so under
+    it the PHY settles on a speed this device does not carry. `ukphy`
+    leaves Energy Efficient Ethernet advertised at 100 Mbit/s, as the
+    PHY powers up, where `rgephy` turns it off: that a link in that
+    mode loses no frame.
+
+  The PHY's interrupt pin has no use: the interface has no link
+  interrupt, and `mii(4)` polls.
 - **Gigabit on the Nexys Video**, not yet. The board's adapter
   carries 10 and 100 Mbit/s only. The PHY is strapped to add no delay
   to either RGMII clock, so at 1000 Mbit/s the FPGA has to add both:

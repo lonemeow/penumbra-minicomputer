@@ -3,8 +3,9 @@
 // Wires machine_penumbra2 to the board: the shared clocking and power-on
 // reset (nexysvideo_clk_rst), a 64 KB boot ROM, the UART on the UART USB
 // port, the microSD slot over SPI, the display adapter on the HDMI
-// output and the audio device in front of the board's codec behind
-// autoconfig, and system RAM in the board's 512 MiB of DDR3. The top
+// output, the audio device in front of the board's codec and the
+// Ethernet device on the board's PHY behind autoconfig, and system RAM
+// in the board's 512 MiB of DDR3. The top
 // grows one device per bring-up step; the external
 // Penumbra Bus is assembled here the way the ULX3S top assembles it
 // (device decode, response fabric with its no-device watchdog), so what
@@ -22,6 +23,12 @@
 // reset of the machine, which the device reports as its STATUS, and its
 // master clock is the oscillator divided, running whatever the machine's
 // reset does.
+//
+// The Ethernet device is on the board's RTL8211E PHY (nexysvideo_eth,
+// doc/internals/nexysvideo/ethernet.md). The PHY is reset with the
+// board, and the machine is held in reset until the PHY answers
+// management frames. The device's factory address is read from the
+// board's EEPROM, on the I2C bus the codec is on.
 //
 // The DDR3 runs on clocks of its own (nexysvideo_ddr3_clk) behind the
 // line stack (ddr3_stack), which crosses to them. Its controller resets
@@ -80,6 +87,17 @@ module nexysvideo_penumbra2_top (
     // ── I2C: the codec, and the MAC-address EEPROM ─────────
     inout  wire        scl,
     inout  wire        sda,
+
+    // ── Ethernet PHY (RTL8211E): RGMII, management, reset ──
+    input  logic       eth_rxck,     // the PHY's receive clock
+    input  logic       eth_rxctl,
+    input  logic [3:0] eth_rxd,
+    output logic       eth_txck,
+    output logic       eth_txctl,
+    output logic [3:0] eth_txd,
+    output logic       eth_mdc,
+    inout  wire        eth_mdio,
+    output logic       eth_rst_b,    // low resets the PHY
 
     // ── DDR3 (MT41K256M16, x16) ───────────────────────────
     output logic [0:0]  ddr3_ck_p,
@@ -149,7 +167,9 @@ module nexysvideo_penumbra2_top (
     end
 
     // The machine's reset: the board's, held on until the memory has
-    // calibrated (calib_complete, in the controller clock's domain).
+    // calibrated (calib_complete, in the controller clock's domain) and
+    // the Ethernet PHY has come out of its own reset (phy_ready, on the
+    // CPU clock).
     logic calib_complete;
     (* ASYNC_REG = "TRUE" *) logic calib_sync1, calib_sync2;
 
@@ -158,8 +178,10 @@ module nexysvideo_penumbra2_top (
         calib_sync2 <= calib_sync1;
     end
 
+    logic phy_ready;
+
     logic rst;
-    assign rst = board_rst || !calib_sync2;
+    assign rst = board_rst || !calib_sync2 || !phy_ready;
 
     // The stack's controller side, and the display's output chain below,
     // reset with the machine. The reset crosses from a flop, since a
@@ -224,6 +246,7 @@ module nexysvideo_penumbra2_top (
     logic        uart_irq;
     logic        spi_irq;
     logic        audio_irq;
+    logic        eth_irq;
 
     // ── Autoconfig control from the machine's bus controller ──
     logic        busctl_bus_rst;
@@ -239,7 +262,7 @@ module nexysvideo_penumbra2_top (
         .i_clk         (cpu_clk),
         .i_rst         (rst),
 
-        .i_irq         (uart_irq | spi_irq | audio_irq),
+        .i_irq         (uart_irq | spi_irq | audio_irq | eth_irq),
         .i_timer_irq   (1'b0),        // the internal timer is the source
 
         .o_bus_addr    (mem_addr),
@@ -634,11 +657,9 @@ module nexysvideo_penumbra2_top (
     logic        audio_dev_we, audio_dev_re, audio_dev_ack;
     logic [31:0] ac_audio_rdata;
     logic        ac_audio_ack, ac_audio_sel;
-    // Last device in the chain: the dangling cfg_out is the
-    // "no more devices" end the ROM's autoconfig loop probes.
-    /* verilator lint_off UNUSEDSIGNAL */
+    // cfg_out is the daisy-chain to the next autoconfig device
+    // (Ethernet).
     logic        ac_audio_cfg_out;
-    /* verilator lint_on UNUSEDSIGNAL */
 
     autoconfig_dev #(
         .DEV_CLASS (ACFG_CLASS_AUDIO),
@@ -734,11 +755,22 @@ module nexysvideo_penumbra2_top (
         .o_mclk       (ac_mclk)
     );
 
-    logic       i2c_cmd_valid, i2c_cmd_ready;
-    logic       i2c_cmd_start, i2c_cmd_stop, i2c_cmd_read, i2c_cmd_nack;
-    logic [7:0] i2c_cmd_wdata;
-    logic       i2c_rsp_valid, i2c_rsp_nack, i2c_rsp_error;
-    logic [7:0] i2c_rsp_rdata;
+    // ── The I2C bus ─────────────────────────────────────────
+    // The codec and the EEPROM that holds the board's Ethernet address
+    // are on the one bus. Its master has a command port for each of the
+    // two that talk to them, the codec's setup and the Ethernet device,
+    // which have it a transaction at a time.
+    localparam int I2C_CODEC     = 0;
+    localparam int I2C_EEPROM    = 1;
+    localparam int I2C_CONSUMERS = 2;
+
+    logic [I2C_CONSUMERS-1:0]      i2c_cmd_valid, i2c_cmd_ready;
+    logic [I2C_CONSUMERS-1:0]      i2c_cmd_start, i2c_cmd_stop;
+    logic [I2C_CONSUMERS-1:0]      i2c_cmd_read, i2c_cmd_nack;
+    logic [I2C_CONSUMERS-1:0][7:0] i2c_cmd_wdata;
+    logic [I2C_CONSUMERS-1:0]      i2c_rsp_valid;
+    logic [7:0]                    i2c_rsp_rdata;
+    logic                          i2c_rsp_nack, i2c_rsp_error;
 
     nexysvideo_codec_setup #(
         .CLK_HZ  (int'(CPU_HZ)),
@@ -746,14 +778,14 @@ module nexysvideo_penumbra2_top (
     ) u_codec_setup (
         .i_clk        (cpu_clk),
         .i_rst        (rst),
-        .o_cmd_valid  (i2c_cmd_valid),
-        .i_cmd_ready  (i2c_cmd_ready),
-        .o_cmd_start  (i2c_cmd_start),
-        .o_cmd_stop   (i2c_cmd_stop),
-        .o_cmd_read   (i2c_cmd_read),
-        .o_cmd_wdata  (i2c_cmd_wdata),
-        .o_cmd_nack   (i2c_cmd_nack),
-        .i_rsp_valid  (i2c_rsp_valid),
+        .o_cmd_valid  (i2c_cmd_valid[I2C_CODEC]),
+        .i_cmd_ready  (i2c_cmd_ready[I2C_CODEC]),
+        .o_cmd_start  (i2c_cmd_start[I2C_CODEC]),
+        .o_cmd_stop   (i2c_cmd_stop[I2C_CODEC]),
+        .o_cmd_read   (i2c_cmd_read[I2C_CODEC]),
+        .o_cmd_wdata  (i2c_cmd_wdata[I2C_CODEC]),
+        .o_cmd_nack   (i2c_cmd_nack[I2C_CODEC]),
+        .i_rsp_valid  (i2c_rsp_valid[I2C_CODEC]),
         .i_rsp_rdata  (i2c_rsp_rdata),
         .i_rsp_nack   (i2c_rsp_nack),
         .i_rsp_error  (i2c_rsp_error),
@@ -765,9 +797,10 @@ module nexysvideo_penumbra2_top (
     // What the master asks of each line: 1 lets it go, 0 pulls it low.
     logic i2c_scl_release, i2c_sda_release;
 
-    i2c_master #(
-        .CLK_HZ (int'(CPU_HZ)),
-        .SCL_HZ (100_000)
+    i2c_shared_master #(
+        .CLK_HZ    (int'(CPU_HZ)),
+        .SCL_HZ    (100_000),
+        .CONSUMERS (I2C_CONSUMERS)
     ) u_i2c (
         .i_clk       (cpu_clk),
         .i_rst       (rst),
@@ -792,6 +825,102 @@ module nexysvideo_penumbra2_top (
     assign sda = i2c_sda_release ? 1'bz : 1'b0;
     assign scl = i2c_scl_release ? 1'bz : 1'b0;
 
+    // ── Ethernet (fourth in chain) ──────────────────────────
+    // The device's rings, and its window, which ends where the receive
+    // ring's slots do.
+    localparam int          ETH_RX_SLOTS   = 32;
+    localparam int          ETH_TX_SLOTS   = 8;
+    localparam int          ETH_SLOT_BYTES = 2048;
+    localparam logic [31:0] ETH_DEV_SIZE   = ETH_RX_APERTURE +
+                                             ETH_RX_SLOTS * ETH_SLOT_BYTES;
+
+    logic [31:0] eth_dev_addr, eth_dev_wdata, eth_dev_rdata;
+    logic [3:0]  eth_dev_byte_en;
+    logic        eth_dev_we, eth_dev_re, eth_dev_ack;
+    logic [31:0] ac_eth_rdata;
+    logic        ac_eth_ack, ac_eth_sel;
+    // Last device in the chain: the dangling cfg_out is the
+    // "no more devices" end the ROM's autoconfig loop probes.
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic        ac_eth_cfg_out;
+    /* verilator lint_on UNUSEDSIGNAL */
+
+    autoconfig_dev #(
+        .DEV_CLASS (ACFG_CLASS_ETHERNET),
+        .DEV_SIZE  (ETH_DEV_SIZE),
+        .DEV_ID    (32'd0),
+        .DEV_NAME0 (32'h00485445)      // "ETH\0" packed LE
+    ) u_ac_eth (
+        .i_clk        (cpu_clk),
+        .i_rst        (rst),
+        .i_bus_rst    (busctl_bus_rst),
+        .i_cfg_en     (busctl_cfg_en),
+        .i_cfg_in     (ac_audio_cfg_out),
+        .o_cfg_out    (ac_eth_cfg_out),
+        .i_addr       (mem_addr),
+        .i_wdata      (mem_wdata),
+        .i_byte_en    (mem_byte_en),
+        .i_we         (mem_we),
+        .i_re         (mem_re),
+        .o_rdata      (ac_eth_rdata),
+        .o_ack        (ac_eth_ack),
+        .o_sel        (ac_eth_sel),
+        .o_dev_addr   (eth_dev_addr),
+        .o_dev_wdata  (eth_dev_wdata),
+        .o_dev_byte_en(eth_dev_byte_en),
+        .o_dev_we     (eth_dev_we),
+        .o_dev_re     (eth_dev_re),
+        .i_dev_rdata  (eth_dev_rdata),
+        .i_dev_ack    (eth_dev_ack)
+    );
+
+    // The device on the board's PHY. The PHY is reset with the board and
+    // by nothing else: a machine restarted any other way finds it as its
+    // driver left it.
+    nexysvideo_eth #(
+        .CLK_HZ     (int'(CPU_HZ)),
+        .RX_SLOTS   (ETH_RX_SLOTS),
+        .TX_SLOTS   (ETH_TX_SLOTS),
+        .SLOT_BYTES (ETH_SLOT_BYTES)
+    ) u_eth (
+        .i_clk           (cpu_clk),
+        .i_rst           (rst),
+        .i_clk_100mhz    (clk),
+        .i_board_rst     (board_rst),
+        .o_phy_ready     (phy_ready),
+
+        .i_addr          (eth_dev_addr),
+        .i_wdata         (eth_dev_wdata),
+        .i_byte_en       (eth_dev_byte_en),
+        .i_we            (eth_dev_we),
+        .i_re            (eth_dev_re),
+        .o_rdata         (eth_dev_rdata),
+        .o_ack           (eth_dev_ack),
+        .o_irq           (eth_irq),
+
+        .o_i2c_cmd_valid (i2c_cmd_valid[I2C_EEPROM]),
+        .i_i2c_cmd_ready (i2c_cmd_ready[I2C_EEPROM]),
+        .o_i2c_cmd_start (i2c_cmd_start[I2C_EEPROM]),
+        .o_i2c_cmd_stop  (i2c_cmd_stop[I2C_EEPROM]),
+        .o_i2c_cmd_read  (i2c_cmd_read[I2C_EEPROM]),
+        .o_i2c_cmd_wdata (i2c_cmd_wdata[I2C_EEPROM]),
+        .o_i2c_cmd_nack  (i2c_cmd_nack[I2C_EEPROM]),
+        .i_i2c_rsp_valid (i2c_rsp_valid[I2C_EEPROM]),
+        .i_i2c_rsp_rdata (i2c_rsp_rdata),
+        .i_i2c_rsp_nack  (i2c_rsp_nack),
+        .i_i2c_rsp_error (i2c_rsp_error),
+
+        .i_rgmii_rxc     (eth_rxck),
+        .i_rgmii_rxd     (eth_rxd),
+        .i_rgmii_rx_ctl  (eth_rxctl),
+        .o_rgmii_txc     (eth_txck),
+        .o_rgmii_txd     (eth_txd),
+        .o_rgmii_tx_ctl  (eth_txctl),
+        .o_mdc           (eth_mdc),
+        .io_mdio         (eth_mdio),
+        .o_phy_rst_n     (eth_rst_b)
+    );
+
     // ── Response fabric ─────────────────────────────────────
     localparam int SLV_RAM   = 0;
     localparam int SLV_ROM   = 1;
@@ -799,7 +928,8 @@ module nexysvideo_penumbra2_top (
     localparam int SLV_SPI   = 3;
     localparam int SLV_DISP  = 4;
     localparam int SLV_AUDIO = 5;
-    localparam int NUM_SLV   = 6;
+    localparam int SLV_ETH   = 6;
+    localparam int NUM_SLV   = 7;
 
     logic [NUM_SLV-1:0]       slv_sel;
     logic [NUM_SLV-1:0]       slv_ack;
@@ -828,6 +958,10 @@ module nexysvideo_penumbra2_top (
     assign slv_sel[SLV_AUDIO]   = ac_audio_sel;
     assign slv_ack[SLV_AUDIO]   = ac_audio_ack;
     assign slv_rdata[SLV_AUDIO] = ac_audio_rdata;
+
+    assign slv_sel[SLV_ETH]     = ac_eth_sel;
+    assign slv_ack[SLV_ETH]     = ac_eth_ack;
+    assign slv_rdata[SLV_ETH]   = ac_eth_rdata;
 
     bus_response_fabric #(
         .NUM_SLAVES     (NUM_SLV),

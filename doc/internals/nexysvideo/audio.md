@@ -21,7 +21,7 @@ flowchart LR
         DEV["audio device<br/>(CLASS_AUDIO)"]
         I2S["audio_i2s_out<br/>I2S output stage"]
         SETUP["nexysvideo_codec_setup<br/>register sequence"]
-        I2CM["i2c_master"]
+        I2CM["i2c_shared_master"]
         MDIV["MCLK divider<br/>oscillator / 8"]
     end
     subgraph CODEC["ADAU1761 codec"]
@@ -63,7 +63,7 @@ Every wire between the two chips, and who drives it:
 |-------|-------|------|
 | audio device | `hw/rtl/io/audio/` | queues, rate, gain and mixing, down to one stereo frame per request; the same on every board |
 | `audio_i2s_out` | `hw/rtl/io/audio/` | follows BCLK and LRCLK, requests each frame, shifts it out |
-| `i2c_master` | `hw/rtl/io/i2c/` | the I2C bus, one byte per command |
+| `i2c_shared_master` | `hw/rtl/io/i2c/` | the I2C bus, one byte per command; the setup has one of its two command ports, the Ethernet address's reader the other |
 | `nexysvideo_codec_setup` | `hw/rtl/fpga/nexysvideo/` | the register sequence, and its progress as `STATUS` |
 | `nexysvideo_codec_mclk` | `hw/rtl/fpga/nexysvideo/` | MCLK, divided from the oscillator |
 

@@ -53,6 +53,23 @@ set_property -dict { PACKAGE_PIN U6    IOSTANDARD LVCMOS33 } [get_ports { ac_mcl
 set_property -dict { PACKAGE_PIN W5    IOSTANDARD LVCMOS33 } [get_ports { scl }]; #IO_L15N_T2_DQS_34 Sch=scl
 set_property -dict { PACKAGE_PIN V5    IOSTANDARD LVCMOS33 } [get_ports { sda }]; #IO_L16N_T2_34 Sch=sda
 
+## Ethernet PHY
+set_property -dict { PACKAGE_PIN AA16  IOSTANDARD LVCMOS25 } [get_ports { eth_mdc }]; #IO_L1N_T0_13 Sch=eth_mdc
+set_property -dict { PACKAGE_PIN Y16   IOSTANDARD LVCMOS25 } [get_ports { eth_mdio }]; #IO_L1P_T0_13 Sch=eth_mdio
+set_property -dict { PACKAGE_PIN U7    IOSTANDARD LVCMOS33 } [get_ports { eth_rst_b }]; #IO_25_34 Sch=eth_rst_b
+set_property -dict { PACKAGE_PIN V13   IOSTANDARD LVCMOS25 } [get_ports { eth_rxck }]; #IO_L13P_T2_MRCC_13 Sch=eth_rxck
+set_property -dict { PACKAGE_PIN W10   IOSTANDARD LVCMOS25 } [get_ports { eth_rxctl }]; #IO_L10N_T1_13 Sch=eth_rxctl
+set_property -dict { PACKAGE_PIN AB16  IOSTANDARD LVCMOS25 } [get_ports { eth_rxd[0] }]; #IO_L2P_T0_13 Sch=eth_rxd[0]
+set_property -dict { PACKAGE_PIN AA15  IOSTANDARD LVCMOS25 } [get_ports { eth_rxd[1] }]; #IO_L4P_T0_13 Sch=eth_rxd[1]
+set_property -dict { PACKAGE_PIN AB15  IOSTANDARD LVCMOS25 } [get_ports { eth_rxd[2] }]; #IO_L4N_T0_13 Sch=eth_rxd[2]
+set_property -dict { PACKAGE_PIN AB11  IOSTANDARD LVCMOS25 } [get_ports { eth_rxd[3] }]; #IO_L7P_T1_13 Sch=eth_rxd[3]
+set_property -dict { PACKAGE_PIN AA14  IOSTANDARD LVCMOS25 } [get_ports { eth_txck }]; #IO_L5N_T0_13 Sch=eth_txck
+set_property -dict { PACKAGE_PIN V10   IOSTANDARD LVCMOS25 } [get_ports { eth_txctl }]; #IO_L10P_T1_13 Sch=eth_txctl
+set_property -dict { PACKAGE_PIN Y12   IOSTANDARD LVCMOS25 } [get_ports { eth_txd[0] }]; #IO_L11N_T1_SRCC_13 Sch=eth_txd[0]
+set_property -dict { PACKAGE_PIN W12   IOSTANDARD LVCMOS25 } [get_ports { eth_txd[1] }]; #IO_L12N_T1_MRCC_13 Sch=eth_txd[1]
+set_property -dict { PACKAGE_PIN W11   IOSTANDARD LVCMOS25 } [get_ports { eth_txd[2] }]; #IO_L12P_T1_MRCC_13 Sch=eth_txd[2]
+set_property -dict { PACKAGE_PIN Y11   IOSTANDARD LVCMOS25 } [get_ports { eth_txd[3] }]; #IO_L11P_T1_SRCC_13 Sch=eth_txd[3]
+
 ## Configuration options, can be used for all designs
 set_property CONFIG_VOLTAGE 3.3 [current_design]
 set_property CFGBVS VCCO [current_design]
@@ -124,3 +141,62 @@ set_false_path -to [get_ports { ac_mclk }]
 # clocks at a time and read back through two-flop synchronizers.
 set_false_path -from [get_ports { scl sda }]
 set_false_path -to [get_ports { scl sda }]
+
+# The Ethernet PHY's receive clock. With software managing the PHY it
+# is 25 or 2.5 MHz, for 100 or 10 Mbit/s. Until then the PHY negotiates
+# by itself, and on a gigabit link the clock is 125 MHz. The device
+# carries nothing at that speed, but its receive side is clocked at it,
+# so everything on the clock is timed for it too. The periods are the
+# shortest the PHY's datasheet allows each (Table 65), and the two never
+# run together.
+create_clock -name eth_rxck -period 36.000 [get_ports eth_rxck]
+create_clock -name eth_rxck_1000 -period 7.200 -add [get_ports eth_rxck]
+set_clock_groups -physically_exclusive -group eth_rxck -group eth_rxck_1000
+
+# RXD and RX_CTL change within 0.5 ns of each edge of the clock the PHY
+# sends (Table 65, TskewT), and their input cells take them on that same
+# edge: the clock reaches the cells later than the data does, through
+# its global buffer, and nothing delays the data. The clock as the PHY
+# sends it is a clock of its own here, so that the paths from the pins
+# can be told from the paths inside the receive domain. Each edge's data
+# is checked against the capture on that edge, where Vivado would
+# otherwise check it against the edge after. The pins take no pull:
+# they are the PHY's configuration pins as it leaves reset.
+create_clock -name eth_phy_rxc -period 36.000
+set eth_rx_pins [get_ports { eth_rxd[*] eth_rxctl }]
+set_input_delay -clock eth_phy_rxc -max 0.5 $eth_rx_pins
+set_input_delay -clock eth_phy_rxc -min -0.5 $eth_rx_pins
+set_input_delay -clock eth_phy_rxc -clock_fall -max 0.5 -add_delay $eth_rx_pins
+set_input_delay -clock eth_phy_rxc -clock_fall -min -0.5 -add_delay $eth_rx_pins
+set_multicycle_path -setup 0 -rise_from [get_clocks eth_phy_rxc] -rise_to [get_clocks eth_rxck]
+set_multicycle_path -setup 0 -fall_from [get_clocks eth_phy_rxc] -fall_to [get_clocks eth_rxck]
+# At 125 MHz the pins carry nothing the device takes.
+set_false_path -from [get_clocks eth_phy_rxc] -to [get_clocks eth_rxck_1000]
+
+# The transmit pins are source-synchronous: the PHY samples TXD and
+# TX_CTL against the clock pin, which leaves through the same kind of
+# I/O-cell register as they do, on the same clock. They change a quarter
+# of the pin clock's period ahead of its rise by count, never by a path
+# delay.
+set_false_path -to [get_ports { eth_txck eth_txctl eth_txd[*] }]
+
+# The Ethernet device's receive side runs on the PHY's clock and its
+# transmit side on the oscillator. Each meets the CPU clock only through
+# eth_cdc, in synchronizers and bundles held still while they cross, and
+# inside dual-clock block RAM. The PHY's clock is unrelated to the CPU
+# clock; the oscillator is the CPU clock's own source, so without this
+# Vivado times that crossing at the closest pair of edges. One period of
+# the faster clock bounds each bit's arrival, as on the other crossings.
+set osc_clk [get_clocks sys_clk_pin]
+set eth_rx_clks [get_clocks { eth_rxck eth_rxck_1000 }]
+set_max_delay -datapath_only -from $cpu_clk -to $eth_rx_clks 7.200
+set_max_delay -datapath_only -from $eth_rx_clks -to $cpu_clk 7.200
+set_max_delay -datapath_only -from $cpu_clk -to $osc_clk 10.000
+set_max_delay -datapath_only -from $osc_clk -to $cpu_clk 10.000
+
+# PHY management runs at 2.5 MHz at most off the CPU clock: MDC from a
+# divider, MDIO changed half an MDC period from the edge the PHY samples
+# on and read back through a two-flop synchronizer. The PHY's reset pin
+# moves once per board reset.
+set_false_path -from [get_ports { eth_mdio }]
+set_false_path -to [get_ports { eth_mdc eth_mdio eth_rst_b }]

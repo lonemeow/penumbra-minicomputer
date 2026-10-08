@@ -5,6 +5,11 @@ How the board realizes the Ethernet adapter
 that presents it at the device's seam, the clocks, the PHY's reset,
 and where the station address comes from.
 
+`nexysvideo_eth` holds all of it: the device with the board's parts
+around it. The board top puts its bus port behind autoconfig as it
+does any device's, gives it a command port of the I2C master, and
+holds the machine in reset until it reports the PHY ready.
+
 ## The PHY
 
 The board carries a Realtek RTL8211E-VL, a 10/100/1000 PHY, on RGMII
@@ -18,7 +23,9 @@ Its configuration pins set it up at power-on and at every reset:
 
 - **Negotiation on, every speed advertised.** The PHY brings a link up
   by itself, whether or not the FPGA is configured.
-- **Management address 1.**
+- **Management address 1.** It answers at address 0 too, which it
+  takes for a call to every PHY (datasheet, "PHYAD"), so software
+  looking for it has to try address 0 last.
 - **No delay on either clock.** The PHY changes its outputs within
   half a nanosecond of the edges of the receive clock it sends, and
   samples its inputs on the edges of the transmit clock it is sent, so
@@ -109,6 +116,13 @@ the adapter counts, and nothing else.
 The oscillator and the PHY's are unrelated. RGMII asks nothing more
 of the transmit clock than its own accuracy, since the PHY re-times
 what it is sent.
+
+The receive clock is 25 or 2.5 MHz only once software has the PHY at
+100 or 10 Mbit/s. Out of reset the PHY negotiates by itself with every
+speed advertised, and on a gigabit link it sends the clock at 125 MHz
+until a driver has it negotiate again. The device takes nothing in at
+that speed, but its receive side is clocked at it all the same, so the
+constraints time everything on the receive clock for 125 MHz as well.
 
 ## Reset
 

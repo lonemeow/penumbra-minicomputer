@@ -45,7 +45,17 @@
 //    driven high where it should be let go each breaks one of those.
 //    The I2C pads are open drain, so the top is built with its inouts'
 //    enables exposed and the testbench holds the bus: high unless the
-//    top or the codec pulls a line low.
+//    top or a device on it pulls a line low;
+//  - Ethernet: the PHY's reset pin low for its 10 ms and the machine
+//    held in reset 30 ms beyond; the device found by autoconfig after
+//    the audio device; its factory address the one in an EEPROM on the
+//    I2C pins, read while the codec's setup uses the same bus; a PHY
+//    register read over the management pins, and all ones from an
+//    address no PHY answers at; and a frame queued from the monitor
+//    going out on the RGMII transmit pins and, with those wired back to
+//    the receive pins, arriving in the receive ring byte for byte. A
+//    data pin swapped with another, on either side, breaks the frame's
+//    check sequence, and the frame is never stored.
 #include "Vnexysvideo_penumbra2_top.h"
 #include "i2c_slave.h"
 #include "sd_card_sim.h"
@@ -243,6 +253,100 @@ struct CodecPins {
 
 static CodecPins codec;
 
+// The EEPROM beside the codec on the I2C bus: a 24AA025E48 at 0x57, a
+// memory behind an address pointer with its EUI-48 at 0xFA. Every other
+// byte is its own address turned over, so a read from the wrong place
+// shows.
+struct EepromPins {
+    static constexpr uint8_t EUI[6] = {0x00, 0x18, 0x3E, 0x9A, 0xBC, 0xDE};
+    I2cSlave i2c{0x57};
+    uint8_t memory[256];
+    uint8_t pointer = 0;
+
+    EepromPins() {
+        for (int i = 0; i < 256; i++)
+            memory[i] = (uint8_t)~i;
+        for (int i = 0; i < 6; i++)
+            memory[0xFA + i] = EUI[i];
+        i2c.on_boundary = [this] { boundary(); };
+    }
+
+    // A byte written since the last START or STOP is the word address,
+    // and a read sends from the pointer on.
+    void boundary() {
+        if (!i2c.written.empty()) {
+            pointer = i2c.written[0];
+            i2c.written.clear();
+        }
+        i2c.to_send.clear();
+        for (int i = 0; i < 32; i++)
+            i2c.to_send.push_back(memory[(pointer + i) & 0xff]);
+    }
+};
+
+static EepromPins eeprom;
+
+// The PHY's management pins: a clause-22 slave at address 1, which
+// answers a read of any register with a value made from its number. It
+// takes each bit as MDC rises and puts its own next bit up behind the
+// same edge, as a PHY does.
+struct MdioPhy {
+    static uint16_t value(int reg) { return (uint16_t)(0xA5C0 ^ (reg * 0x0111)); }
+
+    bool mdc_was = false;
+    int  ones = 0;              // 1s in a row: 32 make a preamble
+    int  bit = -1;              // bits into the frame from its start, -1 outside one
+    uint32_t head = 0;          // the frame's first 14 bits
+    bool answering = false;     // a read of this PHY: the rest is its own to send
+    uint16_t answer = 0;
+    bool drive_low = false;     // the PHY's own pull on MDIO
+    int  reads = 0;
+
+    void step(bool mdc, bool mdio) {
+        bool rise = mdc && !mdc_was;
+        mdc_was = mdc;
+        if (!rise)
+            return;
+        if (bit < 0) {
+            // A frame starts with a 0 behind a preamble.
+            if (mdio) {
+                ones++;
+            } else {
+                if (ones >= 32) {
+                    bit = 0;
+                    head = 0;
+                }
+                ones = 0;
+            }
+        } else {
+            bit++;
+            if (bit < 14)
+                head = head << 1 | (mdio ? 1u : 0u);
+        }
+        if (bit == 13) {
+            // Start 01, opcode, then the PHY's address and the register's.
+            int op = (head >> 10) & 3, phy = (head >> 5) & 31, reg = head & 31;
+            answering = (head >> 12) == 1 && op == 2 && phy == 1;
+            answer = value(reg);
+            reads += answering;
+        }
+        // The turnaround's second bit is a 0 from the PHY, then the data.
+        int next = bit + 1;
+        drive_low = answering && (next == 15 || (next >= 16 && next <= 31 &&
+                                                 !((answer >> (31 - next)) & 1)));
+        if (bit == 31) {
+            bit = -1;
+            answering = false;
+        }
+    }
+};
+
+static MdioPhy mdio_phy;
+
+// When the PHY's reset pin and then the machine's reset first let go,
+// in testbench clocks; 0 until they have.
+static uint64_t phy_reset_released = 0, machine_released = 0;
+
 // MCLK at the pin: how long each level lasts, in testbench clocks. The
 // clock-manager stubs pass the oscillator through, so a testbench clock
 // is an oscillator cycle here as well as a CPU one.
@@ -286,7 +390,14 @@ static void tick() {
     // The I2C lines rest high on the board's pull-ups: the top pulls
     // either one low, the codec SDA.
     top->scl = !pulls_low(top->scl__en, top->scl__out);
-    top->sda = !pulls_low(top->sda__en, top->sda__out) && !codec.i2c.drive_low;
+    top->sda = !pulls_low(top->sda__en, top->sda__out) && !codec.i2c.drive_low &&
+               !eeprom.i2c.drive_low;
+    // MDIO rests high on its pull-up too.
+    top->eth_mdio = !pulls_low(top->eth_mdio__en, top->eth_mdio__out) && !mdio_phy.drive_low;
+    // The RGMII transmit pins wired back to the receive pins.
+    top->eth_rxck = top->eth_txck;
+    top->eth_rxd = top->eth_txd;
+    top->eth_rxctl = top->eth_txctl;
     top->ac_bclk = codec.bclk;
     top->ac_lrclk = codec.lrclk;
     top->clk = 0;
@@ -301,6 +412,13 @@ static void tick() {
     i2c_driven_high += (top->scl__en && top->scl__out) || (top->sda__en && top->sda__out);
     codec.i2c.tick();
     codec.i2c.observe(top->scl, top->sda);
+    eeprom.i2c.tick();
+    eeprom.i2c.observe(top->scl, top->sda);
+    mdio_phy.step(top->eth_mdc, top->eth_mdio);
+    if (top->eth_rst_b && !phy_reset_released)
+        phy_reset_released = cycle;
+    if (((top->led >> 1) & 1) && !machine_released)
+        machine_released = cycle;
     codec.step(top->ac_dac_sdata);
     mclk.step(top->ac_mclk);
 }
@@ -465,6 +583,99 @@ static void check_audio(const std::string& boot) {
     chk(ok, "the codec did not sample silence and then the four frames pushed, in order");
 }
 
+// The Ethernet device through the whole machine: its factory address
+// from the EEPROM, a PHY register over the management pins, and a frame
+// out of the transmit pins and back in at the receive pins.
+static void check_ethernet(const std::string& boot) {
+    const std::string tag = "  ETH Ethernet @ 0x";
+    size_t at = boot.find(tag);
+    if (at == std::string::npos)
+        return;
+    uint32_t base = (uint32_t)strtoul(boot.c_str() + at + tag.size(), nullptr, 16);
+    auto hex = [](uint32_t v) {
+        char buf[16];
+        snprintf(buf, sizeof buf, "%08x", v);
+        return std::string(buf);
+    };
+    auto bytes = [](std::initializer_list<int> b) {
+        std::string out = "   ";
+        char buf[8];
+        for (int v : b) {
+            snprintf(buf, sizeof buf, " %02x", v);
+            out += buf;
+        }
+        return out;
+    };
+
+    // FACTORY_LO and FACTORY_HI: the EEPROM's six bytes, and VALID.
+    const uint8_t* eui = EepromPins::EUI;
+    std::string out = command("x " + hex(base + 0x20) + " 4");
+    expect(out, hex(base + 0x20) + bytes({eui[0], eui[1], eui[2], eui[3]}));
+    out = command("x " + hex(base + 0x24) + " 4");
+    expect(out, hex(base + 0x24) + bytes({eui[4], eui[5], 0x00, 0x80}));
+
+    // MDIO: register 2 of the PHY at address 1, then of one at address 3,
+    // where nothing answers. BUSY has long cleared by the next command.
+    uint16_t id = MdioPhy::value(2);
+    command("w " + hex(base + 0x14) + " 01020000");
+    out = command("x " + hex(base + 0x14) + " 4");
+    expect(out, hex(base + 0x14) + bytes({id & 0xff, id >> 8, 0x02, 0x01}));
+    chk(mdio_phy.reads == 1, "the PHY at the management pins was not read once");
+    command("w " + hex(base + 0x14) + " 03020000");
+    out = command("x " + hex(base + 0x14) + " 4");
+    expect(out, hex(base + 0x14) + bytes({0xff, 0xff, 0x02, 0x03}));
+
+    // A frame of the least length, to the station's own address, at
+    // 100 Mbit/s. The slot is written from its second word on and its
+    // first, with LEN, last; then the count.
+    uint8_t frame[60];
+    const uint8_t station[6] = {0x02, 0x11, 0x22, 0x33, 0x44, 0x55};
+    const uint8_t peer[6] = {0x02, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE};
+    for (int i = 0; i < 6; i++) {
+        frame[i] = station[i];
+        frame[6 + i] = peer[i];
+    }
+    frame[12] = 0x88;
+    frame[13] = 0xB5;
+    for (int i = 14; i < 60; i++)
+        frame[i] = (uint8_t)(0x40 + i);
+    uint8_t image[64] = {60, 0};
+    for (int i = 0; i < 60; i++)
+        image[2 + i] = frame[i];
+    auto word = [&](int w) {
+        return (uint32_t)image[4 * w] | (uint32_t)image[4 * w + 1] << 8 |
+               (uint32_t)image[4 * w + 2] << 16 | (uint32_t)image[4 * w + 3] << 24;
+    };
+
+    command("w " + hex(base + 0x18) + " 33221102");
+    command("w " + hex(base + 0x1c) + " 00005544");
+    command("w " + hex(base + 0x0c) + " 00000103");     // RX_EN, TX_EN, SPEED 100
+    const uint32_t tx_slot = base + 0x8000, rx_slot = base + 0x10000;
+    for (int w = 1; w < 16; w += 3) {
+        std::string line = "w " + hex(tx_slot + 4 * w);
+        for (int i = w; i < w + 3 && i < 16; i++)
+            line += " " + hex(word(i));
+        command(line);
+    }
+    command("w " + hex(tx_slot) + " " + hex(word(0)));
+    command("w " + hex(base + 0x54) + " 1");
+
+    // TX_CONS and RX_PROD: one frame sent, one stored.
+    out = command("x " + hex(base + 0x58) + " 4");
+    expect(out, hex(base + 0x58) + bytes({1, 0, 0, 0}));
+    out = command("x " + hex(base + 0x44) + " 4");
+    expect(out, hex(base + 0x44) + bytes({1, 0, 0, 0}));
+    // The slot's last word holds the frame's last two bytes and two
+    // that are nobody's.
+    for (int w = 0; w < 15; w++) {
+        out = command("x " + hex(rx_slot + 4 * w) + " 4");
+        expect(out, hex(rx_slot + 4 * w) +
+                    bytes({image[4 * w], image[4 * w + 1], image[4 * w + 2], image[4 * w + 3]}));
+    }
+    out = command("x " + hex(rx_slot + 60) + " 4");
+    expect(out, hex(rx_slot + 60) + bytes({image[60], image[61]}));
+}
+
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
     make_sd_image();
@@ -482,7 +693,34 @@ int main(int argc, char** argv) {
         off_in_reset &= top->sd_reset;
     }
     chk(off_in_reset, "sd_reset low (card powered) during the reset hold");
+    chk(!top->eth_rst_b, "the PHY's reset pin high during the reset hold");
     chk(mclk.edges > 200, "MCLK not running through the reset hold");
+
+    // ── The PHY's reset, then the machine's ────────────────────────
+    // The machine waits for the memory to calibrate and for the PHY to
+    // have had its reset and the time it takes to settle. Nothing below
+    // is worth running on a machine that never gets out.
+    const uint64_t MS = CPU_HZ / 1000;
+    while (!machine_released && cycle < 200 * MS)
+        tick();
+    if (!machine_released) {
+        chk(false, phy_reset_released
+                       ? "the machine is still in reset after 200 ms, with the PHY out of its own"
+                       : "the machine is still in reset after 200 ms, and the PHY's reset pin "
+                         "still low");
+    } else if (!phy_reset_released) {
+        chk(false, "the machine left reset with the PHY's reset pin still low");
+    } else {
+        chk(phy_reset_released >= 10 * MS, "the PHY's reset pin was let go inside 10 ms");
+        chk(machine_released >= phy_reset_released + 30 * MS,
+            "the machine left reset inside 30 ms of the PHY's reset pin being let go");
+    }
+    printf("  reset: the PHY's pin let go at %.1f ms, the machine at %.1f ms\n",
+           phy_reset_released * 1000.0 / CPU_HZ, machine_released * 1000.0 / CPU_HZ);
+    if (fails) {
+        printf("FAIL: the reset hold is wrong, and the boot was not run\n");
+        return 1;
+    }
 
     // ── Boot to the monitor prompt ─────────────────────────────────
     // RAM detection probes each of the 131072 pages in turn.
@@ -505,7 +743,8 @@ int main(int argc, char** argv) {
     expect(boot, "  SD SD @ 0x");
     expect(boot, "  DISPLAY Display @ 0x");
     expect(boot, "  AUDIO Audio @ 0x");
-    expect(boot, "3 device(s) found");
+    expect(boot, "  ETH Ethernet @ 0x");
+    expect(boot, "4 device(s) found");
     expect(boot, "sd:0,0 ... card present");
     chk(!top->sd_reset, "sd_reset still high (card unpowered) after the reset hold");
 
@@ -527,6 +766,8 @@ int main(int argc, char** argv) {
         check_hdmi_frame();
 
         check_audio(boot);
+
+        check_ethernet(boot);
     }
 
     // led[3] the DDR3 calibrated; led[6:4] the RAM's longest wait

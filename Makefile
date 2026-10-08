@@ -1201,6 +1201,16 @@ SRC_AUDIO = hw/rtl/io/audio/audio.sv \
             hw/rtl/io/audio/audio_chan_fifo.sv \
             hw/rtl/io/audio/audio_mixer.sv
 
+# The Ethernet device up to the seam a board's PHY adapter attaches at.
+SRC_ETH = hw/rtl/io/eth/eth.sv \
+          hw/rtl/io/eth/eth_regs.sv \
+          hw/rtl/io/eth/eth_mdio.sv \
+          hw/rtl/io/eth/eth_cdc.sv \
+          hw/rtl/io/eth/eth_slot_ram.sv \
+          hw/rtl/io/eth/eth_rx.sv \
+          hw/rtl/io/eth/eth_tx.sv \
+          hw/rtl/io/eth/eth_crc32.sv
+
 # The ULX3S's output stage: frames requested off a fixed clock, the
 # modulator and the resistor ladder. The probe's tone and clip sources
 # are deliberately absent: they belong to the bring-up top, and
@@ -1474,11 +1484,17 @@ FPGA_SRC_nexysvideo_penumbra2_top = $(SRC_COMMON) $(SRC_CORE) \
                                     $(SRC_AUDIO) \
                                     hw/rtl/io/audio/audio_i2s_out.sv \
                                     hw/rtl/io/i2c/i2c_master.sv \
+                                    hw/rtl/io/i2c/i2c_shared_master.sv \
+                                    $(SRC_ETH) \
+                                    hw/rtl/io/eth/eth_phy_rgmii_xc7.sv \
+                                    hw/rtl/io/eth/eth_phy_reset.sv \
+                                    hw/rtl/io/eth/eth_addr_eeprom.sv \
                                     $(SRC_BOARD_nexysvideo) \
                                     $(SRC_DDR3_nexysvideo) \
                                     $(FPGA_RTL)/nexysvideo/nexysvideo_video_clk.sv \
                                     $(FPGA_RTL)/nexysvideo/nexysvideo_codec_mclk.sv \
                                     $(FPGA_RTL)/nexysvideo/nexysvideo_codec_setup.sv \
+                                    $(FPGA_RTL)/nexysvideo/nexysvideo_eth.sv \
                                     $(FPGA_RTL)/nexysvideo/nexysvideo_penumbra2_top.sv \
                                     $(SRC_UBERDDR3)
 XDC_nexysvideo_penumbra2_top = $(XDC_MACHINE_nexysvideo)
