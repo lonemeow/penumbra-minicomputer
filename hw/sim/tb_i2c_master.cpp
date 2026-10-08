@@ -6,8 +6,9 @@
 // checks are the ones a consumer depends on: bytes arrive whole and in
 // order with the right START, repeated START and STOP around them; an
 // unanswered write ends in a STOP and says so; a read is acknowledged
-// as asked; a bus that will not move fails the command instead of
-// hanging it; and a reset that lands mid-transfer leaves the bus free.
+// as asked; a bus error, a line held low that the master has let go,
+// fails the command instead of hanging it; and a reset that lands
+// mid-transfer leaves the bus free.
 
 #include <cstdio>
 #include <cstdlib>

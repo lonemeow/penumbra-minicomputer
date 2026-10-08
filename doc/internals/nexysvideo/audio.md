@@ -206,7 +206,7 @@ prints the code at attach. `FAULT_CODE` is:
 
 | Bits | Meaning |
 |------|---------|
-| `[7:6]` | what failed: 1 the codec did not acknowledge a byte, 2 the I2C bus would not move, 3 the PLL did not lock in time |
+| `[7:6]` | what failed: 1 the codec did not acknowledge a byte, 2 a bus error on I2C (a line read low that the master had let go), 3 the PLL did not lock in time |
 | `[5:0]` | the step it failed in, an index into the table in `nexysvideo_codec_setup.sv` |
 
 `0x40` is no acknowledgement in the first step: the codec is absent,

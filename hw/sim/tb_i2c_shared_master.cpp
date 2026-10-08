@@ -556,7 +556,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    // A START the bus would not take.
+    // A bus error at a START: the data line is held low.
     scenario = "the others, behind a consumer whose START met a held data line";
     reset();
     run(600);           // the master frees the bus first, and finds it free

@@ -65,7 +65,7 @@ module i2c_master #(
     output logic       o_rsp_valid,
     output logic [7:0] o_rsp_rdata,
     output logic       o_rsp_nack,    // a write: the slave did not acknowledge
-    output logic       o_rsp_error,   // the bus would not move; nothing else holds
+    output logic       o_rsp_error,   // a bus error; nothing else holds
 
     // ── Pins ─────────────────────────────────────────────────
     // o_scl and o_sda are the levels the master asks for: 1 lets the

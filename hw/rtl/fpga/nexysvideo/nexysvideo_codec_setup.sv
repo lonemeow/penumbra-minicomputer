@@ -21,8 +21,11 @@
 // reset until the last step, then done or faulted. A fault stops the
 // sequence where it stands, and its code says what failed and where:
 //
-//   [7:6] what failed: 1 the codec did not acknowledge a byte, 2 the bus
-//         would not move, 3 the PLL did not lock within LOCK_TIMEOUT_MS
+//   [7:6] what failed:
+//           * 1: the codec did not acknowledge a byte
+//           * 2: a bus error, the master reading a line low that it had
+//             let go
+//           * 3: the PLL did not lock within LOCK_TIMEOUT_MS
 //   [5:0] the step it failed in, an index into the table below
 
 module nexysvideo_codec_setup #(
