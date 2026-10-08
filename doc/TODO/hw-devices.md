@@ -1095,14 +1095,7 @@ Open:
   (`doc/internals/nexysvideo/ethernet.md`) runs on the board: under
   NetBSD's `peth` the PHY links at 100 Mbit/s full duplex and the
   interface carries traffic. Open there:
-  - A DHCP exchange takes about 30 s on the one network tried.
-    `dhcpcd` sends at about 0, 4, 12 and 28 s after it starts, and
-    the lease comes with the fourth: nothing earlier is answered.
-    Every `ifconfig up` has the PHY negotiate again, and `dhcpcd` was
-    started during or just after that each time. Not established:
-    whether frames fail to pass for a while after the link comes up,
-    on the board's side or the network's, or the router is slow.
-  - 10 Mbit/s and frames of full length have not been tried.
+  - 10 Mbit/s has not been tried.
   - `eth_mdio` allows 20 ns for its two pins' delays (`PIN_NS`), and
     the constraints leave both pins untimed.
   - The PHY runs under `ukphy`. `rgephy(4)`, which knows the RTL8211

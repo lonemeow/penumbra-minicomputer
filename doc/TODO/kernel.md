@@ -924,6 +924,25 @@ Open: give PENBOOT its stack in `.bss`, and reserve only the vector
 table, the boot data (`total_size` bytes at R1) and its own image in
 place of the fixed low range.
 
+## NetBSD: dhcpcd comes up close to its own 30 s limit
+
+On the Nexys Video, `dhcpcd peth0` with a saved lease took 33 s on
+its first run after boot and 17 s on a second. Started for one
+interface, it gives up after 30 s ("timed out") and exits, though
+the network has answered.
+
+The exchange is not what is slow. `dhcpcd` prints "DHCP lease
+expired" when its request for a saved lease goes 5 s unanswered, and
+printed it in neither run, so the acknowledgement came within 5 s.
+The time passes between "leased" and going to the background. Two
+things happen there, neither measured: the kernel checks the address
+for a conflict, several seconds by its constants
+(`netinet/if_inarp.h`), and `dhcpcd` runs its hook script, a shell
+script it waits for. The first run taking twice the second points at
+work the machine does itself, not at the network.
+
+Open: where the time goes. `dhcpcd -t` raises the limit.
+
 ## Ruled out
 
 - **Refill way pick: set bits mixed into the counter bit, or an empty
