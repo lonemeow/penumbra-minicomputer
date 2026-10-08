@@ -249,12 +249,18 @@ peth_station_address(struct peth_softc *sc, uint32_t cap)
  * extended status out hides those modes from mii(4) altogether, which
  * stops it offering them and also stops it writing their
  * advertisement, which peth_phy_disable_1000() clears instead.
+ *
+ * A PHY may answer at address 0 as well as at its own, taking 0 for a
+ * call to every PHY.  mii(4) would attach it at both and, as it does
+ * with two PHYs on one port, isolate the one it had not selected:
+ * the same chip.  So address 0 is tried only when no other answers.
  */
 static void
 peth_mii_attach(struct peth_softc *sc)
 {
 	struct mii_data *mii = &sc->sc_mii;
 	struct mii_softc *phy;
+	int phyno;
 	int capmask = ~(BMSR_100T4 | BMSR_100TXHDX | BMSR_10THDX |
 	    BMSR_100T2FDX | BMSR_100T2HDX);
 
@@ -272,7 +278,10 @@ peth_mii_attach(struct peth_softc *sc)
 	sc->sc_ec.ec_mii = mii;
 	ifmedia_init(&mii->mii_media, IFM_IMASK, ether_mediachange,
 	    ether_mediastatus);
-	mii_attach(sc->sc_dev, mii, capmask, MII_PHY_ANY, MII_OFFSET_ANY, 0);
+	for (phyno = 1; phyno < MII_NPHY; phyno++)
+		mii_attach(sc->sc_dev, mii, capmask, phyno, MII_OFFSET_ANY, 0);
+	if (LIST_EMPTY(&mii->mii_phys))
+		mii_attach(sc->sc_dev, mii, capmask, 0, MII_OFFSET_ANY, 0);
 
 	if (LIST_EMPTY(&mii->mii_phys)) {
 		aprint_error_dev(sc->sc_dev, "no PHY answers\n");

@@ -443,8 +443,11 @@ before it returns, and sets it again once the ring is empty.
 
 ### A managed PHY
 
-1. Read PHY register 2 at each address through `MDIO`; the address
-   that does not answer `0xFFFF` is the PHY.
+1. Read PHY register 2 at each address from 1 to 31 through `MDIO`;
+   an address that does not answer `0xFFFF` is a PHY's. Try address 0
+   only when none of them answers: a PHY may answer there as well as
+   at its own address, taking 0 for a call to every PHY, and it is
+   one PHY all the same.
 2. Have the PHY advertise the full-duplex modes at the speeds in
    `CAP.SPEEDS`, and no others.
 3. Read the PHY's status at an interval. Whenever it reports a new

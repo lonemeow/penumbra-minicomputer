@@ -145,8 +145,11 @@ bootinfo — `boot sd:0,0` reaches single-user with no prompts.
   interrupt.  A device whose PHY is software's gets `mii(4)` over
   its `MDIO` register: on the ISS's (`ETH=tap,mdio`) `ukphy`
   attaches, and the link comes up at the best speed the adapter
-  carries, whichever of 10, 100 and 1000 Mbit/s that is.  No board
-  carries the device, so the driver has run on no hardware.
+  carries, whichever of 10, 100 and 1000 Mbit/s that is.  On the
+  Nexys Video the interface attaches with the address from the
+  board's EEPROM, `ukphy` runs the RTL8211E, which links at
+  100 Mbit/s full duplex, and it takes a DHCP lease, resolves names
+  and fetches over HTTP.  10 Mbit/s has not been tried there.
 
 - **Audio (paudio):** `CLASS_AUDIO` driver on the four-channel
   device.  Channel 0 plays a PCM stream under MI `audio(4)`
