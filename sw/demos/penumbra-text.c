@@ -452,15 +452,19 @@ static struct ptext state;
 
 /* Reset the screen and start a fresh trace cycle.
  *
- * \033[0m goes *before* \033[2J: erase escapes fill with the current
- * background colour, and after a trace frame that is whatever the last
- * cell set — often a bright one.  Without the reset the screen flips to
- * that colour and stays there. */
-static void reset_cells(struct ptext *p) {
-    static const char clear_esc[] = "\033[0m\033[2J\033[H";
-
+ * Attributes go off *before* the erase: erase escapes fill with the
+ * current background colour, and after a trace frame that is whatever
+ * the last cell set — often a bright one.  Without the reset the screen
+ * flips to that colour and stays there. */
+static void reset_cells(struct ptext *p, const struct demo_surface *s) {
     memset(intensity, 0, (size_t)g_width * (size_t)g_pixel_rows);
-    emit_bytes(clear_esc, sizeof(clear_esc) - 1);
+    dterm_reset();
+    if (s->blocks)
+        dterm_canvas((int)s->width, (int)s->height);
+    else
+        dterm_clear();
+    /* The cells that follow go out through write(2). */
+    fflush(stdout);
     phase = PHASE_TRACE;
     path_idx = 0;
     pass_num = 0;
@@ -607,7 +611,7 @@ static void frame_cells(const struct demo_surface *s, uint32_t dt_us,
     if (frame == 0) {
         if (setup(s) != 0)
             exit(1);
-        reset_cells(p);
+        reset_cells(p, s);
     }
     p->elapsed_us += dt_us;
 
@@ -633,7 +637,7 @@ static void frame_cells(const struct demo_surface *s, uint32_t dt_us,
             / 1000000ull), s->blocks);
 
     if (phase == PHASE_HOLD && p->elapsed_us - p->phase_started_us >= HOLD_US)
-        reset_cells(p);
+        reset_cells(p, s);
 }
 
 /* ── Pixel surface ──────────────────────────────────────────────────── */

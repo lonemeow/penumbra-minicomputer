@@ -302,6 +302,37 @@ dterm_clear(void)
 	fputs("\033[2J", stdout);
 }
 
+#define MIN(x, y) ((x) > (y) ? (y) : (x))
+
+void
+dterm_canvas(int cols, int rows)
+{
+	char buf[32];
+	char *out = dterm_bg(buf, DTERM_BLACK);
+	fwrite(buf, 1, out - buf, stdout);
+
+	/* Erased while black is the current colour: a terminal that erases
+	 * in it leaves no edge between the picture and the rest of the
+	 * screen. */
+	dterm_clear();
+
+	/* Painted as well, where the picture is.  What an erase leaves
+	 * behind is the terminal's choice, and this is the part the
+	 * drawing depends on. */
+	char colbuf[32];
+	memset(colbuf, ' ', sizeof(colbuf));
+
+	for (int r = 1; r <= rows; r++) {
+		out = dterm_at(buf, r, 1);
+		fwrite(buf, 1, out - buf, stdout);
+
+		for (int c = cols; c > 0; c -= (int)sizeof(colbuf)) {
+			fwrite(colbuf, 1, MIN((size_t)c, sizeof(colbuf)), stdout);
+		}
+	}
+	dterm_reset();
+}
+
 /* Top-left of the picture, which is below whatever the caller reserved. */
 void
 dterm_home(void)

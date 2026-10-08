@@ -516,7 +516,16 @@ demo_main(int argc, char **argv, const struct demo *d)
 		 * neither. */
 		if (s.kind == DEMO_CELL) {
 			dterm_cursor(0);
-			dterm_clear();
+			/* A picture in the palette's colours needs the palette's
+			 * ground under it.  An ASCII one is drawn in the
+			 * terminal's own colours and wants the terminal's. */
+			if (s.blocks)
+				dterm_canvas((int)s.width, (int)s.height);
+			else
+				dterm_clear();
+			/* The demos emit cells with write(2), which would
+			 * overtake anything still buffered here. */
+			fflush(stdout);
 		}
 		demo_frame_fn fn = (s.kind == DEMO_PIXEL) ? d->frame_pixel
 							  : d->frame_cell;

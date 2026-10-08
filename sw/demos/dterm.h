@@ -65,6 +65,26 @@ char   *dterm_at(char *out, int row, int col);
 
 void	dterm_cursor(int on);
 void	dterm_clear(void);
+
+/*
+ * The palette's black.  The first sixteen indices are the terminal's
+ * own colours and its "black" may be any dark shade, so the demos take
+ * theirs from the cube, whose corner is black on every terminal.
+ */
+#define DTERM_BLACK	16
+
+/*
+ * Clear the screen and lay the ground for a picture of `cols' by `rows'
+ * cells: DTERM_BLACK wherever a demo will draw.  A demo that touches
+ * only some cells gives the empty half of each DTERM_BLACK and leaves
+ * the rest alone, and the two meet without a seam only where the
+ * untouched cells are that same black, which a terminal's own
+ * background, being its theme's to choose, need not be.
+ *
+ * Leaves attributes off.  Written through stdio like the rest, so a
+ * caller that draws with write(2) flushes before it does.
+ */
+void	dterm_canvas(int cols, int rows);
 void	dterm_home(void);
 void	dterm_reset(void);
 
