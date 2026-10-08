@@ -16,14 +16,16 @@
  * compute its new position, plus splat updates (a 3x3 box of byte
  * increments per bob).  No multiplies on the hot path.
  *
- * Usage: shadebobs [-m|--mono | -b|--blocks] [-n|--nodraw]
- *                  [FRAMES] [WIDTH] [HEIGHT]
- *   defaults: blocks on TTY / mono when piped, infinite frames,
- *             78 x 39 cells
+ * Usage: shadebobs [RUNTIME OPTIONS] [TICKS_PER_SEC [MAX_TICKS_PER_FRAME]]
+ *   The runtime's options (surface, size, run time) come first; demo.c
+ *   has them.  TICKS_PER_SEC is how fast the bobs travel their paths
+ *   and MAX_TICKS_PER_FRAME how far one cell frame may walk them; each
+ *   defaults to what suits the surface.
  *
  * Press any key or Ctrl-C to stop.
  */
 
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -100,8 +102,9 @@ static uint8_t *fb_pix;
 static unsigned fb_stride;
 
 /* Bookkeeping for which cells need re-emission this frame.  Allocated
- * once with max possible touched cells (bobs * splat_cells_per_bob);
- * cleared at the start of each frame, populated during splat. */
+ * once with room for every cell, since a frame touches as many as its
+ * bobs' paths cross; cleared at the start of each frame, populated
+ * during splat. */
 struct dirty_cell {
     int16_t col;   /* cell column, 0..width-1 */
     int16_t row;   /* cell row,    0..height-1 */
@@ -120,11 +123,11 @@ static void mark_dirty(int col, int pixel_row) {
     int cell_idx = col * (g_pixel_rows >> 1) + cell_row;
     if (dirty_flag[cell_idx]) return;
     dirty_flag[cell_idx] = 1;
-    if (dirty_count < dirty_capacity) {
-        dirty[dirty_count].col = (int16_t)col;
-        dirty[dirty_count].row = (int16_t)cell_row;
-        dirty_count++;
-    }
+    /* The flag admits a cell once a frame, and the list holds them all. */
+    assert(dirty_count < dirty_capacity);
+    dirty[dirty_count].col = (int16_t)col;
+    dirty[dirty_count].row = (int16_t)cell_row;
+    dirty_count++;
 }
 
 /* Saturating add: intensity capped at 255 so a hot cell stays at the
@@ -291,13 +294,41 @@ static inline void bob_position(const struct bob *b, uint32_t t,
  * stepping per frame would make the same demo crawl on one and race on
  * the other.
  */
-/* Ticks per second of wall clock.  The phase step is a fraction of a
+/*
+ * Ticks per second of wall clock.  The phase step is a fraction of a
  * lookup entry, so this sets how fast a bob travels its path rather
- * than how far it jumps per frame. */
-#define BOB_TICKS_PER_SEC  700
+ * than how far it jumps per frame.
+ *
+ * Each surface has its own, because what a bob's travel costs differs
+ * in kind.  Pixels are stores, and the rate there is whatever looks
+ * right.  Cells are bytes on a wire: every cell a bob crosses has to be
+ * sent again, so the wire's capacity is a speed limit, and the cell
+ * rate sits inside the one a 115200-baud console sets.
+ */
+#define PIXEL_TICKS_PER_SEC  700
+#define CELL_TICKS_PER_SEC    50
+
+/*
+ * The most ticks one cell frame walks the bobs.  A frame that took long
+ * has more path to cover, which is more cells to send, which takes
+ * longer still: on a link too slow for the rate asked of it, that feeds
+ * itself until a frame is most of the picture.  Bounding the walk turns
+ * the shortfall into slower bobs instead.  Frames stay the size the
+ * bound allows, and the trails stay continuous at whatever speed the
+ * wire carries.
+ */
+#define CELL_MAX_FRAME_TICKS  8
 
 struct shadebobs {
-    uint64_t elapsed_us;    /* since the first frame */
+    /* Zero until setup gives them the surface's values, unless an
+     * argument set them first. */
+    uint32_t ticks_per_sec;
+    uint32_t max_frame_ticks;   /* cell surface only */
+
+    uint64_t max_frame_us;  /* max_frame_ticks, as time on the bobs' clock */
+    uint64_t elapsed_us;    /* the bobs' clock: wall time since the first
+                             * frame, less what the frame bound held back */
+    uint32_t walked;        /* cell surface: ticks painted, [0, walked) */
     int      ready;         /* buffers sized to the surface */
 };
 
@@ -308,8 +339,16 @@ static struct shadebobs state;
  * known: the runtime picks one after arguments are parsed, and dt == 0
  * marks the frame where nothing has happened yet.
  */
-static int setup(const struct demo_surface *s) {
+static int setup(const struct demo_surface *s, struct shadebobs *sb) {
     int cells;
+
+    if (sb->ticks_per_sec == 0)
+        sb->ticks_per_sec = (s->kind == DEMO_PIXEL) ? PIXEL_TICKS_PER_SEC
+                                                    : CELL_TICKS_PER_SEC;
+    if (sb->max_frame_ticks == 0)
+        sb->max_frame_ticks = CELL_MAX_FRAME_TICKS;
+    sb->max_frame_us = (uint64_t)sb->max_frame_ticks * 1000000ull /
+        sb->ticks_per_sec;
 
     g_width = (int)s->width;
     g_pixel_rows = (s->kind == DEMO_PIXEL) ? (int)s->height
@@ -322,8 +361,7 @@ static int setup(const struct demo_surface *s) {
     splat_r = (s->kind == DEMO_PIXEL) ? SPLAT_MAX_R : 1;
 
     intensity = calloc((size_t)g_width * g_pixel_rows, 1);
-    /* Worst case: every splatted half-pixel lands in its own cell. */
-    dirty_capacity = NUM_BOBS * 9;
+    dirty_capacity = cells;
     dirty = calloc((size_t)dirty_capacity, sizeof(*dirty));
     dirty_flag = calloc((size_t)cells, 1);
     if (intensity == NULL || dirty == NULL || dirty_flag == NULL) {
@@ -333,15 +371,17 @@ static int setup(const struct demo_surface *s) {
 
     init_sin_lut();
     init_bobs(g_width, g_pixel_rows);
-    state.ready = 1;
+    sb->ready = 1;
     return 0;
 }
 
-/* Advance every bob to where wall-clock time says it should be, and
- * splat there.  Returns nothing: the marks land in the intensity
- * buffer, and on a pixel surface in the framebuffer too. */
-static void step_bobs(uint64_t elapsed_us) {
-    uint32_t t = (uint32_t)((elapsed_us * BOB_TICKS_PER_SEC) / 1000000ull);
+/* Splat every bob where the clock says it is now.  One position a frame
+ * traces the path only while consecutive frames land within a splat's
+ * width of each other, which pixel frames do; cell frames are a wire
+ * apart, and walk instead. */
+static void step_bobs(const struct shadebobs *sb) {
+    uint32_t t = (uint32_t)((sb->elapsed_us * sb->ticks_per_sec) /
+                            1000000ull);
 
     for (int i = 0; i < NUM_BOBS; i++) {
         int bx, by;
@@ -351,17 +391,56 @@ static void step_bobs(uint64_t elapsed_us) {
     }
 }
 
+static int parse_args(int argc, char **argv, void *vs) {
+    struct shadebobs *sb = vs;
+    int v[2] = { 0, 0 };
+
+    if (argc > 2)
+        goto bad;
+    for (int i = 0; i < argc; i++) {
+        if (!dterm_looks_like_int(argv[i]))
+            goto bad;
+        v[i] = atoi(argv[i]);
+        if (v[i] < 1 || v[i] > 100000)
+            goto bad;
+    }
+    sb->ticks_per_sec = (uint32_t)v[0];
+    sb->max_frame_ticks = (uint32_t)v[1];
+    return 0;
+
+bad:
+    fprintf(stderr, "shadebobs: want [TICKS_PER_SEC [MAX_TICKS_PER_FRAME]], "
+        "each 1..100000\n");
+    return -1;
+}
+
 /* ── Cell surface ───────────────────────────────────────────────────── */
+
+/*
+ * Paint the bobs' paths over ticks [sb->walked, target), leaving
+ * sb->walked at target.  Every tick in between is on the path, however
+ * many a frame has to cover: one skipped is a gap in the trail.
+ */
+static void walk_bobs(struct shadebobs *sb, uint32_t target) {
+    while (sb->walked < target) {
+        for (int i=0; i<NUM_BOBS; i++) {
+            int x, y;
+            bob_position(&bobs[i], sb->walked, &x, &y);
+            splat(x, y);
+        }
+        sb->walked++;
+    }
+}
 
 static void frame_cells(const struct demo_surface *s, uint32_t dt_us,
                         uint64_t frame, void *vs) {
     struct shadebobs *sb = vs;
 
     if (frame == 0) {
-        if (setup(s) != 0)
+        if (setup(s, sb) != 0)
             exit(1);
     }
-    sb->elapsed_us += dt_us;
+    sb->elapsed_us += (dt_us < sb->max_frame_us) ? dt_us : sb->max_frame_us;
 
     /* Only cells touched this frame are re-emitted, which is what keeps
      * a frame inside the serial console's budget: a handful of cells
@@ -372,7 +451,8 @@ static void frame_cells(const struct demo_surface *s, uint32_t dt_us,
     }
     dirty_count = 0;
 
-    step_bobs(sb->elapsed_us);
+    walk_bobs(sb, (uint32_t)((sb->elapsed_us * sb->ticks_per_sec) /
+                             1000000ull));
 
     for (int i = 0; i < dirty_count; i++) {
         if (s->blocks)
@@ -432,14 +512,14 @@ static void frame_pixels(const struct demo_surface *s, uint32_t dt_us,
     struct shadebobs *sb = vs;
 
     if (frame == 0) {
-        if (setup(s) != 0)
+        if (setup(s, sb) != 0)
             exit(1);
         build_cmap(s);
         fb_pix = s->pix;
         fb_stride = s->stride;
     }
     sb->elapsed_us += dt_us;
-    step_bobs(sb->elapsed_us);
+    step_bobs(sb);
 }
 
 int main(int argc, char **argv) {
@@ -447,6 +527,8 @@ int main(int argc, char **argv) {
         .name        = "shadebobs",
         .frame_cell  = frame_cells,
         .frame_pixel = frame_pixels,
+        .parse       = parse_args,
+        .usage_tail  = "[TICKS_PER_SEC [MAX_TICKS_PER_FRAME]]",
         .state       = &state,
     };
 
