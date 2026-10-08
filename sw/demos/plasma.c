@@ -301,10 +301,12 @@ static void field_offsets(int t, int *ax, int *ay, int *bx, int *by) {
 
     /* A travels both axes, to the pixel — the pre-shifted copies make
      * an odd horizontal offset as cheap as an even one.  B travels
-     * vertically, where alignment never mattered. */
+     * vertically only, but its rows are still read a word at a time
+     * from wherever it sits horizontally, and half a margin is only
+     * guaranteed even. */
     *ax = half + ((half * sin_lut[(t * 2) & 0xFF]) >> 7);
     *ay = half + ((half * sin_lut[(t * 3 + 64) & 0xFF]) >> 7);
-    *bx = half;
+    *bx = half & ~3;
     *by = half + ((half * sin_lut[(t * 4 + 96) & 0xFF]) >> 7);
 }
 
