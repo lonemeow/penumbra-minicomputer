@@ -149,7 +149,8 @@ bootinfo — `boot sd:0,0` reaches single-user with no prompts.
   Nexys Video the interface attaches with the address from the
   board's EEPROM, `ukphy` runs the RTL8211E, which links at
   100 Mbit/s full duplex, and it takes a DHCP lease, resolves names
-  and fetches over HTTP.  10 Mbit/s has not been tried there.
+  and fetches over HTTP.  With the 10 Mbit/s medium selected it
+  carries traffic at that speed too.
 
 - **Audio (paudio):** `CLASS_AUDIO` driver on the four-channel
   device.  Channel 0 plays a PCM stream under MI `audio(4)`

@@ -1093,9 +1093,8 @@ Open:
   block RAM.
 - **The Nexys Video's side**
   (`doc/internals/nexysvideo/ethernet.md`) runs on the board: under
-  NetBSD's `peth` the PHY links at 100 Mbit/s full duplex and the
-  interface carries traffic. Open there:
-  - 10 Mbit/s has not been tried.
+  NetBSD's `peth` the interface carries traffic at 100 Mbit/s and at
+  10. Open there:
   - `eth_mdio` allows 20 ns for its two pins' delays (`PIN_NS`), and
     the constraints leave both pins untimed.
   - The PHY runs under `ukphy`. `rgephy(4)`, which knows the RTL8211
