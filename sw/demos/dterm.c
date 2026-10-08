@@ -90,38 +90,24 @@ fold_color(int c, int n)
 }
 
 /*
- * Build one colour sequence.  A terminal with only eight colours still
- * reaches the bright half through bold, and bright black is what makes
- * greys land on a grey rather than on the nearest hue, so the intensity
- * is folded into the same sequence.  Backgrounds have no bold, so they
- * fold onto the eight.
+ * Build one colour sequence.  Short of 256 colours a foreground and a
+ * background fold onto the same eight, because the two meet inside a
+ * cell as the halves of a block: a colour that folded one way above and
+ * another below shows as stripes wherever a picture is flat.  Bold
+ * reaches the bright eight for a foreground only, so using it would
+ * bring that mismatch back.
  */
 static void
-build_seq(struct seq *dst, const char *cap, int base, int c, int is_fg)
+build_seq(struct seq *dst, const char *cap, int base, int c)
 {
 	char buf[DT_SEQMAX];
 	const char *s = NULL;
-	int idx;
+	int idx = (ncolors >= 256) ? c : fold_color(c, 8);
 
-	if (ncolors >= 256)
-		idx = c;
-	else
-		idx = fold_color(c, (is_fg && ncolors < 16) ? 16 : 8);
-
-	if (ncolors >= 16) {
-		if (cap != NULL)
-			s = tiparm(cap, idx);
-		if (s == NULL) {
-			(void)snprintf(buf, sizeof(buf), "\033[%dm",
-			    base + (idx & 7));
-			s = buf;
-		}
-	} else {
-		/* Bold carries the bright half, so every sequence states the
-		 * intensity or a dim colour would inherit the last bright
-		 * one's bold. */
-		(void)snprintf(buf, sizeof(buf), "\033[%d;%dm",
-		    idx >= 8 ? 1 : 22, base + (idx & 7));
+	if (ncolors >= 16 && cap != NULL)
+		s = tiparm(cap, idx);
+	if (s == NULL) {
+		(void)snprintf(buf, sizeof(buf), "\033[%dm", base + (idx & 7));
 		s = buf;
 	}
 
@@ -150,8 +136,8 @@ dterm_init(int *cols, int *rows, int above, int below)
 	}
 
 	for (int c = 0; c < DT_NCOLORS; c++) {
-		build_seq(&fg_seq[c], setaf, 30, c, 1);
-		build_seq(&bg_seq[c], setab, 40, c, 0);
+		build_seq(&fg_seq[c], setaf, 30, c);
+		build_seq(&bg_seq[c], setab, 40, c);
 		dec_seq[c].len = (unsigned char)snprintf(dec_seq[c].s,
 		    sizeof(dec_seq[c].s), "%d", c);
 	}
