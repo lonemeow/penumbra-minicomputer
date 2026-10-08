@@ -283,7 +283,7 @@ in the LLVM subtree CLAUDE.md).
   the image targets pick the config via `KERNCONF=` (default
   `GENERIC.DEBUG`). Full
   sequence in `DEVELOP.md` § 7.
-- SD images: `make image [FLAVOR=multiuser|kiosk]`, built by NetBSD's
+- SD images: `make image [FLAVOR=multiuser|kiosk|guest]`, built by NetBSD's
   own `distrib/utils/embedded/mkimage` from a board conf per flavor
   under `netbsd/distrib/utils/embedded/conf/`. Adding a flavor means
   adding a conf. Images carry `boot.cfg` with `root=ld0f` so

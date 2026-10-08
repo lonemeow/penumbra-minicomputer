@@ -271,6 +271,7 @@ Three configs, per NetBSD convention, all built at `-O2`:
 ```sh
 make image                  # boot + full FFS root + benchmark ELFs on FAT32
 make image FLAVOR=multiuser # the same, configured to reach multiuser
+make image FLAVOR=guest     # multiuser on the network: telnetd, a guest account
 
 make simulate SDCARD=build/boot.img
 # At ROM prompt: boot sd:0,0

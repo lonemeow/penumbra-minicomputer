@@ -976,6 +976,8 @@ NBTOOLBIN := $(abspath $(BUILD_DIR)/netbsd-tools/bin)
 # FLAVOR is the base image the others are derived from:
 #   make image                   — boots to a single-user shell
 #   make image FLAVOR=multiuser  — runs /etc/rc, getty per tty
+#   make image FLAVOR=guest      — multiuser, on the network: a DHCP
+#                                  client, telnetd and a guest account
 FLAVOR     ?=
 IMAGE_CONF := penumbra$(if $(FLAVOR),_$(FLAVOR))
 PENIMAGE   ?= $(BUILD_DIR)/$(IMAGE_CONF).img
@@ -994,6 +996,7 @@ image: netbsd-overlay bench-elfs demoscene-elfs
 	    TOOL_DISKLABEL=$(NBTOOLBIN)/nbdisklabel \
 	    TOOL_GPT=$(NBTOOLBIN)/nbgpt \
 	    TOOL_FDISK=$(NBTOOLBIN)/penumbra-unknown-netbsd-fdisk \
+	    TOOL_PWD_MKDB=$(NBTOOLBIN)/nbpwd_mkdb \
 	    penboot=$(abspath $(BOOT_ELF)) \
 	    kernel=$(abspath $(KERNEL)) \
 	    rootoverlay=$(abspath $(OVERLAY_ROOT)) \

@@ -378,9 +378,12 @@ The Penumbra ROM boots from FAT32 on an SD card; the NetBSD kernel mounts an FFS
 make image                            # single-user shell
 make image FLAVOR=multiuser           # /etc/rc, getty on every tty marked on
 make image FLAVOR=kiosk               # the exhibit launcher on the display
+make image FLAVOR=guest               # multiuser on the network: DHCP, telnetd, a guest account
 ```
 
 `FLAVOR` names a conf under `netbsd/distrib/utils/embedded/conf/`, which all carry a `penumbra_` prefix the flavor name leaves off; adding a flavor means adding a conf and nothing else. Output is `build/penumbra[_FLAVOR].img`.
+
+The `guest` flavor is for a machine others log into over the network: it runs a DHCP client and `telnetd`, and adds a `guest` account. The account takes no login until it has a password. Give it one on the machine, as root on the console (`passwd guest`), or build one in: `pwhash` on the machine prints a hash, and `guest_pwhash='<hash>' make image FLAVOR=guest` puts it in the image. root logs in on the console only. `telnet` carries passwords in the clear, and a guest's shell is on whatever network the machine is plugged into.
 
 Each image carries a `boot.cfg` selecting `root=ld0f`, so `boot sd:0,0` needs no further interaction, plus the bare-metal benchmark ELFs (`DHRYSTON.ELF`, `MEMTEST.ELF`, `MEMBENCH.ELF`) on the FAT32 partition — `boot sd:0,0/DHRYSTON.ELF` runs one straight from ROM on the same card.
 
