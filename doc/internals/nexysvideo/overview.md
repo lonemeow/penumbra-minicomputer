@@ -160,9 +160,11 @@ A top's constraints can span several files:
 vendored masters (`hw/third_party/digilent-xdc/`,
 `hw/third_party/digilent-boards/`): every pin location, I/O standard
 and oscillator clock must be one of the masters' lines, unchanged, and
-every board-wide setting must be present. Everything else, timing
-exceptions and crossing constraints included, is design intent and
-passes unchecked.
+every board-wide setting must be present. A clock that a part on the
+board sends, the Ethernet PHY's receive clock, is not the masters' to
+state: the top gives its period from the part's datasheet. Everything
+else, timing exceptions and crossing constraints included, is design
+intent and passes unchecked.
 
 ## Thermal guard
 

@@ -18,10 +18,18 @@ otherwise unchanged, keeping the masters' port names. This fails when
 one of a top's files states a board fact no master states, or the files
 together leave out a board-wide setting:
 
-- a line setting PACKAGE_PIN or IOSTANDARD, or a create_clock on a
-  top-level port, that is not one of the masters' lines;
+- a line setting PACKAGE_PIN or IOSTANDARD that is not one of the
+  masters' lines;
+- a create_clock on a port the masters give a clock, an oscillator's,
+  that is not the masters' line for it;
+- a create_clock whose ports are not written out by name (a pattern or
+  a variable), since nothing here can tell which ports it clocks;
 - a missing master line that is active in the master itself (such as
   CONFIG_VOLTAGE), which every design on the board needs.
+
+A clock on any other port is one a part on the board sends, such as an
+Ethernet PHY's receive clock. The masters say nothing of it, so its
+period is the top's to state, from the part's datasheet.
 
 Lines compare with whitespace collapsed and any trailing `; #...`
 schematic comment dropped. Everything else in a top's XDC (generated
@@ -36,7 +44,10 @@ import re
 import sys
 import xml.etree.ElementTree as ET
 
-BOARD_FACT = re.compile(r'\b(PACKAGE_PIN|IOSTANDARD)\b|^create_clock\b.*\bget_ports\b')
+PIN_FACT = re.compile(r'\b(PACKAGE_PIN|IOSTANDARD)\b')
+# What a create_clock hands get_ports: a braced list, or one bare word.
+CLOCK_PORTS = re.compile(r'^create_clock\b.*\bget_ports\s+(?:\{([^}]*)\}|([^\s\]]+))')
+PORT_NAME = re.compile(r'^\w+(\[\d+\])?$')
 TRAILING_COMMENT = re.compile(r';\s*#.*$')
 
 
@@ -44,6 +55,15 @@ def normalize(line):
     """The constraint itself: no schematic comment, whitespace collapsed."""
     line = TRAILING_COMMENT.sub('', line.strip())
     return ' '.join(line.rstrip(';').split())
+
+
+def clock_ports(line):
+    """What a create_clock line names as its ports, each as written;
+    empty for any other line, and for a clock on no port."""
+    match = CLOCK_PORTS.search(line)
+    if not match:
+        return []
+    return (match.group(1) if match.group(1) is not None else match.group(2)).split()
 
 
 def load_master_xdc(path):
@@ -83,6 +103,8 @@ def check(masters, top_paths, facts, board_wide):
     board-wide line."""
     errors = []
     present = set()
+    # The ports the board itself clocks: the masters' clock lines name them.
+    board_clocked = {port for fact in facts for port in clock_ports(fact)}
     for top_path in top_paths:
         with open(top_path) as f:
             for number, raw in enumerate(f, 1):
@@ -90,7 +112,13 @@ def check(masters, top_paths, facts, board_wide):
                 if not line or line.startswith('#'):
                     continue
                 present.add(line)
-                if BOARD_FACT.search(line) and line not in facts:
+                ports = clock_ports(line)
+                unnamed = [port for port in ports if not PORT_NAME.match(port)]
+                if unnamed:
+                    errors.append(f'{top_path}:{number}: a clock on ports not written out by '
+                                  f'name ({" ".join(unnamed)}): {line}')
+                elif ((PIN_FACT.search(line) or board_clocked.intersection(ports))
+                        and line not in facts):
                     errors.append(f'{top_path}:{number}: not a board fact of {masters}: {line}')
     tops = ', '.join(top_paths)
     for line in board_wide:
