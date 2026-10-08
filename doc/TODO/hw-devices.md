@@ -1082,15 +1082,12 @@ The programming interface is `doc/system/devices/ethernet.md`
 writes, a filter on one station address, and a PHY that software
 manages through an MDIO register and reports the speed of.
 
+The device, its driver and the Nexys Video's side are in ("hw: put
+the Ethernet device on the Nexys Video" and the commits it builds
+on; `doc/internals/ethernet.md`).
+
 Open:
 
-- **The device's RTL**, board-neutral above the PHY's data interface
-  as the USB controller is above its PHY
-  (`doc/internals/usb-host-controller.md`), with the class constant
-  in the package and the ROM's header. The receive ring's size is the
-  free choice: 32 slots hold a whole default TCP receive window
-  (32 KB, 22 full frames) while the CPU drains nothing, for 64 KB of
-  block RAM.
 - **The Nexys Video's side**
   (`doc/internals/nexysvideo/ethernet.md`) runs on the board: under
   NetBSD's `peth` the interface carries traffic at 100 Mbit/s and at

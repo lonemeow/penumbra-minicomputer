@@ -172,6 +172,10 @@ A frame that arrives while the ring is full is still checked, though
 not stored, since the contract counts in `RX_DROP` only frames that
 would otherwise have been received.
 
+The receive ring's size is the free choice. Its default of 32 slots
+holds a whole default TCP receive window (32 KB, 22 full frames) while
+the CPU drains nothing, for 64 KB of block RAM.
+
 ## Transmit
 
 `eth_tx` runs on the transmit clock. With `TX_EN` set and a frame
