@@ -551,6 +551,14 @@ demo_main(int argc, char **argv, const struct demo *d)
 				break;
 		}
 		elapsed = now_us() - started;
+		/* A looped demo draws with absolute positioning, so the cursor
+		 * and its colours are wherever the last cell left them: step
+		 * off the picture before printing under it.  A one-shot render
+		 * streams newline-terminated lines and is there already, where
+		 * stepping again would only scroll a picture that reached the
+		 * bottom. */
+		if (s.kind == DEMO_CELL)
+			dterm_end();
 		printf("\n%llu frames in %llu.%03llu s (%llu.%llu fps)\n",
 		    (unsigned long long)frame,
 		    (unsigned long long)(elapsed / 1000000ull),
@@ -561,17 +569,9 @@ demo_main(int argc, char **argv, const struct demo *d)
 	}
 
 	restore_input();
-	if (s.kind == DEMO_PIXEL) {
+	if (s.kind == DEMO_PIXEL)
 		pixel_close(&s);
-	} else if (!one_shot) {
-		/* Only a demo that drew with absolute positioning needs the
-		 * cursor put back: dterm_end jumps to the row below the
-		 * picture, which is where a one-shot render that streamed
-		 * newline-terminated lines already left it.  Doing it anyway
-		 * moves the cursor for no reason and scrolls when the picture
-		 * reached the bottom. */
-		dterm_end();
-		dterm_cursor(1);
-	}
+	else if (!one_shot)
+		dterm_cursor(1);	/* hidden for the frame loop */
 	return status;
 }
