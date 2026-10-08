@@ -9,29 +9,37 @@
 // The controller side of the crossing speaks the line contract
 // (sdram_cdc): a request held valid until ready, then done, with the
 // line on rsp_valid for a read. The Wishbone port speaks the same
-// handshake under other names, so the glue between them is wiring and
-// adds no cycle:
+// handshake under other names, so the glue between them adds no cycle:
 //   valid  → stb, held until the port stops stalling
 //   ready  ← !stall
-//   done   ← ack, for reads and writes alike, in request order
-//   rsp_valid ← ack of a read: the request's we rides out on aux and
-//               comes back with its ack
+//   done   ← ack in the current epoch, for reads and writes alike, in
+//            request order
+//   rsp_valid ← such an ack of a read: the request's we rides out on
+//               aux bit 0 and comes back with its ack
 //   addr   → the burst holding the byte address
 // A write is one word: it goes out replicated across the line, and its
 // byte enables select that word's lanes, so the controller writes only
 // the bytes the bus asked for.
 //
-// The bus cycle (o_wb_cyc) is open whenever the controller side is out
-// of reset. A reset drops it, which cancels a request the controller
-// still has in flight: its ack would otherwise arrive after the reset,
-// where the crossing would take it for the next request's.
+// The port has no cyc, because the stack never cancels a request: the
+// memory answers every one it has taken, whatever resets the stack
+// meanwhile. A memory with a cycle input has it tied high.
+//
+// A reset of the stack so leaves the memory owing an ack for any
+// request it had taken. That ack arrives during the reset or after it,
+// where the crossing would take it for the answer to a later request.
+// To tell them apart each request carries the epoch out in aux, above
+// we: the count of resets so far. An ack that brings back another epoch
+// answers a request the reset abandoned, and is dropped. The count
+// wraps, so this holds for fewer than 2^(AUX_WIDTH-1) resets in the
+// time the memory takes over one request.
 //
 // The bus side runs on the system clock and the Wishbone side on the
 // controller's; the crossing between them is sdram_cdc's.
 
 module ddr3_stack #(
     parameter int ADDR_BITS = 25,   // the Wishbone port's burst address width
-    parameter int AUX_WIDTH = 4     // the Wishbone port's aux width, at least 1
+    parameter int AUX_WIDTH = 4     // the Wishbone port's aux width, at least 2
 ) (
     input  logic                  i_sys_clk,
     input  logic                  i_sys_rst,
@@ -47,8 +55,7 @@ module ddr3_stack #(
     output logic [31:0]           o_rdata,
     output logic                  o_ack,
 
-    // ── Wishbone burst port (controller clock) ───────────────
-    output logic                  o_wb_cyc,
+    // ── Wishbone burst port, cycle always open (controller clock) ──
     output logic                  o_wb_stb,
     output logic                  o_wb_we,
     output logic [ADDR_BITS-1:0]  o_wb_addr,
@@ -58,11 +65,15 @@ module ddr3_stack #(
     input  logic                  i_wb_stall,
     input  logic                  i_wb_ack,
     input  logic [127:0]          i_wb_data,
-    /* verilator lint_off UNUSEDSIGNAL */
-    input  logic [AUX_WIDTH-1:0]  i_wb_aux      // bit 0 is all the stack sends out
-    /* verilator lint_on UNUSEDSIGNAL */
+    input  logic [AUX_WIDTH-1:0]  i_wb_aux
 );
-    localparam int LINE_BITS = 128;
+    localparam int LINE_BITS  = 128;
+    localparam int EPOCH_BITS = AUX_WIDTH - 1;
+
+    build_check #(
+        .COND (AUX_WIDTH >= 2),
+        .MSG  ("ddr3_stack: AUX_WIDTH leaves no bit for the epoch")
+    ) u_check_aux_width ();
 
     // ── Adapter ↔ CDC (system clock) ─────────────────────────
     logic                 sys_req_valid, sys_req_we, sys_req_ready;
@@ -138,22 +149,46 @@ module ddr3_stack #(
     );
     /* verilator lint_on PINCONNECTEMPTY */
 
+    // ── The epoch ────────────────────────────────────────────
+    // The count of resets of the controller side so far, modulo its
+    // width. It has no reset of its own, since what it has to outlast is
+    // the reset; any starting value serves, as only a change of it tells
+    // one epoch from the next.
+    logic [EPOCH_BITS-1:0] epoch_q;
+    logic                  ack_live;   // an ack of a request made in this epoch
+
+    // One step for each reset, however long i_ctrl_rst is held: the
+    // count wraps, so stepping all through a reset would bring an old
+    // epoch back.
+    logic in_reset_q;
+
+    always_ff @(posedge i_ctrl_clk) begin
+        if (i_ctrl_rst) begin
+            if (!in_reset_q)
+                epoch_q <= epoch_q + 1'b1;
+            in_reset_q <= 1'b1;
+        end else begin
+            in_reset_q <= 1'b0;
+        end
+    end
+
+    assign ack_live = i_wb_ack && i_wb_aux[1 +: EPOCH_BITS] == epoch_q;
+
     // ── Glue: the line contract as Wishbone ──────────────────
     // A write's word goes out replicated across the line, and its byte
     // enables move to that word's lanes. Word k of a line is bits
     // [32k+31:32k] and bytes 4k..4k+3, as the adapter indexes the line a
     // read returns; sel bit j masks byte j.
-    assign o_wb_cyc       = !i_ctrl_rst;
     assign o_wb_stb       = ctrl_req_valid;
     assign o_wb_we        = ctrl_req_we;
     assign o_wb_addr      = ctrl_req_addr[4 +: ADDR_BITS];
     assign o_wb_data      = {4{ctrl_req_wdata}};
     assign o_wb_sel       = 16'(ctrl_req_byte_en) << {ctrl_req_addr[3:2], 2'b00};
-    assign o_wb_aux       = AUX_WIDTH'(ctrl_req_we);
+    assign o_wb_aux       = {epoch_q, ctrl_req_we};
     assign ctrl_req_ready = !i_wb_stall;
 
-    assign ctrl_done      = i_wb_ack;
-    assign ctrl_rsp_valid = i_wb_ack && !i_wb_aux[0];
+    assign ctrl_done      = ack_live;
+    assign ctrl_rsp_valid = ack_live && !i_wb_aux[0];
     assign ctrl_rsp_data  = i_wb_data;
 
 endmodule

@@ -4,7 +4,8 @@
 // nexysvideo_ddr3 exposes). A request is accepted on an edge where stb is
 // high and stall low; each completes, in order, with a one-cycle ack
 // carrying the line a read asked for and the aux the request brought.
-// Dropping cyc cancels everything in flight, acks included.
+// The port has no cyc: its cycle never ends, so every request taken is
+// answered. Only the model's own reset empties it.
 //
 // Stall and ack latency are random, within bounds a real controller
 // shows, so a consumer that only works at one timing fails here:
@@ -16,8 +17,7 @@
 //
 // Calibration comes first: for CALIB_CYCLES after reset the port stalls
 // and o_calib_complete stays low, as a DDR3 controller's does while it
-// trains its read and write timing. Only i_rst restarts it; dropping cyc
-// does not.
+// trains its read and write timing. Only i_rst restarts it.
 //
 // A write takes effect when accepted, under its byte selects; a read
 // takes its line when accepted, so completion order is request order by
@@ -33,7 +33,6 @@ module wb_line_mem #(
 ) (
     input  logic                 i_clk,
     input  logic                 i_rst,
-    input  logic                 i_cyc,
     input  logic                 i_stb,
     input  logic                 i_we,
     input  logic [ADDR_BITS-1:0] i_addr,
@@ -71,7 +70,7 @@ module wb_line_mem #(
     logic [127:0] sel_bits;                 // i_sel, one bit per data bit
 
     assign o_calib_complete = (calib_left_q == '0);
-    assign accept           = i_cyc && i_stb && !o_stall;
+    assign accept           = i_stb && !o_stall;
     assign complete         = (count_q != '0) && (q_due[head_q] <= now_q);
     assign o_stall          = i_rst || !o_calib_complete || (stall_left_q != '0)
                            || (count_q == (Q_W+1)'(DEPTH));
@@ -112,7 +111,7 @@ module wb_line_mem #(
     always_ff @(posedge i_clk) begin
         o_ack <= 1'b0;
         now_q <= now_q + 32'd1;
-        if (i_rst || !i_cyc) begin
+        if (i_rst) begin
             head_q       <= '0;
             tail_q       <= '0;
             count_q      <= '0;

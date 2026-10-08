@@ -95,7 +95,6 @@ module nexysvideo_ddr3_test_top (
         .i_ref_clk        (ref_clk),
         .i_rst_n          (ctrl_rst_n),
 
-        .i_cyc            (1'b1),
         .i_stb            (1'b0),
         .i_we             (1'b0),
         .i_addr           ('0),

@@ -18,7 +18,7 @@ line").
 graph LR
     BUS["system bus<br/>(CPU clock)"] --> ADP["bus adapter<br/>holds one line"]
     ADP --> CDC["sdram_cdc<br/>line contract"]
-    CDC --> GLUE["Wishbone glue<br/>(wiring only)"]
+    CDC --> GLUE["Wishbone glue"]
     GLUE -->|"pipelined Wishbone,<br/>128-bit bursts"| WRAP["nexysvideo_ddr3<br/>(GPL-3.0-or-later)"]
     WRAP --> UBER["UberDDR3 ddr3_top<br/>controller + PHY"]
     UBER --> CHIP["DDR3 chip<br/>(333 MHz, DDR3-667)"]
@@ -51,8 +51,8 @@ takes no per-board parameter.
 
 The crossing's controller side and UberDDR3's request port speak the
 same handshake under different names: a request held until the port
-stops stalling, then an acknowledgement. The glue is wiring and adds
-no cycle:
+stops stalling, then an acknowledgement. The glue adds no cycle, and
+holds one piece of state, the epoch:
 
 | Crossing, controller side | UberDDR3 Wishbone port |
 |---|---|
@@ -61,21 +61,35 @@ no cycle:
 | address | the burst holding the byte address (16-byte units) |
 | write data | the word, replicated across the 128-bit line |
 | byte enables | `sel`: the word's four enables, shifted to its lane |
-| (request kind) | `aux` carries `we` out and back with the ack |
-| done | `ack`, for reads and writes, in request order |
-| read response | `ack` of a request whose `aux` says read; the line is `data` |
+| (request kind) | `aux` bit 0 carries `we` out and back with the ack |
+| (which reset) | the rest of `aux` carries the epoch out and back |
+| done | `ack` in the current epoch, for reads and writes, in request order |
+| read response | such an `ack` whose `aux` says read; the line is `data` |
 
 A write is one word: it goes out across the whole line, and its byte
 enables pick the lanes, so the controller writes only the bytes the bus
 asked for, with the chip's data masks. There is no read-modify-write.
 
-The Wishbone cycle (`cyc`) stays open while the controller side is out
-of reset. A reset drops it, which cancels whatever the controller
-still has in flight; otherwise that request's ack could arrive after
-the reset and complete the next request in its place. Writes are
-posted (the adapter acknowledges a write once the crossing takes it),
-so a stack reset discards a write still on its way, as on the SDR
-stacks.
+The port has no cycle signal (`cyc`), because the stack never cancels
+a request: the controller answers every one it has taken, whatever
+resets the stack meanwhile. UberDDR3 has a cancel, a dropped `cyc`,
+and it is not safe to use (`hw/third_party/uberddr3/README.md`, "Known
+defects"), so the wrapper ties `cyc` high.
+
+A reset of the stack therefore leaves the controller owing an ack for
+any request it had taken. That ack arrives during the reset or after
+it, where the crossing would take it for the answer to a later
+request. To tell them apart, each request carries the epoch out in
+`aux`: the count of stack resets so far. An ack that brings back
+another epoch answers a request the reset abandoned, and the glue
+drops it. The count is three bits and wraps, so the rule holds for
+fewer than eight resets in the time the controller takes over one
+request; a machine reset lasts 10 ms at least, and a request
+microseconds.
+
+Writes are posted (the adapter acknowledges a write once the crossing
+takes it), so a stack reset discards a write still in the crossing, as
+on the SDR stacks. One the controller has taken is written.
 
 ## The controller
 
@@ -179,17 +193,19 @@ so the crossing keeps one request in flight.
 
 | Where | What it covers |
 |---|---|
-| `tb_ddr3_stack_test` (`make test-modules`) | the stack on `wb_line_mem` (random stalls, ack latencies with long tails), unrelated clocks: every byte, halfword and word lane, random traffic, resets with a read in flight |
+| `tb_ddr3_stack_test` (`make test-modules`) | the stack on `wb_line_mem` (random stalls, ack latencies with long tails), unrelated clocks: every byte, halfword and word lane, random traffic, resets that leave a read or a write in the memory, answered during the reset or after it |
 | `make test SIM_MEM=ddr3` | the program suites on the gen2 sim machine with `ddr3_sim`: the stack on a 512 MiB model that calibrates after reset, the machine held until it has |
 | `make sim MOD=nexysvideo_penumbra2_top` | the board top through its pins, the controller replaced by `hw/rtl/sim/nexysvideo/nexysvideo_ddr3.sv` (the wrapper's ports on `wb_line_mem`); `make fpga-lint` sees the same stand-in, since UberDDR3 does not elaborate under Verilator at this configuration |
 | `nexysvideo_ddr3_test_top` | the real controller and chip on the board: calibration and the whole-chip self-test, repeated |
 
 Only the board runs the real controller behind the stack, so two
 things are tested there alone: the controller's actual latencies
-(which `bus_wait_meter` reports) and a cancelled cycle, which only a
-machine reset in the middle of an access produces. Co-simulating the
-real controller was considered and declined
-(`doc/TODO/hw-nexysvideo.md`, "Ruled out").
+(which `bus_wait_meter` reports) and its answer to a request the
+stack has abandoned, which only a machine reset in the middle of an
+access produces. A reset at the idle monitor prompt is not one, since
+the ROM touches no RAM there; one pressed while the ROM is still
+sizing RAM often is. Co-simulating the real controller was considered
+and declined (`doc/TODO/hw-nexysvideo.md`, "Ruled out").
 
 ## Naming
 

@@ -311,7 +311,7 @@ module nexysvideo_penumbra2_top (
     bus_devsel #(.BASE(RAM_BASE), .SIZE(32'(RAM_BYTES)))
         u_ram_sel (.i_addr(mem_addr), .o_sel(ram_sel));
 
-    logic                      wb_cyc, wb_stb, wb_we, wb_stall, wb_ack;
+    logic                      wb_stb, wb_we, wb_stall, wb_ack;
     logic [DDR3_ADDR_BITS-1:0] wb_addr;
     logic [127:0]              wb_wdata, wb_rdata;
     logic [15:0]               wb_sel;
@@ -332,7 +332,6 @@ module nexysvideo_penumbra2_top (
         .i_re       (mem_re & ram_sel),
         .o_rdata    (ram_rdata),
         .o_ack      (ram_ack),
-        .o_wb_cyc   (wb_cyc),
         .o_wb_stb   (wb_stb),
         .o_wb_we    (wb_we),
         .o_wb_addr  (wb_addr),
@@ -355,7 +354,6 @@ module nexysvideo_penumbra2_top (
         .i_ref_clk        (ref_clk),
         .i_rst_n          (ddr3_locked_sync2),
 
-        .i_cyc            (wb_cyc),
         .i_stb            (wb_stb),
         .i_we             (wb_we),
         .i_addr           (wb_addr),

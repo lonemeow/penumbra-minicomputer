@@ -5,7 +5,8 @@
 // system clock, the memory on the controller's. The memory has a reset
 // of its own, apart from the stack's controller-side one, as the machine
 // resets its stack without recalibrating the DDR3 controller: a stack
-// reset reaches the memory only as the dropped bus cycle.
+// reset does not reach the memory at all, which goes on to answer what
+// it had taken.
 
 module ddr3_stack_test (
     input  logic        i_sys_clk,
@@ -21,14 +22,14 @@ module ddr3_stack_test (
     output logic [31:0] o_rdata,
     output logic        o_ack,
     // The memory port, watched by the testbench.
-    output logic        o_wb_cyc,
     output logic        o_wb_stb,
-    output logic        o_wb_stall
+    output logic        o_wb_we,
+    output logic        o_wb_stall,
+    output logic        o_wb_ack
 );
     localparam int ADDR_BITS = 25;
     localparam int AUX_WIDTH = 4;
 
-    logic                 wb_we, wb_ack;
     logic [ADDR_BITS-1:0] wb_addr;
     logic [127:0]         wb_wdata, wb_rdata;
     logic [15:0]          wb_sel;
@@ -49,15 +50,14 @@ module ddr3_stack_test (
         .i_re       (i_re),
         .o_rdata    (o_rdata),
         .o_ack      (o_ack),
-        .o_wb_cyc   (o_wb_cyc),
         .o_wb_stb   (o_wb_stb),
-        .o_wb_we    (wb_we),
+        .o_wb_we    (o_wb_we),
         .o_wb_addr  (wb_addr),
         .o_wb_data  (wb_wdata),
         .o_wb_sel   (wb_sel),
         .o_wb_aux   (wb_aux_out),
         .i_wb_stall (o_wb_stall),
-        .i_wb_ack   (wb_ack),
+        .i_wb_ack   (o_wb_ack),
         .i_wb_data  (wb_rdata),
         .i_wb_aux   (wb_aux_in)
     );
@@ -69,15 +69,14 @@ module ddr3_stack_test (
     ) u_mem (
         .i_clk            (i_ctrl_clk),
         .i_rst            (i_mem_rst),
-        .i_cyc            (o_wb_cyc),
         .i_stb            (o_wb_stb),
-        .i_we             (wb_we),
+        .i_we             (o_wb_we),
         .i_addr           (wb_addr),
         .i_data           (wb_wdata),
         .i_sel            (wb_sel),
         .i_aux            (wb_aux_out),
         .o_stall          (o_wb_stall),
-        .o_ack            (wb_ack),
+        .o_ack            (o_wb_ack),
         .o_data           (wb_rdata),
         .o_aux            (wb_aux_in),
         .o_calib_complete ()

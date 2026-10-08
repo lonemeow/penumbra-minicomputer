@@ -313,9 +313,11 @@ exposed external bus.
   `doc/internals/sdram-controller.md` and `sdram-optimization.md`).
 - `ddr3/ddr3_stack.sv` — the line-buffer adapter and `sdram_cdc` ending
   in a DDR3 controller's pipelined-Wishbone port instead of
-  `sdram_ctrl`: one 128-bit burst per line, the glue stateless. Drops
-  the Wishbone cycle in reset, cancelling a request in flight. Takes
-  the line adapter from `sdram_line/`, so a source list names it.
+  `sdram_ctrl`: one 128-bit burst per line. Never cancels a request:
+  the port has no cycle signal, and the answer to a request from
+  before a stack reset is told by the reset count in its aux, and
+  dropped. Takes the line adapter from `sdram_line/`, so a source list
+  names it.
 
 ### Simulation glue (`rtl/sim/`)
 - `machine_penumbra2_sim.sv` — `machine_penumbra2` + `unified_bus_mem`:
@@ -464,9 +466,11 @@ the shared module.
   `hw/constraints/nexysvideo_uart_test_top.xdc`.
 - `nexysvideo/nexysvideo_ddr3.sv` — the board's DDR3 behind UberDDR3
   (`hw/third_party/uberddr3/`), at the machine's configuration (x16,
-  two lanes, 15 row bits): a Wishbone burst port, UberDDR3's debug
-  port, calibration complete. The one file that instantiates
-  `ddr3_top`, so the one licensed GPL-3.0-or-later.
+  two lanes, 15 row bits): a Wishbone burst port with the
+  controller's cycle input tied high (why is in the vendored README,
+  "Known defects"), UberDDR3's debug port, calibration complete. The
+  one file that instantiates `ddr3_top`, so the one licensed
+  GPL-3.0-or-later.
 - `nexysvideo/nexysvideo_ddr3_clk.sv` — the DDR3 controller's four
   clocks (83.33, 333.33, 333.33 at 90 degrees, 200 MHz) from one PLL.
 - `nexysvideo/nexysvideo_video_clk.sv` — the display's pixel and TMDS

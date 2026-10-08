@@ -17,9 +17,8 @@
 // Two resets, as on the board. i_mem_rst is the controller's own, from
 // power-on; nothing else restarts calibration. i_rst is the machine's,
 // in the system clock domain, and resets the stack: its controller side
-// takes it through a two-flop synchronizer, and while it is held the
-// stack drops the Wishbone cycle, cancelling whatever the memory still
-// has in flight.
+// takes it through a two-flop synchronizer. It does not reach the
+// memory, which goes on to answer whatever it had taken.
 
 module ddr3_sim #(
     parameter int CALIB_CYCLES = 4096   // memory clocks
@@ -49,7 +48,7 @@ module ddr3_sim #(
         mem_rst_sync2 <= mem_rst_sync1;
     end
 
-    logic                 wb_cyc, wb_stb, wb_we, wb_stall, wb_ack;
+    logic                 wb_stb, wb_we, wb_stall, wb_ack;
     logic [ADDR_BITS-1:0] wb_addr;
     logic [127:0]         wb_wdata, wb_rdata;
     logic [15:0]          wb_sel;
@@ -70,7 +69,6 @@ module ddr3_sim #(
         .i_re       (i_re),
         .o_rdata    (o_rdata),
         .o_ack      (o_ack),
-        .o_wb_cyc   (wb_cyc),
         .o_wb_stb   (wb_stb),
         .o_wb_we    (wb_we),
         .o_wb_addr  (wb_addr),
@@ -90,7 +88,6 @@ module ddr3_sim #(
     ) u_mem (
         .i_clk            (i_mem_clk),
         .i_rst            (i_mem_rst),
-        .i_cyc            (wb_cyc),
         .i_stb            (wb_stb),
         .i_we             (wb_we),
         .i_addr           (wb_addr),

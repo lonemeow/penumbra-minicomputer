@@ -43,7 +43,6 @@ module nexysvideo_ddr3 #(
     input  logic                     i_rst_n,
 
     // ── Memory port ─────────────────────────────────────────
-    input  logic                     i_cyc,
     input  logic                     i_stb,
     input  logic                     i_we,
     input  logic [ADDR_BITS-1:0]     i_addr,
@@ -94,7 +93,6 @@ module nexysvideo_ddr3 #(
     ) u_mem (
         .i_clk            (i_ctrl_clk),
         .i_rst            (!i_rst_n),
-        .i_cyc            (i_cyc),
         .i_stb            (i_stb),
         .i_we             (i_we),
         .i_addr           (i_addr),

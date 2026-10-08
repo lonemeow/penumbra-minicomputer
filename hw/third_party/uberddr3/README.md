@@ -36,6 +36,30 @@ incorporating this directory is a combined work, GPL-3.0 as a whole if
 it is ever distributed, with its Corresponding Source the public
 repository at the exact commit. ULX3S bitstreams never contain it.
 
+## Known defects
+
+At the pinned commit:
+
+- **Dropping `i_wb_cyc` with a request in flight can leave every
+  later read returning the wrong burst.** The controller keeps read
+  data in two slots and alternates between them with two flags: one
+  steps when a request nears the end of the acknowledge pipeline, to
+  pick the slot its data is captured into, and the other when its ack
+  goes out, to pick the slot presented (`ddr3_controller.v`, "Align
+  Read Data from ISERDES"). A dropped cycle clears the pipeline and
+  neither flag. A request cancelled between the two steps, a window of
+  two or three controller cycles, leaves the flags out of step, and
+  each read from then on returns what the request before it captured.
+  Only the controller's own reset puts them back.
+
+  This is read from the code, and reproduced neither in simulation nor
+  on the board. The board has shown what it predicts, once: after a
+  CPU RESET the boot ROM's first RAM check failed, and failed again at
+  every reset until a power cycle. Penumbra never drops the cycle: the
+  wrapper ties it high, as upstream's instantiation template does, and
+  the stack tells the acks of requests it has abandoned by a tag
+  (`doc/internals/nexysvideo/ddr3.md`, "The glue").
+
 ## Local modifications
 
 None. The controller is configured through its parameters only. A
