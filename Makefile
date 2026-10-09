@@ -878,7 +878,7 @@ DEMOS_DIR        := $(BUILD_DIR)/demos
 OVERLAY_ROOT    := $(BUILD_DIR)/netbsd-overlay
 NETBSD_OVERLAYS := benchmark-overlay demos-overlay penmon-overlay \
                    exhibit-launcher-overlay doom-overlay pmusic-test-overlay \
-                   modplay-overlay local-overlay
+                   modplay-overlay fasttelnetd-overlay local-overlay
 
 .PHONY: netbsd-overlay benchmark-overlay demos-overlay penmon-overlay penmon
 .PHONY: demos
@@ -886,6 +886,7 @@ NETBSD_OVERLAYS := benchmark-overlay demos-overlay penmon-overlay \
 .PHONY: doom-overlay doom
 .PHONY: pmusic-test-overlay pmusic-test local-overlay
 .PHONY: modplay-overlay modplay modplay-dump
+.PHONY: fasttelnetd-overlay
 netbsd-overlay:
 	rm -rf $(OVERLAY_ROOT)
 	@$(MAKE) $(NETBSD_OVERLAYS)
@@ -916,6 +917,10 @@ pmusic-test-overlay:
 
 modplay-overlay:
 	@$(MAKE) -C sw/modplay LLVM_PREFIX=$(LLVM_PREFIX) \
+		DESTDIR=$(abspath $(DESTDIR)) OVERLAY_ROOT=$(abspath $(OVERLAY_ROOT)) overlay
+
+fasttelnetd-overlay:
+	@$(MAKE) -C sw/fasttelnetd LLVM_PREFIX=$(LLVM_PREFIX) \
 		DESTDIR=$(abspath $(DESTDIR)) OVERLAY_ROOT=$(abspath $(OVERLAY_ROOT)) overlay
 
 # Files for the image that stay out of the repository: whatever sits

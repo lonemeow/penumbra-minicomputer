@@ -1,0 +1,34 @@
+telnetd: store a session's output into the network buffer directly
+
+The loop that carries what a session prints from the pty to the socket
+hands every byte to output_data("%c"), which formats it with
+vsnprintf() and sends the buffer to the socket once it is three-quarters
+full: a printf for each character, and two short writes for each read
+of the pty.  The loop checks that the buffer has room for what one pass
+adds before it makes the pass, so the bytes go in as they are, and the
+buffer leaves in one write when the main loop finds the socket ready.
+
+sw/fasttelnetd/Makefile applies this to a copy of telnetd.c; the file
+in the NetBSD tree stays as imported.
+
+--- a/libexec/telnetd/telnetd.c
++++ b/libexec/telnetd/telnetd.c
+@@ -1074,14 +1074,14 @@
+ 				break;
+ 			c = *ptyip++ & 0377, pcc--;
+ 			if (c == IAC)
+-				output_data("%c", c);
+-			output_data("%c", c);
++				*nfrontp++ = c;
++			*nfrontp++ = c;
+ 			if ((c == '\r') && (my_state_is_wont(TELOPT_BINARY))) {
+ 				if (pcc > 0 && ((*ptyip & 0377) == '\n')) {
+-					output_data("%c", *ptyip++ & 0377);
++					*nfrontp++ = *ptyip++ & 0377;
+ 					pcc--;
+ 				} else
+-					output_datalen("\0", 1);
++					*nfrontp++ = '\0';
+ 			}
+ 		}
+ 

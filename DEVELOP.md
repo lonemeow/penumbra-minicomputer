@@ -383,7 +383,7 @@ make image FLAVOR=guest               # multiuser on the network: DHCP, telnetd,
 
 `FLAVOR` names a conf under `netbsd/distrib/utils/embedded/conf/`, which all carry a `penumbra_` prefix the flavor name leaves off; adding a flavor means adding a conf and nothing else. Output is `build/penumbra[_FLAVOR].img`.
 
-The `guest` flavor is for a machine others log into over the network: it runs a DHCP client and `telnetd`, and adds a `guest` account. The account takes no login until it has a password. Give it one on the machine, as root on the console (`passwd guest`), or build one in: `pwhash` on the machine prints a hash, and `guest_pwhash='<hash>' make image FLAVOR=guest` puts it in the image. root logs in on the console only. `telnet` carries passwords in the clear, and a guest's shell is on whatever network the machine is plugged into.
+The `guest` flavor is for a machine others log into over the network: it runs a DHCP client and `telnetd` (the overlay's build of it, `sw/fasttelnetd`), and adds a `guest` account. The account takes no login until it has a password. Give it one on the machine, as root on the console (`passwd guest`), or build one in: `pwhash` on the machine prints a hash, and `guest_pwhash='<hash>' make image FLAVOR=guest` puts it in the image. root logs in on the console only. `telnet` carries passwords in the clear, and a guest's shell is on whatever network the machine is plugged into.
 
 Each image carries a `boot.cfg` selecting `root=ld0f`, so `boot sd:0,0` needs no further interaction, plus the bare-metal benchmark ELFs (`DHRYSTON.ELF`, `MEMTEST.ELF`, `MEMBENCH.ELF`) on the FAT32 partition — `boot sd:0,0/DHRYSTON.ELF` runs one straight from ROM on the same card.
 
@@ -441,10 +441,13 @@ find build/netbsd-overlay -type f      # inspect exactly what will be installed
 
 Staged into the tree: the demo/benchmark suite (`pbench`,
 `mandelbrot`, `julia`, `plasma`, `lorenz`, `shadebobs`, `penumbra-text`) at
-`/usr/local/bin/`, and three tools:
+`/usr/local/bin/`, and these tools:
 
 - **`penmon`**, the hardware-counter system monitor (see
   `sw/penmon/README.md`);
+- **`fasttelnetd`**, at `/usr/local/libexec/`: NetBSD's `telnetd` built
+  with a cheaper output loop, which the guest image's `inetd` runs (see
+  `sw/fasttelnetd/README.md`);
 - **`pmusic-test`**, which exercises the audio device's voice
   interface, `/dev/pmusic`;
 - **`modplay`**, which plays ProTracker modules through `/dev/pmusic`.
