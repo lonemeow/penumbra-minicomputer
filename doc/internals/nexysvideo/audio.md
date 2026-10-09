@@ -190,14 +190,23 @@ Levels are fixed here, since `MASTER_VOL` gives software its volume:
 the line out at 0 dB (about 1 V rms full scale, under the 2 V rms a
 line input takes), the headphones at −10 dB.
 
-Once biased, the playback path is never powered down. The setup mutes
-and unmutes instead, which leaves at worst one thump per board power
-cycle, when the bias first comes up.
+Once biased, the playback path is never powered down; the setup mutes
+and unmutes instead.
 
-A CPU RESET in the middle of playback makes no audible glitch on the
-board. The frame in progress goes out whole, silence follows it for
-the reset hold, and the setup mutes the codec before it stops its
-clock.
+Heard on the board, through amplified speakers on the line out:
+
+- **A power cycle**: no glitch. The output bias coming up is not
+  audible there.
+- **A bitstream load**: at most a very faint pop as it starts, hard to
+  make out even at high volume.
+- **A CPU RESET**, in the middle of playback or not: no glitch. The
+  frame in progress goes out whole, silence follows it for the reset
+  hold, and the setup mutes the codec before it stops its clock.
+- **The PROG button**, which clears the FPGA's configuration: no
+  glitch.
+- **A bitstream load during playback**: the audio cuts off at once,
+  with at most a small transient. MCLK stops while the FPGA
+  configures, and the codec's clock with it.
 
 ### Fault codes
 

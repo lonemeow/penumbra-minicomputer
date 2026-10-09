@@ -103,23 +103,6 @@ no card is a PS/2 device behind the PIC24's bridge. The network does
 not wait for USB (`hw-devices.md`, "Hardware + kernel: Ethernet MAC
 for an onboard PHY").
 
-## Devices: audio unheard through power-on and reset
-
-The audio device (`CLASS_AUDIO`) plays through the board's ADAU1761
-codec, which the machine top sets up over I2C by itself ("hw: play
-audio through the Nexys Video's codec";
-`doc/internals/nexysvideo/audio.md`), with the kernel and image the
-ULX3S runs.
-
-A CPU RESET during playback is clean (`audio.md`, "Setup"). What the
-path does to the speakers around power and configuration is not
-recorded: with the speakers on, listen through a board power-on, a
-bitstream load, and a reload while audio plays. The power-on listen
-also settles what the datasheet does not say: whether the output bias,
-and the one thump it costs, comes up at the codec's power-on or when
-the playback path is first enabled. What is heard goes into
-`audio.md`, "Setup".
-
 ## Clocking: CPU clock above 60 MHz
 
 The machine runs at 60 MHz. The DDR3 machine top's signoff
