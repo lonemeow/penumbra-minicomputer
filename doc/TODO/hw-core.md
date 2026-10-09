@@ -841,31 +841,37 @@ The divmul unit walks all 32 bits of `Rd` for a multiply and produces
 all 32 quotient bits for a divide
 ([divmul.md](../internals/divmul.md)): 10 cycles for a multiply at
 four bits a step and 34 for a divide, whatever the values.  Counted
-2026-10-03 with a scratch census in the ISS, not in the tree, over
-`pbench kernel` and Doom `demo3`, the operands seldom need that.
-Steps are those up to an operand's highest set bit, on magnitudes, as
-the unit works:
+2026-10-08 by the ISS's operand census (`+opstats`, with
+`+core=penumbra2_5` for the step width) over `pbench kernel`, Doom
+`demo3` and the bare-metal CoreMark (the whole run, both seed sets),
+the operands seldom need that.  Steps are those up to an operand's
+highest set bit, on magnitudes, as the unit works:
 
-| | `pbench kernel` | Doom `demo3` |
-|---|---|---|
-| `MUL`, `MULU` per 1000 instructions | 1.4 | 3.0 |
-| Steps needed of 8, walking `Rd` as built | 6.9 | 3.8 |
-| … walking `Rs` | 5.6 | 4.1 |
-| … walking the smaller operand | 5.6 | 2.6 |
-| `DIV`, `DIVU` per 1000 instructions | under 0.01 | 0.76 |
-| Steps needed of 32, past the dividend's leading zeros | — | 28.2 |
-| … with the dividend aligned to the divisor | — | 12.8 |
+| | `pbench kernel` | Doom `demo3` | CoreMark |
+|---|---|---|---|
+| `MUL`, `MULU` per 1000 instructions | 1.4 | 3.0 | 24 |
+| Steps needed of 8, walking `Rd` as built | 6.9 | 3.8 | 2.2 |
+| … walking `Rs` | 5.7 | 4.1 | 1.9 |
+| … walking the smaller operand | 5.6 | 2.6 | 1.7 |
+| `DIV`, `DIVU` per 1000 instructions | under 0.01 | 0.76 | under 0.01 |
+| Steps needed of 32, past the dividend's leading zeros | — | 28.2 | — |
+| … with the dividend aligned to the divisor | — | 12.8 | — |
 
+- **CoreMark is where the multiply costs most:** 24 per 1000
+  instructions, about 240 cycles per 1000 as built.  Its matrix
+  kernels multiply 16-bit elements, so a multiply that stops at `Rd`'s
+  highest set bit saves 140 of them, and 153 walking the smaller
+  operand.
 - **On Doom, stopping early would halve what the two cost.**  They
   take about 55 cycles per 1000 instructions there.  A multiply that stops
-  at `Rd`'s highest set bit saves 12 of them, 16 walking the smaller
+  at `Rd`'s highest set bit saves 13 of them, 16 walking the smaller
   operand; a divide aligned to its divisor saves 15.
 - **Skipping the dividend's leading zeros alone saves 3.**  Doom's
   dividends mostly fill the word: each wall column divides
   `0xffffffff` by a scale.  Aligned to the divisor, two thirds of its
   divides need 16 steps or fewer, and 8 % need none: the dividend is
   the smaller.
-- **The kernel paths gain 1–3 cycles per 1000.**
+- **The kernel paths gain 2–3 cycles per 1000.**
 - **The audio mixer is not counted.**  It multiplies an 8-bit sample
   by a volume of at most 64, two steps of the eight, and the multiply
   is 10 of its ~40 cycles per voice-sample (`workloads.md`, "Compiler:
@@ -886,6 +892,13 @@ Open:
   compiler's scheduling models carry (`compiler-pipeline.md`,
   "Compiler: per-generation tuning — models and their consumers").
 - **Count the mixer,** and a workload that divides small numbers.
+- **Count a fixed-point audio decoder.**  Integer MP3 or Vorbis
+  decoding is about what a core of gen4's class can carry, and its
+  filter taps are each a 32-bit coefficient times a 32-bit sample with
+  the high half kept.  If those operands fill the word as expected,
+  stopping early saves least where multiplies are most of the work,
+  and more multiplier bits a step is the lever instead.  No such
+  decoder is built for Penumbra; none of this is measured.
 
 ## Ruled out
 
