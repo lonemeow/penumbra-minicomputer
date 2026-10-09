@@ -59,9 +59,7 @@ loops).  The other ~40% sweeps the ~70-line Proc/loop text.
    order.
 2. **Word-wise string routines** (bare-metal `benchmark/common` and
    NetBSD libc both): rolled byte/word loops cost ~150–200
-   insns/iteration here for ~+10 lines of shared footprint.  Related:
-   the existing "Libc: memcpy misses same-offset misaligned shortcut"
-   entry.
+   insns/iteration here for ~+10 lines of shared footprint.
 3. **I$ geometry is a gen2 matter.**  gen1 2-way associativity was
    tried and **blew timing** (the fetch/TLB path is already the fmax
    limiter) — treat gen1 I$ improvements as infeasible; gen2's BRAM

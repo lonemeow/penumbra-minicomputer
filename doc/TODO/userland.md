@@ -1,37 +1,5 @@
 # Userland and libc
 
-## Libc: memcpy misses same-offset misaligned shortcut
-
-NetBSD's libc memcpy on Penumbra takes the byte-fallback path for
-*all* misalignment configurations, even the cases where a word-at-
-a-time body would still work.  Measured via `pbench libc memcpy_align`
-at n=256 (commit 3decf13fa4b0):
-
-```
-  aligned (size=256, main sweep):    ~83 us
-  src=1, dst=0:                     ~287 us
-  src=0, dst=1:                     ~287 us
-  src=1, dst=1 (same offset):       ~290 us  ← could be word body
-  src=1, dst=3 (different offsets): ~290 us  ← byte fallback only
-```
-
-When src and dst are misaligned by the same offset, after a 3-byte
-head prologue both pointers reach word boundaries simultaneously
-and the middle can run word-at-a-time.  Current libc misses this
-case and lumps it with the genuinely-impossible different-offset
-case.
-
-Implementation lives in
-`common/lib/libc/arch/penumbra/string/memcpy.S`.  An offset-
-comparison check at the top would let the same-offset case fall
-into the aligned word loop.
-
-Expected win: ~3.4× on same-offset misaligned calls (~290 us → ~85 us
-matching aligned).  Different-offset path is unchanged.  Affects
-roughly half of all "misaligned" memcpy calls in practice (anything
-where src and dst come from the same allocation pool or share a
-base alignment).
-
 ## Libc: cache-line-align the memcpy/memset hot loops
 
 The 2026-06-13 pbench snapshot showed the small-size `memcpy` rows
