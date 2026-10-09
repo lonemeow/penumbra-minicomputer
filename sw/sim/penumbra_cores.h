@@ -7,9 +7,12 @@
 // to every generation.  A generation is named the way `make CORE=` names
 // it.
 //
+// A generation also carries the multiplier bits its divmul unit retires
+// a step, which software cannot see and +opstats counts steps by.
+//
 // The values mirror the RTL parameters of each machine, so a change to a
-// generation's cache or TLB geometry or CPU name there has to land here
-// too.
+// generation's cache or TLB geometry, CPU name or multiplier step there
+// has to land here too.
 
 #pragma once
 
@@ -49,33 +52,39 @@ struct CoreGeneration {
     uint32_t      cpu_name2;   // CPU name word 2: the generation tag
     CacheGeometry l1i, l1d, l2;
     TlbGeometry   tlb;
+    uint32_t      mul_bits_per_step;   // divmul's MUL_BITS_PER_STEP
 };
 
 static const CoreGeneration CORE_GENERATIONS[] = {
     // cpu_core's two cache_vipt instances at their defaults (64 sets,
     // direct-mapped, 4-word lines) and l2_cache at its defaults (64 KiB,
     // 4 ways, 16-byte lines); tlb's 64 entries, 2-way.  cpuid's default
-    // name, "Penumbra/1".
+    // name, "Penumbra/1".  datapath's divmul at its default of one
+    // multiplier bit a step.
     { "penumbra1", 0x0000312F,
       { 64, 1, 16, CACHE_ADDRESSING_VIPT },
       { 64, 1, 16, CACHE_ADDRESSING_VIPT },
       { 1024, 4, 16, CACHE_ADDRESSING_PIPT },
-      { 32, 2 } },
+      { 32, 2 },
+      1 },
 
     // machine_penumbra2's two cache_bram_vipt instances (4 KiB, 2 ways),
     // the same l2_cache, and penumbra2_tlb's 64 entries, 2-way.  The name
     // tags the variant: "Penumbra/2" for the baseline, "Penumbra/2.5" for
-    // the forwarding/prediction variant.
+    // the forwarding/prediction variant.  Both EX stages build divmul at
+    // four multiplier bits a step.
     { "penumbra2", 0x0000322F,
       { 128, 2, 16, CACHE_ADDRESSING_VIPT },
       { 128, 2, 16, CACHE_ADDRESSING_VIPT },
       { 1024, 4, 16, CACHE_ADDRESSING_PIPT },
-      { 32, 2 } },
+      { 32, 2 },
+      4 },
     { "penumbra2_5", 0x352E322F,
       { 128, 2, 16, CACHE_ADDRESSING_VIPT },
       { 128, 2, 16, CACHE_ADDRESSING_VIPT },
       { 1024, 4, 16, CACHE_ADDRESSING_PIPT },
-      { 32, 2 } },
+      { 32, 2 },
+      4 },
 };
 
 // The generation the ISS presents unless told otherwise: the identity it

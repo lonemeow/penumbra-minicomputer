@@ -702,6 +702,43 @@ LU_WAITS = {
 }
 
 
+# ops_muldiv.s's window: 47 instructions.  The fourteen probes are three
+# instructions each, their operands 19 LLIs and 9 MOVs, and a branch
+# leaves the window; DZ's trap adds the handler's RDSPR, ADD, WRSPR and
+# ERET.  DZ counts as an instruction but not as a divide: it produced
+# nothing.
+OPS_MULDIV_CLASSES = {"total executed": 47, "const materialize": 19, "MOV reg-reg": 9,
+                      "MUL/DIV": 14, "branch": 1, "sys/spr": 3, "ALU immediate": 1}
+
+
+def operands(steps_each, rd, rs, shorter):
+    """+opstats' expected counts over the window of ops_muldiv.s: the
+    instruction classes, and a census whose four multiplies are of
+    `steps_each` steps and need `rd`, `rs` and `shorter` of them in all,
+    by the operand walked.  The nine divides are the same on every core."""
+    return {"ops": {"classes": OPS_MULDIV_CLASSES,
+                    "multiplies": (4, steps_each, rd, rs, shorter),
+                    "divides": (9, 32, 127, 90),
+                    "divides by steps needed aligned": {"none": 2, "1-8": 3, "9-16": 2,
+                                                        "17-32": 2}}}
+
+
+# A multiply needs the steps that cover the significant bits of the
+# operand walked, and a divide one for each quotient bit it cannot skip.
+#   multiplies, bits of Rd / Rs / the shorter:
+#       M1 5 / 13 / 5     M2 17 / 2 / 2     M3 2 / 9 / 2     M4 32 / 0 / 0
+#     At one bit a step (penumbra1) those are the steps: 56, 24 and 9 in
+#     all.  At four (penumbra2_5): 2+5+1+8, 4+1+3+0 and 2+1+1+0.
+#   divides, past the dividend's leading zeros: its bits, 127 in all.
+#   divides, aligned to the divisor: leading dividend bits fewer than
+#     the divisor's cannot produce a quotient 1, and are skipped too.
+#       D1 12 by 5: 8     D2 13 by 5: 9     D3 32 by 17: 16
+#       D4 21 by 5: 17    D5 32 by 1: 32    D6 3 by 7: none
+#       D7 4 by 4: 1      D8 10 by 4: 7     D9 none by 3: none
+OPS_MULDIV = {"penumbra1": operands(32, 56, 24, 9), "penumbra2_5": operands(8, 16, 8, 4)}
+OPS_MULDIV_ARGS = ["+opstats", "+model_start=0xFFFF0800", "+model_stop=0xFFFF0900"]
+
+
 def tlb_misses(user=0, supervisor=0):
     """A shadow TLB's expected misses over one window, or with the label
     "real" the refills the program's own miss handler took."""
@@ -901,6 +938,11 @@ CASES = [
     Case("loadusemodel waits", "lu_waits.s",
          ["+loadusemodel=" + ",".join(k[len("load-use "):] for k in LU_WAITS)],
          windows=[("reset to exit", LU_WAITS)]),
+    Case("opstats window and operands", "ops_muldiv.s", OPS_MULDIV_ARGS,
+         windows=[("start PC to stop PC", {"opstats": OPS_MULDIV["penumbra1"]})]),
+    Case("opstats multiply steps follow +core", "ops_muldiv.s",
+         ["+core=penumbra2_5"] + OPS_MULDIV_ARGS,
+         windows=[("start PC to stop PC", {"opstats": OPS_MULDIV["penumbra2_5"]})]),
     Case("loadusemodel unknown base", "lu_waits.s", ["+loadusemodel=mem"],
          error=r"an item starts with ex or late"),
     Case("loadusemodel second late", "lu_waits.s", ["+loadusemodel=late+late"],
@@ -1006,6 +1048,32 @@ def parse_report(text):
         if m:
             counts["lu"]["conditional branches"] = (int(m.group(1)), named_counts(m.group(2)))
             continue
+        if line == "-- instruction classes":
+            counts = windows[-1][1].setdefault("opstats", {"ops": {"classes": {}}})
+            continue
+        if line == "-- MUL and DIV operands":
+            continue
+        if counts is not None and "ops" in counts:
+            m = re.match(r"  (\S(?:.*?\S)?) {2,}(\d+)(?: |$)", line)
+            if m:
+                if int(m.group(2)):
+                    counts["ops"]["classes"][m.group(1)] = int(m.group(2))
+                continue
+            m = re.match(r"\s+multiplies (\d+), of (\d+) steps each; needed walking Rd (\d+) \(\S+\),"
+                         r" Rs (\d+) \(\S+\), the shorter (\d+) \(", line)
+            if m:
+                counts["ops"]["multiplies"] = tuple(int(v) for v in m.groups())
+                continue
+            m = re.match(r"\s+divides (\d+), of (\d+) steps each; needed past the dividend's leading"
+                         r" zeros (\d+) \(\S+\), aligned to the divisor (\d+) \(", line)
+            if m:
+                counts["ops"]["divides"] = tuple(int(v) for v in m.groups())
+                continue
+            m = re.match(r"\s+(divides by steps needed aligned): (.*)", line)
+            if m:
+                counts["ops"][m.group(1)] = {name: int(n) for name, n
+                                             in re.findall(r"(none|\d+-\d+) (\d+)", m.group(2))}
+                continue
         m = re.match(r"-- store buffer (\S+): ", line)
         if m:
             counts = windows[-1][1].setdefault(f"sb {m.group(1)}", {"sb": {}})
@@ -1076,6 +1144,11 @@ def compare_windows(expected, got):
                 for key, value in want["lu"].items():
                     if have["lu"].get(key) != value:
                         problems.append(f"{label} {key} {have['lu'].get(key)}, expected {value}")
+                continue
+            if "ops" in want:
+                for key, value in want["ops"].items():
+                    if have["ops"].get(key) != value:
+                        problems.append(f"{label} {key} {have['ops'].get(key)}, expected {value}")
                 continue
             if "sb" in want:
                 for key, value in want["sb"].items():

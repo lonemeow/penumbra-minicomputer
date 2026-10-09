@@ -1849,6 +1849,12 @@ static PairModel* pair_model;
 // that reaches the end of its execution (loaduse_model.h).
 static LoadUseModel* loaduse_model;
 
+// +opstats: an instruction-class histogram and a MUL/DIV operand census,
+// counted over each window as the models' counts are.
+static bool opstats_enabled = false;
+static void opstats_clear();
+static void opstats_report(FILE* out);
+
 static CacheEnables cache_enables() {
     return { cache_l1i.enabled, cache_l1d.enabled, cache_l2.enabled };
 }
@@ -1865,11 +1871,12 @@ static bool supervisor() { return cpu.sr & SR_S; }
 // --- Measurement window (+model_start, +model_stop, SIGUSR1) ---
 // The models watch the whole run, so their state warms from reset as the
 // hardware's would, but they count only inside a window and report each
-// window as it closes.  A window opens at reset, or at the first user-mode
-// execution of +model_start; it closes at the first user-mode execution of
-// +model_stop, on SIGUSR1 (which opens the next window at once), or when
-// the run ends.  User mode, as for +pcprof_start: the workload's own code,
-// not the kernel passing the same address on its behalf.
+// window as it closes; +opstats counts and reports by the same windows.
+// A window opens at reset, or at the first user-mode execution of
+// +model_start; it closes at the first user-mode execution of +model_stop,
+// on SIGUSR1 (which opens the next window at once), or when the run ends.
+// User mode, as for +pcprof_start: the workload's own code, not the kernel
+// passing the same address on its behalf.
 static struct {
     uint32_t    start_pc, stop_pc;
     bool        open, finished;
@@ -1880,11 +1887,14 @@ static struct {
 } model_window;
 static volatile sig_atomic_t model_window_signal = 0;
 
-static bool models_active() {
-    return cache_model || tlb_model || sb_model || bp_model || pair_model || loaduse_model;
+// Whether anything counts by window: a model, or +opstats.
+static bool windows_active() {
+    return opstats_enabled || cache_model || tlb_model || sb_model || bp_model || pair_model
+        || loaduse_model;
 }
 
 static void model_window_open(const char* why) {
+    if (opstats_enabled) opstats_clear();
     if (cache_model) cache_model->clear_counts();
     if (tlb_model) tlb_model->clear_counts();
     if (sb_model) sb_model->clear_counts();
@@ -1902,6 +1912,7 @@ static void model_window_close(const char* why) {
     uint64_t insns = cpu.insn_count - model_window.insn0;
     fprintf(out, "== model window %d: %llu instructions, %s to %s ==\n",
             model_window.number, (unsigned long long)insns, model_window.opened_by, why);
+    if (opstats_enabled) opstats_report(out);
     if (cache_model) cache_model->report(out, insns);
     if (tlb_model) tlb_model->report(out, insns, TLB_GEOMETRY);
     if (sb_model) sb_model->report(out, insns);
@@ -2879,7 +2890,7 @@ static void record_pcrel_branch(bool conditional, bool backward, bool taken) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Instruction-class histogram (+opstats)
+// Instruction-class histogram and MUL/DIV operand census (+opstats)
 // ═══════════════════════════════════════════════════════════════
 //
 // Buckets every executed instruction by class, so a dynamic instruction-count
@@ -2887,8 +2898,8 @@ static void record_pcrel_branch(bool conditional, bool backward, bool taken) {
 // (depends only on the instruction stream), so the ISS reports it exactly; the
 // diagnostic buckets are stack traffic (spills/locals), reg-reg moves
 // (codegen redundancy), constant/address materialization, and flag-only
-// compares (the flag-ISA tax).
-static bool opstats_enabled = false;
+// compares (the flag-ISA tax).  Counted over each measurement window and
+// reported with it.
 
 struct OpStats {
     uint64_t alu_rr = 0;    // Format R ALU reg-reg, writes a result
@@ -2952,6 +2963,83 @@ static void opstats_record(uint32_t insn) {
         else                            opstats.br_cond++;
         break;
     }
+    }
+}
+
+// MUL and DIV operands.  The divmul unit takes every step whatever its
+// operands hold (doc/internals/divmul.md); this counts the steps one
+// that stopped at an operand's highest set bit would need.  Lengths are
+// those of the magnitudes, which are what the unit iterates on.
+static constexpr int DIVMUL_BITS = 32;      // operand width, and a divide's steps at one quotient bit each
+
+// Divides by the aligned steps they need: none, then up to each bound.
+static constexpr int DIV_ALIGNED_BUCKETS = 4;
+static constexpr int DIV_ALIGNED_BOUNDS[DIV_ALIGNED_BUCKETS] = { 0, 8, 16, DIVMUL_BITS };
+
+struct MulDivCensus {
+    uint64_t mul = 0;                   // MUL, MULU
+    uint64_t mul_steps_rd = 0;          // steps needed walking Rd, the operand the unit walks
+    uint64_t mul_steps_rs = 0;          // ... walking Rs
+    uint64_t mul_steps_shorter = 0;     // ... walking the shorter of the two
+    uint64_t div = 0;                   // DIV, DIVU that did not trap
+    uint64_t div_steps_dividend = 0;    // steps needed past the dividend's leading zeros
+    uint64_t div_steps_aligned = 0;     // ... with the dividend aligned to the divisor
+    uint64_t div_by_aligned[DIV_ALIGNED_BUCKETS] = {};
+};
+static MulDivCensus muldiv_census;
+
+static void opstats_clear() {
+    opstats = OpStats();
+    muldiv_census = MulDivCensus();
+}
+
+// The significant bits of an operand as the unit iterates on it: of its
+// magnitude when the op is signed.
+static int divmul_operand_bits(uint32_t v, bool is_signed) {
+    if (is_signed && (v >> 31)) v = 0u - v;
+    return v ? DIVMUL_BITS - __builtin_clz(v) : 0;
+}
+
+// Steps a multiply needs to walk a multiplier of `bits` significant
+// bits, at the multiplier bits the +core= generation retires a step.
+static int mul_steps_needed(int bits) {
+    int per_step = (int)core_gen->mul_bits_per_step;
+    return (bits + per_step - 1) / per_step;
+}
+
+// Steps a divide needs aligned to its divisor: the remainder starts
+// with the dividend's leading bits that cannot yet reach it.
+static int div_steps_aligned(int dividend_bits, int divisor_bits) {
+    if (dividend_bits < divisor_bits)
+        return 0;
+    else
+        return dividend_bits - divisor_bits + 1;
+}
+
+// One MUL or DIV that did not trap, with the operands it read: `rd_val`
+// the multiplier or dividend, `rs_val` the multiplicand or divisor.
+static void opstats_muldiv(int op, uint32_t rd_val, uint32_t rs_val) {
+    MulDivCensus& m = muldiv_census;
+    bool is_signed = op == 16 || op == 18;      // MUL, DIV; MULU and DIVU are 17 and 19
+    int rd_bits = divmul_operand_bits(rd_val, is_signed);
+    int rs_bits = divmul_operand_bits(rs_val, is_signed);
+    if (op <= 17) {
+        m.mul++;
+        m.mul_steps_rd      += mul_steps_needed(rd_bits);
+        m.mul_steps_rs      += mul_steps_needed(rs_bits);
+        m.mul_steps_shorter += mul_steps_needed(std::min(rd_bits, rs_bits));
+    } else {
+        int aligned = div_steps_aligned(rd_bits, rs_bits);
+        if (aligned < 0 || aligned > rd_bits) {
+            fprintf(stderr, "opstats: %d aligned steps for a dividend of %d bits\n", aligned, rd_bits);
+            abort();
+        }
+        int bucket = 0;
+        while (aligned > DIV_ALIGNED_BOUNDS[bucket]) bucket++;
+        m.div++;
+        m.div_steps_dividend += rd_bits;
+        m.div_steps_aligned  += aligned;
+        m.div_by_aligned[bucket]++;
     }
 }
 
@@ -3370,6 +3458,7 @@ static void execute_one() {
             if (fault) {
                 exception_entry(VEC_ARITH);
             } else {
+                if (opstats_enabled) opstats_muldiv(op, a, b);
                 // Z/N reflect the low half (Rd value); C/V cleared.
                 cpu.sr = (cpu.sr & ~SR_FLAGS)
                        | (((lo >> 31) & 1) ? SR_N : 0)
@@ -3888,9 +3977,9 @@ static double bs_pct(uint64_t a, uint64_t b) {
     return b ? 100.0 * (double)a / (double)b : 0.0;
 }
 
-// Dump the +opstats instruction-class histogram to stderr.
-static void print_opstats() {
-    if (!opstats_enabled) return;
+// One window's +opstats report: the instruction-class histogram, then
+// the MUL and DIV operand census.
+static void opstats_report(FILE* out) {
     OpStats &o = opstats;
     uint64_t total = o.alu_rr + o.alu_imm + o.mov_rr + o.cmp_test + o.imm_mat
                    + o.muldiv + o.ld_stack + o.ld_other + o.st_stack + o.st_other
@@ -3898,12 +3987,12 @@ static void print_opstats() {
     if (!total) return;
 
     auto row = [&](const char *name, uint64_t n, const char *note) {
-        fprintf(stderr, "  %-22s %12llu  %5.1f%%%s\n",
+        fprintf(out, "  %-22s %12llu  %5.1f%%%s\n",
                 name, (unsigned long long)n, bs_pct(n, total), note);
     };
 
-    fprintf(stderr, "\n── instruction class histogram (+opstats) ──\n");
-    fprintf(stderr, "  total executed         %12llu\n", (unsigned long long)total);
+    fprintf(out, "-- instruction classes\n");
+    fprintf(out, "  total executed         %12llu\n", (unsigned long long)total);
     row("ALU reg-reg",        o.alu_rr,   "");
     row("ALU immediate",      o.alu_imm,  "");
     row("MOV reg-reg",        o.mov_rr,   "   <- redundant-move signal");
@@ -3920,13 +4009,32 @@ static void print_opstats() {
     if (o.sys_spr) row("sys/spr", o.sys_spr, "");
     if (o.other)   row("other",   o.other,   "");
 
-    fprintf(stderr, "  ── derived ──\n");
-    fprintf(stderr, "  stack traffic (spill+local)  %5.1f%%   (LUI=%llu, ≈ 32-bit consts/addrs)\n",
+    fprintf(out, "  ── derived ──\n");
+    fprintf(out, "  stack traffic (spill+local)  %5.1f%%   (LUI=%llu, ≈ 32-bit consts/addrs)\n",
             bs_pct(o.ld_stack + o.st_stack, total), (unsigned long long)o.lui);
-    fprintf(stderr, "  control (branch+call+ret)    %5.1f%%\n",
+    fprintf(out, "  control (branch+call+ret)    %5.1f%%\n",
             bs_pct(o.br_cond + o.call + o.ret_jmp, total));
-    fprintf(stderr, "  flag-compare + const-mat     %5.1f%%\n",
+    fprintf(out, "  flag-compare + const-mat     %5.1f%%\n",
             bs_pct(o.cmp_test + o.imm_mat, total));
+
+    const MulDivCensus& m = muldiv_census;
+    auto n = [](uint64_t v) { return (unsigned long long)v; };
+    auto each = [](uint64_t steps, uint64_t ops) { return ops ? (double)steps / (double)ops : 0.0; };
+    fprintf(out, "-- MUL and DIV operands\n");
+    fprintf(out, "  multiplies %llu, of %u steps each; needed walking Rd %llu (%.2f), Rs %llu (%.2f),"
+                 " the shorter %llu (%.2f)\n",
+            n(m.mul), DIVMUL_BITS / core_gen->mul_bits_per_step,
+            n(m.mul_steps_rd), each(m.mul_steps_rd, m.mul), n(m.mul_steps_rs), each(m.mul_steps_rs, m.mul),
+            n(m.mul_steps_shorter), each(m.mul_steps_shorter, m.mul));
+    fprintf(out, "  divides %llu, of %d steps each; needed past the dividend's leading zeros %llu (%.2f),"
+                 " aligned to the divisor %llu (%.2f)\n",
+            n(m.div), DIVMUL_BITS, n(m.div_steps_dividend), each(m.div_steps_dividend, m.div),
+            n(m.div_steps_aligned), each(m.div_steps_aligned, m.div));
+    fprintf(out, "  divides by steps needed aligned: none %llu", n(m.div_by_aligned[0]));
+    for (int i = 1; i < DIV_ALIGNED_BUCKETS; i++)
+        fprintf(out, ", %d-%d %llu", DIV_ALIGNED_BOUNDS[i - 1] + 1, DIV_ALIGNED_BOUNDS[i],
+                n(m.div_by_aligned[i]));
+    fprintf(out, "\n");
 }
 
 // Dump the +branchstats histogram to stderr. Raw architectural counts only —
@@ -4178,7 +4286,7 @@ int main(int argc, char** argv) {
         }
         loaduse_model = &model;
     }
-    if (models_active()) {
+    if (windows_active()) {
         model_window.out = stderr;
         if (model_report_path && !(model_window.out = fopen(model_report_path, "w"))) {
             fprintf(stderr, "+model_report: cannot open '%s'\n", model_report_path);
@@ -4268,11 +4376,11 @@ int main(int argc, char** argv) {
             fprintf(stderr, "── Penumbra ISS (Ctrl-C to exit) ──\n\n");
     }
 
-    if (models_active() && !model_window.start_pc) model_window_open("reset");
+    if (windows_active() && !model_window.start_pc) model_window_open("reset");
 
     // Main loop
     while (running && !cpu.halted) {
-        if (models_active()) model_window_step();
+        if (windows_active()) model_window_step();
         if (max_insns > 0 && cpu.insn_count >= max_insns) {
             fprintf(stderr, "\n[ERROR] Instruction limit reached (%llu)\n", (unsigned long long)max_insns);
             hosted_exit_code = 124; // Standard timeout exit code
@@ -4304,13 +4412,12 @@ int main(int argc, char** argv) {
     // Restore terminal before printing exit summary so \n works normally
     restore_term();
 
-    if (models_active() && model_window.open) model_window_close("exit");
+    if (windows_active() && model_window.open) model_window_close("exit");
     print_branch_stats();  // no-op unless +branchstats
     if (irq_at_pc_addr != 0)
         fprintf(stderr, "[IRQ_AT_PC] 0x%08X reached %llu times, injected %llu\n",
                 irq_at_pc_addr, (unsigned long long)irq_at_pc_arrivals,
                 (unsigned long long)irq_at_pc_injected);
-    print_opstats();       // no-op unless +opstats
     pcprof_write();        // no-op unless +pcprof
 
     if (!quiet_mode) {

@@ -323,7 +323,8 @@ rom.ld ──────────────────┘
   `make CORE=` spells it (`penumbra1` by default, `penumbra2`,
   `penumbra2_5`): its CPU name and the geometry its caches report.
   The table is `sw/sim/penumbra_cores.h`; a generation's cache or
-  TLB geometry or CPU name changing in RTL has to change there too.
+  TLB geometry, CPU name or multiplier step changing in RTL has to
+  change there too.
   `+eth=backend[,mdio][,rx=N][,tx=N][,speed=MBIT]` attaches an
   Ethernet adapter (`CLASS_ETHERNET`,
   `doc/system/devices/ethernet.md`) with N slots in each ring; the
@@ -338,9 +339,9 @@ rom.ld ──────────────────┘
   gives it a PHY for software to manage, a generic gigabit one; then
   `speed=` is the fastest the device itself carries, which may be
   less than the PHY settles on.
-  Measurement options: `+opstats` (instruction-class histogram),
-  `+branchstats`, `+pcprof`, `+cachemodel`, `+tlbmodel`, `+sbmodel`,
-  `+bpmodel`, `+pairmodel` and `+loadusemodel` — see below.
+  Measurement options: `+opstats`, `+branchstats`, `+pcprof`,
+  `+cachemodel`, `+tlbmodel`, `+sbmodel`, `+bpmodel`, `+pairmodel` and
+  `+loadusemodel` — see below.
 - **Cache model** (`+cachemodel[=list]`, `sw/sim/cache_model.h`) —
   runs every fetch, load and store through shadow cache hierarchies:
   the `+core=` generation's by default, or a comma-separated list of
@@ -433,6 +434,15 @@ rom.ld ──────────────────┘
   them, which cost the late stage's distance more.  **Waits are those
   behind a register alone:** every access hits, fetch always has the
   next instruction, and MUL and DIV take one cycle.
+- **Instruction classes** (`+opstats`) — buckets every instruction a
+  window executes by class (ALU ops, copies, flag-only compares,
+  constants, loads and stores by base, control transfers), and counts
+  what `MUL` and `DIV` operands would let the `divmul` unit skip: the
+  steps a multiply needs up to the highest set bit of `Rd`, of `Rs` or
+  of the shorter of the two, at the `+core=` generation's multiplier
+  bits a step, and the steps a divide needs past its dividend's leading
+  zeros or with the dividend aligned to its divisor.  Reported with the
+  models' windows; `+branchstats` counts the whole run.
 - **Execution profiles** (`+pcprof=file` plus
   `sw/tools/pcprof-report.py`) — buckets executed instructions by PC,
   exceptions by vector and TLB misses by faulting page.
