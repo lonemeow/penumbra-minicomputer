@@ -741,10 +741,10 @@ scheduler before it costs more than it gains
 register behind the last memory stage, so its reader waits two cycles
 at distance 1 and one at distance 2
 ([memory completion](../internals/penumbra3/memory-completion.md#load-hit--a-registered-load-use-hazard)).
-Counted 2026-10-03 on a single-issue timing model in the ISS, with
-every access a hit, those waits come to 131 cycles per 1000
-instructions on `pbench kernel` and 147 on Doom `demo3`, against 59
-and 71 at gen2.5's one cycle
+Counted by the ISS's load-use model (`+loadusemodel=ex,ex+wait:1`), a
+single-issue core with every access a hit, those waits come to 131
+cycles per 1000 instructions on `pbench kernel` and 147 on Doom
+`demo3`, against 59 and 71 at gen2.5's one cycle
 ([penumbra4/load-use.md](../internals/penumbra4/load-use.md)).  In a
 model that is gen2.5's line with the wait doubled,
 `ReadAdvance<ReadGPR, -2, [WriteLoad]>`.  The count is the most a

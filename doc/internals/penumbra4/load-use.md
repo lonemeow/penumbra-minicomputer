@@ -20,8 +20,8 @@ arrives. A branch that resolves there pays the longer redirect.
 
 ## Measurement setup
 
-Measured 2026-10-03 with a scratch timing model in the ISS, not in the
-tree, on the two windows [issue-pairing](./issue-pairing.md) uses:
+Measured 2026-10-04 with the ISS's load-use model (`+loadusemodel`) on
+the two windows [issue-pairing](./issue-pairing.md) uses:
 `pbench kernel` (719 M instructions) and Doom `demo3` (2.89 G).
 
 The model is a single-issue core. Each instruction takes the EX slot
@@ -29,22 +29,26 @@ after the one before it unless it has to wait for a register:
 
 - **An ALU result** is usable by the next instruction.
 - **A load's value** is usable `wait` cycles later than that: 2 in
-  gen3, 1 for comparison.
+  gen3, 1 for comparison (`wait:1`).
 - **A load's or store's base and a jump's target** are needed at EX,
-  and store data at the late stage.
-- **With a second ALU,** `1 + wait` stages after EX, an ALU op whose
+  and store data at the late stage, `1 + wait` stages after EX, where
+  it never waits.
+- **With one ALU, at EX** (`ex`), an op waits there for its operands.
+- **With a second ALU** at the late stage (`ex+late`), an ALU op whose
   operand is not there at EX executes late instead of waiting, and its
   result is usable that much later. A conditional branch whose flags
   are late resolves late, and a misprediction then costs `1 + wait`
   cycles more. Mispredictions come from a pre-decode redirect with a 1K
   bimodal table, gen3's planned front end.
-- **With the one ALU after the memory stages,** every ALU op executes
-  late: the order of the 486 and its successors, where an address is
-  formed a stage ahead of the cache and the ALU sits behind it.
+- **With the one ALU after the memory stages** (`late`), every ALU op
+  executes late: the order of the 486 and its successors, where an
+  address is formed a stage ahead of the cache and the ALU sits behind
+  it.
 
 What it leaves out: every access hits, fetch always supplies the next
-instruction, and `MUL` and `DIV` count as one cycle. An op goes late
-whenever its operand is missing, with no look at what reads its result.
+instruction, and `MUL` and `DIV` read their operands at EX and count as
+one cycle. An op goes late whenever its operand is missing, with no
+look at what reads its result.
 
 ## What the wait costs
 
@@ -54,8 +58,8 @@ extra cycles included, as `pbench kernel` / Doom:
 | | 2-cycle wait | 1-cycle wait |
 |---|---|---|
 | One ALU, at EX | 131 / 147 | 59 / 71 |
-| A second ALU behind the memory stages | 30 / 130 | 15 / 82 |
-| One ALU, behind the memory stages | 155 / 373 | 95 / 243 |
+| A second ALU behind the memory stages | 31 / 134 | 15 / 83 |
+| One ALU, behind the memory stages | 158 / 380 | 97 / 247 |
 
 Who waits, at the 2-cycle wait:
 
@@ -63,7 +67,7 @@ Who waits, at the 2-cycle wait:
 |---|---|---|
 | One ALU: ALU ops waiting for an operand | 113 | 143 |
 | One ALU: loads and stores waiting for a base | 14 | 3 |
-| Second ALU: ALU ops executed late, of all ALU ops | 79 of 462 | 88 of 612 |
+| Second ALU: ALU ops executed late, of all ALU ops | 78 of 462 | 83 of 612 |
 | Second ALU: loads and stores waiting for a base | 17 | 123 |
 | Second ALU: conditional branches resolved late, of all | 49 of 109 | 25 of 91 |
 | Second ALU: resolved late and mispredicted | 2.1 | 1.6 |
@@ -72,7 +76,7 @@ Who waits, at the 2-cycle wait:
   kernel paths that is what an L1 size step is worth in gen3's
   [lever table](../penumbra3/overview.md#levers-ranked-by-measured-benefit),
   and on Doom about four times one.
-- **A second ALU takes back about 100 on the kernel paths and 17 on
+- **A second ALU takes back about 100 on the kernel paths and 13 on
   Doom.** Kernel code loads a field and tests or adds to it, and the
   late ALU absorbs that. Doom's loops load, add, and load through the
   sum: the second load needs its base at EX, and an add executed late
@@ -86,7 +90,7 @@ Who waits, at the 2-cycle wait:
 
 ## Ruled out
 
-- **One ALU behind the memory stages.** 155–373 at the 2-cycle wait.
+- **One ALU behind the memory stages.** 158–380 at the 2-cycle wait.
   The ISA has no indexed addressing, so address arithmetic is ALU ops,
   and an ALU behind the cache makes every computed address wait for it.
 
