@@ -340,7 +340,7 @@ rom.ld ──────────────────┘
   less than the PHY settles on.
   Measurement options: `+opstats` (instruction-class histogram),
   `+branchstats`, `+pcprof`, `+cachemodel`, `+tlbmodel`, `+sbmodel`,
-  `+bpmodel` and `+pairmodel` — see below.
+  `+bpmodel`, `+pairmodel` and `+loadusemodel` — see below.
 - **Cache model** (`+cachemodel[=list]`, `sw/sim/cache_model.h`) —
   runs every fetch, load and store through shadow cache hierarchies:
   the `+core=` generation's by default, or a comma-separated list of
@@ -418,6 +418,21 @@ rom.ld ──────────────────┘
   queue was full.  **Counts are issue slots only:** no stall, miss or
   misprediction is modelled, and without `fetch:` every instruction is
   at hand when issue wants it.
+- **Load-use model** (`+loadusemodel[=list]`,
+  `sw/sim/loaduse_model.h`) — runs every instruction through shadow
+  single-issue pipelines and counts the cycles instructions wait for a
+  register or the flags behind a load.  Items are `ex` (one ALU, at
+  EX), `ex+late` (a second ALU where a load's value arrives, which
+  takes the ops whose operands are not there at EX) or `late` (one
+  ALU, behind the memory stages), each with an optional `+wait:N`, the
+  slots a load's value is usable later than an ALU result (2 unless
+  given): `+loadusemodel=ex,ex+late,ex+wait:1`.  Each window reports
+  the waits by what was waited for (an ALU operand, a base, a branch's
+  flags, a jump's target), the ALU ops executed late, and the
+  conditional branches resolved late with the mispredicted ones among
+  them, which cost the late stage's distance more.  **Waits are those
+  behind a register alone:** every access hits, fetch always has the
+  next instruction, and MUL and DIV take one cycle.
 - **Execution profiles** (`+pcprof=file` plus
   `sw/tools/pcprof-report.py`) — buckets executed instructions by PC,
   exceptions by vector and TLB misses by faulting page.

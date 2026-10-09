@@ -180,8 +180,9 @@ public:
     }
 
     // One executed control transfer: `pc` its address, `target` where it
-    // goes when taken.  Calls and returns are always taken.
-    void transfer(uint32_t pc, BranchKind kind, bool taken, uint32_t target) {
+    // goes when taken.  Calls and returns are always taken.  Returns
+    // whether it was mispredicted, so that fetch is redirected in EX.
+    bool transfer(uint32_t pc, BranchKind kind, bool taken, uint32_t target) {
         int k = int(kind);
         counts_.transfers[k]++;
         if (taken) counts_.taken[k]++;
@@ -217,11 +218,13 @@ public:
 
         // Resolve.
         bool predicted_taken = where != Where::None;
+        bool mispredicted = false;
         if (taken && predicted_taken && predicted == target) {
             if (where == Where::Fetch) counts_.fetch++;
             else                       counts_.decode++;
         } else if (taken || predicted_taken) {
             counts_.execute[k]++;
+            mispredicted = true;
         }
 
         // Train.
@@ -230,6 +233,7 @@ public:
             if (taken)              btb_[0].write(pc, target);
             else if (dir_.empty())  btb_[0].remove(pc);
         }
+        return mispredicted;
     }
 
     void clear_counts() { counts_ = Counts(); }

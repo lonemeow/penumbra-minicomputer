@@ -662,6 +662,46 @@ def pair_case(name, program, stages, plusargs=()):
                 windows=[("reset to exit", stages)])
 
 
+def waits(insns, waited=None, late=0, cond_late=0, both=0):
+    """A load-use pipeline's expected counts over one window of
+    lu_waits.s: the cycles `waited`, by the need each is charged to; the
+    ALU ops executed `late`; and of the two conditional branches, of
+    which the first is mispredicted, those resolved late (`cond_late`)
+    and the mispredicted ones among them (`both`)."""
+    waited = waited or {}
+    cond = {"late": cond_late, "mispredicted": 1, "both": both}
+    return {"lu": {"instructions": (insns, sum(waited.values())), "waited": waited,
+                   "alu ops": (10, late),
+                   "conditional branches": (2, {k: v for k, v in cond.items() if v})}}
+
+
+# lu_waits.s: 29 instructions, 10 of them ALU ops, with a load's wait of
+# two slots unless the item says otherwise.  A reader directly behind a
+# load waits the load's wait where it needs the value at EX:
+#   ex:        A's ADD, D's CMP, E's first ADD, F's ADD and M's MUL wait
+#              for an operand, B's load for its base and T's JMP for its
+#              target.  C's store never waits for data.
+#   ex+late:   the five ALU ops execute late in place of waiting, and with
+#              them E's second ADD, whose operand is then late too.  D's
+#              BNE resolves late and is mispredicted.  F's load waits
+#              three slots for the base its late ADD writes; the MUL, the
+#              base and the target wait as before.
+#   late:      every ALU op but the two LLIs executes late, and both
+#              branches resolve late.  G's load now waits three slots for
+#              its base, as F's does.
+#   wait:1:    each wait is one slot, and F's behind a late ADD two.
+LU_WAITS = {
+    "load-use ex": waits(29, {"operand": 10, "base": 2, "target": 2}),
+    "load-use ex+late": waits(29, {"operand": 2, "base": 5, "target": 2},
+                              late=5, cond_late=1, both=1),
+    "load-use late": waits(29, {"operand": 2, "base": 8, "target": 2},
+                           late=8, cond_late=2, both=1),
+    "load-use ex+wait:1": waits(29, {"operand": 5, "base": 1, "target": 1}),
+    "load-use ex+late+wait:1": waits(29, {"operand": 1, "base": 3, "target": 1},
+                                     late=5, cond_late=1, both=1),
+}
+
+
 def tlb_misses(user=0, supervisor=0):
     """A shadow TLB's expected misses over one window, or with the label
     "real" the refills the program's own miss handler took."""
@@ -858,6 +898,15 @@ CASES = [
          error=r"unknown modifier 'fw:cond:xyz'"),
     Case("pairmodel unknown class", "pair_slots.s", ["+pairmodel=dual+x:alu:fpu"],
          error=r"unknown modifier 'x:alu:fpu'"),
+    Case("loadusemodel waits", "lu_waits.s",
+         ["+loadusemodel=" + ",".join(k[len("load-use "):] for k in LU_WAITS)],
+         windows=[("reset to exit", LU_WAITS)]),
+    Case("loadusemodel unknown base", "lu_waits.s", ["+loadusemodel=mem"],
+         error=r"an item starts with ex or late"),
+    Case("loadusemodel second late", "lu_waits.s", ["+loadusemodel=late+late"],
+         error=r"unknown modifier 'late'"),
+    Case("loadusemodel unknown wait", "lu_waits.s", ["+loadusemodel=ex+wait:x"],
+         error=r"unknown modifier 'wait:x'"),
     Case("pairmodel unknown reach", "pair_reach.s", ["+pairmodel=dual+reach:far"],
          error=r"unknown modifier 'reach:far'"),
     Case("pairmodel fetch of nothing", "pair_fetch.s", ["+pairmodel=dual+fetch:0"],
@@ -940,6 +989,23 @@ def parse_report(text):
         if m:
             counts["pair"][m.group(1)] = named_counts(m.group(2))
             continue
+        m = re.match(r"-- load-use (\S+)$", line)
+        if m:
+            counts = windows[-1][1].setdefault(f"load-use {m.group(1)}", {"lu": {}})
+            continue
+        m = re.match(r"\s+instructions (\d+), waited (\d+): (.*)", line)
+        if m:
+            counts["lu"]["instructions"] = (int(m.group(1)), int(m.group(2)))
+            counts["lu"]["waited"] = named_counts(m.group(3))
+            continue
+        m = re.match(r"\s+alu ops (\d+), late (\d+)$", line)
+        if m:
+            counts["lu"]["alu ops"] = tuple(int(v) for v in m.groups())
+            continue
+        m = re.match(r"\s+conditional branches (\d+): (.*)", line)
+        if m:
+            counts["lu"]["conditional branches"] = (int(m.group(1)), named_counts(m.group(2)))
+            continue
         m = re.match(r"-- store buffer (\S+): ", line)
         if m:
             counts = windows[-1][1].setdefault(f"sb {m.group(1)}", {"sb": {}})
@@ -1005,6 +1071,11 @@ def compare_windows(expected, got):
                 for key, value in want["pair"].items():
                     if have["pair"].get(key) != value:
                         problems.append(f"{label} {key} {have['pair'].get(key)}, expected {value}")
+                continue
+            if "lu" in want:
+                for key, value in want["lu"].items():
+                    if have["lu"].get(key) != value:
+                        problems.append(f"{label} {key} {have['lu'].get(key)}, expected {value}")
                 continue
             if "sb" in want:
                 for key, value in want["sb"].items():

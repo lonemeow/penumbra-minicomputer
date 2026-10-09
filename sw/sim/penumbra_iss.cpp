@@ -47,6 +47,9 @@
 // redirected fetch.  +pairmodel[=list] runs every instruction through
 // shadow two-slot issue stages (pair_model.h) and reports the issue
 // cycles each would take and what kept instructions from pairing.
+// +loadusemodel[=list] runs every instruction through shadow
+// single-issue pipelines (loaduse_model.h) and reports the cycles
+// instructions wait for what a load, or an op behind one, writes.
 //
 // +raw enables full raw TTY mode: all control characters (Ctrl-C,
 // Ctrl-Z, etc.) pass through to the simulated UART for job control
@@ -90,6 +93,7 @@
 #include "sb_model.h"
 #include "bp_model.h"
 #include "pair_model.h"
+#include "loaduse_model.h"
 
 // ═══════════════════════════════════════════════════════════════
 // SD Card Emulator (inline — same protocol as hw/sim/sd_card_sim.h
@@ -1841,6 +1845,10 @@ static BpModel* bp_model;
 // the end of its execution (pair_model.h).
 static PairModel* pair_model;
 
+// +loadusemodel: shadow single-issue pipelines fed by every instruction
+// that reaches the end of its execution (loaduse_model.h).
+static LoadUseModel* loaduse_model;
+
 static CacheEnables cache_enables() {
     return { cache_l1i.enabled, cache_l1d.enabled, cache_l2.enabled };
 }
@@ -1873,7 +1881,7 @@ static struct {
 static volatile sig_atomic_t model_window_signal = 0;
 
 static bool models_active() {
-    return cache_model || tlb_model || sb_model || bp_model || pair_model;
+    return cache_model || tlb_model || sb_model || bp_model || pair_model || loaduse_model;
 }
 
 static void model_window_open(const char* why) {
@@ -1882,6 +1890,7 @@ static void model_window_open(const char* why) {
     if (sb_model) sb_model->clear_counts();
     if (bp_model) bp_model->clear_counts();
     if (pair_model) pair_model->clear_counts();
+    if (loaduse_model) loaduse_model->clear_counts();
     model_window.open      = true;
     model_window.opened_by = why;
     model_window.insn0     = cpu.insn_count;
@@ -1901,6 +1910,7 @@ static void model_window_close(const char* why) {
         pair_model->end_window();
         pair_model->report(out);
     }
+    if (loaduse_model) loaduse_model->report(out);
     fflush(out);
     model_window.open = false;
 }
@@ -3595,6 +3605,7 @@ static void execute_one() {
     if (had_ei_shadow) cpu.ei_shadow = false;
 
     if (pair_model) pair_model->insn(insn_pc, insn, pc_written && !insn_trapped, insn_trapped);
+    if (loaduse_model) loaduse_model->insn(insn_pc, insn, pc_written && !insn_trapped, insn_trapped);
     cpu.insn_count++;
 }
 
@@ -4005,6 +4016,7 @@ int main(int argc, char** argv) {
     double sbmodel_cpi = 1;
     const char* bpmodel_spec = nullptr;
     const char* pairmodel_spec = nullptr;
+    const char* loadusemodel_spec = nullptr;
     const char* model_report_path = nullptr;
 
     for (int i = 1; i < argc; i++) {
@@ -4073,6 +4085,8 @@ int main(int argc, char** argv) {
         else if (strncmp(argv[i], "+bpmodel=", 9) == 0) bpmodel_spec = argv[i] + 9;
         else if (strcmp(argv[i], "+pairmodel") == 0) pairmodel_spec = "";
         else if (strncmp(argv[i], "+pairmodel=", 11) == 0) pairmodel_spec = argv[i] + 11;
+        else if (strcmp(argv[i], "+loadusemodel") == 0) loadusemodel_spec = "";
+        else if (strncmp(argv[i], "+loadusemodel=", 14) == 0) loadusemodel_spec = argv[i] + 14;
         else if (strncmp(argv[i], "+model_start=", 13) == 0)
             model_window.start_pc = (uint32_t)strtoull(argv[i] + 13, nullptr, 0);
         else if (strncmp(argv[i], "+model_stop=", 12) == 0)
@@ -4082,7 +4096,7 @@ int main(int argc, char** argv) {
     }
 
     if (!hex_path) {
-        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+ram=size] [+sdcard=path] [+usbdev=type:config] [+eth=loop|tap[:name][,mdio][,rx=N][,tx=N][,speed=MBIT]] [+audiofile=path] [+audio_status=busy[:N]|fault[:CODE]] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+pcprof=path [+pcprof_start=addr]] [+irq_at_pc=addr[,period]] [+core=generation] [+cachemodel[=list]] [+tlbmodel[=list]] [+sbmodel[=list] [+sbmodel_cpi=N]] [+bpmodel[=list]] [+pairmodel[=list]] [+model_start=addr] [+model_stop=addr] [+model_report=path]\n");
+        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+ram=size] [+sdcard=path] [+usbdev=type:config] [+eth=loop|tap[:name][,mdio][,rx=N][,tx=N][,speed=MBIT]] [+audiofile=path] [+audio_status=busy[:N]|fault[:CODE]] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+pcprof=path [+pcprof_start=addr]] [+irq_at_pc=addr[,period]] [+core=generation] [+cachemodel[=list]] [+tlbmodel[=list]] [+sbmodel[=list] [+sbmodel_cpi=N]] [+bpmodel[=list]] [+pairmodel[=list]] [+loadusemodel[=list]] [+model_start=addr] [+model_stop=addr] [+model_report=path]\n");
         return 1;
     }
 
@@ -4154,6 +4168,15 @@ int main(int argc, char** argv) {
             return 1;
         }
         pair_model = &model;
+    }
+    if (loadusemodel_spec) {
+        static LoadUseModel model;
+        std::string err;
+        if (!LoadUseModel::parse(loadusemodel_spec, model, err)) {
+            fprintf(stderr, "+loadusemodel: %s\n", err.c_str());
+            return 1;
+        }
+        loaduse_model = &model;
     }
     if (models_active()) {
         model_window.out = stderr;
