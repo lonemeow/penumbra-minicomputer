@@ -577,12 +577,18 @@ safe.
 ### Uncached Access
 
 MMIO regions must bypass the cache. Set `C=0` in the TLB entry for
-these pages. Penumbra uses VIPT caches sized at most one page
-(1 KiB direct-mapped, ≤ 4 KiB page), so the cache RAM index runs in
-parallel with TLB translation. The `C` bit and physical tag arrive
-together at the end of the cycle and gate the hit/commit decision —
-when `C=0` the cache treats the access as pass-through and forwards
-it to memory, regardless of any incidental tag match.
+these pages. Penumbra's L1 caches are VIPT with each way at most one
+page, so the cache index runs in parallel with TLB translation and the
+physical tag compare follows it.
+
+`C=0` sends a missing access to memory as a single access and never
+installs a line, but a cache need not check `C` on a hit: an access
+through a `C=0` mapping may hit a line left from a time the same
+physical page was mapped with `C=1`. Before changing a physical page's
+mapping from cacheable to uncacheable, software therefore invalidates
+every cache that may hold its lines (`INVAL_ALL`, after `FLUSH_ALL` on
+a write-back cache). Device pages are never mapped cacheable, so they
+never meet this.
 
 ### Reserved bits
 

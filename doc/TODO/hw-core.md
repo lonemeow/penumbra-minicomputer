@@ -169,15 +169,36 @@ freeze is unexercised).
 **Next, in order** -- the shapes `doc/internals/penumbra3/overview.md`
 ranks first ("Levers ranked by measured benefit"):
 
-1. **The L1 caches:** passive -- `penumbra3_l1_store` and
-   `penumbra3_l1_match` plus replacement, the enable and the sysreg
-   interface, no embedded FSM, since miss orchestration is in
-   `load_complete` -- and 8 KB 2-way on the ECP5. P0.5 settled the
-   lookup and the IF2 shape (`doc/internals/penumbra3/phase0-probes.md`,
-   "P0.5 -- physical-tag compare behind the TLB verdict"); the real IF2
-   takes it from the probe top: each way's word decoded and pre-decoded
-   beside the compare, the hit selecting. **The fetch side moves to
-   replay** (`doc/internals/penumbra3/timing-outline.md`, "4. Caches"):
+1. **The L1 caches:** `penumbra3_l1` is built -- storage, the hit
+   verdict, the store-hit write with its forwarding, tree-PLRU, the
+   enable, the cache device's sysregs and counters, 8 KB 2-way on the
+   ECP5, and no FSM, since miss orchestration is the consumer's. What
+   remains is wiring it in. **The D-side:** MEM1 launches it, MEM2
+   consumes the verdict, and `load_complete` parks `o_victim_way` with a
+   miss. Two faults on the still-unexercised load-miss path come first:
+   - `mem2_stage` keeps committing while a load is pending: the MEM2/WB
+     register is not held then, and the slot held in MEM2 behind the
+     missing load is not driven to bubbles, as
+     `doc/internals/penumbra3/memory-completion.md` ("What the pipe gate
+     freezes") requires, so it commits again on every pending cycle; a
+     store there writes again each cycle;
+   - that held slot resumes in the cycle after the fill installs, when
+     the L1 still gives the filled way as it was: the L1 reads a held
+     lookup's set again every cycle, but a line shows two cycles after
+     its install. A load to the same line then misses again and installs
+     it in a second way. The hold has to last one cycle past the install.
+
+   With the L1 checking no cacheability on a store hit
+   (`doc/system/mmu.md`, "Uncached Access"), the load's
+   `& i_translate_cacheable` on the hit can go too; the fill shape still
+   reads it.
+
+   **The fetch side:** P0.5 settled the lookup and the IF2 shape
+   (`doc/internals/penumbra3/phase0-probes.md`, "P0.5 -- physical-tag
+   compare behind the TLB verdict"); the real IF2 takes it from the
+   probe top: each way's word decoded and pre-decoded beside the
+   compare, the hit selecting. It moves to replay
+   (`doc/internals/penumbra3/timing-outline.md`, "4. Caches"):
    today IF2 reads busy low as word valid and IF1 folds busy into its
    hold and the block RAM enable, which puts the I-cache hit on that
    cone. Under replay a miss sets a flop that steers IF1 back to the
@@ -185,15 +206,10 @@ ranks first ("Levers ranked by measured benefit"):
    registered fill; an uncached fetch, which never hits, then needs its
    word delivered to the replayed slot. P0.5 never saw the hold form
    as its worst path, so the full-top read is where replay has to show
-   its worth. **Open decisions:**
-   - the store write-through path is unbuilt -- `mem2_stage` writes
-     the L1 copy (`o_dcache_we`) but issues no write-through to
-     L2/memory and does not block (stores retire via `mem2_commits`);
-   - the store-hit hazards: the L1 writes a store hit a cycle after it
-     resolves, so a load one behind reads the word before the store
-     lands, and a load two behind reading that word finds the way
-     invalid (`penumbra3_l1_store`). That miss must re-read, not refill
-     the line into another way.
+   its worth. **Open decision:** the store write-through path is
+   unbuilt -- `mem2_stage` writes the L1 copy (`o_dcache_we`) but issues
+   no write-through to L2/memory and does not block (stores retire via
+   `mem2_commits`).
 2. **The uncore pipeline:** L2 -- write-through and posted, a look-up
    every cycle, the line-wide transfer with fill-through -- with the
    I/D select and the fill folded in, driving `bus_master`.
@@ -814,6 +830,24 @@ it is ready, so an install lands in a cycle with no lookup launched
 and a status read leaves the device registered. This fits the gen3
 rule that rare and slow operations pay cycles, never critical-path
 logic.
+
+## Hardware: the gen3 L1's valid bits are most of its logic
+
+`penumbra3_l1_store` keeps its 512 valid bits in flops, as gen2's L1
+does, so that reset and `INVAL_ALL` clear them in one cycle. Synthesized
+for the ECP5 on its own (yosys, out of context), the store is 1719 LUT4
+with them and 509 without: about 1200 LUT4 and 512 flops for the write
+decode, the clear and two 256:1 read muxes. The store bypass beside
+them is about 80 LUT4. Each L1 pays this, and the PLRU bits in
+`penumbra3_l1` are a second flop array of the same shape, not measured
+apart.
+
+Open: the only timing evidence is the P0.5 probe, which holds both L1s
+whole and clears 37.5 MHz with 13–19 % slack over ten seeds
+(`doc/internals/penumbra3/phase0-probes.md`, "P0.5 -- physical-tag
+compare behind the TLB verdict"). That covers the cones through the L1,
+not what the arrays cost a full machine's routing. No replacement has
+been looked at.
 
 ## Hardware: an L2 INVAL_ALL write is dropped or drops a strobe
 

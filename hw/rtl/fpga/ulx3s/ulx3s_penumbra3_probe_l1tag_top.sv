@@ -6,16 +6,16 @@
 //
 //   MEM2: TLB and L1 block RAM outputs -> frame candidates -> per-way tag
 //     compare -> way select -> word -> sub-word extract -> the MEM2/WB
-//     register, the load-completion hold buffer and the registered store
-//     write.
+//     register, the load-completion hold buffer, and the store's byte
+//     merge into the L1's registered write.
 //   IF2: the same compare on the I-side -> the way select of bundles each
 //     way decoded from its own word -> the fetch FIFO; and each way's
 //     pre-decode, the direction counter and the return stack's top -> the
 //     predicted redirect -> the PC register.
 //
 // Everything memory-shaped is the real gen3 RTL: penumbra3_mmu (both
-// translate copies, the pinned TLB, bypass), penumbra3_l1_store and
-// penumbra3_l1_match per side, penumbra3_mem1_stage and
+// translate copies, the pinned TLB, bypass), penumbra3_l1 per side,
+// penumbra3_mem1_stage and
 // penumbra3_mem2_stage, penumbra3_decode and penumbra3_fetch_buffer, and the
 // predictor pieces. What the probe models is the stimulus (an LFSR standing
 // in for EX, ID, the bus and the sysreg writes) and the fetch control.
@@ -98,7 +98,7 @@ module ulx3s_penumbra3_probe_l1tag_top (
     end
 
     // A few sparse events, each a registered AND of LFSR bits.
-    logic ex_redirect_q, sys_we_q, sys_re_q, inval_q, train_q, bubble_q;
+    logic ex_redirect_q, sys_we_q, sys_re_q, train_q, bubble_q;
     logic [31:0] ex_target_q, sys_wdata_q;
     logic [3:0]  sys_reg_q;
     logic        user_q, force_bypass_q, fault_commit_q, deq_ready_q;
@@ -109,7 +109,6 @@ module ulx3s_penumbra3_probe_l1tag_top (
         sys_re_q       <= lfsr_q[6] && lfsr_q[34];
         sys_reg_q      <= lfsr_q[12:9];
         sys_wdata_q    <= lfsr_q[55:24];
-        inval_q        <= !rst && lfsr_q[7] && lfsr_q[19] && lfsr_q[41] && lfsr_q[53];
         train_q        <= lfsr_q[8] && lfsr_q[26];
         bubble_q       <= lfsr_q[13] && lfsr_q[37] && lfsr_q[49];
         user_q         <= lfsr_q[14];
@@ -240,76 +239,61 @@ module ulx3s_penumbra3_probe_l1tag_top (
         .o_mem2_bcause        (mem2_bcause)
     );
 
-    // ── L1-D: storage + the parallel compare ─────────────────────
-    logic [D_WAYS-1:0]        dl1_valid;
-    logic [D_WAYS-1:0][19:0]  dl1_tag;
-    logic [D_WAYS-1:0][31:0]  dl1_word;
-    logic [D_WAYS-1:0]        dl1_way_hit;
-    logic                     dl1_hit;
-    logic [31:0]              dl1_rdata;
+    // ── L1-D ─────────────────────────────────────────────────────
+    logic                        dl1_hit, dl1_en;
+    logic [31:0]                 dl1_rdata, dl1_sys_rdata;
+    logic [$clog2(D_WAYS)-1:0]   dl1_victim;
 
     logic                        dfill_we;
     logic [31:0]                 dfill_paddr_q;
-    logic [$clog2(D_WAYS)-1:0]   dfill_way_q;
+    logic [$clog2(D_WAYS)-1:0]   dfill_way_q, dvictim_q;
     logic [LINE_WORDS-1:0][31:0] fill_line;
-    logic                        st_we_q;
-    logic [$clog2(D_WAYS)-1:0]   st_way_q;
-    logic [7:0]                  st_set_q;
-    logic [1:0]                  st_word_q;
-    logic [31:0]                 st_wdata_q;
-    logic [3:0]                  st_be_q;
+    logic                        dc_we;
+    logic [31:0]                 dc_wdata;
+    logic [3:0]                  dc_byte_en;
 
     always_comb
         for (int c = 0; c < LINE_WORDS; c++)
             fill_line[c] = lfsr_q[31:0] ^ {lfsr_q[63:56], 24'(c)};
 
-    penumbra3_l1_store #(
+    penumbra3_l1 #(
         .WAYS       (D_WAYS),
-        .LINE_BYTES (LINE_BYTES)
-    ) u_dl1_store (
+        .LINE_BYTES (LINE_BYTES),
+        .FRAMES     (FRAMES)
+    ) u_dl1 (
         .i_clk           (clk),
         .i_rst           (rst),
         .i_launch        (dc_en && !d_hold),
-        .i_set           (dc_vaddr[11:4]),
-        .i_word          (dc_vaddr[3:2]),
-        .o_rd_valid      (dl1_valid),
-        .o_rd_tag        (dl1_tag),
-        .o_rd_word       (dl1_word),
+        .i_offset        (dc_vaddr[11:0]),
+        .i_frame         (d_frame),
+        .i_frame_sel     (d_frame_sel),
+        .o_way_hit       (),
+        .o_way_word      (),
+        .o_hit           (dl1_hit),
+        .o_word          (dl1_rdata),
+        .o_victim_way    (dl1_victim),
+        .i_store         (dc_we),
+        .i_store_wdata   (dc_wdata),
+        .i_store_byte_en (dc_byte_en),
+        .i_count_read    (mem2_valid && mem2_bundle.mem_op == MEM_LOAD && d_cacheable),
+        .i_count_write   (mem2_valid && mem2_bundle.mem_op == MEM_STORE && d_cacheable),
         .i_fill_we       (dfill_we),
-        .i_fill_set      (dfill_paddr_q[11:4]),
+        .i_fill_paddr    (dfill_paddr_q),
         .i_fill_way      (dfill_way_q),
-        .i_fill_tag      (dfill_paddr_q[31:12]),
         .i_fill_line     (fill_line),
-        .i_store_we      (st_we_q),
-        .i_store_set     (st_set_q),
-        .i_store_word    (st_word_q),
-        .i_store_way     (st_way_q),
-        .i_store_wdata   (st_wdata_q),
-        .i_store_byte_en (st_be_q),
-        .i_inval_all     (inval_q)
-    );
-
-    penumbra3_l1_match #(
-        .WAYS   (D_WAYS),
-        .FRAMES (FRAMES)
-    ) u_dl1_match (
-        .i_valid     (dl1_valid),
-        .i_tag       (dl1_tag),
-        .i_word      (dl1_word),
-        .i_frame     (d_frame),
-        .i_frame_sel (d_frame_sel),
-        .o_way_hit   (dl1_way_hit),
-        .o_hit       (dl1_hit),
-        .o_word      (dl1_rdata)
+        .i_sys_reg       (sys_reg_q),
+        .i_sys_wdata     (sys_wdata_q),
+        .i_sys_we        (sys_we_q),
+        .i_sys_re        (sys_re_q),
+        .o_sys_rdata     (dl1_sys_rdata),
+        .o_enabled       (dl1_en)
     );
 
     // ── MEM2: resolve, hold buffer, MEM2/WB register ─────────────
     logic           load_pending, launch_fill, fill_cacheable, complete, complete_fault;
     logic [31:0]    fill_paddr, complete_value;
     logic [SB_IDX_W-1:0] complete_dest;
-    logic           dc_we;
-    logic [31:0]    dc_paddr, dc_wdata;
-    logic [3:0]     dc_byte_en;
+    logic [31:0]    dc_paddr;
     ctrl_bundle_t   wb_bundle;
     dpath_payload_t wb_payload;
     logic           wb_valid;
@@ -364,34 +348,21 @@ module ulx3s_penumbra3_probe_l1tag_top (
 
     assign d_hold = load_pending;
 
-    // ── The store write: a hit, registered and written a cycle later ─
-    logic [$clog2(D_WAYS)-1:0] dl1_hit_way;
-    always_comb begin
-        dl1_hit_way = '0;
-        for (int w = 0; w < D_WAYS; w++)
-            if (dl1_way_hit[w]) dl1_hit_way |= $clog2(D_WAYS)'(w);
-    end
-    always_ff @(posedge clk) begin
-        st_we_q    <= !rst && dc_we && dl1_hit && d_cacheable;
-        st_way_q   <= dl1_hit_way;
-        st_set_q   <= dc_paddr[11:4];
-        st_word_q  <= dc_paddr[3:2];
-        st_wdata_q <= dc_wdata;
-        st_be_q    <= dc_byte_en;
-    end
-
     // ── The fill, modeled: done after an LFSR-timed wait ─────────
+    // The fill launches a cycle after its miss resolved, so the victim
+    // from that resolve is a register by then.
     logic dfill_busy_q, dfill_cacheable_q;
     assign dfill_done = dfill_busy_q && lfsr_q[40];
-    assign dfill_we   = dfill_done && dfill_cacheable_q;
+    assign dfill_we   = dfill_done && dfill_cacheable_q && dl1_en;
     always_ff @(posedge clk) begin
         if (rst)              dfill_busy_q <= 1'b0;
         else if (launch_fill) dfill_busy_q <= 1'b1;
         else if (dfill_done)  dfill_busy_q <= 1'b0;
+        dvictim_q   <= dl1_victim;
         if (launch_fill) begin
             dfill_paddr_q     <= fill_paddr;
             dfill_cacheable_q <= fill_cacheable;
-            dfill_way_q       <= lfsr_q[46 +: $clog2(D_WAYS)];
+            dfill_way_q       <= dvictim_q;
         end
     end
 
@@ -406,55 +377,48 @@ module ulx3s_penumbra3_probe_l1tag_top (
     // The hold: the IF2 slot waits on FIFO room, or a fill is in flight.
     assign fetch_hold = (if2_valid_q && !fbuf_enq_ready) || ifill_busy_q;
 
-    // ── L1-I: storage + the parallel compare ─────────────────────
-    logic [I_WAYS-1:0]        il1_valid;
-    logic [I_WAYS-1:0][19:0]  il1_tag;
-    logic [I_WAYS-1:0][31:0]  il1_word;
-    logic [I_WAYS-1:0]        il1_way_hit;
-    logic                     il1_hit;
+    // ── L1-I ─────────────────────────────────────────────────────
+    logic [I_WAYS-1:0]         il1_way_hit;
+    logic [I_WAYS-1:0][31:0]   il1_word;
+    logic                      il1_hit, il1_en, il1_count_read;
+    logic [31:0]               il1_sys_rdata;
+    logic [$clog2(I_WAYS)-1:0] il1_victim;
 
     logic        ifill_we;
     logic [31:0] ifill_paddr_q;
     logic [$clog2(I_WAYS)-1:0] ifill_way_q;
 
-    penumbra3_l1_store #(
+    penumbra3_l1 #(
         .WAYS       (I_WAYS),
-        .LINE_BYTES (LINE_BYTES)
-    ) u_il1_store (
+        .LINE_BYTES (LINE_BYTES),
+        .FRAMES     (FRAMES)
+    ) u_il1 (
         .i_clk           (clk),
         .i_rst           (rst),
         .i_launch        (!fetch_hold),
-        .i_set           (pc_q[11:4]),
-        .i_word          (pc_q[3:2]),
-        .o_rd_valid      (il1_valid),
-        .o_rd_tag        (il1_tag),
-        .o_rd_word       (il1_word),
-        .i_fill_we       (ifill_we),
-        .i_fill_set      (ifill_paddr_q[11:4]),
-        .i_fill_way      (ifill_way_q),
-        .i_fill_tag      (ifill_paddr_q[31:12]),
-        .i_fill_line     (fill_line),
-        .i_store_we      (1'b0),
-        .i_store_set     ('0),
-        .i_store_word    ('0),
-        .i_store_way     ('0),
+        .i_offset        (pc_q[11:0]),
+        .i_frame         (i_frame),
+        .i_frame_sel     (i_frame_sel),
+        .o_way_hit       (il1_way_hit),
+        .o_way_word      (il1_word),
+        .o_hit           (il1_hit),
+        .o_word          (),                // each way's word decodes before the select
+        .o_victim_way    (il1_victim),
+        .i_store         (1'b0),
         .i_store_wdata   ('0),
         .i_store_byte_en ('0),
-        .i_inval_all     (inval_q)
-    );
-
-    penumbra3_l1_match #(
-        .WAYS   (I_WAYS),
-        .FRAMES (FRAMES)
-    ) u_il1_match (
-        .i_valid     (il1_valid),
-        .i_tag       (il1_tag),
-        .i_word      (il1_word),
-        .i_frame     (i_frame),
-        .i_frame_sel (i_frame_sel),
-        .o_way_hit   (il1_way_hit),
-        .o_hit       (il1_hit),
-        .o_word      ()                // each way's word decodes before the select
+        .i_count_read    (il1_count_read),
+        .i_count_write   (1'b0),
+        .i_fill_we       (ifill_we),
+        .i_fill_paddr    (ifill_paddr_q),
+        .i_fill_way      (ifill_way_q),
+        .i_fill_line     (fill_line),
+        .i_sys_reg       (sys_reg_q),
+        .i_sys_wdata     (sys_wdata_q),
+        .i_sys_we        (sys_we_q),
+        .i_sys_re        (sys_re_q),
+        .o_sys_rdata     (il1_sys_rdata),
+        .o_enabled       (il1_en)
     );
 
     // ── Predictor: direction table, return stack, per-way pre-decode ─
@@ -504,6 +468,7 @@ module ulx3s_penumbra3_probe_l1tag_top (
     // redirect needs only a way to hit (the AND-OR below) and FIFO room.
     logic slot_live, ihit, enq_valid, enq_fire, word_enq;
     assign slot_live = if2_valid_q && !replay_q && !ex_redirect_q;
+    assign il1_count_read = slot_live && i_cacheable;
     assign ihit      = il1_hit && i_cacheable;
     assign enq_valid = slot_live && (i_fault || ihit);
     assign enq_fire  = enq_valid && fbuf_enq_ready;
@@ -563,14 +528,14 @@ module ulx3s_penumbra3_probe_l1tag_top (
     // ── Replay and the I-fill, modeled like the D-side one ───────
     logic ifill_done, ifill_cacheable_q;
     assign ifill_done = ifill_busy_q && lfsr_q[50];
-    assign ifill_we   = ifill_done && ifill_cacheable_q;
+    assign ifill_we   = ifill_done && ifill_cacheable_q && il1_en;
     always_ff @(posedge clk) begin
         replay_q <= !rst && replay_d;
         if (replay_d) begin
             replay_pc_q       <= if2_pc_q;
             ifill_paddr_q     <= i_paddr;
             ifill_cacheable_q <= i_cacheable;
-            ifill_way_q       <= lfsr_q[48 +: $clog2(I_WAYS)];
+            ifill_way_q       <= il1_victim;
         end
         if (rst)             ifill_busy_q <= 1'b0;
         else if (replay_d)   ifill_busy_q <= 1'b1;
@@ -631,7 +596,7 @@ module ulx3s_penumbra3_probe_l1tag_top (
         fold_q[3] <= launch_fill ^ (^fill_paddr);
         fold_q[4] <= ^pc_q;
         fold_q[5] <= ^ras_top;
-        fold_q[6] <= ^{st_we_q, st_way_q, st_set_q, st_word_q, st_wdata_q, st_be_q};
+        fold_q[6] <= ^{dl1_sys_rdata, il1_sys_rdata};
         fold_q[7] <= ^{ifill_paddr_q, replay_pc_q};
         led_q     <= fold_q;
     end

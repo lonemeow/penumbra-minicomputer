@@ -247,6 +247,18 @@ cycles, never critical-path logic.**
   loads unconditionally and lets its valid bit carry the decision.
 - **Bookkeeping off the hit→busy cone:** PLRU touch, dirty, write-hit are
   registered/deferred (gen2's L1 already does this — keep it).
+- **A store hit is written a cycle after it resolves,** from registers, so
+  the hit reaches a register's D and never a block RAM's write enable. The
+  cache merges the store's bytes over the word its own lookup read and
+  writes the whole word. A lookup that resolves before the block RAM shows
+  that word, in the write's cycle or the next, takes it from the write
+  register or a copy one cycle behind it: a mux on each way's word,
+  selected by a compare of registers, which the tag compare outlasts.
+- **A held lookup is read again every cycle.** The L1 keeps no copy of a
+  lookup: with nothing launching it reads the last lookup's set again, so
+  a verdict its consumer holds follows a fill or an invalidate with no
+  strobe to ask for it, and the store bypass never outlives the write's
+  two cycles. A line shows two cycles after its install.
 - **L1: write-through**, keep the timing-critical level simple.
 - **Size the L1 per board, and read size and ways together.** A VIPT L1 indexes
   within the 4 KB page, so a way holds at most 4 KB: 8 KB 2-way keeps the compares

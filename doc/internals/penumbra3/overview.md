@@ -394,7 +394,7 @@ the Phase-1 full-top read calibrates the drop for gen3.
 | P0.2 registered decode→issue | `pre-decoded FIFO slot → regmap → scoreboard/forward compare → issue` starts from flops and fits |
 | P0.3 split MEM + BRAM TLB | MEM1-launch / MEM2-verdict absorbs the 5.8 ns BRAM Tco + tag/permission compare in the period |
 | P0.4 CPU↔bus burst + SDRAM survival | registered line-transaction into the **real `sdram_bus_adapter`** streams without the gapped-read deadlock |
-| P0.5 physical-tag compare *(added after exit)* | the L1's tag compare at the board's associativity, chained behind the BRAM TLB verdict, closes in MEM2 and IF2 with 12–17 % slack at 37.5 MHz |
+| P0.5 physical-tag compare *(added after exit)* | the L1's tag compare at the board's associativity, chained behind the BRAM TLB verdict, closes in MEM2 and IF2 with 13–19 % slack at 37.5 MHz |
 
 **Gate rule (the anti-dead-end rule).** If a probe is structurally short of
 its bar, decide *at that probe* — redesign the boundary, add a stage, or

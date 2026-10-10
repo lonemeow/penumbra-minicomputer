@@ -91,15 +91,23 @@ never sets a scoreboard bit. Its architectural effect *is* the memory write.
 
 The write policy is **write-through, write-no-allocate (WnA)**:
 
-- **Cacheable store, L1 hit** — the L1 line is updated in place (the cache's
-  single write port, driven in MEM2 on the hit) **and** the datum is written
-  through to the bus side.
+- **Cacheable store, L1 hit** — the L1 line is updated in place **and** the
+  datum is written through to the bus side. The L1 write lands a cycle
+  after MEM2, from registers, so the hit never drives a block RAM's write
+  enable: the cache merges the store's bytes over the word its own lookup
+  read and writes the whole word. The block RAM shows a written word two
+  cycles after the write; a lookup that resolves before then takes the
+  word from the cache's write register, or from a copy one cycle behind
+  it, so a load directly behind a store reads it without a stall.
 - **Cacheable store, L1 miss** — WnA: L1 is left untouched (no allocate); the
   datum is written through to the bus side only. A later load to that line
   misses L1 and fills from L2/memory, which already holds the completed store
   — so **no store-to-load forwarding is needed**, a direct consequence of the
   single-outstanding hold-and-complete drain below.
-- **Uncached store** — no L1 interaction; written through to the bus side.
+- **Uncached store** — written through to the bus side. It finds no line
+  in L1: software invalidates the caches before it makes a cached page
+  uncacheable ([MMU, "Uncached Access"](../../system/mmu.md#uncached-access)),
+  so the L1 checks no cacheability on a hit.
 
 Every store therefore produces one off-core write transaction: a bus-master
 **single beat** carrying the byte-enable mask, so a sub-word store writes

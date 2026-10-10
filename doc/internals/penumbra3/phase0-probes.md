@@ -253,13 +253,16 @@ still reaches the next fetch PC.
 - The real MMU: both BRAM TLB copies, the pinned TLB and bypass, each port
   exporting its frame candidates — the bypass-or-pinned frame, registered
   at launch, and each main-TLB way's — with a one-hot select.
-- The L1's per-way tag BRAMs and word-column data BRAMs (a line written
-  in one cycle, a store writing one column's bytes), registered, at the
-  ECP5's 8 KB 2-way on both sides.
+- The real L1 on both sides, at the ECP5's 8 KB 2-way: per-way tag BRAMs
+  and word-column data BRAMs (a line written in one cycle, a store
+  writing one word of one column), registered, with its valid and
+  replacement bits, control registers and counters.
 - The compare in the shape the design intends — each cache way against
   every candidate frame, the select picking — then, for MEM2, the way mux
   into the real MEM2 stage's sub-word extract, MEM2/WB register and
-  load-completion buffer, and a registered store write. For IF2, the way
+  load-completion buffer, and the store: its bytes merged into the word
+  it hit, written from a register, and given to a lookup of that word
+  ahead of the block RAM. For IF2, the way
   select of bundles each way decoded from its own word into the real
   fetch FIFO, and the pre-decode redirect: the transfer's kind from each
   way's word, the direction counter, the return ring's top or PC plus
@@ -282,7 +285,8 @@ side, so MEM2 fails more cheaply than IF2), or move the way select a
 cycle later — a structural choice for the board's L1, made before the
 L1 is written.
 
-**Result** (2026-09-30, `ulx3s_penumbra3_probe_l1tag_top`, seeds 1–5):
+**Result** (2026-09-30, `ulx3s_penumbra3_probe_l1tag_top` with the L1's
+arrays, valid bits and compare alone, seeds 1–5):
 42.5, 44.9, 43.4, 44.9 and 43.6 MHz — 12–17 % slack at 37.5 MHz, short of
 the 50 MHz budget. The two sides take turns as the limit, each the cone
 under test: MEM2's is 5.6 ns of Tco, about 7.5 of TLB match, 2 of
@@ -321,6 +325,20 @@ became the worst path, so the replay contract's timing benefit is not yet
 shown. Yosys's read-during-write emulation on the L1-D against
 `no_rw_check` did not move fmax outside the seed spread; it costs about 600
 flops and 300 LUTs.
+
+**Result with the whole L1** (2026-10-09, seeds 0–9): 43.1–46.1 MHz,
+median 44.7 — 13–19 % slack at 37.5 MHz, still short of the 50 MHz
+budget. This build holds the rest of the L1: on both sides the
+replacement bits, a read of the current lookup on every cycle, the
+control registers and the counters, and on the data side the store's
+byte merge and its bypass, about 1,800 LUTs and 780 flip-flops more in
+all. The build above, repeated in the same session, gave 41.3–45.8 MHz
+(median 43.5) over the same ten seeds, so the sweep shows no cost for
+the additions. Every seed's worst path is still a cone under test, from
+a TLB or L1 tag block RAM output to MEM2/WB (seven seeds) or to the
+fetch PC registers (three). Vivado 2025.2 builds one L1 out of context
+with its arrays in 10 RAMB18, beside 1.7K LUTs and 1.0K flip-flops; the
+probe's Artix-7 timing was not run again.
 
 ## Recommended order — fail fast
 

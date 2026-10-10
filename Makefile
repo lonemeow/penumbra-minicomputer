@@ -386,7 +386,7 @@ MODULE_TESTS = \
     penumbra3_irq \
     penumbra3_core \
     penumbra3_mmu \
-    penumbra3_l1_lookup_test:tb_penumbra3_l1_lookup \
+    penumbra3_l1 \
     penumbra3_predecode \
     penumbra3_return_stack \
     penumbra3_direction_table \
@@ -1409,6 +1409,7 @@ FPGA_SRC_ulx3s_penumbra3_probe_decode_top = $(SRC_COMMON) $(SRC_CORE_penumbra3) 
 # the fetch FIFO and the predicted redirect into the PC
 # (make timing BOARD=ulx3s CORE=penumbra3 VARIANT=probe_l1tag).
 FPGA_SRC_ulx3s_penumbra3_probe_l1tag_top = $(SRC_COMMON) $(SRC_CORE_penumbra3) \
+                               hw/rtl/soc/cache_perfctr.sv \
                                $(FPGA_RTL)/ulx3s/ulx3s_penumbra3_probe_l1tag_top.sv
 
 # Text-video bring-up probe: the sim-verified output chain in front of

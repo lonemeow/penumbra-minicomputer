@@ -162,7 +162,7 @@ fetch FIFO, where the back-end stall does not reach.
   selects; the translation fault and cacheability stay off it, since a
   faulting slot traps and a missing one replays anyway.
 - **No target buffer for direct transfers.** The IF2 redirect closes in
-  its cycle at 37.5 MHz with 12–17 % slack
+  its cycle at 37.5 MHz with 13–19 % slack
   ([P0.5](./phase0-probes.md#p05--physical-tag-compare-behind-the-tlb-verdict)),
   so a buffer adds only indirect targets: 3–15 cycles per 1000, a
   measure-driven option.

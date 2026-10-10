@@ -161,7 +161,7 @@ on the data side ([L1 geometry](./memory-performance.md#l1-geometry)),
 so MEM2 can keep 2 ways where IF2 takes 4. P0.3 measured the TLB verdict
 alone; [P0.5](./phase0-probes.md#p05--physical-tag-compare-behind-the-tlb-verdict)
 measured the chained compare at the ECP5's 2 ways: about 2 ns after the
-TLB match, with MEM2 closing 37.5 MHz at 12–17 % slack.
+TLB match, with MEM2 closing 37.5 MHz at 13–19 % slack.
 
 ## Fault contract (commit-time)
 
