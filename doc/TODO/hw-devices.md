@@ -1133,10 +1133,10 @@ beside the display: a login on `ttyE0`, and Doom, which reads the
 keyboard in raw mode (`sw/doom/i_input_netbsd.c`).
 
 The programming interface is `doc/system/devices/ps2.md`
-(`CLASS_PS2`): single bytes each way, a flag on a byte that fails its
-parity or stop bit, and a receive side that holds the device off
-rather than lose a byte. Everything above a byte is software's, so
-the kernel's part is a back-end for `pckbport(9)` under the
+(`CLASS_PS2`): single bytes each way, a flag on a byte whose start,
+parity or stop bit is wrong, and a receive side that holds the device
+off rather than lose a byte. Everything above a byte is software's,
+so the kernel's part is a back-end for `pckbport(9)` under the
 machine-independent `pckbd(4)`; `dev/ic/pl050.c` is the closest
 existing one.
 

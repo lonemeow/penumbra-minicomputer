@@ -26,10 +26,10 @@ this in two ways, to make the device wait while software has not
 taken the bytes already received (see [Receive](#receive)), and to
 claim the link for a byte of its own (see [Transmit](#transmit)).
 
-Each byte travels in a frame with a parity bit and a stop bit, which
-the receiving end checks. The link has no signal for presence: a port
-with nothing attached looks like one whose device is idle, until
-software sends a byte and no device takes it.
+Each byte travels in a frame with a start bit, a parity bit and a
+stop bit, which the receiving end checks. The link has no signal for
+presence: a port with nothing attached looks like one whose device is
+idle, until software sends a command and nothing answers it.
 
 The port may be a socket, or a bridge that presents another kind of
 keyboard as a PS/2 device. Software cannot tell which, and has no
@@ -98,8 +98,8 @@ Remaining bits reserved (read 0).
 
 - Bits [7:0]: `BYTE` — the oldest received byte
 - Bit [8]: `VALID` — `BYTE` is a received byte software has not taken
-- Bit [9]: `ERR` — the byte's parity or stop bit was wrong, and `BYTE`
-  holds the bits as they arrived
+- Bit [9]: `ERR` — the byte's start, parity or stop bit was wrong, and
+  `BYTE` holds the bits as they arrived
 
 Remaining bits reserved (read 0).
 
@@ -130,14 +130,15 @@ and `RX_DATA` presents the oldest. Every port holds at least one.
 When it has room for no more, it holds the device off until software
 reads one, so no byte is lost to a slow reader and the port has no
 overrun to report. A device held off for long enough may overflow a
-buffer of its own; it reports that in its byte stream, as its command
-set defines.
+buffer of its own. A keyboard reports that in its byte stream, as its
+command set defines; a bridge may drop what does not fit and report
+nothing.
 
-A byte whose parity or stop bit is wrong is delivered with `ERR` set
-rather than dropped, since the remedy is software's: keyboards and
-pointing devices both define a command (`0xFE`) that asks for the
-last byte again. A frame the device stops sending partway is
-discarded.
+A byte whose start, parity or stop bit is wrong is delivered with
+`ERR` set rather than dropped, since the remedy is software's:
+keyboards and pointing devices both define a command (`0xFE`) that
+asks for the last byte again. A frame the device stops sending
+partway is discarded.
 
 ## Transmit
 
@@ -146,9 +147,13 @@ which clocks it in and acknowledges it on the wire. `BUSY` is set
 from the write until the device has acknowledged the byte or the port
 has given up, which it does when the device does not start clocking,
 stops partway, or does not acknowledge. Either way `BUSY` clears
-within 20 ms of the write, and `ERR` then says which happened. With
-nothing attached every transmission ends in `ERR`, which is how
-software finds an empty port.
+within 20 ms of the write, and `ERR` then says which happened.
+
+`ERR` clear means the byte was clocked in and acknowledged on the
+wire, and no more: whether the device acts on it shows only in what
+it sends back. With nothing on the link every transmission ends in
+`ERR`. A bridge is on the link whether or not a keyboard is behind
+it, so there only an answer to a command shows a device.
 
 Sending takes precedence over receiving. A byte the device had begun
 to send when the port claimed the link is abandoned by the device and
@@ -165,17 +170,20 @@ and sends the result (`0xAA` for a pass), and a pointing device
 follows that with its identity. Received unprompted, the result means
 a device has just been attached and is in its power-on state,
 whatever software had configured before. Removal is silent: software
-that needs to know sends a byte and reads `TX_DATA.ERR`.
+that needs to know sends a command and waits for its answer.
 
 ## Driver Flow
 
 ### Bring-up — the class minimum
 
 1. Set `CTRL.EN`.
-2. Read `RX_DATA` until `VALID` is clear, discarding what was
-   waiting.
-3. Send a byte the device answers (its reset command serves) and read
-   `TX_DATA.ERR` to learn whether anything is attached.
+2. Read `RX_DATA`, discarding what was waiting, until no byte has
+   arrived for 5 ms. A device that was held off kept what it had to
+   send, through a reset of the machine too, and hands it over a
+   frame at a time once the port reads.
+3. Send a command the device answers (its reset command serves) and
+   wait for the answer to learn whether anything is attached.
+   `TX_DATA.ERR` set says at once that nothing is on the link.
 
 What the replies mean belongs to the device's command set, not to the
 port. A keyboard needs no command to start reporting keys, so a
