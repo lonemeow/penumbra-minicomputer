@@ -364,6 +364,23 @@ package penumbra_pkg;
     localparam int ETH_IRQ_RX = 0;
     localparam int ETH_IRQ_TX = 1;
 
+    // ── PS/2 port (CLASS_PS2) ──────────────────────────────────
+    // Register contract: doc/system/devices/ps2.md.
+
+    // Register offsets (word-strided within the device window)
+    localparam logic [4:0] PS2_REG_CAP        = 5'h00;
+    localparam logic [4:0] PS2_REG_IRQ_STATUS = 5'h04;
+    localparam logic [4:0] PS2_REG_IRQ_ENABLE = 5'h08;
+    localparam logic [4:0] PS2_REG_CTRL       = 5'h0C;
+    localparam logic [4:0] PS2_REG_RX_DATA    = 5'h10;
+    localparam logic [4:0] PS2_REG_TX_DATA    = 5'h14;
+
+    localparam logic [7:0] PS2_VERSION = 8'd1;     // CAP.VERSION
+
+    // IRQ_STATUS / IRQ_ENABLE bit positions
+    localparam int PS2_IRQ_RX = 0;
+    localparam int PS2_IRQ_TX = 1;
+
     // ── Physical address map (bus base addresses) ──────────────
     // Fixed base addresses for memory-mapped devices.
     // UART_BASE already defined above (32'hFF00_0000).

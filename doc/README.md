@@ -78,6 +78,7 @@ subdirectory owns its realization.
 *   **[Display Adapter](./internals/display.md)** — FPGA microarchitecture of the `CLASS_DISPLAY` adapter: pixel generator + TMDS output PHY.
 *   **[USB Host Controller](./internals/usb-host-controller.md)** — FPGA microarchitecture of the `CLASS_USBHC` controller: SIE, transaction FSM, and the NetBSD HCD mapping.
 *   **[Ethernet Adapter](./internals/ethernet.md)** — FPGA microarchitecture of the `CLASS_ETHERNET` adapter: the module split, the clock domains and what crosses between them, and the seam a board's PHY attaches at.
+*   **[PS/2 Port](./internals/ps2-port.md)** — FPGA microarchitecture of the `CLASS_PS2` port: how the two lines are read, how the port tells the device's clock edges from its own hold, and the receiver and sender built on that.
 *   **[Coding Standards](./internals/coding-standards.md)** — RTL naming and style conventions for hardware.
 *   **[Build & Test Structure](./internals/build-system.md)** — The BOARD×CORE build matrix, the machine integration layer, and the `isa/` conformance split for test programs.
 *   **[Development Setup](./internals/setup.md)** — How to build and simulate the RTL.

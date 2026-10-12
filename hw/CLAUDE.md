@@ -39,7 +39,8 @@ hw/
 │   ├── io/        # Real UART, real SPI, SDRAM v2 controller/adapter/PHY/CDC
 │   │              #   (+ sdram_line/, the whole-line adapter variant),
 │   │              #   usb/ (SIE cells + MAC + host controller), video/,
-│   │              #   eth/ (the Ethernet adapter's cells)
+│   │              #   eth/ (the Ethernet adapter's cells),
+│   │              #   ps2/ (the PS/2 port)
 │   ├── sim/       # machine_sim + machine_penumbra2_sim, sim devices, memory models
 │   └── fpga/      # FPGA helpers (ECP5 PLL package, lint stubs); board tops under <board>/,
 │                  #   Xilinx 7-series helpers under xc7/ (MMCM package, lint stubs)
@@ -47,7 +48,8 @@ hw/
 ├── rom/         # Boot ROM (C + asm) and its standalone Makefile
 ├── sim/         # tb_cpu_prog (program runner), sim_console + per-core shims, per-module tbs,
 │                #   uart_host.h (a serial host for tbs driving a board top's pins),
-│                #   i2c_slave.h (a slave for tbs holding an I2C bus)
+│                #   i2c_slave.h (a slave for tbs holding an I2C bus),
+│                #   ps2_device.h (a device for tbs holding a PS/2 link)
 ├── third_party/ # vendored files under their own licenses (Digilent board XDCs, UberDDR3)
 └── tools/       # uasm.py (microcode), oss-cad-suite wrappers
 ```
@@ -285,6 +287,21 @@ exposed external bus.
   two slot apertures onto the slot memories' bus-side ports, byte lanes
   honoured in the transmit aperture alone, and the interrupt as two
   conditions on the counts. A simple bus device.
+- `ps2/ps2.sv` — the PS/2 port (`CLASS_PS2`): the register block on
+  the bus (offsets `PS2_REG_*` in `penumbra_pkg`), the interrupt as two
+  conditions, and `ps2_link` below it. The two lines leave as levels
+  asked for and levels read, for a board to make open-drain pads of. A
+  simple bus device; microarchitecture in `doc/internals/ps2-port.md`.
+- `ps2/ps2_link.sv` — one PS/2 link between its pins and single
+  bytes: a frame's bits taken as the device clocks them, the clock
+  held low while the port is not in use or a byte waits, a byte sent
+  by claiming the link and letting the device clock it in, given up
+  `TX_LIMIT_US` after its start. No reset of its own: a port not in
+  use keeps nothing.
+- `ps2/ps2_line_filter.sv` — one PS/2 line in: two synchroniser flops
+  and a filter, with a delay that depends on its parameter alone. The
+  link puts both lines and its own request for the clock through one
+  each, so the three keep their timing beside each other.
 - `sdram/sdram_pkg.sv` — command encoding + chip presets.
 - `sdram/sdram_ctrl.sv` — FSM core: init / refresh / ACT/RW/RECOVER.
   `PHY_OUT_LATENCY` / `PHY_IN_LATENCY` parameters absorb
@@ -359,6 +376,12 @@ exposed external bus.
   consumers' ports, for `tb_i2c_shared_master`: consumer models at the
   ports, a slave for each on the bus's lines, and a monitor reading
   whose each transaction is.
+- `ps2_test.sv` — `ps2` on a bus clock of `CLK_HZ`, for `tb_ps2`: a
+  device model (`hw/sim/ps2_device.h`) on the two lines, and the port
+  reached through its registers alone. The testbench reads the rate
+  back and keeps its times to it, so `make sim MOD=ps2_test TB=tb_ps2
+  SIM_FLAGS_ps2_test=-GCLK_HZ=60000000` runs the same checks at
+  another rate than the default.
 - `eth_mdio_test.sv` — `eth_mdio` at a 25 MHz clock, where MDC's period
   is the 400 ns minimum, for `tb_eth_mdio`: a PHY model on the two
   pins and a monitor holding them to the minimums a PHY asks for.

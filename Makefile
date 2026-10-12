@@ -39,7 +39,7 @@ OPT_BUILD ?= -O2
 VERILATOR_BASE_FLAGS = --cc --exe --build -Wall --assert \
                        $(if $(VCD),--trace) \
                        -CFLAGS "-std=c++17 $(OPT_BUILD)"
-VERILATOR_INCLUDES   = -Ihw/rtl/common -Ihw/rtl/penumbra1 -Ihw/rtl/penumbra2 -Ihw/rtl/penumbra3 -Ihw/rtl/machine -Ihw/rtl/bus -Ihw/rtl/io -Ihw/rtl/io/audio -Ihw/rtl/io/i2c -Ihw/rtl/io/sdram -Ihw/rtl/io/video -Ihw/rtl/io/usb -Ihw/rtl/io/eth -Ihw/rtl/soc -Ihw/rtl/sim
+VERILATOR_INCLUDES   = -Ihw/rtl/common -Ihw/rtl/penumbra1 -Ihw/rtl/penumbra2 -Ihw/rtl/penumbra3 -Ihw/rtl/machine -Ihw/rtl/bus -Ihw/rtl/io -Ihw/rtl/io/audio -Ihw/rtl/io/i2c -Ihw/rtl/io/sdram -Ihw/rtl/io/video -Ihw/rtl/io/usb -Ihw/rtl/io/eth -Ihw/rtl/io/ps2 -Ihw/rtl/soc -Ihw/rtl/sim
 
 # A core build (program runners, interactive sim) puts its variant's
 # directory first, so the variant's forks shadow the base modules they
@@ -412,6 +412,7 @@ MODULE_TESTS = \
     eth_phy_rgmii_xc7_test:tb_eth_phy_rgmii_xc7 \
     eth_phy_reset_test:tb_eth_phy_reset \
     eth_addr_eeprom_test:tb_eth_addr_eeprom \
+    ps2_test:tb_ps2 \
     usb_crc5 \
     usb_crc16 \
     usb_bit_stuff_tx \
