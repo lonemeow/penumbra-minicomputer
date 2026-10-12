@@ -142,6 +142,7 @@ static const char *class_name(uint32_t cls) {
     case ACFG_CLASS_DISPLAY: return "Display";
     case ACFG_CLASS_AUDIO:  return "Audio";
     case ACFG_CLASS_USBHC:  return "USBHC";
+    case ACFG_CLASS_PS2:    return "PS/2";
     default:                return "Unknown";
     }
 }

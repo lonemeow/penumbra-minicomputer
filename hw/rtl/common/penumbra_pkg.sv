@@ -274,6 +274,7 @@ package penumbra_pkg;
     localparam logic [31:0] ACFG_CLASS_DISPLAY  = 32'd6;  // Display adapter (character-cell console minimum protocol)
     localparam logic [31:0] ACFG_CLASS_AUDIO    = 32'd7;  // Audio output (PCM frames pushed to per-channel FIFOs)
     localparam logic [31:0] ACFG_CLASS_USBHC    = 32'd8;  // USB host controller (transaction-level minimum protocol)
+    localparam logic [31:0] ACFG_CLASS_PS2      = 32'd9;  // PS/2 port (single bytes to and from one keyboard or pointing device)
 
     // ── UART register offsets (word-strided within 4 KB page) ────
     // Memory-mapped I/O at 0xFF00_0000. Each 8-bit register
