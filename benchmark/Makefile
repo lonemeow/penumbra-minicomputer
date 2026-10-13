@@ -38,13 +38,13 @@ BUILDDIR := $(PROJROOT)/build/benchmark
 
 # ── Targets ────────────────────────────────────────────────────
 
-.PHONY: all dhrystone coremark memtest membench strtest fbtest audiotest clean
+.PHONY: all dhrystone coremark memtest membench strtest fbtest audiotest ps2test clean
 
-# fbtest and audiotest ship with the others so they are on the SD image
-# ready to run on hardware; both stay out of BENCH_ELFS in the root
-# Makefile, which is the list the automated ISS/RTL benchmark loop
-# runs, because both need a real device and a human to judge them.
-all: dhrystone coremark memtest membench fbtest audiotest
+# fbtest, audiotest and ps2test ship with the others so they are on the
+# SD image ready to run on hardware; they stay out of BENCH_ELFS in the
+# root Makefile, which is the list the automated ISS/RTL benchmark loop
+# runs, because each needs a real device and a human to judge it.
+all: dhrystone coremark memtest membench fbtest audiotest ps2test
 
 # ── Common harness objects ─────────────────────────────────────
 
@@ -444,6 +444,27 @@ audiotest: $(BUILDDIR)/AUDIOTES.ELF
 
 $(BUILDDIR)/AUDIOTES.ELF: $(CRT0_OBJ) $(AUDIOTEST_OBJ) $(COMMON_OBJ) $(HARNESS_LIBS) common/bench.ld
 	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(AUDIOTEST_OBJ) $(COMMON_OBJ) $(HARNESS_LIBS) -o $@
+
+# ── ps2test ───────────────────────────────────────────────────
+#
+# Bare-metal exercise for the CLASS_PS2 port, and for whatever is on the
+# other end of it: what the device had sent, what it answers to a few
+# commands, every byte it sends while keys are typed, and what it keeps
+# while the port holds it off.  Each received byte is printed with its
+# error flag and, where it matters, the time it was taken.
+#
+# Not a benchmark: it needs a device and a person at the keys.
+#   boot sd:0,0/PS2TEST.ELF
+
+PS2TEST_OBJ := $(BUILDDIR)/ps2test_entry.o
+
+$(BUILDDIR)/ps2test_entry.o: ps2test/entry.c common/bench.h | $(BUILDDIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+ps2test: $(BUILDDIR)/PS2TEST.ELF
+
+$(BUILDDIR)/PS2TEST.ELF: $(CRT0_OBJ) $(PS2TEST_OBJ) $(COMMON_OBJ) $(HARNESS_LIBS) common/bench.ld
+	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(PS2TEST_OBJ) $(COMMON_OBJ) $(HARNESS_LIBS) -o $@
 
 # ── Cleanup ────────────────────────────────────────────────────
 
