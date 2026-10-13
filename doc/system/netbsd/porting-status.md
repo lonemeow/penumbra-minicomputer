@@ -164,6 +164,15 @@ bootinfo — `boot sd:0,0` reaches single-user with no prompts.
   listening checks correctly on the board.
   Design: [design-notes.md, Audio Driver](design-notes.md#audio-driver).
 
+- **PS/2 keyboard (pkbc):** `CLASS_PS2` back-end for MI
+  `pckbport(9)`, with `pckbd` and `wskbd` above it.  The port
+  translates no scan codes, so `pckbd` converts set 2 itself.  A
+  byte sent that nothing answers is sent again, which a bridge that
+  acknowledges bytes and then drops them needs; `vmstat -e` counts
+  the repeats.  On the Nexys Video a USB keyboard on the board's HID
+  socket types at the display console.  The keyboard has to be there
+  at boot, and a pointing device on the port is not found.
+
 - **Core dumps:** the process register accessors and ELF core
   writer work; a crashing program leaves a core whose register
   note and load map symbolize against the unstripped binaries in

@@ -64,6 +64,11 @@ wsdisplay*	at pdisplay? console ?
 paudio0		at pbbus?
 audio*		at audiobus?
 
+# PS/2 port -> MI PS/2 keyboard
+pkbc*		at pbbus?
+pckbd*		at pkbc?		# PS/2 keyboard
+wskbd*		at pckbd? console ?	# -> wscons (mux 1, the display's)
+
 # Ethernet adapter -> ifnet
 peth0		at pbbus?
 options 	WSEMUL_VT100

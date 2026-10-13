@@ -148,6 +148,7 @@ struct bootinfo {
 #define ACFG_CLASS_DISPLAY	6
 #define ACFG_CLASS_AUDIO	7
 #define ACFG_CLASS_USBHC	8
+#define ACFG_CLASS_PS2		9
 
 #ifdef _KERNEL
 void	*lookup_bootinfo(unsigned int);

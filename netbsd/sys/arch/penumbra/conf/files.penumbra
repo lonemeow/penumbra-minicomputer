@@ -85,6 +85,13 @@ attach	paudio at pbbus
 file	arch/penumbra/penumbra/paudio.c			paudio
 file	arch/penumbra/penumbra/pmusic.c			paudio
 
+# PS/2 port (CLASS_PS2 byte link) -> MI pckbport(9), whose keyboard
+# driver attaches above it
+include "dev/pckbport/files.pckbport"
+device	pkbc: pckbport
+attach	pkbc at pbbus
+file	arch/penumbra/penumbra/pkbc.c			pkbc
+
 # Ethernet adapter (CLASS_ETHERNET slot rings) -> ifnet
 device	peth: arp, ether, ifnet, mii
 attach	peth at pbbus
