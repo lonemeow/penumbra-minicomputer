@@ -1,15 +1,13 @@
 # Nexys Video
 
 > **Applies to:** the Digilent Nexys Video board (XC7A200T-1SBG484C) ·
-> its machine top and bring-up tops. The memory system and the audio
-> path have their own documents, [ddr3.md](ddr3.md) and
-> [audio.md](audio.md).
+> its machine top and bring-up tops.
 
 The Nexys Video is the machine's second board: an Artix-7 200T, a
 100 MHz oscillator, 512 MiB of DDR3, a microSD slot, a USB UART, an
-HDMI output and an audio codec, plus an HDMI input, Gigabit Ethernet,
-an OLED and Pmod headers the machine does not use yet
-(`doc/TODO/hw-nexysvideo.md`). It runs the
+HDMI output, an audio codec, Gigabit Ethernet and a USB HID socket
+for a keyboard, plus an HDMI input, an OLED and Pmod headers the
+machine does not use yet (`doc/TODO/hw-nexysvideo.md`). It runs the
 gen2 machine from the same boot ROM and NetBSD as the ULX3S. The CPU
 behaves functionally the same on both boards, and what differs,
 software discovers: the machine's name and clock from `SYSDEV_MACH`,
@@ -20,6 +18,16 @@ It builds with Vivado, in a container (`DEVELOP.md`, "Vivado (Xilinx
 boards)"; `doc/internals/build-system.md`, "Device families"), and
 every build passes its signoff gates before it can be flashed.
 
+The board's larger subsystems have documents of their own:
+
+- [`ddr3.md`](ddr3.md) — the memory system: the vendored DDR3
+  controller, the glue between it and the bus, and its clocks and
+  latency.
+- [`audio.md`](audio.md) — the audio path: the device in front of the
+  codec, the codec's setup over I2C and the clocks between them.
+- [`ethernet.md`](ethernet.md) — the Ethernet adapter: the PHY, its
+  clocks and reset, and where the station address comes from.
+
 ## Tops
 
 | Top | Build | What it is |
@@ -28,12 +36,14 @@ every build passes its signoff gates before it can be flashed.
 | `nexysvideo_uart_test_top` | `make fpga TOP=nexysvideo_uart_test_top` | the console alone: a banner, an echo, and LEDs for lock, reset, a heartbeat, RX activity and framing errors |
 | `nexysvideo_ddr3_test_top` | `make fpga TOP=nexysvideo_ddr3_test_top` | the DDR3 controller and its whole-chip self-test, no CPU |
 
-The machine top carries a 64 KiB boot ROM, the UART, the microSD slot
-over SPI, the display adapter on the HDMI output and the audio device
-in front of the codec ([audio.md](audio.md)) behind autoconfig, and
-system RAM in DDR3, and names itself "Nexys Video". It assembles the external bus around the machine as
-the ULX3S top does: the device decode, and the response fabric with
-its 256-cycle watchdog.
+The machine top carries a 64 KiB boot ROM, the UART and system RAM in
+DDR3, and names itself "Nexys Video". Behind autoconfig it carries
+the microSD slot over SPI, the display adapter on the HDMI output, the
+audio device in front of the codec ([audio.md](audio.md)), the
+Ethernet adapter on the board's PHY ([ethernet.md](ethernet.md)) and
+the PS/2 port on the keyboard bridge. It assembles the external bus
+around the machine as the ULX3S top does: the device decode, and the
+response fabric with its 256-cycle watchdog.
 
 ## Clocking and reset
 
@@ -51,7 +61,8 @@ lock restarts the hold, so a bouncing button does too. The MMCM's own
 reset is tied off, so its lock reports the MMCM alone. CPU RESET
 (`cpu_resetn`) is active-low and sits in the DDR3 bank at 1.5 V. The
 machine top also holds the machine in reset until the DDR3 has
-calibrated.
+calibrated and the Ethernet PHY is past its own reset
+([ethernet.md](ethernet.md), "Reset").
 
 The display has an MMCM of its own (`nexysvideo_video_clk`): 25 MHz
 for the pixel clock and 125 MHz for the TMDS serial clock, both off a
@@ -65,6 +76,10 @@ The codec's master clock, 12.5 MHz, is the oscillator divided by eight
 in a counter (`nexysvideo_codec_mclk`), with no clock manager: it runs
 from configuration on and no reset stops it ([audio.md](audio.md),
 "Three clocks, and who drives each").
+
+The Ethernet adapter's transmit side runs on the oscillator itself and
+its receive side on the clock the PHY sends, with no clock manager for
+either ([ethernet.md](ethernet.md), "Clocks").
 
 All three clock managers take the oscillator straight from its pin
 (R4, in bank 34 and clock region X1Y2), and that region's clock
@@ -195,8 +210,9 @@ A top's constraints can span several files:
 - `hw/constraints/nexysvideo_machine.xdc`: the board lines every
   machine top uses, whatever its core, and the design's timing
   intent (false paths on the asynchronous pins and the HDMI pairs,
-  the SD input timing, the bounds on the CPU/DDR3 and CPU/pixel-clock
-  crossings, the pull-downs on the codec's serial clocks);
+  the SD and Ethernet input timing, the bounds on the CPU clock's
+  crossings to the DDR3, the pixel clock and the Ethernet clocks, the
+  pull-downs on the codec's serial clocks);
 - `hw/constraints/nexysvideo_ddr3.xdc`: the DDR3 pins, taken from
   Digilent's memory-interface project, shared by every top with the
   memory;
