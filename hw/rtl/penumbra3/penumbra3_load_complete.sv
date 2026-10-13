@@ -19,7 +19,7 @@ module penumbra3_load_complete #(
     input  logic                i_rst,
 
     // MEM2 verdict for a load (combinational; consumed into a flop)
-    input  logic                i_load_valid,   // a load is resolving in MEM2
+    input  logic                i_load_valid,   // a load leaves MEM2 this cycle with its verdict
     input  logic                i_cache_hit,
     input  logic [IDX_BITS-1:0] i_load_dest,
     input  logic [1:0]          i_load_size,    // sub-word extract metadata, parked with the load

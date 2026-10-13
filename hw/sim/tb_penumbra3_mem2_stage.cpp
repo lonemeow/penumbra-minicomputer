@@ -8,7 +8,9 @@
 //
 // Covers: load hit (+ sub-word), the miss -> hold -> registered completion
 // sequence, an uncached load taking the fill path despite a cache "hit", a TLB
-// miss committing as a fault, a store write-through, and the MEM2->EX forward.
+// miss committing as a fault, a store write-through, the MEM2->EX forward, and
+// a slot held in MEM2 taking effect only as it leaves: behind a parked load,
+// under WB back-pressure, and squashed by a fault commit.
 
 #include <cstdio>
 #include <cstdint>
@@ -160,6 +162,104 @@ int main(int argc, char** argv) {
     tick(d); d->eval();
     check("st_wb_class", d->o_wb_op_class, OPC_STORE);
     check("st_wb_valid", d->o_wb_valid, 1);
+
+    tick(d);
+
+    // The slot in MEM2 takes effect -- commits, parks, writes the L1 -- in
+    // the one cycle it leaves MEM2. The three sequences below hold it there
+    // in each of the ways the spine can: behind a parked load, under WB
+    // back-pressure, and squashed by a fault commit.
+
+    // ── An ALU op behind a parked load commits once, after the completion ──
+    idle(d);
+    d->i_ir = enc_m(1, MEM_SZ_WORD, 0, 5); d->i_ea = 0x1000;
+    d->i_phys_dst = 5; d->i_phys_dst_we = 1; d->i_valid = 1;
+    d->eval(); tick(d);                        // the load is in MEM2
+    d->i_ir = enc_r(0 /* ADD */, 4); d->i_ea = 0x11110000;
+    d->i_phys_dst = 4; d->i_dcache_hit = 0;    // the load misses; the ADD is in MEM1
+    d->eval(); tick(d);                        // the load parks; the ADD is in MEM2
+    d->i_valid = 0; d->eval();
+    int alu_commits = 0;
+    tick(d); d->eval();
+    check("behind_alu_waits_1", d->o_wb_valid, 0);
+    alu_commits += d->o_wb_valid && d->o_wb_phys_dst == 4;
+    tick(d); d->eval();
+    check("behind_alu_waits_2", d->o_wb_valid, 0);
+    alu_commits += d->o_wb_valid && d->o_wb_phys_dst == 4;
+    d->i_fill_done = 1; d->i_fill_data = 0x0BADCAFE; d->eval(); tick(d);
+    d->i_fill_done = 0; d->eval();
+    check("behind_alu_load_done", d->o_complete, 1);
+    alu_commits += d->o_wb_valid && d->o_wb_phys_dst == 4;
+    for (int i = 0; i < 3; i++) {
+        tick(d); d->eval();
+        alu_commits += d->o_wb_valid && d->o_wb_phys_dst == 4;
+    }
+    check("behind_alu_commits_once", alu_commits, 1);
+
+    // ── A store behind a parked load writes the L1 once, after the completion ──
+    idle(d);
+    d->i_ir = enc_m(1, MEM_SZ_WORD, 0, 5); d->i_ea = 0x1000;
+    d->i_phys_dst = 5; d->i_phys_dst_we = 1; d->i_valid = 1;
+    d->eval(); tick(d);                        // the load is in MEM2
+    d->i_ir = enc_m(0, MEM_SZ_WORD, 0, 7); d->i_ea = 0x1004;
+    d->i_store_data = 0x55AA55AA; d->i_phys_dst_we = 0;
+    d->i_dcache_hit = 0;                       // the load misses; the store is in MEM1
+    d->eval(); tick(d);                        // the load parks; the store is in MEM2
+    d->i_valid = 0; d->eval();
+    int store_writes = d->o_dcache_we;
+    check("behind_store_waits_1", d->o_dcache_we, 0);
+    tick(d); d->eval();
+    store_writes += d->o_dcache_we;
+    check("behind_store_waits_2", d->o_dcache_we, 0);
+    d->i_fill_done = 1; d->i_fill_data = 0; d->eval(); tick(d);
+    d->i_fill_done = 0; d->eval();
+    for (int i = 0; i < 3; i++) {
+        store_writes += d->o_dcache_we;
+        tick(d); d->eval();
+    }
+    check("behind_store_writes_once", store_writes, 1);
+
+    // ── A load that misses under WB back-pressure parks when it leaves MEM2 ──
+    idle(d);
+    d->i_ir = enc_m(1, MEM_SZ_WORD, 0, 5); d->i_ea = 0x1000;
+    d->i_phys_dst = 5; d->i_phys_dst_we = 1; d->i_valid = 1;
+    d->eval(); tick(d);                        // the load is in MEM2
+    d->i_valid = 0; d->i_dcache_hit = 0; d->i_ext_stall = 1;
+    d->eval();
+    int fills = d->o_launch_fill, completions = d->o_complete;
+    tick(d); d->eval();                        // held: the load is still in MEM2
+    check("held_load_not_parked", d->o_load_pending, 0);
+    fills += d->o_launch_fill; completions += d->o_complete;
+    d->i_ext_stall = 0; d->eval();             // released: the load leaves MEM2
+    tick(d); d->eval();
+    check("held_load_parks_on_release", d->o_load_pending, 1);
+    fills += d->o_launch_fill; completions += d->o_complete;
+    d->i_fill_done = 1; d->i_fill_data = 0x600DF00D; d->eval(); tick(d);
+    d->i_fill_done = 0; d->eval();
+    for (int i = 0; i < 4; i++) {
+        fills += d->o_launch_fill; completions += d->o_complete;
+        // A second park would wait here for ever: answer it so the count shows it.
+        d->i_fill_done = d->o_load_pending; d->eval();
+        tick(d); d->i_fill_done = 0; d->eval();
+    }
+    check("held_load_fills_once",     fills, 1);
+    check("held_load_completes_once", completions, 1);
+
+    // ── A load squashed in MEM2 by a fault commit does not park ──
+    idle(d);
+    d->i_ir = enc_m(1, MEM_SZ_WORD, 0, 5); d->i_ea = 0x1000;
+    d->i_phys_dst = 5; d->i_phys_dst_we = 1; d->i_valid = 1;
+    d->eval(); tick(d);                        // the load is in MEM2
+    d->i_valid = 0; d->i_dcache_hit = 0; d->i_bubble = 1;
+    d->eval(); tick(d);
+    d->i_bubble = 0; d->eval();
+    check("squashed_load_not_parked",  d->o_load_pending, 0);
+    check("squashed_load_no_fill",     d->o_launch_fill, 0);
+    check("squashed_load_no_commit",   d->o_wb_valid, 0);
+    // Answer a park if there is one, so a failure here does not hang the rest.
+    d->i_fill_done = d->o_load_pending; d->eval(); tick(d);
+    d->i_fill_done = 0; d->eval();
+    check("squashed_load_no_complete", d->o_complete, 0);
 
     printf("%s: %d/%d checks passed\n", errors ? "FAIL" : "PASS", tests - errors, tests);
     delete d;

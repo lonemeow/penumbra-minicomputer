@@ -4,8 +4,9 @@
 //
 // MEM1 drives the translation launch; dtranslate resolves the verdict a cycle
 // later into MEM2; MEM2 resolves the access. The freeze is wired the way the
-// spine will wire it: hold = load_pending | external stall, fanned to MEM1,
-// MEM2, and dtranslate together. The D-cache resolve and the bus-master fill
+// spine wires it: hold = load_pending | external stall goes to MEM1,
+// dtranslate and MEM2's slot, and the external stall alone holds the
+// MEM2/WB register. The D-cache resolve and the bus-master fill
 // are driven by the testbench (those leaves attach at the spine). A raw
 // instruction word feeds penumbra3_decode for the bundle; the payload's live
 // fields come in flat (value = the effective address).
@@ -217,7 +218,8 @@ module penumbra3_mem2_stage_test
         .o_fwd_dst              (o_fwd_dst),
         .o_fwd_we               (o_fwd_we),
         .o_fwd_valid            (o_fwd_valid),
-        .i_hold                 (hold),
+        .i_launch_hold          (hold),
+        .i_hold                 (i_ext_stall),
         .i_bubble               (i_bubble),
         .o_wb_bundle            (wb_bundle),
         .o_wb_payload           (wb_payload),

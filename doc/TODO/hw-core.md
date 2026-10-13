@@ -179,31 +179,13 @@ ranks first ("Levers ranked by measured benefit"):
    `o_launch_fill` and a one-word `i_fill_data`, its fetch side
    `i_fetch_busy`. **The D-side:** MEM1 launches it, MEM2
    consumes the verdict, and `load_complete` parks `o_victim_way` with a
-   miss. Four faults on the still-unexercised load-miss path come first:
-   - `mem2_stage` keeps committing while a load is pending: the MEM2/WB
-     register is not held then, and the slot held in MEM2 behind the
-     missing load is not driven to bubbles, as
-     `doc/internals/penumbra3/memory-completion.md` ("What the pipe gate
-     freezes") requires, so it commits again on every pending cycle; a
-     store there writes again each cycle;
-   - that held slot resumes in the cycle after the fill installs, when
-     the L1 still gives the filled way as it was: the L1 reads a held
-     lookup's set again every cycle, but a line shows two cycles after
-     its install. A load to the same line then misses again and installs
-     it in a second way. The hold has to last one cycle past the install;
-   - a load parks on its verdict alone, whether or not its slot leaves
-     MEM2. In a cycle WB holds MEM2 for a `divmul` second write, a
-     missing load parks and stays in MEM2, and once the fill completes
-     it resolves there a second time: a cacheable load completes and
-     then commits again as a hit, an uncached one reads its device
-     twice;
-   - a load squashed in MEM2 by a fault commit parks too: `i_bubble`
-     clears its commit but not the park, so it fills its line and then
-     writes its register through the completion path, after the fault
-     ahead of it was taken.
-
-   All four have one cause: the commit, the park and the store strobe
-   each decide separately whether the slot in MEM2 leaves it this cycle.
+   miss. One fault on the load-miss path comes first: the slot held in
+   MEM2 behind a missing load resumes in the cycle after the fill
+   installs, when the L1 still gives the filled way as it was. The L1
+   reads a held lookup's set again every cycle, but a line shows two
+   cycles after its install, so a load to the same line misses again
+   and installs it in a second way. The hold has to last one cycle past
+   the install.
 
    With the L1 checking no cacheability on a store hit
    (`doc/system/mmu.md`, "Uncached Access"), the load's

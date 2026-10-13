@@ -161,7 +161,11 @@ differs — no register writeback).
 - **Held while an access is pending:** MEM1, the MEM1/MEM2 register, the
   [address-translation launch](./mem-stage.md), and issue (a dependent stalls
   on the scoreboard, see [the issue gate](#the-issue-gate)). The pending
-  access and every younger instruction hold in place.
+  access and every younger instruction hold in place. The instruction held
+  in MEM2 keeps its verdict and does nothing with it: its commit, a store's
+  cache write and a miss of its own all happen in the one cycle it leaves
+  MEM2, which is also the rule for a slot held there by the commit stage
+  or squashed by a fault.
 - **Not held:** the MEM2/WB register. It carries instructions *older* than the
   pending access to the commit point, and an older instruction must retire
   while the access waits. A pending access drives that register to bubbles —

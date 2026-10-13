@@ -204,7 +204,8 @@ module penumbra3_spine
     //   - wb_local_stall: WB's dual-write hold (flop-shallow).
     //   - ex_local_stall: EX's divmul / drain-commit hold (flop-shallow).
 
-    logic launch_hold;    // freeze MEM1 + the MEM1/MEM2 register + dtranslate + cache
+    logic launch_hold;    // freeze MEM1 + the MEM1/MEM2 register + dtranslate + cache;
+                          // MEM2 reads it as "my slot stays"
     logic mem2_reg_hold;  // freeze the MEM2/WB register
     logic ex_stall_in;    // MEM1 cannot accept (-> EX)
     logic id_stall_in;    // EX cannot accept (-> ID register hold)
@@ -495,6 +496,7 @@ module penumbra3_spine
         .o_complete_value(lc_complete_value), .o_complete_fault(lc_complete_fault),
         .o_fwd_result(mem2_fwd_result), .o_fwd_dst(mem2_fwd_dst),
         .o_fwd_we(mem2_fwd_we), .o_fwd_valid(mem2_fwd_valid),
+        .i_launch_hold(launch_hold),
         .i_hold(mem2_reg_hold), .i_bubble(younger_flush),
         .o_wb_bundle(mem2wb_bundle), .o_wb_payload(mem2wb_payload),
         .o_wb_valid(mem2wb_valid), .o_wb_bcause(mem2wb_bcause)

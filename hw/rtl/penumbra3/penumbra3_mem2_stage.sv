@@ -11,6 +11,11 @@
 // The back-end stall is the whole point: the only thing that holds the pipe is
 // the registered o_load_pending out of the hold buffer, distributed by the
 // spine -- never a combinational cache/TLB verdict reaching into issue.
+//
+// The spine holds a slot in MEM2 in two ways: behind a parked access
+// (o_load_pending) and under WB back-pressure. Either way the slot's verdict
+// stands every cycle it waits, and its effects -- the commit to WB, the park,
+// the L1 write -- happen once, in the cycle it leaves (mem2_fire).
 
 module penumbra3_mem2_stage
     import penumbra_pkg::*;
@@ -70,8 +75,9 @@ module penumbra3_mem2_stage
     output logic                  o_fwd_valid,
 
     // -- Pipeline handshake ---------------------------------------
-    input  logic           i_hold,           // freeze the MEM2/WB register (pipe stall)
-    input  logic           i_bubble,          // fault-commit flush from WB
+    input  logic           i_launch_hold,    // the MEM1/MEM2 register is frozen: the slot stays in MEM2
+    input  logic           i_hold,           // freeze the MEM2/WB register (WB back-pressure)
+    input  logic           i_bubble,         // fault-commit flush from WB
 
     // -- MEM2/WB register (to WB) ---------------------------------
     output ctrl_bundle_t   o_wb_bundle,
@@ -80,8 +86,12 @@ module penumbra3_mem2_stage
     output bcause_e        o_wb_bcause
 );
 
-    logic mem2_fire;                            // the MEM2 slot retires to WB cleanly
-    assign mem2_fire = ~i_hold & ~i_bubble;
+    // The slot in MEM2 takes effect in the cycle it leaves MEM2, and in no
+    // other. i_launch_hold is the hold the MEM1/MEM2 register itself gets, so
+    // the slot fires exactly when that register lets it go; a slot a fault
+    // commit squashes never fires.
+    logic mem2_fire;
+    assign mem2_fire = i_valid & ~i_launch_hold & ~i_bubble;
 
     // -- Access classification ------------------------------------
     logic mem2_is_load, mem2_is_store, mem2_is_rdsys;
@@ -136,13 +146,13 @@ module penumbra3_mem2_stage
 
     // -- Back-end load verdict -> hold buffer ---------------------
     // An uncached load never "hits" the cache, so it takes the fill path too.
-    // load_miss keys off the same effective hit fed to load_complete, so the
-    // two never disagree on whether the load is held.
+    // A slot that fires either commits to WB or, a load that missed, parks in
+    // the hold buffer; both key off the one load_miss, so they never disagree.
     logic ld_valid, ld_cache_hit, load_miss, mem2_commits;
     assign ld_valid     = mem2_is_load & ~mem2_fault;
     assign ld_cache_hit = i_dcache_hit & i_translate_cacheable;
     assign load_miss    = ld_valid & ~ld_cache_hit;
-    assign mem2_commits = i_valid & ~load_miss;
+    assign mem2_commits = mem2_fire & ~load_miss;
 
     logic [31:0] lc_complete_data;
     logic [1:0]  lc_complete_size, lc_complete_addr_lo;
@@ -152,7 +162,7 @@ module penumbra3_mem2_stage
     ) u_load_complete (
         .i_clk              (i_clk),
         .i_rst              (i_rst),
-        .i_load_valid       (ld_valid),
+        .i_load_valid       (mem2_fire & ld_valid),
         .i_cache_hit        (ld_cache_hit),
         .i_load_dest        (i_payload.phys_dst),
         .i_load_size        (i_bundle.mem_size),
@@ -192,7 +202,7 @@ module penumbra3_mem2_stage
                     : mem2_is_rdsys ? i_sys_rdata
                     :                 i_payload.value;
 
-    // A store writes through in MEM2 on a clean, retiring, fault-free slot.
+    // A store writes the L1 as it leaves MEM2 fault-free.
     assign o_dcache_paddr   = i_translate_paddr;
     assign o_dcache_wdata   = i_store_wdata;
     assign o_dcache_byte_en = i_byte_en;
@@ -223,22 +233,26 @@ module penumbra3_mem2_stage
         wb_payload_d.fault_status  = mem2_fault_status;
     end
 
+    // The bubble WB gets while an access is parked is that access's, whatever
+    // waits behind it in MEM2.
     bcause_e mem2_bcause;
-    assign mem2_bcause = (load_miss & mem2_is_load) ? BCAUSE_LOAD
-                       : mem2_is_store              ? BCAUSE_STORE
-                       :                              i_bcause;
+    assign mem2_bcause = (o_load_pending | load_miss) ? BCAUSE_LOAD
+                       : mem2_is_store                ? BCAUSE_STORE
+                       :                                i_bcause;
 
     // Only the valid bit carries the commit decision. The bundle and payload
     // load whenever MEM2 advances, and every consumer qualifies them with
     // o_wb_valid, so their ~350 enables stay off the verdict: the load-miss
     // decision behind them waits on the TLB permission check, cacheability
-    // and the L1 hit.
+    // and the L1 hit. A parked access does not hold this register: it loads a
+    // bubble every cycle the slot behind the access waits, so what is older
+    // than the access drains to commit.
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             o_wb_valid  <= 1'b0;
             o_wb_bcause <= BCAUSE_FLUSH;
         end else if (~i_hold) begin
-            o_wb_valid  <= i_bubble ? 1'b0 : mem2_commits;
+            o_wb_valid  <= mem2_commits;
             o_wb_bcause <= i_bubble ? BCAUSE_FLUSH : mem2_bcause;
         end
         if (~i_hold) begin
@@ -248,10 +262,23 @@ module penumbra3_mem2_stage
     end
 
     // -- Assertions (sim-only; Verilator --assert) ----------------
-    // A missing load never commits to WB -- it is evicted and completes later.
+    // Both of the spine's holds on this slot reach it as i_launch_hold: a
+    // parked access freezes the launch side, and WB back-pressure holds the
+    // slot behind the register it freezes.
     always_comb
-        assert (!(load_miss && mem2_commits))
-            else $error("penumbra3_mem2_stage: a missing load committed to WB");
+        assert (i_rst || !(o_load_pending && !i_launch_hold))
+            else $error("penumbra3_mem2_stage: an access is parked and the launch side is not held");
+    always_comb
+        assert (i_rst || !(i_hold && !i_launch_hold))
+            else $error("penumbra3_mem2_stage: the MEM2/WB register is held and the slot in MEM2 is not");
+
+    // A held MEM1/MEM2 register keeps its slot through a flush, so a fault
+    // commit must never find one held. Nothing commits while an access is
+    // parked, and WB holds MEM2 only for a divmul's second write, which is
+    // no fault commit.
+    always_comb
+        assert (i_rst || !(i_bubble && i_launch_hold))
+            else $error("penumbra3_mem2_stage: a fault commit met a held MEM2 slot");
 
     // A protection fault implies a TLB hit (the verdict module guarantees it).
     always_comb
