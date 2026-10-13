@@ -13,9 +13,10 @@
  * A RAM shadow of the cell grid backs the copy operations: device
  * reads are uncached MMIO and would dominate scrolling, so copyrows /
  * copycols move cells in the shadow and replay only the stores to the
- * device.  The shadow starts blank while the screen may still show
- * the power-up splash; the emulation screen begins with a full clear,
- * which brings the two in sync before the first copy ever runs.
+ * device.  Neither the device nor wscons clears the cells, which hold
+ * whatever firmware left there, so the screen is cleared when it is
+ * allocated; that also brings the shadow and the device in sync before
+ * the first copy runs.
  *
  * The cursor is the device's own (CURSOR register + CTRL.CURSOR_EN),
  * so the driver never draws one.
@@ -198,8 +199,8 @@ pdisplay_attach(device_t parent, device_t self, void *aux)
 
 	/*
 	 * Known control state: picture on, cursor off until the
-	 * emulator owns a position.  The splash (if the board
-	 * preloads one) stays on screen until the first clear.
+	 * emulator owns a position.  What firmware left in the cells
+	 * stays on screen until the screen is allocated.
 	 */
 	sc->sc_ctrl = PD_CTRL_ENABLE;
 	PD_WR(sc, PD_CTRL, sc->sc_ctrl);
@@ -564,6 +565,7 @@ pdisplay_alloc_screen(void *v, const struct wsscreen_descr *type,
     void **cookiep, int *curxp, int *curyp, long *defattrp)
 {
 	struct pdisplay_softc *sc = v;
+	int error;
 
 	if (sc->sc_nscreens > 0)
 		return ENOMEM;
@@ -571,7 +573,10 @@ pdisplay_alloc_screen(void *v, const struct wsscreen_descr *type,
 
 	*cookiep = sc;
 	*curxp = *curyp = 0;
-	return pdisplay_allocattr(sc, 0, 0, 0, defattrp);
+	error = pdisplay_allocattr(sc, 0, 0, 0, defattrp);
+	if (error == 0)
+		pdisplay_eraserows(sc, 0, sc->sc_rows, *defattrp);
+	return error;
 }
 
 static void
