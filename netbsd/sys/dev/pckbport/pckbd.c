@@ -978,6 +978,9 @@ pckbd_input(void *vsc, int data)
 	if (sc->rawkbd) {
 		u_char d = data;
 		wskbd_rawinput(sc->sc_wskbddev, &d, 1);
+		/* normally cleared in pckbd_decode() */
+		if (data != KBR_EXTENDED0 && data != KBR_EXTENDED1)
+			sc->id->t_releasing = 0;
 		return;
 	}
 #endif
