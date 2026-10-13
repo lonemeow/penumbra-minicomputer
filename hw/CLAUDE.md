@@ -468,7 +468,9 @@ the shared module.
   from `nexysvideo_codec_mclk`; `doc/internals/nexysvideo/audio.md`),
   the Ethernet device on the RTL8211E PHY (autoconfig;
   `nexysvideo_eth`, with a command port of the same I2C master;
-  `doc/internals/nexysvideo/ethernet.md`), and
+  `doc/internals/nexysvideo/ethernet.md`), the PS/2 port on the two
+  pins of the board's HID socket (autoconfig, last in the chain;
+  open-drain pads on the pins' own pull-ups), and
   512 MiB of DDR3 as system RAM through `ddr3_stack`.
   The controller resets only with its clocks' lock; the machine is held
   in reset until it has calibrated and the PHY has left its own reset,
@@ -481,7 +483,8 @@ the shared module.
   DVI off the HDMI pins, plays frames pushed from the monitor into a
   codec model on the I2C and serial-port pins, and sends a frame out of
   the RGMII transmit pins and back in at the receive pins, with an
-  EEPROM model on the I2C pins and a PHY model on the management pins.
+  EEPROM model on the I2C pins and a PHY model on the management pins,
+  and exchanges bytes with a keyboard model on the PS/2 pins.
 - `nexysvideo/nexysvideo_uart_test_top.sv` — console bring-up top
   (`make fpga TOP=nexysvideo_uart_test_top`): banner and echo on the
   UART port, LEDs for lock, reset, a 1 Hz heartbeat, RX activity and

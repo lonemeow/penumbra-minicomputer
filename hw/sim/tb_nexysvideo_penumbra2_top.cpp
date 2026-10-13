@@ -55,9 +55,16 @@
 //    going out on the RGMII transmit pins and, with those wired back to
 //    the receive pins, arriving in the receive ring byte for byte. A
 //    data pin swapped with another, on either side, breaks the frame's
-//    check sequence, and the frame is never stored.
+//    check sequence, and the frame is never stored;
+//  - the PS/2 port: found by autoconfig after the Ethernet device, the
+//    last in the chain; a keyboard on the two pins (ps2_device.h) held
+//    off from the first clock until the monitor sets CTRL.EN, its
+//    power-on byte arriving then, and a byte from the monitor reaching
+//    it and acknowledged. The two pins swapped, or a pad driven high
+//    where it should be let go, each breaks one of those.
 #include "Vnexysvideo_penumbra2_top.h"
 #include "i2c_slave.h"
+#include "ps2_device.h"
 #include "sd_card_sim.h"
 #include "uart_host.h"
 #include "verilated.h"
@@ -383,6 +390,11 @@ static void chk(bool ok, const char* what) {
 static bool pulls_low(bool en, bool out) { return en && !out; }
 static long i2c_driven_high = 0;    // clocks either I2C pad drove high
 
+// The keyboard behind the board's HID socket, as its bridge presents
+// one: a PS/2 device on the two pins.
+static Ps2Device kbd;
+static long ps2_driven_high = 0;    // clocks either PS/2 pad drove high
+
 static void tick() {
     bool powered = !top->sd_reset;
     top->uart_tx_in = host_tx.line(cycle);
@@ -394,6 +406,12 @@ static void tick() {
                !eeprom.i2c.drive_low;
     // MDIO rests high on its pull-up too.
     top->eth_mdio = !pulls_low(top->eth_mdio__en, top->eth_mdio__out) && !mdio_phy.drive_low;
+    // The PS/2 lines rest high on the pins' pull-ups: the top or the
+    // keyboard pulls either one low.
+    bool ps2_clk_line = !pulls_low(top->ps2_clk__en, top->ps2_clk__out) && kbd.clk;
+    bool ps2_data_line = !pulls_low(top->ps2_data__en, top->ps2_data__out) && kbd.data;
+    top->ps2_clk = ps2_clk_line;
+    top->ps2_data = ps2_data_line;
     // The RGMII transmit pins wired back to the receive pins.
     top->eth_rxck = top->eth_txck;
     top->eth_rxd = top->eth_txd;
@@ -415,6 +433,9 @@ static void tick() {
     eeprom.i2c.tick();
     eeprom.i2c.observe(top->scl, top->sda);
     mdio_phy.step(top->eth_mdc, top->eth_mdio);
+    ps2_driven_high += (top->ps2_clk__en && top->ps2_clk__out) ||
+                       (top->ps2_data__en && top->ps2_data__out);
+    kbd.step(ps2_clk_line, ps2_data_line);
     if (top->eth_rst_b && !phy_reset_released)
         phy_reset_released = cycle;
     if (((top->led >> 1) & 1) && !machine_released)
@@ -447,6 +468,14 @@ static std::string command(const std::string& line) {
     bool ok = wait_prompt(mark + line.size(), 20000000);
     chk(ok, ("no prompt after '" + line + "'").c_str());
     return host.text.substr(mark);
+}
+
+// Run until `done` says so, for 20 ms at most.
+template <typename F>
+static bool run_until(F done) {
+    for (uint64_t limit = cycle + CPU_HZ / 50; !done() && cycle < limit;)
+        tick();
+    return done();
 }
 
 static bool contains(const std::string& hay, const std::string& needle) {
@@ -676,6 +705,66 @@ static void check_ethernet(const std::string& boot) {
     expect(out, hex(rx_slot + 60) + bytes({image[60], image[61]}));
 }
 
+// The PS/2 port through the whole machine: the keyboard on the pins
+// held off until the port is in use, a byte from it, and a byte to it.
+//
+// The monitor reads a byte at a time, and a read of any byte of RX_DATA
+// takes what waits there. So a received byte is read at the register's
+// first address, and the flags beside one, VALID and ERR, at its
+// second, which costs that byte.
+static void check_ps2(const std::string& boot) {
+    const std::string tag = "  PS2 PS/2 @ 0x";
+    size_t at = boot.find(tag);
+    if (at == std::string::npos)
+        return;
+    uint32_t base = (uint32_t)strtoul(boot.c_str() + at + tag.size(), nullptr, 16);
+    auto hex = [](uint32_t v) {
+        char buf[16];
+        snprintf(buf, sizeof buf, "%08x", v);
+        return std::string(buf);
+    };
+    const uint32_t CAP = base, IRQ_STATUS = base + 0x04, CTRL = base + 0x0c;
+    const uint32_t RX_DATA = base + 0x10, TX_DATA = base + 0x14;
+    auto sent = [](size_t n) { return run_until([n] { return kbd.sent_log.size() >= n; }); };
+
+    std::string out = command("x " + hex(CAP) + " 4");
+    expect(out, hex(CAP) + "    01 00 00 00");
+
+    // The keyboard has had its power-on result to send since the first
+    // clock, and the port, not in use, has held it off.
+    chk(kbd.started == 0, "the keyboard sent to a port not in use");
+    command("w " + hex(CTRL) + " 1");
+    chk(sent(1), "the keyboard's byte did not go once the port was in use");
+    out = command("x " + hex(IRQ_STATUS) + " 1");
+    expect(out, hex(IRQ_STATUS) + "    03");            // RX and TX
+    out = command("x " + hex(RX_DATA) + " 1");
+    expect(out, hex(RX_DATA) + "    aa");
+    out = command("x " + hex(IRQ_STATUS) + " 1");
+    expect(out, hex(IRQ_STATUS) + "    02");            // the byte taken
+
+    // The flags beside a second byte: VALID, and no ERR.
+    kbd.send(0x1c);
+    chk(sent(2), "the keyboard's second byte did not go");
+    out = command("x " + hex(RX_DATA + 1) + " 1");
+    expect(out, hex(RX_DATA + 1) + "    01");
+
+    // A byte to the keyboard, which answers as one does. BUSY and ERR
+    // are both clear once it has the byte.
+    kbd.on_byte = [](uint8_t) { kbd.reply(0xfa); };
+    command("w " + hex(TX_DATA) + " f4");
+    chk(run_until([] { return !kbd.received.empty(); }), "the keyboard was sent no byte");
+    chk(kbd.received.size() == 1 && kbd.received[0] == 0xf4,
+        "the keyboard did not take the byte sent");
+    chk(kbd.bad_parity == 0 && kbd.bad_stop == 0, "the byte reached the keyboard malformed");
+    out = command("x " + hex(TX_DATA) + " 4");
+    expect(out, hex(TX_DATA) + "    00 00 00 00");
+    chk(sent(3), "the keyboard's reply did not go");
+    out = command("x " + hex(RX_DATA) + " 1");
+    expect(out, hex(RX_DATA) + "    fa");
+
+    chk(ps2_driven_high == 0, "a PS/2 pad driven high: the link is open drain");
+}
+
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
     make_sd_image();
@@ -685,6 +774,10 @@ int main(int argc, char** argv) {
     top = new Vnexysvideo_penumbra2_top;
     top->cpu_resetn = 1;
     top->uart_tx_in = 1;
+
+    // A keyboard announces itself as it powers up.
+    kbd.step_hz(CPU_HZ);
+    kbd.send(0xaa);
 
     // ── The card stays unpowered through the reset hold ────────────
     bool off_in_reset = true;
@@ -744,7 +837,8 @@ int main(int argc, char** argv) {
     expect(boot, "  DISPLAY Display @ 0x");
     expect(boot, "  AUDIO Audio @ 0x");
     expect(boot, "  ETH Ethernet @ 0x");
-    expect(boot, "4 device(s) found");
+    expect(boot, "  PS2 PS/2 @ 0x");
+    expect(boot, "5 device(s) found");
     expect(boot, "sd:0,0 ... card present");
     chk(!top->sd_reset, "sd_reset still high (card unpowered) after the reset hold");
 
@@ -768,6 +862,8 @@ int main(int argc, char** argv) {
         check_audio(boot);
 
         check_ethernet(boot);
+
+        check_ps2(boot);
     }
 
     // led[3] the DDR3 calibrated; led[6:4] the RAM's longest wait

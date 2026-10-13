@@ -3,9 +3,9 @@
 // Wires machine_penumbra2 to the board: the shared clocking and power-on
 // reset (nexysvideo_clk_rst), a 64 KB boot ROM, the UART on the UART USB
 // port, the microSD slot over SPI, the display adapter on the HDMI
-// output, the audio device in front of the board's codec and the
-// Ethernet device on the board's PHY behind autoconfig, and system RAM
-// in the board's 512 MiB of DDR3. The top
+// output, the audio device in front of the board's codec, the Ethernet
+// device on the board's PHY and the PS/2 port on the board's HID socket
+// behind autoconfig, and system RAM in the board's 512 MiB of DDR3. The top
 // grows one device per bring-up step; the external
 // Penumbra Bus is assembled here the way the ULX3S top assembles it
 // (device decode, response fabric with its no-device watchdog), so what
@@ -98,6 +98,10 @@ module nexysvideo_penumbra2_top (
     output logic       eth_mdc,
     inout  wire        eth_mdio,
     output logic       eth_rst_b,    // low resets the PHY
+
+    // ── USB HID socket, through the board's PIC24: a PS/2 link ──
+    inout  wire        ps2_clk,
+    inout  wire        ps2_data,
 
     // ── DDR3 (MT41K256M16, x16) ───────────────────────────
     output logic [0:0]  ddr3_ck_p,
@@ -247,6 +251,7 @@ module nexysvideo_penumbra2_top (
     logic        spi_irq;
     logic        audio_irq;
     logic        eth_irq;
+    logic        ps2_irq;
 
     // ── Autoconfig control from the machine's bus controller ──
     logic        busctl_bus_rst;
@@ -262,7 +267,7 @@ module nexysvideo_penumbra2_top (
         .i_clk         (cpu_clk),
         .i_rst         (rst),
 
-        .i_irq         (uart_irq | spi_irq | audio_irq | eth_irq),
+        .i_irq         (uart_irq | spi_irq | audio_irq | eth_irq | ps2_irq),
         .i_timer_irq   (1'b0),        // the internal timer is the source
 
         .o_bus_addr    (mem_addr),
@@ -837,11 +842,8 @@ module nexysvideo_penumbra2_top (
     logic        eth_dev_we, eth_dev_re, eth_dev_ack;
     logic [31:0] ac_eth_rdata;
     logic        ac_eth_ack, ac_eth_sel;
-    // Last device in the chain: the dangling cfg_out is the
-    // "no more devices" end the ROM's autoconfig loop probes.
-    /* verilator lint_off UNUSEDSIGNAL */
+    // cfg_out is the daisy-chain to the next autoconfig device (PS/2 port).
     logic        ac_eth_cfg_out;
-    /* verilator lint_on UNUSEDSIGNAL */
 
     autoconfig_dev #(
         .DEV_CLASS (ACFG_CLASS_ETHERNET),
@@ -919,6 +921,78 @@ module nexysvideo_penumbra2_top (
         .o_phy_rst_n     (eth_rst_b)
     );
 
+    // ── PS/2 port (fifth in chain) ──────────────────────────
+    // The board's USB HID socket belongs to its PIC24, which presents
+    // the keyboard or mouse plugged in there as a PS/2 device on two
+    // pins.
+    logic [31:0] ps2_dev_addr, ps2_dev_wdata, ps2_dev_rdata;
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic [3:0]  ps2_dev_byte_en;
+    /* verilator lint_on UNUSEDSIGNAL */
+    logic        ps2_dev_we, ps2_dev_re, ps2_dev_ack;
+    logic [31:0] ac_ps2_rdata;
+    logic        ac_ps2_ack, ac_ps2_sel;
+    // Last device in the chain: the dangling cfg_out is the
+    // "no more devices" end the ROM's autoconfig loop probes.
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic        ac_ps2_cfg_out;
+    /* verilator lint_on UNUSEDSIGNAL */
+
+    autoconfig_dev #(
+        .DEV_CLASS (ACFG_CLASS_PS2),
+        .DEV_SIZE  (32'd4096),
+        .DEV_ID    (32'd0),
+        .DEV_NAME0 (32'h00325350)      // "PS2\0" packed LE
+    ) u_ac_ps2 (
+        .i_clk        (cpu_clk),
+        .i_rst        (rst),
+        .i_bus_rst    (busctl_bus_rst),
+        .i_cfg_en     (busctl_cfg_en),
+        .i_cfg_in     (ac_eth_cfg_out),
+        .o_cfg_out    (ac_ps2_cfg_out),
+        .i_addr       (mem_addr),
+        .i_wdata      (mem_wdata),
+        .i_byte_en    (mem_byte_en),
+        .i_we         (mem_we),
+        .i_re         (mem_re),
+        .o_rdata      (ac_ps2_rdata),
+        .o_ack        (ac_ps2_ack),
+        .o_sel        (ac_ps2_sel),
+        .o_dev_addr   (ps2_dev_addr),
+        .o_dev_wdata  (ps2_dev_wdata),
+        .o_dev_byte_en(ps2_dev_byte_en),
+        .o_dev_we     (ps2_dev_we),
+        .o_dev_re     (ps2_dev_re),
+        .i_dev_rdata  (ps2_dev_rdata),
+        .i_dev_ack    (ps2_dev_ack)
+    );
+
+    logic ps2_clk_release, ps2_data_release;
+
+    ps2 #(
+        .CLK_HZ (int'(CPU_HZ))
+    ) u_ps2 (
+        .i_clk      (cpu_clk),
+        .i_rst      (rst),
+        .i_addr     (ps2_dev_addr),
+        .i_wdata    (ps2_dev_wdata),
+        .i_we       (ps2_dev_we),
+        .i_re       (ps2_dev_re),
+        .o_rdata    (ps2_dev_rdata),
+        .o_ack      (ps2_dev_ack),
+        .o_irq      (ps2_irq),
+        .o_ps2_clk  (ps2_clk_release),
+        .i_ps2_clk  (ps2_clk),
+        .o_ps2_data (ps2_data_release),
+        .i_ps2_data (ps2_data)
+    );
+
+    // PS/2 pads, open drain. Nothing on the board pulls these lines
+    // up: the pins' own pull-ups make a line high (the constraints
+    // enable them).
+    assign ps2_clk  = ps2_clk_release  ? 1'bz : 1'b0;
+    assign ps2_data = ps2_data_release ? 1'bz : 1'b0;
+
     // ── Response fabric ─────────────────────────────────────
     localparam int SLV_RAM   = 0;
     localparam int SLV_ROM   = 1;
@@ -927,7 +1001,8 @@ module nexysvideo_penumbra2_top (
     localparam int SLV_DISP  = 4;
     localparam int SLV_AUDIO = 5;
     localparam int SLV_ETH   = 6;
-    localparam int NUM_SLV   = 7;
+    localparam int SLV_PS2   = 7;
+    localparam int NUM_SLV   = 8;
 
     logic [NUM_SLV-1:0]       slv_sel;
     logic [NUM_SLV-1:0]       slv_ack;
@@ -960,6 +1035,10 @@ module nexysvideo_penumbra2_top (
     assign slv_sel[SLV_ETH]     = ac_eth_sel;
     assign slv_ack[SLV_ETH]     = ac_eth_ack;
     assign slv_rdata[SLV_ETH]   = ac_eth_rdata;
+
+    assign slv_sel[SLV_PS2]     = ac_ps2_sel;
+    assign slv_ack[SLV_PS2]     = ac_ps2_ack;
+    assign slv_rdata[SLV_PS2]   = ac_ps2_rdata;
 
     bus_response_fabric #(
         .NUM_SLAVES     (NUM_SLV),

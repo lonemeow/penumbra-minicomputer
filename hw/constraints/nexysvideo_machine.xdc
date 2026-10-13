@@ -53,6 +53,10 @@ set_property -dict { PACKAGE_PIN U6    IOSTANDARD LVCMOS33 } [get_ports { ac_mcl
 set_property -dict { PACKAGE_PIN W5    IOSTANDARD LVCMOS33 } [get_ports { scl }]; #IO_L15N_T2_DQS_34 Sch=scl
 set_property -dict { PACKAGE_PIN V5    IOSTANDARD LVCMOS33 } [get_ports { sda }]; #IO_L16N_T2_34 Sch=sda
 
+## HID port
+set_property -dict { PACKAGE_PIN W17   IOSTANDARD LVCMOS33   PULLUP true } [get_ports { ps2_clk }]; #IO_L16N_T2_A15_D31_14 Sch=ps2_clk
+set_property -dict { PACKAGE_PIN N13   IOSTANDARD LVCMOS33   PULLUP true } [get_ports { ps2_data }]; #IO_L23P_T3_A03_D19_14 Sch=ps2_data
+
 ## Ethernet PHY
 set_property -dict { PACKAGE_PIN AA16  IOSTANDARD LVCMOS25 } [get_ports { eth_mdc }]; #IO_L1N_T0_13 Sch=eth_mdc
 set_property -dict { PACKAGE_PIN Y16   IOSTANDARD LVCMOS25 } [get_ports { eth_mdio }]; #IO_L1P_T0_13 Sch=eth_mdio
@@ -141,6 +145,11 @@ set_false_path -to [get_ports { ac_mclk }]
 # clocks at a time and read back through two-flop synchronizers.
 set_false_path -from [get_ports { scl sda }]
 set_false_path -to [get_ports { scl sda }]
+
+# The PS/2 lines move tens of microseconds apart, on the attached
+# device's clock, and are read back through two-flop synchronizers.
+set_false_path -from [get_ports { ps2_clk ps2_data }]
+set_false_path -to [get_ports { ps2_clk ps2_data }]
 
 # The Ethernet PHY's receive clock. With software managing the PHY it
 # is 25 or 2.5 MHz, for 100 or 10 Mbit/s. Until then the PHY negotiates

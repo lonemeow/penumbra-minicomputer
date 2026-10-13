@@ -1499,6 +1499,9 @@ FPGA_SRC_nexysvideo_penumbra2_top = $(SRC_COMMON) $(SRC_CORE) \
                                     hw/rtl/io/eth/eth_phy_rgmii_xc7.sv \
                                     hw/rtl/io/eth/eth_phy_reset.sv \
                                     hw/rtl/io/eth/eth_addr_eeprom.sv \
+                                    hw/rtl/io/ps2/ps2.sv \
+                                    hw/rtl/io/ps2/ps2_link.sv \
+                                    hw/rtl/io/ps2/ps2_line_filter.sv \
                                     $(SRC_BOARD_nexysvideo) \
                                     $(SRC_DDR3_nexysvideo) \
                                     $(FPGA_RTL)/nexysvideo/nexysvideo_video_clk.sv \

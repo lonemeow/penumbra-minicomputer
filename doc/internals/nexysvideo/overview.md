@@ -117,6 +117,20 @@ its worst arrival, 25 ns after the edge (clock-to-out, the board's
 flight both ways and the card's 14 ns output delay), as a two-cycle
 path. The slot's card-detect switch is not used.
 
+## Keyboard
+
+The USB HID host socket (J15) is connected to the board's PIC24
+instead of the FPGA, and the PIC24 presents the keyboard or mouse
+plugged in there as a PS/2 device on two FPGA pins, `ps2_clk` and
+`ps2_data`. The machine puts its PS/2 port
+([`../ps2-port.md`](../ps2-port.md)) on them, last in the autoconfig
+chain, so the board has a keyboard without a USB host of its own.
+
+Nothing on the board pulls the two lines up. The manual has a design
+enable the FPGA's own pull-ups on both pins, which the constraints do,
+and the top drives each pad open drain. The bridge sends a device's
+self-test result (`0xAA`) when one is plugged in.
+
 ## Display
 
 The display adapter (`CLASS_DISPLAY`, [display.md](../display.md))
@@ -141,8 +155,8 @@ I/O standard from Digilent's master XDC unchanged: LVCMOS12 for the
 buttons and switches (the VADJ bank; with `set_vadj` and `vadj_en`
 undriven, the board's pull resistors set it to 1.2 V), LVCMOS15 for CPU
 RESET (the DDR3 bank), LVCMOS25 for the LEDs and Ethernet, LVCMOS33
-for the UART, SD, audio codec, I2C and Pmods, and TMDS_33 for the HDMI
-output's pairs.
+for the UART, SD, audio codec, I2C, PS/2 lines and Pmods, and TMDS_33
+for the HDMI output's pairs.
 
 A top's constraints can span several files:
 
