@@ -529,8 +529,8 @@ PRE"). Suspects:
 - **Missing debounce.**
 
 Which one matters beyond the ULX3S: a ULPI PHY on the Nexys Video
-(`hw-nexysvideo.md`, "Devices: no USB host, so no keyboard or USB
-storage") replaces the clock recovery but not the controller above
+(`hw-nexysvideo.md`, "Devices: no USB host, so no USB storage")
+replaces the clock recovery but not the controller above
 the seam. Open: capture a failing full-speed session with the
 controller's line-capture instrument (`CAP.CAPTURE`,
 `doc/system/devices/usb-host.md`) and tell the two apart.
@@ -592,9 +592,8 @@ single-transaction register behavior as the default.
 
 The controller's contract (`doc/system/devices/usb-host.md`) covers
 low and full speed. The ULPI PHYs on the fmc-usb2 card
-(`hw-nexysvideo.md`, "Devices: no USB host, so no keyboard or USB
-storage") also signal at 480 Mbit/s, and the contract lacks what that
-needs:
+(`hw-nexysvideo.md`, "Devices: no USB host, so no USB storage") also
+signal at 480 Mbit/s, and the contract lacks what that needs:
 
 - `PORT_STATUS.SPEED` has no high-speed value; 3 is free.
 - `CAP[15:8]` gives the `DATA` buffer size in bytes in 8 bits, and
@@ -1062,7 +1061,7 @@ device in the FPGA, the preferred path there; the Nexys Video's
 RTL8211E, on RGMII, is the first. USB Ethernet (`ure(4)`, as on the
 ULX3S) stays available wherever a USB host is: on the Nexys once the
 fmc-usb2 card arrives (`hw-nexysvideo.md`, "Devices: no USB host, so
-no keyboard or USB storage").
+no USB storage").
 
 The bus has one master (`doc/hardware/bus-protocol.md`, "One Master"),
 so the device reaches no system RAM: it holds received and outgoing
@@ -1123,37 +1122,11 @@ Open:
 
 ## Hardware + kernel: PS/2 port (`CLASS_PS2`)
 
-The Nexys Video has no keyboard until its USB card exists
-(`hw-nexysvideo.md`, "Devices: no USB host, so no keyboard or USB
-storage"). Its USB socket belongs to the board's PIC24, which presents
-one keyboard or mouse to the FPGA as a PS/2 device on two pins. A PS/2
-port on the bus gives the machine that keyboard, and gives a board
-with a PS/2 socket one the same way. The goal is a `wscons` keyboard
-beside the display: a login on `ttyE0`, and Doom, which reads the
-keyboard in raw mode (`sw/doom/i_input_netbsd.c`).
+The port (`doc/system/devices/ps2.md`), its place on the Nexys Video
+behind the board's keyboard bridge, and the kernel's `pckbport(9)`
+back-end, `pkbc`, landed in `2b09d8776709`, `6b0ce9109d16` and
+`5d82f32ab1f0`. Open:
 
-The programming interface is `doc/system/devices/ps2.md`
-(`CLASS_PS2`): single bytes each way, a flag on a byte whose start,
-parity or stop bit is wrong, and a receive side that holds the device
-off rather than lose a byte. Everything above a byte is software's,
-so the kernel's part is a back-end for `pckbport(9)` under the
-machine-independent `pckbd(4)`; `dev/ic/pl050.c` is the closest
-existing one.
-
-Open:
-
-- **The port's RTL**, with the class constant in the package and the
-  ROM's header, a unit testbench against a bit-level model of the
-  attached device, and its microarchitecture under `doc/internals/`.
-  Clock and data pass through the same synchronizer and filter: the
-  board's manual gives data 5 µs of setup and of hold around the
-  falling clock edge, so a longer filter on the clock alone would
-  sample the next bit. The manual gives the clock as 20 to 30 kHz in
-  its text and as 30 to 50 µs, drawn twice a cycle, in its timing
-  table; the receiver follows the device's clock and has only to
-  bound it.
-- **The Nexys Video's side**: `ps2_clk` and `ps2_data` (W17, N13) as
-  open-drain pins with pull-ups, and the device in the machine top.
 - **Why the bridge loses bytes sent to it.** It clocks in and
   acknowledges every byte the port sends, then acts on about nine in
   ten: the rest get no action and no answer
@@ -1167,19 +1140,30 @@ Open:
   pull-ups but the FPGA's own. A scope on the lines would say which:
   the rise times, and whether anything differs on a byte that goes
   unanswered. `benchmark/ps2test` counts the loss.
-- **The driver**: the six port operations over the registers,
-  reporting scan code translation as unavailable so that `pckbd`
-  converts set 2 itself, with `pckbd` and its `wskbd` in `GENERIC`.
-  `pckbd`'s probe needs the keyboard to answer a reset, so one
-  plugged in after boot is not seen; the driver can instead attach
-  the keyboard when the port first hears a device announce itself.
+- **A keyboard plugged in after boot is not seen.** `pckbd` finds its
+  keyboard by resetting it at attach, and when none answers, `pkbc`
+  turns the port off. The bridge sends a self-test result (`0xAA`)
+  when a device is plugged in, so the driver can attach the keyboard
+  when the port first hears one.
+- **A pointing device is not found.** `pkbc` offers the port as
+  `pckbport`'s keyboard slot only. `pckbd` looks in that slot and
+  `pms` in the auxiliary one, and which device is plugged in is known
+  only from its answer to a read ID (`0xF2`), so the driver has to
+  ask before it picks the slot. The bridge carries one device at a
+  time; Doom's mouse input is a stub and `GENERIC` has no `wsmouse`.
+- **Any byte passes for the answer to a byte sent.** The port cannot
+  tell an answer from a key, so a key's byte that arrives while an
+  answer is owed ends the wait. If the bridge had dropped the byte
+  sent, its command then times out in `pckbport` where a resend would
+  have saved it, and a dropped resend request (`0xFE`) loses the
+  damaged byte it asked for. A kernel that took every sixteenth byte
+  for a damaged one had keys stick in Doom, which this would explain.
+  An answer starts with `0xFA`, `0xFE` or `0xEE`, none of them a scan
+  code, so the driver can tell the two apart.
 
-Left out: a pointing device (the bridge carries one device at a time,
-so a mouse beside the keyboard needs a second port, Doom's mouse input
-is a stub and `GENERIC` has no `wsmouse`), an ISS model (the driver is
-checked on the board), and a console on this keyboard in the ROM, the
-loader and the kernel (the ROM's console and the kernel's are both
-UART-only).
+Left out: an ISS model (the driver is checked on the board), and a
+console on this keyboard in the ROM, the loader and the kernel (the
+ROM's console and the kernel's are both UART-only).
 
 ## Hardware: the I2C master does not wait out a stretched clock
 

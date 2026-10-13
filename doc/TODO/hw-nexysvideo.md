@@ -71,12 +71,15 @@ unless its blit doubles pixels, and the demos size their work from
 the geometry, so each frame costs them four times the pixels. Open:
 the storage and scan-out, and a consumer that wants the resolution.
 
-## Devices: no USB host, so no keyboard or USB storage
+## Devices: no USB host, so no USB storage
 
 On the ULX3S the USB host controller (`CLASS_USBHC`) carries the
 keyboard and USB storage. The Nexys Video has no USB port the FPGA
 drives: its USB host socket belongs to the PIC24, which presents a
-keyboard or mouse as PS/2 (`ps2_clk`, `ps2_data`).
+keyboard or mouse as PS/2. The machine's PS/2 port takes the keyboard
+from there (`6b0ce9109d16`; `doc/internals/nexysvideo/overview.md`,
+"Keyboard"), so what waits for a USB host is storage, and a keyboard
+the bridge does not serve.
 
 USB comes to the board on an FPGA Mezzanine Card made for it,
 fmc-usb2 (a repository of its own): two USB 2.0 ports on USB3320
@@ -98,10 +101,9 @@ in design and will take a while. The machine's side of it:
   top that did would need `xdc_check.py` to accept the I/O standard
   the bank's VADJ implies.
 
-Until the card, the machine has no keyboard: the only one that needs
-no card is a PS/2 device behind the PIC24's bridge. The network does
-not wait for USB (`hw-devices.md`, "Hardware + kernel: Ethernet MAC
-for an onboard PHY").
+Neither the keyboard nor the network waits for the card
+(`hw-devices.md`, "Hardware + kernel: PS/2 port (`CLASS_PS2`)" and
+"Hardware + kernel: Ethernet MAC for an onboard PHY").
 
 ## Clocking: CPU clock above 60 MHz
 
