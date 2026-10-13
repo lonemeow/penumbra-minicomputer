@@ -1154,20 +1154,19 @@ Open:
   bound it.
 - **The Nexys Video's side**: `ps2_clk` and `ps2_data` (W17, N13) as
   open-drain pins with pull-ups, and the device in the machine top.
-- **Three checks on the board**, from the ROM monitor and before any
-  driver, because the manual describes the bridge only as a PS/2
-  keyboard in general:
-  - Whether it keeps bytes while the clock is held low, and how many.
-    The manual calls the clock a clear-to-send signal and gives no
-    depth. If keys are lost, the interface needs a receive queue and
-    a count of dropped bytes.
-  - Whether it acknowledges the enable command (`0xF4`) for a
-    keyboard. The manual lists `ED`, `EE`, `F3`, `FE` and `FF` as
-    "some common commands" and `F4` for a mouse only, and `pckbd`
-    fails to enable a keyboard that does not acknowledge it.
-  - What a transmission meets with nothing plugged in. The interface
-    reports an empty port through `TX_DATA.ERR`, which assumes the
-    bridge leaves the link idle then.
+- **Why the bridge loses bytes sent to it.** It clocks in and
+  acknowledges every byte the port sends, then acts on about nine in
+  ten: the rest get no action and no answer
+  (`doc/internals/nexysvideo/overview.md`, "Keyboard", has the
+  measurements). Each byte fares independently of the last, and the
+  loss follows neither the byte's value nor any period from 50 µs to
+  20 s. It is the same with the clock held low for up to 1 ms longer
+  ahead of a byte, and with data low for 1 to 255 µs before the clock
+  is let go, where Digilent's own PS/2 core uses 20 µs. What is left
+  is the bridge's firmware or the two lines themselves, which have no
+  pull-ups but the FPGA's own. A scope on the lines would say which:
+  the rise times, and whether anything differs on a byte that goes
+  unanswered. `benchmark/ps2test` counts the loss.
 - **The driver**: the six port operations over the registers,
   reporting scan code translation as unavailable so that `pckbd`
   converts set 2 itself, with `pckbd` and its `wskbd` in `GENERIC`.

@@ -131,6 +131,38 @@ enable the FPGA's own pull-ups on both pins, which the constraints do,
 and the top drives each pad open drain. The bridge sends a device's
 self-test result (`0xAA`) when one is plugged in.
 
+The manual describes the bridge only in outline. What it does beyond
+that, measured with `benchmark/ps2test` and a low-speed USB keyboard:
+
+- It is on the link with or without a keyboard. It clocks in and
+  acknowledges every byte the port sends, so `TX_DATA.ERR` never
+  shows an empty socket here: a command going unanswered does.
+- With a keyboard it answers echo, read ID, set LEDs, enable and
+  reset. An answer starts about 0.8 ms after the byte is taken, 13 ms
+  at the longest seen, and the self-test result follows a reset by
+  40 to 300 ms.
+- About one byte in ten that the port sends is acknowledged and then
+  lost: no action and no answer. Each byte fares independently of the
+  one before, whatever its value, and the share drifts between a few
+  percent and a quarter over seconds. When the first byte of a
+  two-byte command is the one lost, the bridge takes the second for a
+  command and answers `0xFE`. Why it loses them is open
+  (`doc/TODO/hw-devices.md`, "Hardware + kernel: PS/2 port
+  (`CLASS_PS2`)"). A driver sends a byte again when nothing answers
+  it inside the protocol's 20 ms, and that is enough: of 1240 bytes
+  of enable, LED and reset commands sent so, with four tries each,
+  none failed.
+- Asked with `0xFE`, it sends its last byte again. A kernel that took
+  every sixteenth byte received for a damaged one asked 43 times
+  while a keyboard was typed on: no request ran out of tries, and
+  what was typed arrived whole.
+- Held off, it keeps sixteen bytes. Past that it drops what arrives,
+  keeping the newest in the last place, and reports no overrun.
+- What it kept survives a reset of the machine, which does not reset
+  the bridge.
+- Not every keyboard is served. A low-speed one is; a Keychron C1 is
+  not, and the bridge has no hub support to put one behind.
+
 ## Display
 
 The display adapter (`CLASS_DISPLAY`, [display.md](../display.md))
