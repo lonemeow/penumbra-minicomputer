@@ -6,6 +6,10 @@
 //
 // Doom's own key constants are XT scancodes offset by 0x80 — vanilla read
 // the PC keyboard directly — so most of the table below is identity.
+//
+// The scancodes arrive as input on the display's tty, where the line
+// discipline would take them for typed characters (Enter's 0x1C is the
+// quit character), so the tty goes raw along with the keyboard.
 
 #include <sys/ioctl.h>
 
@@ -15,6 +19,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <termios.h>
 #include <unistd.h>
 
 #include "config.h"
@@ -35,6 +40,11 @@ int mouse_threshold = 10;
 static int kbd_fd = -1;
 static int kbd_mode_set = 0;
 static int shift_held = 0;
+
+// The tty's state as found, restored on shutdown: the shell shares it.
+static int kbd_flags = -1;
+static struct termios kbd_term;
+static int kbd_term_set = 0;
 
 static const unsigned char scancode_to_key[128] = {
     [0x01] = KEY_ESCAPE,
@@ -89,25 +99,57 @@ key_to_char(int key)
 void
 I_InputInit(int fd)
 {
+    struct termios raw;
+    const char *name;
     int mode = WSKBD_RAW;
-    int flags;
 
     kbd_fd = fd;
 
-    flags = fcntl(kbd_fd, F_GETFL, 0);
-    if (flags < 0 || fcntl(kbd_fd, F_SETFL, flags | O_NONBLOCK) < 0)
+    // A getty or shell reading this tty would take the keys; only as the
+    // tty's foreground process is Doom sure to be the one reader.
+    if (tcgetpgrp(kbd_fd) != getpgrp())
+    {
+        name = ttyname(kbd_fd);
+        fprintf(stderr, "keyboard: %s is not this terminal; whatever else "
+                "reads it takes the keys\n",
+                name != NULL ? name : "the display");
+    }
+
+    kbd_flags = fcntl(kbd_fd, F_GETFL, 0);
+    if (kbd_flags < 0 || fcntl(kbd_fd, F_SETFL, kbd_flags | O_NONBLOCK) < 0)
     {
         fprintf(stderr, "keyboard O_NONBLOCK: %s; keys will not work\n",
                 strerror(errno));
+        kbd_flags = -1;
         kbd_fd = -1;
         return;
     }
+
+    // Input as bytes; output as it was, since what Doom prints is text.
+    if (tcgetattr(kbd_fd, &kbd_term) != 0)
+    {
+        fprintf(stderr, "keyboard tty modes: %s; keys will not work\n",
+                strerror(errno));
+        I_InputShutdown();
+        return;
+    }
+    raw = kbd_term;
+    cfmakeraw(&raw);
+    raw.c_oflag = kbd_term.c_oflag;
+    if (tcsetattr(kbd_fd, TCSAFLUSH, &raw) != 0)
+    {
+        fprintf(stderr, "keyboard tty modes: %s; keys will not work\n",
+                strerror(errno));
+        I_InputShutdown();
+        return;
+    }
+    kbd_term_set = 1;
 
     if (ioctl(kbd_fd, WSKBDIO_SETMODE, &mode) != 0)
     {
         fprintf(stderr, "keyboard raw mode: %s; keys will not work\n",
                 strerror(errno));
-        kbd_fd = -1;
+        I_InputShutdown();
         return;
     }
 
@@ -123,6 +165,19 @@ I_InputShutdown(void)
     {
         ioctl(kbd_fd, WSKBDIO_SETMODE, &mode);
         kbd_mode_set = 0;
+    }
+
+    // Flush, so unread scancodes do not reach the shell as typed input.
+    if (kbd_term_set)
+    {
+        tcsetattr(kbd_fd, TCSAFLUSH, &kbd_term);
+        kbd_term_set = 0;
+    }
+
+    if (kbd_flags >= 0)
+    {
+        fcntl(kbd_fd, F_SETFL, kbd_flags);
+        kbd_flags = -1;
     }
 
     kbd_fd = -1;
