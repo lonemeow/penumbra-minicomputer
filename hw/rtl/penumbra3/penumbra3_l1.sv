@@ -45,8 +45,9 @@
 // invalid, so nothing hits and no store is absorbed. The enable folds into
 // the valid bits as a lookup launches, not into the compare. Lines installed
 // before a disable survive it; software pairs an enable change with
-// INVAL_ALL. o_enabled tells the consumer to shape a disabled access as a
-// single beat, so it never installs a line (asserted).
+// INVAL_ALL. A disabled access on a cacheable page still brings a line
+// back (doc/internals/penumbra3/uncore-port.md, "The four transactions");
+// o_enabled tells the consumer not to install it (asserted).
 module penumbra3_l1
     import penumbra_pkg::*;
 #(

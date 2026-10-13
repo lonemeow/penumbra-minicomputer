@@ -173,7 +173,11 @@ ranks first ("Levers ranked by measured benefit"):
    verdict, the store-hit write with its forwarding, tree-PLRU, the
    enable, the cache device's sysregs and counters, 8 KB 2-way on the
    ECP5, and no FSM, since miss orchestration is the consumer's. What
-   remains is wiring it in. **The D-side:** MEM1 launches it, MEM2
+   remains is wiring it in. Both sides reach memory through the port
+   `doc/internals/penumbra3/uncore-port.md` specifies, and
+   `penumbra3_core` does not have it yet: its data side has
+   `o_launch_fill` and a one-word `i_fill_data`, its fetch side
+   `i_fetch_busy`. **The D-side:** MEM1 launches it, MEM2
    consumes the verdict, and `load_complete` parks `o_victim_way` with a
    miss. Four faults on the still-unexercised load-miss path come first:
    - `mem2_stage` keeps committing while a load is pending: the MEM2/WB

@@ -12,8 +12,8 @@ machinery, so they are specified here too.
 
 It builds on the [timing outline](./timing-outline.md) (the back-end stall
 section), the [MEM1/MEM2 stage](./mem-stage.md) (which produces the verdict
-this consumes), and the [bus master](./overview.md#fork-boundary) (which
-every off-core transaction is launched through). The full forwarding network
+this consumes), and the [core-to-uncore port](./uncore-port.md) (which
+every access that leaves the core crosses). The full forwarding network
 is a separate spec; this doc covers the load path, the store path, and the
 issue gate they feed.
 
@@ -78,9 +78,11 @@ graph LR
   works to keep shallow. It trades the fmax gen3 exists to protect for IPC
   only on miss-heavy code, and going multi-outstanding would also cost the
   precise-fault property below. It is out of scope by design, not deferred.
-- **The fill is launched once** as a registered line transaction through the
-  [bus master](./overview.md#fork-boundary) (validated in P0.4); the fill
-  FSM holds the request.
+- **The fill is requested once,** as a line read on the
+  [core-to-uncore port](./uncore-port.md): the hold buffer's registers hold
+  the request up until it completes, and the
+  [bus master](./overview.md#fork-boundary) carries it out as one registered
+  line transaction (validated in P0.4).
 - **Completion is a registered event** delivering `{data}` or `{fault}` to
   the held load, which then advances to WB and clears `mem_pending_q`.
 
@@ -144,6 +146,10 @@ fault precision:
 | Uncached load | single read | value | precise |
 | Uncached store | single write (+byte-en) | none | **precise** |
 | Cacheable store write-through | single write (+byte-en) | none | **async (sticky)** |
+
+Each row is one transaction of the
+[core-to-uncore port](./uncore-port.md#the-four-transactions): the line
+read, the word read, the word write and the cacheable write.
 
 ## What the pipe gate freezes
 

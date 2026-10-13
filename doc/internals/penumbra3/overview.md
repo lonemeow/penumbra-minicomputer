@@ -457,6 +457,8 @@ the seed sweep, not into a higher clock.
      duplicated BRAM TLB.
    - [`memory-completion.md`](./memory-completion.md) — the registered
      back-end stall and the load/store completion + fault-precision contract.
+   - [`uncore-port.md`](./uncore-port.md) — the port between the core and
+     the uncore: its four transactions, handshake and faults.
    - [`memory-performance.md`](./memory-performance.md) — measured
      memory-path costs, gen2.5 workload profiles, and the uncore levers
      they point to (store buffer, one uncore pipeline, whole-line SDRAM
