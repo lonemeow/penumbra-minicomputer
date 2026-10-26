@@ -5,8 +5,8 @@
 // the forwarding network can supply this cycle, and the back-end hold. This
 // is reg#-equality on already-registered fields -- the shallow compare every
 // in-order core uses, never a long path -- and the cone P0.1 measures (P0.2
-// shares it). It reads only flops: no cache busy/hit reaches here, which is
-// what keeps the gen2 floor cone from ever forming.
+// shares it). It reads only flops: no cache busy/hit reaches here, so the
+// memory verdict never joins the issue cone.
 module penumbra3_issue (
     input  logic i_valid,         // an instruction is present in ID
     input  logic i_pipe_hold,     // back-end back-pressure (registered: load_pending, ...)

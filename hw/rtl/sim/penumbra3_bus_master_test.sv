@@ -3,9 +3,10 @@
 // Wires the gen3 bus master to the real sim SDRAM stack (sdram_sim:
 // adapter + CDC + controller + sim PHY + behavioral chip) so the
 // master's back-to-back burst runs against the actual speculative-
-// prefetch adapter -- the path the gen2 register slice deadlocked on a
-// gapped stream. The master's transaction interface is exposed for the
-// testbench; the cache-facing bus between master and memory is internal.
+// prefetch adapter, which a gapped read stream can wedge
+// (doc/TODO/hw-core.md). The master's transaction interface is exposed
+// for the testbench; the cache-facing bus between master and memory is
+// internal.
 module penumbra3_bus_master_test #(
     parameter int LINE_BYTES = 16,
     parameter int WORD_BYTES = 4

@@ -19,9 +19,9 @@
 //
 // Pinned-hit-wins lives here, not inside tlb_verdict: the shared tlb_pinned
 // produces a resolved verdict (paddr / cacheable / fault), while tlb_verdict
-// would want the raw matched PTE -- and tlb_pinned is frozen for gen1/gen2, so
-// the override is composed at this wrapper instead. Each translate runs
-// main-TLB-only (its pinned input tied off).
+// would want the raw matched PTE -- and the shared cell keeps the one
+// interface every core uses, so the override is composed at this wrapper
+// instead. Each translate runs main-TLB-only (its pinned input tied off).
 //
 // Sysreg read-back of a main-TLB entry taps the D-copy's registered set: during
 // an RDSYS to TLB_VPN/TLB_PTE the read index is steered to the addressed set

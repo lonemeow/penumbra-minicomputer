@@ -1,9 +1,8 @@
 // penumbra3_id_stage -- Penumbra/3 issue stage.
 //
-// The integration point of the gen3 front half's tail. Unlike gen2's ID, it
-// does NOT decode -- the word->bundle decode already ran on the fetch-FIFO
-// enqueue path, so ID reads a *pre-decoded* ctrl_bundle_t off the FIFO head.
-// Each cycle it:
+// The integration point of the gen3 front half's tail. It does NOT decode
+// -- the word->bundle decode already ran on the fetch-FIFO enqueue path, so
+// ID reads a *pre-decoded* ctrl_bundle_t off the FIFO head. Each cycle it:
 //   - maps the bundle's architectural register refs to physical scoreboard
 //     indices (penumbra3_regmap for GPRs; an inline map for SPR refs),
 //   - reads the scoreboard pending bits for the two sources,
@@ -14,12 +13,12 @@
 //   - latches the bundle + operands + physical dst + PC into the ID/EX
 //     register under the back-pressure handshake.
 //
-// Hazard model (diverges from gen2's unforwarded scoreboard). gen3 forwards,
-// so the scoreboard tracks only the *non-forwardable* producers -- loads,
-// divmul, and sysreg reads (is_pending_class) -- whose results are not
-// available by the time a back-to-back dependent would forward them. ALU
-// results never set a bit; EX forwards them. NZCV is not a scoreboard entry
-// (it forwards in EX), so flag reads never stall here.
+// Hazard model. The core forwards, so the scoreboard tracks only the
+// *non-forwardable* producers -- loads, divmul, and sysreg reads
+// (is_pending_class) -- whose results are not available by the time a
+// back-to-back dependent would forward them. ALU results never set a bit;
+// EX forwards them. NZCV is not a scoreboard entry (it forwards in EX), so
+// flag reads never stall here.
 //
 // Forwarding boundary. Whether a pending source can be supplied *this* cycle
 // depends on where its producer sits in EX/MEM/WB -- so the spine broadcasts

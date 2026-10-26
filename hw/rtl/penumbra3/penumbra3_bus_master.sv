@@ -16,7 +16,7 @@
 // Cacheability is decided upstream; the master only sees the mechanical
 // shape of the transfer, so a single beat is just a length-1 burst.
 //
-// Two properties make this the gen3 boundary rather than gen2's:
+// Two properties define this boundary:
 //
 //  1. Registered transaction boundary. The request is latched once on
 //     accept; the response word/line and any fault are presented from

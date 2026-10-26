@@ -1,7 +1,6 @@
 // penumbra3_spine -- Penumbra/3 ID->EX->MEM1->MEM2->WB datapath integration.
 //
-// The first time the gen3 stages run as a pipeline rather than in isolation. It
-// instantiates the five datapath stages around the shared register / SPR /
+// Instantiates the five datapath stages around the shared register / SPR /
 // scratch files, and closes the loops between them:
 //   - the inter-stage handoffs (each stage holds its own output register, so
 //     this is producer.o_* -> consumer.i_* wiring, carrying the packed
@@ -17,15 +16,13 @@
 //     doc/internals/penumbra3/memory-completion.md).
 //
 // The MMU/TLB and the caches live outside (the machine layer binds them to the
-// exposed launch/verdict ports), the same boundary gen2 uses -- the TLB is
-// shared coherently with the I-side copy, so it is not a spine-private module.
+// exposed launch/verdict ports): the TLB is shared coherently with the
+// I-side copy, so it is not a spine-private module.
 //
-// Deferred-loud: a faulting load completion (o_complete_fault, e.g. a bus fault
-// on a fill or an erroring device probe) needs load_complete to park the
-// faulting PC + descriptor before the spine can take it precisely. Until that
-// extension lands, an assertion catches it rather than mis-taking it silently;
-// it is not exercised by the skeleton (no fill fault) and is needed before boot
-// device-probing.
+// A faulting load completion (o_complete_fault, e.g. a bus fault on a fill or
+// an erroring device probe) is asserted never to arrive, rather than taken
+// imprecisely: taking it precisely needs load_complete to park the faulting
+// PC and descriptor (doc/TODO/hw-core.md).
 
 (* keep_hierarchy = "yes" *)
 module penumbra3_spine
@@ -210,8 +207,8 @@ module penumbra3_spine
     // The local stalls each stage exposes (downstream-independent), plus the
     // registered back-end hold. These three are the only inputs the freeze
     // composition needs; everything below is derived from them.
-    //   - load_pending  : registered flop from MEM2's load_complete (NOT a live
-    //                     cache/TLB verdict -- that is the whole gen2 fix).
+    //   - load_pending  : registered flop from MEM2's load_complete, never a
+    //                     live cache/TLB verdict.
     //   - wb_local_stall: WB's dual-write hold (flop-shallow).
     //   - ex_local_stall: EX's divmul / drain-commit hold (flop-shallow).
 
@@ -230,7 +227,7 @@ module penumbra3_spine
     //   - mem2_reg_hold: the MEM2/WB register holds ONLY on WB back-pressure --
     //     it must NOT include load_pending (it drains older work to commit while
     //     a load waits; folding load_pending in re-presents a committed
-    //     multi-cycle writeback). This is the gen3 carve-out.
+    //     multi-cycle writeback).
     //   - ex_stall_in: MEM1 cannot accept a new slot this cycle (its register is
     //     frozen).
     //   - id_stall_in: EX cannot accept -- EX is itself stalling OR is

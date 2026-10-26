@@ -8,11 +8,6 @@
 // lives in penumbra_pkg (hw/rtl/common), which every gen3 module imports
 // alongside this package. The two never collide: nothing here shadows a
 // common symbol.
-//
-// gen3 is a full generation fork (its own core and its own on-chip memory
-// hierarchy); see doc/internals/penumbra3/overview.md. It keeps its own
-// copy of these microarch constants rather than sharing gen2's -- each
-// generation reads as its own design, and gen2 stays byte-frozen.
 /* verilator lint_off UNUSEDPARAM */
 package penumbra3_pkg;
 
@@ -113,10 +108,9 @@ package penumbra3_pkg;
 
   // ── Control bundle ───────────────────────────────────────────────
   // The pre-decoded control word produced at fetch-FIFO enqueue and carried,
-  // unchanged, through ID -> EX -> MEM -> WB. This is the gen3 thesis made
-  // concrete: the heavy word->bundle decode runs once on the fetch-domain
-  // enqueue path, so ID's hazard cone starts from these registered fields
-  // (P0.2), never from the raw instruction word.
+  // unchanged, through ID -> EX -> MEM -> WB. The heavy word->bundle decode
+  // runs once on the fetch-domain enqueue path, so ID's hazard cone starts
+  // from these registered fields (P0.2), never from the raw instruction word.
   //
   // The bundle carries *architectural* register selectors (Rd/Rs numbers +
   // is_spr + enables), not physical scoreboard indices: regmap stays in ID

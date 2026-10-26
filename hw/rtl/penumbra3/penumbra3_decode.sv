@@ -18,7 +18,7 @@
 //
 //  - It is written parallel-then-select: all four formats decode off the raw
 //    word concurrently and the only serial step is the final mux on the
-//    format bits. (Select-then-decode made ID a critical cone in gen2.5.)
+//    format bits.
 //
 // The front end speculatively decodes wrong-path bytes, so the decoder must
 // yield a clean bundle for *any* 32-bit input: an operand form no legal

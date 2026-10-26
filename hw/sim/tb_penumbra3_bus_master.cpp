@@ -3,8 +3,8 @@
 // Drives penumbra3_bus_master's transaction interface against the full
 // sim SDRAM stack (sdram_sim) and checks two things:
 //
-//   • No deadlock. The gen2 register slice gapped the read stream and
-//     hung the adapter's speculative-prefetch FSM. The gen3 master holds
+//   • No deadlock. A gapped read stream can hang the adapter's
+//     speculative-prefetch FSM (doc/TODO/hw-core.md). The master holds
 //     re/we across a burst, so the stream is gapless within a line; this
 //     test stresses that against the real adapter, plus the end-of-line
 //     dangling speculation the adapter must abandon when the next
@@ -15,7 +15,7 @@
 //     writes must all agree with it -- so a transposed spec response or a
 //     mis-lane'd sub-word write is caught, not a coin-flip.
 //
-// Clocking: 4 SDRAM cycles per CPU cycle, matching tb_penumbra2_prog.
+// Clocking: 4 SDRAM cycles per CPU cycle.
 
 #include <cstdio>
 #include <cstdint>
@@ -133,7 +133,8 @@ int main(int argc, char** argv) {
         if (errors) break;
 
         // (2) Non-contiguous single-beat read -- the gapped access that
-        //     overlaps the fresh end-of-line spec (the gen2 deadlock shape).
+        //     overlaps the fresh end-of-line spec, the shape that can wedge
+        //     the adapter.
         uint32_t jw = rnd() % NWORDS;
         uint32_t br[LINE_WORDS];
         if (!do_txn(d, false, false, jw * 4u, 0xF, nullptr, br)) break;

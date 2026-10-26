@@ -5,7 +5,7 @@
 // back-pressure) would propagate combinationally all the way back to the
 // fetch enable -- the core's longest path. Interposing this FIFO lets the
 // fetch front end see o_enq_ready (a registered occupancy bit) instead of
-// id_stall, so a back-end stall no longer reaches the fetch enable in the
+// id_stall, so a back-end stall does not reach the fetch enable in the
 // same cycle: the front end runs ahead into the FIFO and back-pressures only
 // when it fills.
 //
