@@ -258,7 +258,10 @@ cycles, never critical-path logic.**
   lookup: with nothing launching it reads the last lookup's set again, so
   a verdict its consumer holds follows a fill or an invalidate with no
   strobe to ask for it, and the store bypass never outlives the write's
-  two cycles. A line shows two cycles after its install.
+  two cycles. A line shows to a held lookup two cycles after its install,
+  and the L1 reports an install into the held lookup's set in the
+  install's cycle, rather than a bypass putting a mux between the tag
+  block RAM and the compare.
 - **L1: write-through**, keep the timing-critical level simple.
 - **Size the L1 per board, and read size and ways together.** A VIPT L1 indexes
   within the 4 KB page, so a way holds at most 4 KB: 8 KB 2-way keeps the compares

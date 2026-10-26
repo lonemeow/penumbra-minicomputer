@@ -39,8 +39,8 @@
 // adds no read-during-write bypass after the EBRs. A fill gates off every
 // read of the way it writes, at any address, and no lookup launches on a
 // fill (asserted). What that costs is one cycle: in the cycle after a fill
-// the filled way's outputs are out of date and the consumer does not use
-// them, and the line shows from the cycle after that. A store meets reads
+// the filled way's outputs are out of date, the cache tells its consumer
+// so, and the line shows from the cycle after that. A store meets reads
 // all the time; only the read of the very word the store is writing is
 // suppressed, and the register behind the store port stands in for it.
 module penumbra3_l1_store #(

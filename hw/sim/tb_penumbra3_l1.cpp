@@ -93,11 +93,15 @@ static void settle() { quiet(); tick(); tick(); d->eval(); }
 
 static uint32_t line_word(uint32_t base, int c) { return base + c; }
 
-static void fill(uint32_t pa, int way, uint32_t base) {
-    quiet();
+// A fill installing in this cycle.
+static void fill_now(uint32_t pa, int way, uint32_t base) {
     d->i_fill_we = 1; d->i_fill_paddr = pa; d->i_fill_way = way;
     for (int c = 0; c < LINE_WORDS; c++) d->i_fill_line[c] = line_word(base, c);
-    tick(); quiet();
+    d->eval();
+}
+
+static void fill(uint32_t pa, int way, uint32_t base) {
+    quiet(); fill_now(pa, way, base); tick(); quiet();
 }
 
 // A store resolving in this cycle.
@@ -338,12 +342,26 @@ static void test_hold() {
 
     // A line installed into the current lookup's set shows two cycles
     // after its fill: the fill's own edge, then the read that finds it.
+    // The cache says so in the fill's cycle.
     check("held_fill_miss", lookup(PA_C + 4), 0);
     uint32_t victim = d->o_victim_way;
-    fill(PA_C, victim, BASE_C);
-    tick(); frame(PA_C + 4);
+    fill_now(PA_C, victim, BASE_C);
+    check("held_fill_stale_next", d->o_stale_next, 1);
+    tick(); quiet();
+    check("held_fill_between_miss", d->o_hit, 0);
+    check("held_fill_between_quiet", d->o_stale_next, 0);
+    tick(); d->eval();
     check("held_fill_hit", d->o_hit, 1);
     check("held_fill_word", d->o_word, line_word(BASE_C, 1));
+    settle();
+
+    // An install into another set leaves the current lookup as it is.
+    check("held_other_fill_setup", lookup(PA_C + 4), 1);
+    fill_now(PA_D, 0, BASE_D);                               // set 6
+    check("held_other_fill_stale_next", d->o_stale_next, 0);
+    tick(); quiet();
+    check("held_other_fill_hit", d->o_hit, 1);
+    check("held_other_fill_word", d->o_word, line_word(BASE_C, 1));
     settle();
 
     // INVAL_ALL reaches a lookup that stays current.
