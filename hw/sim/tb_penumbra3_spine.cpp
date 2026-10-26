@@ -50,7 +50,9 @@ static void clear_inputs(Vpenumbra3_spine_test* dut) {
     dut->i_translate_paddr = 0; dut->i_translate_cacheable = 0; dut->i_translate_hit = 0;
     dut->i_translate_miss_fault = 0; dut->i_translate_prot_fault = 0;
     dut->i_dcache_hit = 0; dut->i_dcache_rdata = 0; dut->i_sys_rdata = 0;
-    dut->i_fill_done = 0; dut->i_fill_data = 0; dut->i_fill_fault = 0;
+    dut->i_dcache_victim_way = 0; dut->i_dcache_enabled = 1;
+    dut->i_drsp_done = 0; dut->i_rsp_fault = 0;
+    for (int k = 0; k < 4; k++) dut->i_rsp_line[k] = 0;
     dut->i_irq_inject = 0; dut->i_irq_vec = 0;
 }
 

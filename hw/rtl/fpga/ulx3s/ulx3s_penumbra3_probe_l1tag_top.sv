@@ -245,10 +245,10 @@ module ulx3s_penumbra3_probe_l1tag_top (
     logic [$clog2(D_WAYS)-1:0]   dl1_victim;
 
     logic                        dfill_we;
-    logic [31:0]                 dfill_paddr_q;
-    logic [$clog2(D_WAYS)-1:0]   dfill_way_q, dvictim_q;
+    logic [31:0]                 dfill_paddr;
+    logic [$clog2(D_WAYS)-1:0]   dfill_way;
     logic [LINE_WORDS-1:0][31:0] fill_line;
-    logic                        dc_we;
+    logic                        dc_we, dc_count_read, dc_count_write;
     logic [31:0]                 dc_wdata;
     logic [3:0]                  dc_byte_en;
 
@@ -275,11 +275,11 @@ module ulx3s_penumbra3_probe_l1tag_top (
         .i_store         (dc_we),
         .i_store_wdata   (dc_wdata),
         .i_store_byte_en (dc_byte_en),
-        .i_count_read    (mem2_valid && mem2_bundle.mem_op == MEM_LOAD && d_cacheable),
-        .i_count_write   (mem2_valid && mem2_bundle.mem_op == MEM_STORE && d_cacheable),
+        .i_count_read    (dc_count_read),
+        .i_count_write   (dc_count_write),
         .i_fill_we       (dfill_we),
-        .i_fill_paddr    (dfill_paddr_q),
-        .i_fill_way      (dfill_way_q),
+        .i_fill_paddr    (dfill_paddr),
+        .i_fill_way      (dfill_way),
         .i_fill_line     (fill_line),
         .i_sys_reg       (sys_reg_q),
         .i_sys_wdata     (sys_wdata_q),
@@ -290,17 +290,20 @@ module ulx3s_penumbra3_probe_l1tag_top (
     );
 
     // ── MEM2: resolve, hold buffer, MEM2/WB register ─────────────
-    logic           load_pending, launch_fill, fill_cacheable, complete, complete_fault;
-    logic [31:0]    fill_paddr, complete_value;
+    logic           load_pending, complete, complete_fault;
+    logic [31:0]    complete_value;
     logic [SB_IDX_W-1:0] complete_dest;
-    logic [31:0]    dc_paddr;
+    logic           dreq_valid, dreq_cacheable, drsp_done_q;
+    logic [31:0]    dreq_addr;
+    logic [3:0]     dreq_byte_en;
     ctrl_bundle_t   wb_bundle;
     dpath_payload_t wb_payload;
     logic           wb_valid;
     bcause_e        wb_bcause;
-    logic           dfill_done;
 
-    penumbra3_mem2_stage u_mem2 (
+    penumbra3_mem2_stage #(
+        .DL1_WAYS (D_WAYS)
+    ) u_mem2 (
         .i_clk                  (clk),
         .i_rst                  (rst),
         .i_bundle               (mem2_bundle),
@@ -318,17 +321,24 @@ module ulx3s_penumbra3_probe_l1tag_top (
         .i_translate_prot_fault (d_prot_fault),
         .i_dcache_hit           (dl1_hit),
         .i_dcache_rdata         (dl1_rdata),
-        .o_dcache_paddr         (dc_paddr),
+        .i_dcache_victim_way    (dl1_victim),
+        .i_dcache_enabled       (dl1_en),
         .o_dcache_we            (dc_we),
         .o_dcache_wdata         (dc_wdata),
         .o_dcache_byte_en       (dc_byte_en),
+        .o_dcache_count_read    (dc_count_read),
+        .o_dcache_count_write   (dc_count_write),
+        .o_dcache_fill_we       (dfill_we),
+        .o_dcache_fill_way      (dfill_way),
+        .o_dcache_fill_paddr    (dfill_paddr),
         .i_sys_rdata            (sys_rdata),
-        .o_launch_fill          (launch_fill),
-        .o_fill_paddr           (fill_paddr),
-        .o_fill_cacheable       (fill_cacheable),
-        .i_fill_done            (dfill_done),
-        .i_fill_data            (lfsr_q[63:32]),
-        .i_fill_fault           (lfsr_q[1] && lfsr_q[21] && lfsr_q[43]),
+        .o_dreq_valid           (dreq_valid),
+        .o_dreq_cacheable       (dreq_cacheable),
+        .o_dreq_addr            (dreq_addr),
+        .o_dreq_byte_en         (dreq_byte_en),
+        .i_drsp_done            (drsp_done_q),
+        .i_rsp_fault            (lfsr_q[1] && lfsr_q[21] && lfsr_q[43]),
+        .i_rsp_line             (fill_line),
         .o_load_pending         (load_pending),
         .o_complete             (complete),
         .o_complete_dest        (complete_dest),
@@ -349,22 +359,11 @@ module ulx3s_penumbra3_probe_l1tag_top (
 
     assign d_hold = load_pending;
 
-    // ── The fill, modeled: done after an LFSR-timed wait ─────────
-    // The fill launches a cycle after its miss resolved, so the victim
-    // from that resolve is a register by then.
-    logic dfill_busy_q, dfill_cacheable_q;
-    assign dfill_done = dfill_busy_q && lfsr_q[40];
-    assign dfill_we   = dfill_done && dfill_cacheable_q && dl1_en;
+    // ── The uncore, modeled: done an LFSR-timed wait into the request ──
+    // A registered one-cycle done, never in the cycle the request rises.
     always_ff @(posedge clk) begin
-        if (rst)              dfill_busy_q <= 1'b0;
-        else if (launch_fill) dfill_busy_q <= 1'b1;
-        else if (dfill_done)  dfill_busy_q <= 1'b0;
-        dvictim_q   <= dl1_victim;
-        if (launch_fill) begin
-            dfill_paddr_q     <= fill_paddr;
-            dfill_cacheable_q <= fill_cacheable;
-            dfill_way_q       <= dvictim_q;
-        end
+        if (rst) drsp_done_q <= 1'b0;
+        else     drsp_done_q <= dreq_valid && !drsp_done_q && lfsr_q[40];
     end
 
     // ══════════════════════════════════════════════════════════
@@ -594,7 +593,7 @@ module ulx3s_penumbra3_probe_l1tag_top (
         fold_q[0] <= fbuf_deq_valid ^ (^fbuf_deq_data);
         fold_q[1] <= wb_valid ^ (^wb_payload) ^ (^wb_bundle) ^ (^wb_bcause);
         fold_q[2] <= complete ^ complete_fault ^ (^complete_dest) ^ (^complete_value);
-        fold_q[3] <= launch_fill ^ (^fill_paddr);
+        fold_q[3] <= dreq_valid ^ dreq_cacheable ^ (^dreq_addr) ^ (^dreq_byte_en);
         fold_q[4] <= ^pc_q;
         fold_q[5] <= ^ras_top;
         fold_q[6] <= ^{dl1_sys_rdata, il1_sys_rdata};

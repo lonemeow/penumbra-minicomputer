@@ -80,7 +80,7 @@ module ulx3s_penumbra3_probe_decode_top (
 
     // ── scoreboard / load-completion / issue (reused from P0.1) ──
     logic                src0_pending, src1_pending;
-    logic                load_pending, launch_fill, complete, complete_fault;
+    logic                load_pending, req_valid, complete, complete_fault;
     logic [IDX_BITS-1:0] complete_dest;
     logic [31:0]         complete_data;
     logic                can_issue;
@@ -98,17 +98,25 @@ module ulx3s_penumbra3_probe_decode_top (
         .o_src1_pending (src1_pending)
     );
 
-    penumbra3_load_complete #(.IDX_BITS (IDX_BITS)) u_lc (
+    penumbra3_load_complete #(
+        .IDX_BITS (IDX_BITS)
+    ) u_lc (
         .i_clk            (clk_25mhz),
         .i_rst            (rst),
-        .i_load_valid     (lfsr_q[15]),
-        .i_cache_hit      (lfsr_q[12]),
+        .i_park           (lfsr_q[15] & ~lfsr_q[12] & ~load_pending),  // one at a time
         .i_load_dest      (lfsr_q[21 +: IDX_BITS]),
-        .i_fill_done      (lfsr_q[27] & load_pending),
-        .i_fill_data      (lfsr_q),
-        .i_fill_fault     (lfsr_q[28]),
+        .i_load_size      (lfsr_q[1:0]),
+        .i_load_sign      (lfsr_q[2]),
+        .i_load_paddr     (lfsr_q),
+        .i_load_cacheable (lfsr_q[5]),
+        .i_load_byte_en   (lfsr_q[9:6]),
+        .i_victim_way     (lfsr_q[10]),
+        .i_l1_enabled     (lfsr_q[11]),
+        .o_req_valid      (req_valid),
+        .i_rsp_done       (lfsr_q[27] & req_valid),   // done only while a request is up
+        .i_rsp_fault      (lfsr_q[28]),
+        .i_rsp_line       ({4{lfsr_q}}),
         .o_load_pending   (load_pending),
-        .o_launch_fill    (launch_fill),
         .o_complete       (complete),
         .o_complete_dest  (complete_dest),
         .o_complete_data  (complete_data),
@@ -136,7 +144,7 @@ module ulx3s_penumbra3_probe_decode_top (
     always_ff @(posedge clk_25mhz) begin
         led_q <= {7'b0,
                   can_issue_q
-                  ^ load_pending ^ launch_fill ^ complete ^ complete_fault
+                  ^ load_pending ^ req_valid ^ complete ^ complete_fault
                   ^ (^complete_dest) ^ (^complete_data)};
     end
     assign led = led_q;

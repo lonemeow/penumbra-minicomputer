@@ -3,10 +3,11 @@
 // Combinational resolve logic plus penumbra3_load_complete and the MEM2/WB
 // pipeline register. Reads the MEM1/MEM2 register and the verdicts the launch
 // resolved a cycle later -- the translation (paddr, hit, faults) and the
-// D-cache tag compare (hit, data) -- and produces the writeback: sub-word
-// extract for a load hit, the fault merge for the commit point, and the store
-// write-through. A load that misses (cacheable miss or uncached) is handed to
-// the hold buffer and evicted; its registered completion writes back later.
+// L1-D's (hit, word, victim way) -- and produces the writeback: sub-word
+// extract for a load hit, the fault merge for the commit point, and the L1's
+// store strobe. A load the L1 cannot serve (a miss, or an uncacheable page)
+// is parked in penumbra3_load_complete as it leaves; that unit asks the
+// uncore for it, installs the line, and writes the register back later.
 //
 // The back-end stall is the whole point: the only thing that holds the pipe is
 // the registered o_load_pending out of the hold buffer, distributed by the
@@ -20,7 +21,10 @@
 module penumbra3_mem2_stage
     import penumbra_pkg::*;
     import penumbra3_pkg::*;
-(
+#(
+    parameter  int DL1_WAYS     = 2,     // the L1-D's ways
+    localparam int DL1_WAY_BITS = $clog2(DL1_WAYS)
+) (
     input  logic           i_clk,
     input  logic           i_rst,
 
@@ -42,24 +46,35 @@ module penumbra3_mem2_stage
     input  logic           i_translate_miss_fault,
     input  logic           i_translate_prot_fault,
 
-    // -- D-cache resolve + store write ----------------------------
+    // -- L1-D resolve, store strobe, counting ---------------------
     input  logic           i_dcache_hit,
     input  logic [31:0]    i_dcache_rdata,
-    output logic [31:0]    o_dcache_paddr,
-    output logic           o_dcache_we,
+    input  logic [DL1_WAY_BITS-1:0] i_dcache_victim_way,  // where a miss would fill
+    input  logic           i_dcache_enabled,     // the L1's CTRL.ENABLE
+    output logic           o_dcache_we,          // a store leaves MEM2: written on a hit
     output logic [31:0]    o_dcache_wdata,
     output logic [3:0]     o_dcache_byte_en,
+    output logic           o_dcache_count_read,  // a cacheable load leaves MEM2
+    output logic           o_dcache_count_write, // a cacheable store leaves MEM2
+
+    // -- L1-D line install (the line runs from the uncore to the L1) --
+    output logic           o_dcache_fill_we,
+    output logic [DL1_WAY_BITS-1:0] o_dcache_fill_way,
+    output logic [31:0]    o_dcache_fill_paddr,
 
     // -- RDSYS sysreg response ------------------------------------
     input  logic [31:0]    i_sys_rdata,
 
-    // -- Bus-master line fill (load_complete <-> bus master) ------
-    output logic           o_launch_fill,
-    output logic [31:0]    o_fill_paddr,
-    output logic           o_fill_cacheable,
-    input  logic           i_fill_done,
-    input  logic [31:0]    i_fill_data,
-    input  logic           i_fill_fault,
+    // -- Core-to-uncore port, data side ---------------------------
+    // doc/internals/penumbra3/uncore-port.md. Reads only: a store's write
+    // does not leave the core yet.
+    output logic           o_dreq_valid,
+    output logic           o_dreq_cacheable,
+    output logic [31:0]    o_dreq_addr,
+    output logic [3:0]     o_dreq_byte_en,
+    input  logic           i_drsp_done,
+    input  logic           i_rsp_fault,
+    input  logic [UNCORE_LINE_WORDS-1:0][31:0] i_rsp_line,
 
     // -- Back-end hold + completion (to the spine) ----------------
     output logic                  o_load_pending,
@@ -144,39 +159,49 @@ module penumbra3_mem2_stage
         end
     end
 
-    // -- Back-end load verdict -> hold buffer ---------------------
-    // An uncached load never "hits" the cache, so it takes the fill path too.
-    // A slot that fires either commits to WB or, a load that missed, parks in
-    // the hold buffer; both key off the one load_miss, so they never disagree.
-    logic ld_valid, ld_cache_hit, load_miss, mem2_commits;
+    // -- Back-end load verdict -> completion unit -----------------
+    // The L1's hit serves a load whatever its page's cacheability: a line is
+    // resident for an uncacheable mapping only if software changed the page's
+    // cacheability without invalidating (doc/system/mmu.md, "Uncached
+    // Access"). A slot that fires either commits to WB or, a load the L1 did
+    // not serve, parks; both key off the one load_miss, so they never
+    // disagree.
+    logic ld_valid, load_miss, mem2_commits;
     assign ld_valid     = mem2_is_load & ~mem2_fault;
-    assign ld_cache_hit = i_dcache_hit & i_translate_cacheable;
-    assign load_miss    = ld_valid & ~ld_cache_hit;
+    assign load_miss    = ld_valid & ~i_dcache_hit;
     assign mem2_commits = mem2_fire & ~load_miss;
 
     logic [31:0] lc_complete_data;
     logic [1:0]  lc_complete_size, lc_complete_addr_lo;
     logic        lc_complete_sign;
+
     penumbra3_load_complete #(
-        .IDX_BITS (SB_IDX_W)
+        .IDX_BITS   (SB_IDX_W),
+        .WAYS       (DL1_WAYS),
+        .LINE_WORDS (UNCORE_LINE_WORDS)
     ) u_load_complete (
         .i_clk              (i_clk),
         .i_rst              (i_rst),
-        .i_load_valid       (mem2_fire & ld_valid),
-        .i_cache_hit        (ld_cache_hit),
+        .i_park             (mem2_fire & load_miss),
         .i_load_dest        (i_payload.phys_dst),
         .i_load_size        (i_bundle.mem_size),
-        .i_load_addr_lo     (i_payload.value[1:0]),
         .i_load_sign        (i_bundle.sign_ext),
         .i_load_paddr       (i_translate_paddr),
         .i_load_cacheable   (i_translate_cacheable),
-        .i_fill_done        (i_fill_done),
-        .i_fill_data        (i_fill_data),
-        .i_fill_fault       (i_fill_fault),
+        .i_load_byte_en     (i_byte_en),
+        .i_victim_way       (i_dcache_victim_way),
+        .i_l1_enabled       (i_dcache_enabled),
+        .o_req_valid        (o_dreq_valid),
+        .o_req_cacheable    (o_dreq_cacheable),
+        .o_req_addr         (o_dreq_addr),
+        .o_req_byte_en      (o_dreq_byte_en),
+        .i_rsp_done         (i_drsp_done),
+        .i_rsp_fault        (i_rsp_fault),
+        .i_rsp_line         (i_rsp_line),
+        .o_fill_we          (o_dcache_fill_we),
+        .o_fill_way         (o_dcache_fill_way),
+        .o_fill_paddr       (o_dcache_fill_paddr),
         .o_load_pending     (o_load_pending),
-        .o_launch_fill      (o_launch_fill),
-        .o_fill_paddr       (o_fill_paddr),
-        .o_fill_cacheable   (o_fill_cacheable),
         .o_complete         (o_complete),
         .o_complete_dest    (o_complete_dest),
         .o_complete_data    (lc_complete_data),
@@ -202,11 +227,17 @@ module penumbra3_mem2_stage
                     : mem2_is_rdsys ? i_sys_rdata
                     :                 i_payload.value;
 
-    // A store writes the L1 as it leaves MEM2 fault-free.
-    assign o_dcache_paddr   = i_translate_paddr;
-    assign o_dcache_wdata   = i_store_wdata;
-    assign o_dcache_byte_en = i_byte_en;
-    assign o_dcache_we      = mem2_is_store & ~mem2_fault & mem2_fire;
+    // A store writes the L1 as it leaves MEM2 fault-free, and each
+    // cacheable access is counted in that same cycle. The L1 folds its own
+    // enable and hit into both.
+    assign o_dcache_wdata       = i_store_wdata;
+    assign o_dcache_byte_en     = i_byte_en;
+    assign o_dcache_we          = mem2_is_store & ~mem2_fault & mem2_fire;
+    // The L1 counts each cacheable access that leaves MEM2 unfaulted.
+    logic mem2_counted;
+    assign mem2_counted         = ~mem2_fault & mem2_fire & i_translate_cacheable;
+    assign o_dcache_count_read  = mem2_is_load  & mem2_counted;
+    assign o_dcache_count_write = mem2_is_store & mem2_counted;
 
     // MEM2->EX forward (EX's two-ahead leg): a result that entered MEM2
     // already computed, so the leg starts from the MEM1/MEM2 register. A

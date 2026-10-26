@@ -37,6 +37,11 @@ package penumbra3_pkg;
   localparam logic [SB_IDX_W-1:0] SB_SCR2 = 5'd20;  // RDSPR/WRSPR SCR2
   localparam logic [SB_IDX_W-1:0] SB_SCR3 = 5'd21;  // RDSPR/WRSPR SCR3
 
+  // ── The core-to-uncore port's line ───────────────────────────────
+  // The line a line read returns, in words: 16 bytes, the unit every cache
+  // level stores (doc/internals/penumbra3/uncore-port.md).
+  localparam int UNCORE_LINE_WORDS = 4;
+
   // ── ALU function ─────────────────────────────────────────────────
   // The EX-stage ALU select the decode hands forward. The enumerators take
   // values 0..11 in declaration order, which equals the ISA Format-R op[3:0]

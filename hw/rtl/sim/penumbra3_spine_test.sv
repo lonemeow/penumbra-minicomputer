@@ -2,9 +2,10 @@
 //
 // Drives the spine as a pipeline: a raw instruction word is decoded into the
 // ctrl_bundle_t the fetch FIFO would present (the IF2 enqueue path), and the
-// external verdicts the spine consumes -- translation, D-cache, sysreg read,
-// bus fill -- are passed through flat so the testbench supplies them on the
-// right cycle. Commit/retire/branch/fault observability is fanned out flat.
+// external verdicts the spine consumes -- translation, L1-D, sysreg read,
+// the uncore's response -- are passed through flat so the testbench supplies
+// them on the right cycle. Commit/retire/branch/fault observability is
+// fanned out flat.
 //
 // This exercises the spine as a whole: issue, forwarding, the scoreboard
 // interlock, the freeze distribution, and commit -- without the real MMU/cache
@@ -39,15 +40,21 @@ module penumbra3_spine_test
     input  logic        i_translate_miss_fault,
     input  logic        i_translate_prot_fault,
 
-    // D-cache (testbench-driven resolve)
+    // L1-D (testbench-driven resolve)
     output logic        o_dcache_en,
     output logic [31:0] o_dcache_vaddr,
     input  logic        i_dcache_hit,
     input  logic [31:0] i_dcache_rdata,
+    input  logic        i_dcache_victim_way,
+    input  logic        i_dcache_enabled,
     output logic        o_dcache_we,
-    output logic [31:0] o_dcache_paddr,
     output logic [31:0] o_dcache_wdata,
     output logic [3:0]  o_dcache_byte_en,
+    output logic        o_dcache_count_read,
+    output logic        o_dcache_count_write,
+    output logic        o_dcache_fill_we,
+    output logic        o_dcache_fill_way,
+    output logic [31:0] o_dcache_fill_paddr,
 
     // Sysreg
     output logic        o_sys_re,
@@ -59,13 +66,14 @@ module penumbra3_spine_test
     output logic [3:0]  o_sys_wr_reg,
     output logic [31:0] o_sys_wdata,
 
-    // Bus fill
-    output logic        o_launch_fill,
-    output logic [31:0] o_fill_paddr,
-    output logic        o_fill_cacheable,
-    input  logic        i_fill_done,
-    input  logic [31:0] i_fill_data,
-    input  logic        i_fill_fault,
+    // Core-to-uncore port, data side
+    output logic        o_dreq_valid,
+    output logic        o_dreq_cacheable,
+    output logic [31:0] o_dreq_addr,
+    output logic [3:0]  o_dreq_byte_en,
+    input  logic        i_drsp_done,
+    input  logic        i_rsp_fault,
+    input  logic [UNCORE_LINE_WORDS-1:0][31:0] i_rsp_line,
 
     // Branch / exception / interrupt
     output logic        o_branch_taken,
@@ -118,15 +126,20 @@ module penumbra3_spine_test
         .i_translate_prot_fault(i_translate_prot_fault),
         .o_dcache_en(o_dcache_en), .o_dcache_vaddr(o_dcache_vaddr),
         .i_dcache_hit(i_dcache_hit), .i_dcache_rdata(i_dcache_rdata),
-        .o_dcache_paddr(o_dcache_paddr), .o_dcache_we(o_dcache_we),
+        .i_dcache_victim_way(i_dcache_victim_way), .i_dcache_enabled(i_dcache_enabled),
+        .o_dcache_we(o_dcache_we),
         .o_dcache_wdata(o_dcache_wdata), .o_dcache_byte_en(o_dcache_byte_en),
+        .o_dcache_count_read(o_dcache_count_read),
+        .o_dcache_count_write(o_dcache_count_write),
+        .o_dcache_fill_we(o_dcache_fill_we), .o_dcache_fill_way(o_dcache_fill_way),
+        .o_dcache_fill_paddr(o_dcache_fill_paddr),
         .o_sys_re(o_sys_re), .o_sys_dev(o_sys_dev), .o_sys_reg(o_sys_reg),
         .i_sys_rdata(i_sys_rdata),
         .o_sys_we(o_sys_we), .o_sys_wr_dev(o_sys_wr_dev), .o_sys_wr_reg(o_sys_wr_reg),
         .o_sys_wdata(o_sys_wdata),
-        .o_launch_fill(o_launch_fill), .o_fill_paddr(o_fill_paddr),
-        .o_fill_cacheable(o_fill_cacheable),
-        .i_fill_done(i_fill_done), .i_fill_data(i_fill_data), .i_fill_fault(i_fill_fault),
+        .o_dreq_valid(o_dreq_valid), .o_dreq_cacheable(o_dreq_cacheable),
+        .o_dreq_addr(o_dreq_addr), .o_dreq_byte_en(o_dreq_byte_en),
+        .i_drsp_done(i_drsp_done), .i_rsp_fault(i_rsp_fault), .i_rsp_line(i_rsp_line),
         .o_branch_taken(o_branch_taken), .o_branch_target(o_branch_target),
         .o_fault_commit(o_fault_commit), .o_fault_vec(o_fault_vec), .o_epc(o_epc),
         .o_eret_commit(o_eret_commit),

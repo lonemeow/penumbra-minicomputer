@@ -83,8 +83,14 @@ graph LR
   the request up until it completes, and the
   [bus master](./overview.md#fork-boundary) carries it out as one registered
   line transaction (validated in P0.4).
+- **The line is installed as the request completes,** into the way the
+  miss parked with, unless the read faulted or the L1 is disabled. It runs
+  from the uncore's line register into the L1 and never through the core.
 - **Completion is a registered event** delivering `{data}` or `{fault}` to
-  the held load, which then advances to WB and clears `mem_pending_q`.
+  the held load's register in the cycle after the request completes.
+- **The launch side resumes a cycle after completion.** The instruction
+  held in MEM2 behind the miss holds an L1 lookup, and the L1 shows a
+  line to a lookup it already holds two cycles after the install.
 
 ## Stores — write-through, write-no-allocate
 

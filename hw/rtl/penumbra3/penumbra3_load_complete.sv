@@ -1,62 +1,142 @@
-// penumbra3_load_complete -- registered load-completion / hold buffer.
+// penumbra3_load_complete -- the data side's completion unit, for loads.
 //
 // The back-end's single load-completion point, and the module that keeps
-// the cache hit/busy verdict off the issue and MMU cones (the gen2 floor).
-// The MEM2 verdict is a combinational input consumed *here* into a flop; the
-// pipeline's only view of it is the registered o_load_pending. A miss parks
-// the load in the one-entry hold buffer (single-outstanding), the line fill
-// is launched once, and a registered completion delivers {data|fault} to
-// the held -- and therefore oldest -- load.
+// the cache hit verdict off the issue and MMU cones. A load MEM2 cannot
+// serve -- it missed the L1, or its page is uncacheable -- is parked here
+// as it leaves MEM2. The unit is then the data side's requester on the
+// core-to-uncore port (doc/internals/penumbra3/uncore-port.md): it holds
+// one request up until the uncore's done, installs the line a cacheable
+// load brought back into the L1, and hands the load's word to the regfile
+// a cycle later. The pipeline sees none of it but the registered
+// o_load_pending, which freezes the launch side (MEM1, the MEM1/MEM2
+// register, the translate and L1 launches, issue) from the cycle after the
+// park.
 //
-// The buffer also parks the load's sub-word extract metadata (size, address
-// low bits, sign). The fill returns a full word asynchronously, after the
-// load's metadata has left the pipe, so the consumer needs it back at
-// completion to extract a byte/halfword result correctly.
+// One load, cycle by cycle. p is the park, r the uncore's done:
+//
+//   p     i_park: the load's descriptor is latched
+//   p+1   o_load_pending and o_req_valid rise; the request is held
+//   r     i_rsp_done with the line. o_fill_we writes it into the L1 (a
+//         cacheable load, L1 enabled, no fault); the load's word is taken
+//   r+1   o_req_valid is low. o_complete: the regfile write. A lookup the
+//         L1 holds still gives the filled way as it was before r
+//   r+2   o_load_pending is low
+//
+// The descriptor also keeps what the sub-word extract needs (size, sign,
+// the address's low bits): the response is a whole word and arrives after
+// the load has left the pipe.
 module penumbra3_load_complete #(
-    parameter int IDX_BITS = 5      // destination scoreboard-index width
+    parameter  int IDX_BITS   = 5,      // destination scoreboard-index width
+    parameter  int WAYS       = 2,      // the L1's ways
+    parameter  int LINE_WORDS = 4,      // the port's line
+    localparam int WAY_BITS   = $clog2(WAYS),
+    localparam int WORD_BITS  = $clog2(LINE_WORDS)
 ) (
     input  logic                i_clk,
     input  logic                i_rst,
 
-    // MEM2 verdict for a load (combinational; consumed into a flop)
-    input  logic                i_load_valid,   // a load leaves MEM2 this cycle with its verdict
-    input  logic                i_cache_hit,
+    // -- Park: a load that MEM2 cannot serve leaves MEM2 this cycle --
+    input  logic                i_park,           // one cycle; never while o_load_pending
     input  logic [IDX_BITS-1:0] i_load_dest,
-    input  logic [1:0]          i_load_size,    // sub-word extract metadata, parked with the load
-    input  logic [1:0]          i_load_addr_lo,
+    input  logic [1:0]          i_load_size,
     input  logic                i_load_sign,
-    input  logic [31:0]         i_load_paddr,   // fill address, parked for the launch (1 cycle late)
+    input  logic [31:0]         i_load_paddr,
     input  logic                i_load_cacheable,
+    input  logic [3:0]          i_load_byte_en,
+    input  logic [WAY_BITS-1:0] i_victim_way,     // where the L1 would fill its line
+    input  logic                i_l1_enabled,     // the L1's CTRL.ENABLE
 
-    // Line-fill response (registered completion from the bus master)
-    input  logic                i_fill_done,
-    input  logic [31:0]         i_fill_data,
-    input  logic                i_fill_fault,
+    // -- Core-to-uncore port, data side ---------------------------
+    output logic                o_req_valid,
+    output logic                o_req_cacheable,
+    output logic [31:0]         o_req_addr,
+    output logic [3:0]          o_req_byte_en,
+    input  logic                i_rsp_done,       // one cycle, only while o_req_valid
+    input  logic                i_rsp_fault,      // valid with i_rsp_done
+    input  logic [LINE_WORDS-1:0][31:0] i_rsp_line,
 
-    // Registered pipeline gate + completion
-    output logic                o_load_pending, // gates the pipe hold
-    output logic                o_launch_fill,  // kick the line fill (1-cycle)
-    output logic [31:0]         o_fill_paddr,   // parked fill address, valid with o_launch_fill
-    output logic                o_fill_cacheable,
-    output logic                o_complete,     // a held load finished (1-cycle)
+    // -- L1 line install (the line runs from the uncore to the L1) --
+    output logic                o_fill_we,
+    output logic [WAY_BITS-1:0] o_fill_way,
+    output logic [31:0]         o_fill_paddr,
+
+    // -- Pipeline gate + completion -------------------------------
+    output logic                o_load_pending,   // freezes the launch side
+    output logic                o_complete,       // the parked load finished (one cycle)
     output logic [IDX_BITS-1:0] o_complete_dest,
-    output logic [31:0]         o_complete_data,
+    output logic [31:0]         o_complete_data,  // the whole word; the consumer extracts
     output logic                o_complete_fault,
-    output logic [1:0]          o_complete_size,    // parked metadata, for sub-word extract
+    output logic [1:0]          o_complete_size,
     output logic [1:0]          o_complete_addr_lo,
     output logic                o_complete_sign
 );
 
-    typedef enum logic {L_IDLE, L_PENDING} state_e;
-
-    state_e              state_q;
+    // ── The parked load ──────────────────────────────────────────
+    // Loaded every cycle nothing is parked, so only the two flops below
+    // carry the park decision, which waits on the TLB verdict and the L1
+    // hit; these registers' enables stay off it. From p+1 through the
+    // last cycle o_load_pending is high they hold the parked load.
     logic [IDX_BITS-1:0] dest_q;
-    logic [1:0]          size_q;       // sub-word extract metadata, held while pending
-    logic [1:0]          addr_lo_q;
+    logic [1:0]          size_q;
     logic                sign_q;
-    logic [31:0]         paddr_q;      // fill address, held while pending
+    logic [31:0]         paddr_q;
     logic                cacheable_q;
-    logic                launch_fill_q;
+    logic [3:0]          byte_en_q;
+    logic [WAY_BITS-1:0] way_q;        // the L1 way its line goes to
+    logic                install_q;    // level: r installs the line unless it faulted
+
+    // req_valid_q: a request is up on the port. High from p+1 through r.
+    // pending_q:   the launch side is frozen. High from p+1 through r+1.
+    // settle_q:    high in r+1.
+    logic req_valid_q, pending_q, settle_q;
+
+    always_ff @(posedge i_clk)
+        if (!pending_q) begin
+            dest_q      <= i_load_dest;
+            size_q      <= i_load_size;
+            sign_q      <= i_load_sign;
+            paddr_q     <= i_load_paddr;
+            cacheable_q <= i_load_cacheable;
+            byte_en_q   <= i_load_byte_en;
+            way_q       <= i_victim_way;
+            install_q   <= i_load_cacheable && i_l1_enabled;
+        end
+
+    assign o_req_valid     = req_valid_q;
+    assign o_req_cacheable = cacheable_q;
+    assign o_req_addr      = paddr_q;
+    assign o_req_byte_en   = byte_en_q;
+
+    assign o_fill_we    = i_rsp_done && install_q && !i_rsp_fault;
+    assign o_fill_way   = way_q;
+    assign o_fill_paddr = paddr_q;
+
+    // ── Release ──────────────────────────────────────────────────
+    // The instruction held in MEM2 behind the parked load takes effect in
+    // the first cycle o_load_pending is low, on what the L1 gives its
+    // lookup then. A line installed in r shows to a lookup the L1 holds
+    // from r+2, so o_load_pending stays high through r+1.
+    always_ff @(posedge i_clk) begin
+        if (i_rst) begin
+            req_valid_q <= 1'b0;
+            pending_q   <= 1'b0;
+            settle_q    <= 1'b0;
+        end else begin
+            settle_q <= i_rsp_done;
+
+            if (i_park)          req_valid_q <= 1'b1;
+            else if (i_rsp_done) req_valid_q <= 1'b0;
+
+            if (i_park)        pending_q <= 1'b1;
+            else if (settle_q) pending_q <= 1'b0;
+        end
+    end
+    assign o_load_pending = pending_q;
+
+    // ── Completion ───────────────────────────────────────────────
+    // Captured in r, since the parked registers above may load the next
+    // slot from r+1 on. A line read's word is the one the address selects;
+    // a word read's comes back in word 0.
     logic                complete_q;
     logic [IDX_BITS-1:0] complete_dest_q;
     logic [31:0]         complete_data_q;
@@ -65,14 +145,22 @@ module penumbra3_load_complete #(
     logic [1:0]          complete_addr_lo_q;
     logic                complete_sign_q;
 
-    // A miss enters the hold: a load resolving in MEM2 that did not hit.
-    logic miss_enter;
-    assign miss_enter = (state_q == L_IDLE) && i_load_valid && !i_cache_hit;
+    logic [WORD_BITS-1:0] rsp_word_idx;
+    assign rsp_word_idx = cacheable_q ? paddr_q[2 +: WORD_BITS] : '0;
 
-    assign o_load_pending   = (state_q == L_PENDING);
-    assign o_launch_fill    = launch_fill_q;
-    assign o_fill_paddr     = paddr_q;
-    assign o_fill_cacheable = cacheable_q;
+    always_ff @(posedge i_clk) begin
+        if (i_rst) complete_q <= 1'b0;
+        else       complete_q <= i_rsp_done;
+        if (i_rsp_done) begin
+            complete_dest_q    <= dest_q;
+            complete_data_q    <= i_rsp_line[rsp_word_idx];
+            complete_fault_q   <= i_rsp_fault;
+            complete_size_q    <= size_q;
+            complete_addr_lo_q <= paddr_q[1:0];
+            complete_sign_q    <= sign_q;
+        end
+    end
+
     assign o_complete         = complete_q;
     assign o_complete_dest    = complete_dest_q;
     assign o_complete_data    = complete_data_q;
@@ -81,52 +169,16 @@ module penumbra3_load_complete #(
     assign o_complete_addr_lo = complete_addr_lo_q;
     assign o_complete_sign    = complete_sign_q;
 
-    always_ff @(posedge i_clk) begin
-        if (i_rst) begin
-            state_q            <= L_IDLE;
-            dest_q             <= '0;
-            size_q             <= '0;
-            addr_lo_q          <= '0;
-            sign_q             <= 1'b0;
-            paddr_q            <= '0;
-            cacheable_q        <= 1'b0;
-            launch_fill_q      <= 1'b0;
-            complete_q         <= 1'b0;
-            complete_dest_q    <= '0;
-            complete_data_q    <= '0;
-            complete_fault_q   <= 1'b0;
-            complete_size_q    <= '0;
-            complete_addr_lo_q <= '0;
-            complete_sign_q    <= 1'b0;
-        end else begin
-            launch_fill_q <= miss_enter;   // kick the fill the cycle we park
-            complete_q    <= 1'b0;
-
-            if (miss_enter) begin
-                state_q     <= L_PENDING;
-                dest_q      <= i_load_dest;
-                size_q      <= i_load_size;
-                addr_lo_q   <= i_load_addr_lo;
-                sign_q      <= i_load_sign;
-                paddr_q     <= i_load_paddr;
-                cacheable_q <= i_load_cacheable;
-            end else if (state_q == L_PENDING && i_fill_done) begin
-                state_q            <= L_IDLE;
-                complete_q         <= 1'b1;
-                complete_dest_q    <= dest_q;
-                complete_data_q    <= i_fill_data;
-                complete_fault_q   <= i_fill_fault;
-                complete_size_q    <= size_q;
-                complete_addr_lo_q <= addr_lo_q;
-                complete_sign_q    <= sign_q;
-            end
-        end
-    end
-
-    // Single-outstanding: a fill completion only arrives for the load held in
-    // L_PENDING, so a done pulse while idle is a bus-protocol violation.
+    // ── Assertions (sim-only; Verilator --assert) ─────────────────
+    // One load at a time: the freeze keeps a second from reaching MEM2's
+    // exit while one is parked.
     assert property (@(posedge i_clk) disable iff (i_rst)
-        !(state_q == L_IDLE && i_fill_done))
-        else $error("penumbra3_load_complete: fill completion with no load pending");
+        !(i_park && pending_q))
+        else $error("penumbra3_load_complete: a load parked while one is pending");
+
+    // The uncore answers a request, and only once.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        !(i_rsp_done && !req_valid_q))
+        else $error("penumbra3_load_complete: done with no request up");
 
 endmodule

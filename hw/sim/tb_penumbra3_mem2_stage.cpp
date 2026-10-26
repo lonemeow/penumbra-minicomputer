@@ -1,36 +1,143 @@
-// Verilator testbench for penumbra3_mem2_stage, composed with MEM1 + dtranslate
-// (via penumbra3_mem2_stage_test). Each access flows MEM1 (launch) -> MEM2
-// (resolve), so the launch/verdict alignment is exercised end to end.
+// Verilator testbench for penumbra3_mem2_stage as the data side composes it
+// (penumbra3_mem2_stage_test): MEM1, the TLB's D-copy, a real L1 and MEM2
+// with its completion unit. The testbench is the uncore: it answers the
+// requests the completion unit raises, from a memory whose content is a
+// function of the address.
 //
-// Timing: an access driven in cycle A is in MEM1; after one tick it is in MEM2
-// (cycle B) with the translation verdict resolved; the testbench drives the
-// D-cache resolve in B; after another tick it commits in WB (cycle C).
+// Timing: an access driven in cycle A is in MEM1; one tick later it is in
+// MEM2 with the translation and the L1 verdict resolved; it leaves MEM2 at
+// the next tick, into WB or into the completion unit.
 //
-// Covers: load hit (+ sub-word), the miss -> hold -> registered completion
-// sequence, an uncached load taking the fill path despite a cache "hit", a TLB
-// miss committing as a fault, a store write-through, the MEM2->EX forward, and
-// a slot held in MEM2 taking effect only as it leaves: behind a parked load,
-// under WB back-pressure, and squashed by a fault commit.
+// Covers: a load with the L1 disabled; a miss, its request, the line
+// install and the completion, cycle by cycle; hits on the installed line
+// (+ sub-word); an uncached load as a word read; a faulted line read; a
+// store hit read back; the L1's counters; a TLB miss committing as a fault;
+// the MEM2->EX forward; a slot held in MEM2 taking effect only as it leaves
+// (behind a parked load, under WB back-pressure, squashed by a fault
+// commit); and the slot behind a parked load resolving on the L1 as it is
+// after the install.
 
 #include <cstdio>
 #include <cstdint>
+#include <cstring>
 #include "Vpenumbra3_mem2_stage_test.h"
 #include "verilated.h"
 
+typedef Vpenumbra3_mem2_stage_test Dut;
+
 enum { OPC_LOAD = 1, OPC_STORE = 2 };
-enum { MEM_SZ_BYTE = 0, MEM_SZ_WORD = 2 };
+enum { MEM_SZ_BYTE = 0, MEM_SZ_HALF = 1, MEM_SZ_WORD = 2 };
 enum { VEC_TLB_MISS = 2 };
 // TLB PTE flag bits
 enum { F_V = 0x01, F_C = 0x04, F_R = 0x08, F_W = 0x10 };
+// Cache device registers
+enum { CACHE_CTRL = 1, CACHE_READ_HITS = 10, CACHE_READ_MISSES = 11,
+       CACHE_WRITE_HITS = 12, CACHE_WRITE_MISSES = 13 };
 
 static int errors = 0, tests = 0;
 static void check(const char* n, uint32_t g, uint32_t e) {
     tests++;
     if (g != e) { printf("  FAIL [%s]: got 0x%X, expected 0x%X\n", n, g, e); errors++; }
 }
-static void tick(Vpenumbra3_mem2_stage_test* d) {
+
+// The memory behind the uncore: every word a function of its address.
+static uint32_t mem_word(uint32_t pa) {
+    return ((pa >> 2) * 2654435761u) ^ 0x5A5AA5A5u;
+}
+
+// ── The uncore, played each cycle ────────────────────────────────
+// With automatic set it answers a request once the request has been up
+// for `wait` whole cycles, so never in the cycle valid rises. A line read
+// returns its line; a word read returns its word in word 0, beside words
+// no load may take.
+static struct {
+    bool automatic = true;
+    int  wait = 2;
+    bool fault = false;      // fault the next response
+    int  age = 0;
+} uc;
+
+static void uncore_answer(Dut* d, bool fault) {
+    uint32_t a = d->o_dreq_addr;
+    d->i_drsp_done = 1;
+    d->i_rsp_fault = fault;
+    for (int k = 0; k < 4; k++)
+        d->i_rsp_line[k] = fault               ? 0xFA017000u + k
+                         : d->o_dreq_cacheable ? mem_word((a & ~15u) + 4 * k)
+                         : k == 0              ? mem_word(a & ~3u)
+                         :                       0xDEAD0000u + k;
+    d->eval();
+}
+static void uncore_idle(Dut* d) {
+    d->i_drsp_done = 0; d->i_rsp_fault = 0;
+    d->eval();
+}
+
+// ── What the testbench watches every cycle ───────────────────────
+static struct {
+    int      cycle;
+    int      requests, installs, completions, store_strobes, req_changed;
+    uint32_t req_addr;  int req_cacheable, req_byte_en;
+    int      fill_way;  uint32_t fill_paddr;
+    uint32_t cpl_value; int cpl_dest, cpl_fault;
+    int      wb_n[32];  uint32_t wb_value[32];
+    // Cycles from a done to the first cycle o_load_pending is low after it.
+    int      done_at, release_lag;
+    bool     lag_open;
+    bool     prev_valid, prev_done, prev_pending;
+} m;
+
+static void watch_reset() {
+    int cycle = m.cycle;
+    bool pv = m.prev_valid, pd = m.prev_done, pp = m.prev_pending;
+    memset(&m, 0, sizeof m);
+    m.cycle = cycle; m.prev_valid = pv; m.prev_done = pd; m.prev_pending = pp;
+}
+
+static void tick(Dut* d) {
+    d->eval();
+    if (uc.automatic) {
+        uc.age = d->o_dreq_valid ? uc.age + 1 : 0;
+        if (uc.age > uc.wait) { uncore_answer(d, uc.fault); uc.fault = false; }
+        else                  uncore_idle(d);
+    }
+
+    // A request is new when valid rises, or stays up the cycle after a done.
+    if (d->o_dreq_valid && (!m.prev_valid || m.prev_done)) {
+        m.requests++;
+        m.req_addr = d->o_dreq_addr; m.req_cacheable = d->o_dreq_cacheable;
+        m.req_byte_en = d->o_dreq_byte_en;
+    } else if (d->o_dreq_valid) {
+        m.req_changed += d->o_dreq_addr != m.req_addr
+                      || d->o_dreq_cacheable != m.req_cacheable
+                      || d->o_dreq_byte_en != m.req_byte_en;
+    }
+    if (d->o_dcache_fill_we) {
+        m.installs++;
+        m.fill_way = d->o_dcache_fill_way; m.fill_paddr = d->o_dcache_fill_paddr;
+    }
+    if (d->o_complete) {
+        m.completions++;
+        m.cpl_value = d->o_complete_value; m.cpl_dest = d->o_complete_dest;
+        m.cpl_fault = d->o_complete_fault;
+    }
+    m.store_strobes += d->o_dcache_we;
+    if (d->o_wb_valid) {
+        m.wb_n[d->o_wb_phys_dst]++;
+        m.wb_value[d->o_wb_phys_dst] = d->o_wb_value;
+    }
+    if (m.lag_open && m.prev_pending && !d->o_load_pending) {
+        m.release_lag = m.cycle - m.done_at; m.lag_open = false;
+    }
+    if (d->i_drsp_done) { m.done_at = m.cycle; m.lag_open = true; }
+    m.prev_valid = d->o_dreq_valid; m.prev_done = d->i_drsp_done;
+    m.prev_pending = d->o_load_pending;
+    m.cycle++;
+
     d->i_clk = 0; d->eval(); d->i_clk = 1; d->eval();
 }
+
+// ── Driving the pipe ─────────────────────────────────────────────
 static uint32_t enc_m(int L, int sz, int se, int rd) {
     return (2u << 30) | ((L & 1) << 29) | ((sz & 3) << 27) | ((se & 1) << 26)
          | ((rd & 0xF) << 22);
@@ -38,228 +145,319 @@ static uint32_t enc_m(int L, int sz, int se, int rd) {
 static uint32_t enc_r(int op, int rd) {
     return ((op & 0x1F) << 25) | ((rd & 0xF) << 21);
 }
-static void idle(Vpenumbra3_mem2_stage_test* d) {
+static uint32_t ld(int sz, int se, int rd) { return enc_m(1, sz, se, rd); }
+static uint32_t st(int sz)                 { return enc_m(0, sz, 0, 7); }
+
+static void drive_none(Dut* d) {
     d->i_ir = 0; d->i_ea = 0; d->i_phys_dst = 0; d->i_phys_dst_we = 0;
     d->i_fault_pending = 0; d->i_store_data = 0; d->i_valid = 0;
-    d->i_dcache_hit = 0; d->i_dcache_rdata = 0;
-    d->i_tlb_wr_en = 0; d->i_fill_done = 0; d->i_fill_data = 0; d->i_fill_fault = 0;
-    d->i_ext_stall = 0; d->i_bubble = 0;
+    d->eval();
 }
-// Install a TLB entry mapping vaddr's page -> ppn with the given flags (ASID 0).
-static void tlb_install(Vpenumbra3_mem2_stage_test* d, uint32_t vaddr, uint32_t ppn, uint32_t flags) {
+// Put one instruction in MEM1 for this cycle.
+static void drive(Dut* d, uint32_t ir, uint32_t ea, int dst, int dst_we,
+                  uint32_t store = 0) {
+    d->i_ir = ir; d->i_ea = ea; d->i_phys_dst = dst; d->i_phys_dst_we = dst_we;
+    d->i_fault_pending = 0; d->i_store_data = store; d->i_valid = 1;
+    d->eval();
+}
+// Tick until nothing is parked, then let WB and a completion drain.
+static void drain(Dut* d) {
+    for (int guard = 0; d->o_load_pending && guard < 64; guard++) tick(d);
+    for (int i = 0; i < 4; i++) tick(d);
+}
+// One instruction through the pipe, alone.
+static void run(Dut* d, uint32_t ir, uint32_t ea, int dst, int dst_we,
+                uint32_t store = 0) {
+    drive(d, ir, ea, dst, dst_we, store);
+    tick(d);                    // into MEM2
+    drive_none(d);
+    tick(d);                    // out of MEM2: to WB, or parked
+    drain(d);
+}
+// Two instructions through the pipe, the second directly behind the first.
+static void run2(Dut* d, uint32_t ir1, uint32_t ea1, int dst1,
+                         uint32_t ir2, uint32_t ea2, int dst2, int dst2_we,
+                         uint32_t store2 = 0) {
+    drive(d, ir1, ea1, dst1, 1);
+    tick(d);                    // the first is in MEM2
+    drive(d, ir2, ea2, dst2, dst2_we, store2);
+    tick(d);                    // the first leaves MEM2; the second enters it
+    drive_none(d);
+    tick(d);
+    drain(d);
+}
+
+static void tlb_install(Dut* d, uint32_t vaddr, uint32_t ppn, uint32_t flags) {
     d->i_tlb_wr_en = 1;
     d->i_tlb_wr_set = (vaddr >> 12) & 0x1F;
     d->i_tlb_wr_way = 0;
     d->i_tlb_wr_valid = 1;
     d->i_tlb_wr_vpn_word = (vaddr >> 12) << 8;          // VPN<<8 | ASID(0)
     d->i_tlb_wr_pte_word = (ppn << 12) | flags;
-    d->eval(); tick(d);
+    tick(d);
     d->i_tlb_wr_en = 0; d->eval();
 }
+static void l1_write(Dut* d, int reg, uint32_t value) {
+    d->i_l1_sys_reg = reg; d->i_l1_sys_wdata = value; d->i_l1_sys_we = 1;
+    tick(d);
+    d->i_l1_sys_we = 0; d->eval();
+}
+static uint32_t l1_read(Dut* d, int reg) {
+    for (int i = 0; i < 3; i++) tick(d);    // the counters trail their events
+    d->i_l1_sys_reg = reg; d->i_l1_sys_re = 1;
+    tick(d);
+    d->i_l1_sys_re = 0; d->eval();
+    return d->o_l1_sys_rdata;
+}
+
+static int32_t sext8(uint32_t v) { return (int32_t)(int8_t)(v & 0xFF); }
 
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
-    Vpenumbra3_mem2_stage_test* d = new Vpenumbra3_mem2_stage_test;
+    Dut* d = new Dut;
 
-    idle(d); d->i_rst = 1; tick(d); tick(d); d->i_rst = 0; d->eval();
+    drive_none(d);
+    d->i_user_mode = 0; d->i_asid = 0;
+    d->i_tlb_wr_en = 0; d->i_ext_stall = 0; d->i_bubble = 0;
+    d->i_l1_sys_reg = 0; d->i_l1_sys_wdata = 0; d->i_l1_sys_we = 0; d->i_l1_sys_re = 0;
+    uncore_idle(d);
+    d->i_rst = 1; tick(d); tick(d); d->i_rst = 0; d->eval();
     check("rst_valid", d->o_wb_valid, 0);
 
-    // 0x1000 -> paddr 0x2000, cacheable + RW.
-    tlb_install(d, 0x1000, 0x2, F_V | F_C | F_R | F_W);
-    // 0x3000 -> paddr 0x4000, UNCACHED, R.
-    tlb_install(d, 0x3000, 0x4, F_V | F_R);
+    // Three cacheable pages, so three lines can share an L1 set, and one
+    // uncacheable page.
+    tlb_install(d, 0x1000, 0x2, F_V | F_C | F_R | F_W);   // -> 0x2000
+    tlb_install(d, 0x3000, 0x4, F_V | F_R | F_W);         // -> 0x4000, uncacheable
+    tlb_install(d, 0x5000, 0x6, F_V | F_C | F_R | F_W);   // -> 0x6000
+    tlb_install(d, 0x7000, 0x8, F_V | F_C | F_R | F_W);   // -> 0x8000
 
-    // ── Load hit: word, with the MEM2->EX forward ──
-    idle(d);
-    d->i_ir = enc_m(1, MEM_SZ_WORD, 0, 3); d->i_ea = 0x1000;
-    d->i_phys_dst = 3; d->i_phys_dst_we = 1; d->i_valid = 1;
-    d->eval(); tick(d);                       // A -> B
-    d->i_valid = 0; d->i_dcache_hit = 1; d->i_dcache_rdata = 0x12345678;
-    d->eval();
-    check("ldh_no_pending", d->o_load_pending, 0);
-    check("ldh_no_fwd",     d->o_fwd_valid, 0);          // forwards from MEM2/WB, not MEM2
-    tick(d); d->eval();                        // B -> C
-    check("ldh_wb_valid",  d->o_wb_valid, 1);
-    check("ldh_wb_class",  d->o_wb_op_class, OPC_LOAD);
-    check("ldh_wb_value",  d->o_wb_value, 0x12345678);
-    check("ldh_wb_dst",    d->o_wb_phys_dst, 3);
-    check("ldh_wb_nofault", d->o_wb_fault_pending, 0);
+    // ── L1 disabled: a cacheable load reads a line and installs nothing ──
+    watch_reset();
+    run(d, ld(MEM_SZ_WORD, 0, 5), 0x1008, 5, 1);
+    check("off_request",       m.requests, 1);
+    check("off_cacheable",     m.req_cacheable, 1);
+    check("off_addr",          m.req_addr, 0x2008);
+    check("off_no_install",    m.installs, 0);
+    check("off_value",         m.cpl_value, mem_word(0x2008));
+    run(d, ld(MEM_SZ_WORD, 0, 5), 0x1008, 5, 1);
+    check("off_asks_again",    m.requests, 2);
 
-    // ── ALU result: forwarded from MEM2 as it entered ──
-    idle(d);
-    d->i_ir = enc_r(0 /* ADD */, 4); d->i_ea = 0xCAFE0010;   // the carried result
-    d->i_phys_dst = 4; d->i_phys_dst_we = 1; d->i_valid = 1;
-    d->eval(); tick(d);
-    d->i_valid = 0; d->eval();
+    l1_write(d, CACHE_CTRL, 1);
+
+    // ── A miss, cycle by cycle: park, request, install, completion ──
+    uc.automatic = false;
+    watch_reset();
+    drive(d, ld(MEM_SZ_WORD, 0, 5), 0x1008, 5, 1);
+    tick(d);                                   // the load is in MEM2
+    drive_none(d);
+    check("miss_park_no_pending",  d->o_load_pending, 0);   // both register at the park
+    check("miss_park_no_request",  d->o_dreq_valid, 0);
+    tick(d);                                   // p+1
+    check("miss_pending",          d->o_load_pending, 1);
+    check("miss_request",          d->o_dreq_valid, 1);
+    check("miss_req_cacheable",    d->o_dreq_cacheable, 1);
+    check("miss_req_addr",         d->o_dreq_addr, 0x2008);
+    check("miss_req_byte_en",      d->o_dreq_byte_en, 0xF);
+    check("miss_not_committed",    d->o_wb_valid, 0);
+    tick(d); tick(d);
+    check("miss_request_held",     d->o_dreq_valid, 1);
+    uncore_answer(d, false);                   // r
+    check("miss_install",          d->o_dcache_fill_we, 1);
+    check("miss_install_way",      d->o_dcache_fill_way, 0);   // the lowest invalid way
+    check("miss_install_paddr",    d->o_dcache_fill_paddr >> 4, 0x2008 >> 4);
+    check("miss_no_complete_yet",  d->o_complete, 0);
+    tick(d);                                   // r+1
+    uncore_idle(d);
+    check("miss_complete",         d->o_complete, 1);
+    check("miss_complete_value",   d->o_complete_value, mem_word(0x2008));
+    check("miss_complete_dest",    d->o_complete_dest, 5);
+    check("miss_complete_nofault", d->o_complete_fault, 0);
+    check("miss_request_dropped",  d->o_dreq_valid, 0);
+    drain(d);
+    check("miss_one_request",      m.requests, 1);
+    check("miss_request_stable",   m.req_changed, 0);
+    check("miss_one_install",      m.installs, 1);
+    check("miss_one_completion",   m.completions, 1);
+    uc.automatic = true;
+
+    // ── Hits on the installed line ──
+    watch_reset();
+    run(d, ld(MEM_SZ_WORD, 0, 6), 0x1008, 6, 1);
+    check("hit_committed",  m.wb_n[6], 1);
+    check("hit_value",      m.wb_value[6], mem_word(0x2008));
+    check("hit_no_request", m.requests, 0);
+    run(d, ld(MEM_SZ_WORD, 0, 6), 0x100C, 6, 1);           // another word of the line
+    check("hit_other_word", m.wb_value[6], mem_word(0x200C));
+    run(d, ld(MEM_SZ_BYTE, 0, 6), 0x1002, 6, 1);           // byte 2, zero-extended
+    check("hit_byte",       m.wb_value[6], (mem_word(0x2000) >> 16) & 0xFF);
+    check("hit_no_request_2", m.requests, 0);
+
+    // ── A sub-word miss extracts from the line's word ──
+    watch_reset();
+    run(d, ld(MEM_SZ_BYTE, 1, 5), 0x1021, 5, 1);           // byte 1, sign-extended
+    check("subword_miss_request", m.requests, 1);
+    check("subword_miss_value",   m.cpl_value, (uint32_t)sext8(mem_word(0x2020) >> 8));
+    run(d, ld(MEM_SZ_HALF, 0, 6), 0x1022, 6, 1);           // the upper half, now a hit
+    check("subword_hit_value",    m.wb_value[6], mem_word(0x2020) >> 16);
+
+    // ── An uncacheable load is a word read of the access itself ──
+    watch_reset();
+    run(d, ld(MEM_SZ_BYTE, 0, 5), 0x3006, 5, 1);
+    check("uncached_request",    m.requests, 1);
+    check("uncached_cacheable",  m.req_cacheable, 0);
+    check("uncached_addr",       m.req_addr, 0x4006);      // the byte address, unchanged
+    check("uncached_byte_en",    m.req_byte_en, 0x4);
+    check("uncached_value",      m.cpl_value, (mem_word(0x4004) >> 16) & 0xFF);
+    check("uncached_no_install", m.installs, 0);
+    check("uncached_release_lag", m.release_lag, 2);
+
+    // ── A faulted line read installs nothing and completes with the fault ──
+    watch_reset();
+    uc.fault = true;
+    run(d, ld(MEM_SZ_WORD, 0, 5), 0x1040, 5, 1);
+    check("fault_completes",  m.completions, 1);
+    check("fault_reported",   m.cpl_fault, 1);
+    check("fault_no_install", m.installs, 0);
+    run(d, ld(MEM_SZ_WORD, 0, 5), 0x1040, 5, 1);           // so it is asked for again
+    check("fault_asks_again", m.requests, 2);
+    check("fault_then_value", m.cpl_value, mem_word(0x2040));
+
+    // ── A store hit is written once and read back ──
+    watch_reset();
+    run(d, st(MEM_SZ_WORD), 0x1008, 0, 0, 0xAABBCCDD);
+    check("store_strobe_once", m.store_strobes, 1);
+    check("store_committed",   m.wb_n[0], 1);
+    run(d, ld(MEM_SZ_WORD, 0, 6), 0x1008, 6, 1);
+    check("store_read_back",   m.wb_value[6], 0xAABBCCDD);
+    check("store_no_request",  m.requests, 0);
+
+    // ── The L1 counts each cacheable access once ──
+    uint32_t rh = l1_read(d, CACHE_READ_HITS),  rm = l1_read(d, CACHE_READ_MISSES);
+    uint32_t wh = l1_read(d, CACHE_WRITE_HITS), wm = l1_read(d, CACHE_WRITE_MISSES);
+    run(d, ld(MEM_SZ_WORD, 0, 5), 0x1140, 5, 1);           // a miss
+    run(d, ld(MEM_SZ_WORD, 0, 5), 0x1140, 5, 1);           // a hit
+    run(d, st(MEM_SZ_WORD), 0x1144, 0, 0, 0x01020304);     // a store hit
+    run(d, st(MEM_SZ_WORD), 0x1244, 0, 0, 0x05060708);     // a store miss
+    run(d, ld(MEM_SZ_WORD, 0, 5), 0x3000, 5, 1);           // uncacheable: not counted
+    check("count_read_hits",    l1_read(d, CACHE_READ_HITS)    - rh, 1);
+    check("count_read_misses",  l1_read(d, CACHE_READ_MISSES)  - rm, 1);
+    check("count_write_hits",   l1_read(d, CACHE_WRITE_HITS)   - wh, 1);
+    check("count_write_misses", l1_read(d, CACHE_WRITE_MISSES) - wm, 1);
+
+    // ── An ALU result is forwarded from MEM2 as it entered ──
+    drive(d, enc_r(0 /* ADD */, 4), 0xCAFE0010, 4, 1);     // the carried result
+    tick(d);
+    drive_none(d);
     check("alu_fwd_valid",  d->o_fwd_valid, 1);
     check("alu_fwd_result", d->o_fwd_result, 0xCAFE0010);
     check("alu_fwd_dst",    d->o_fwd_dst, 4);
+    drain(d);
+
+    // ── A load's value is not forwarded from MEM2 ──
+    drive(d, ld(MEM_SZ_WORD, 0, 3), 0x100C, 3, 1);
     tick(d);
+    drive_none(d);
+    check("load_no_fwd", d->o_fwd_valid, 0);
+    drain(d);
 
-    // ── Sub-word load hit: byte at offset 2, zero-extended ──
-    idle(d);
-    d->i_ir = enc_m(1, MEM_SZ_BYTE, 0, 3); d->i_ea = 0x1002;
-    d->i_phys_dst = 3; d->i_phys_dst_we = 1; d->i_valid = 1;
-    d->eval(); tick(d);
-    d->i_valid = 0; d->i_dcache_hit = 1; d->i_dcache_rdata = 0x12345678;
-    d->eval(); tick(d); d->eval();
-    check("ldb_wb_value", d->o_wb_value, 0x34);          // byte [23:16]
-
-    // ── Load miss -> hold -> registered completion ──
-    idle(d);
-    d->i_ir = enc_m(1, MEM_SZ_WORD, 0, 5); d->i_ea = 0x1000;
-    d->i_phys_dst = 5; d->i_phys_dst_we = 1; d->i_valid = 1;
-    d->eval(); tick(d);                        // A -> B
-    d->i_valid = 0; d->i_dcache_hit = 0;       // MISS in MEM2
-    d->eval();
-    check("ldm_pending_b", d->o_load_pending, 0);        // registers next cycle
-    tick(d); d->eval();                        // B -> C
-    check("ldm_pending",   d->o_load_pending, 1);        // pipe frozen off the flop
-    check("ldm_launch",    d->o_launch_fill, 1);
-    check("ldm_fill_pa",   d->o_fill_paddr, 0x2000);
-    check("ldm_wb_evicted", d->o_wb_valid, 0);           // the missing load did not commit
-    // Deliver the fill.
-    d->i_fill_done = 1; d->i_fill_data = 0xCAFEF00D; d->i_fill_fault = 0;
-    d->eval(); tick(d); d->eval();             // completion registers
-    check("ldm_complete",      d->o_complete, 1);
-    check("ldm_complete_val",  d->o_complete_value, 0xCAFEF00D);
-    check("ldm_complete_dest", d->o_complete_dest, 5);
-    check("ldm_pending_clr",   d->o_load_pending, 0);
-    d->i_fill_done = 0; d->eval();
-
-    // ── Uncached load: takes the fill path even though the cache "hits" ──
-    idle(d);
-    d->i_ir = enc_m(1, MEM_SZ_WORD, 0, 6); d->i_ea = 0x3000;   // uncached page
-    d->i_phys_dst = 6; d->i_phys_dst_we = 1; d->i_valid = 1;
-    d->eval(); tick(d);
-    d->i_valid = 0; d->i_dcache_hit = 1;       // cache claims a (stale) hit
-    d->eval(); tick(d); d->eval();
-    check("unc_pending", d->o_load_pending, 1);          // uncached -> fill, not a hit
-    check("unc_fill_pa", d->o_fill_paddr, 0x4000);
-    // drain it so the pipe unfreezes
-    d->i_fill_done = 1; d->i_fill_data = 0; d->eval(); tick(d); d->i_fill_done = 0; d->eval();
-
-    // ── TLB miss: commits to WB carrying the fault ──
-    idle(d);
-    d->i_ir = enc_m(1, MEM_SZ_WORD, 0, 4); d->i_ea = 0x9000;   // no entry
-    d->i_phys_dst = 4; d->i_phys_dst_we = 1; d->i_valid = 1;
-    d->eval(); tick(d);
-    d->i_valid = 0; d->eval(); tick(d); d->eval();
-    check("tlbm_wb_valid", d->o_wb_valid, 1);            // a fault commits, not evicted
-    check("tlbm_fault",    d->o_wb_fault_pending, 1);
-    check("tlbm_vec",      d->o_wb_fault_vec, VEC_TLB_MISS);
-    check("tlbm_no_pending", d->o_load_pending, 0);
-
-    // ── Store: write-through in MEM2 ──
-    idle(d);
-    d->i_ir = enc_m(0, MEM_SZ_WORD, 0, 7); d->i_ea = 0x1000;
-    d->i_store_data = 0xAABBCCDD; d->i_valid = 1;
-    d->eval(); tick(d);
-    d->i_valid = 0; d->eval();
-    check("st_we",    d->o_dcache_we, 1);
-    check("st_paddr", d->o_dcache_paddr, 0x2000);
-    check("st_wdata", d->o_dcache_wdata, 0xAABBCCDD);
-    tick(d); d->eval();
-    check("st_wb_class", d->o_wb_op_class, OPC_STORE);
-    check("st_wb_valid", d->o_wb_valid, 1);
-
+    // ── A TLB miss commits to WB carrying the fault ──
+    watch_reset();
+    drive(d, ld(MEM_SZ_WORD, 0, 4), 0x9000, 4, 1);         // no entry
     tick(d);
+    drive_none(d);
+    tick(d);
+    check("tlbmiss_wb_valid",   d->o_wb_valid, 1);
+    check("tlbmiss_fault",      d->o_wb_fault_pending, 1);
+    check("tlbmiss_vec",        d->o_wb_fault_vec, VEC_TLB_MISS);
+    drain(d);
+    check("tlbmiss_no_request", m.requests, 0);
 
     // The slot in MEM2 takes effect -- commits, parks, writes the L1 -- in
-    // the one cycle it leaves MEM2. The three sequences below hold it there
-    // in each of the ways the spine can: behind a parked load, under WB
+    // the one cycle it leaves MEM2. The sequences below hold it there in
+    // each of the ways the spine can: behind a parked load, under WB
     // back-pressure, and squashed by a fault commit.
 
-    // ── An ALU op behind a parked load commits once, after the completion ──
-    idle(d);
-    d->i_ir = enc_m(1, MEM_SZ_WORD, 0, 5); d->i_ea = 0x1000;
-    d->i_phys_dst = 5; d->i_phys_dst_we = 1; d->i_valid = 1;
-    d->eval(); tick(d);                        // the load is in MEM2
-    d->i_ir = enc_r(0 /* ADD */, 4); d->i_ea = 0x11110000;
-    d->i_phys_dst = 4; d->i_dcache_hit = 0;    // the load misses; the ADD is in MEM1
-    d->eval(); tick(d);                        // the load parks; the ADD is in MEM2
-    d->i_valid = 0; d->eval();
-    int alu_commits = 0;
-    tick(d); d->eval();
-    check("behind_alu_waits_1", d->o_wb_valid, 0);
-    alu_commits += d->o_wb_valid && d->o_wb_phys_dst == 4;
-    tick(d); d->eval();
-    check("behind_alu_waits_2", d->o_wb_valid, 0);
-    alu_commits += d->o_wb_valid && d->o_wb_phys_dst == 4;
-    d->i_fill_done = 1; d->i_fill_data = 0x0BADCAFE; d->eval(); tick(d);
-    d->i_fill_done = 0; d->eval();
-    check("behind_alu_load_done", d->o_complete, 1);
-    alu_commits += d->o_wb_valid && d->o_wb_phys_dst == 4;
-    for (int i = 0; i < 3; i++) {
-        tick(d); d->eval();
-        alu_commits += d->o_wb_valid && d->o_wb_phys_dst == 4;
-    }
-    check("behind_alu_commits_once", alu_commits, 1);
+    // ── An ALU op behind a parked load commits once ──
+    watch_reset();
+    run2(d, ld(MEM_SZ_WORD, 0, 5), 0x1180, 5,
+            enc_r(0 /* ADD */, 4), 0x11110000, 4, 1);
+    check("behind_alu_commits_once",  m.wb_n[4], 1);
+    check("behind_alu_value",         m.wb_value[4], 0x11110000);
+    check("behind_alu_load_complete", m.completions, 1);
+    check("behind_alu_release_lag",   m.release_lag, 2);
 
-    // ── A store behind a parked load writes the L1 once, after the completion ──
-    idle(d);
-    d->i_ir = enc_m(1, MEM_SZ_WORD, 0, 5); d->i_ea = 0x1000;
-    d->i_phys_dst = 5; d->i_phys_dst_we = 1; d->i_valid = 1;
-    d->eval(); tick(d);                        // the load is in MEM2
-    d->i_ir = enc_m(0, MEM_SZ_WORD, 0, 7); d->i_ea = 0x1004;
-    d->i_store_data = 0x55AA55AA; d->i_phys_dst_we = 0;
-    d->i_dcache_hit = 0;                       // the load misses; the store is in MEM1
-    d->eval(); tick(d);                        // the load parks; the store is in MEM2
-    d->i_valid = 0; d->eval();
-    int store_writes = d->o_dcache_we;
-    check("behind_store_waits_1", d->o_dcache_we, 0);
-    tick(d); d->eval();
-    store_writes += d->o_dcache_we;
-    check("behind_store_waits_2", d->o_dcache_we, 0);
-    d->i_fill_done = 1; d->i_fill_data = 0; d->eval(); tick(d);
-    d->i_fill_done = 0; d->eval();
-    for (int i = 0; i < 3; i++) {
-        store_writes += d->o_dcache_we;
-        tick(d); d->eval();
-    }
-    check("behind_store_writes_once", store_writes, 1);
+    // ── A store behind a parked load writes the L1 once ──
+    watch_reset();
+    run2(d, ld(MEM_SZ_WORD, 0, 5), 0x11C0, 5,
+            st(MEM_SZ_WORD), 0x100C, 0, 0, 0x55AA55AA);
+    check("behind_store_writes_once", m.store_strobes, 1);
+    run(d, ld(MEM_SZ_WORD, 0, 6), 0x100C, 6, 1);
+    check("behind_store_read_back",   m.wb_value[6], 0x55AA55AA);
 
     // ── A load that misses under WB back-pressure parks when it leaves MEM2 ──
-    idle(d);
-    d->i_ir = enc_m(1, MEM_SZ_WORD, 0, 5); d->i_ea = 0x1000;
-    d->i_phys_dst = 5; d->i_phys_dst_we = 1; d->i_valid = 1;
-    d->eval(); tick(d);                        // the load is in MEM2
-    d->i_valid = 0; d->i_dcache_hit = 0; d->i_ext_stall = 1;
-    d->eval();
-    int fills = d->o_launch_fill, completions = d->o_complete;
-    tick(d); d->eval();                        // held: the load is still in MEM2
-    check("held_load_not_parked", d->o_load_pending, 0);
-    fills += d->o_launch_fill; completions += d->o_complete;
+    watch_reset();
+    drive(d, ld(MEM_SZ_WORD, 0, 5), 0x1200, 5, 1);
+    tick(d);                                   // the load is in MEM2
+    drive_none(d);
+    d->i_ext_stall = 1; d->eval();
+    tick(d);                                   // held: the load is still in MEM2
+    check("held_load_not_parked",       d->o_load_pending, 0);
+    check("held_load_no_request",       d->o_dreq_valid, 0);
     d->i_ext_stall = 0; d->eval();             // released: the load leaves MEM2
-    tick(d); d->eval();
+    tick(d);
     check("held_load_parks_on_release", d->o_load_pending, 1);
-    fills += d->o_launch_fill; completions += d->o_complete;
-    d->i_fill_done = 1; d->i_fill_data = 0x600DF00D; d->eval(); tick(d);
-    d->i_fill_done = 0; d->eval();
-    for (int i = 0; i < 4; i++) {
-        fills += d->o_launch_fill; completions += d->o_complete;
-        // A second park would wait here for ever: answer it so the count shows it.
-        d->i_fill_done = d->o_load_pending; d->eval();
-        tick(d); d->i_fill_done = 0; d->eval();
-    }
-    check("held_load_fills_once",     fills, 1);
-    check("held_load_completes_once", completions, 1);
+    drain(d);
+    check("held_load_one_request",      m.requests, 1);
+    check("held_load_completes_once",   m.completions, 1);
 
     // ── A load squashed in MEM2 by a fault commit does not park ──
-    idle(d);
-    d->i_ir = enc_m(1, MEM_SZ_WORD, 0, 5); d->i_ea = 0x1000;
-    d->i_phys_dst = 5; d->i_phys_dst_we = 1; d->i_valid = 1;
-    d->eval(); tick(d);                        // the load is in MEM2
-    d->i_valid = 0; d->i_dcache_hit = 0; d->i_bubble = 1;
-    d->eval(); tick(d);
+    watch_reset();
+    drive(d, ld(MEM_SZ_WORD, 0, 5), 0x1240, 5, 1);
+    tick(d);                                   // the load is in MEM2
+    drive_none(d);
+    d->i_bubble = 1; d->eval();
+    tick(d);
     d->i_bubble = 0; d->eval();
     check("squashed_load_not_parked",  d->o_load_pending, 0);
-    check("squashed_load_no_fill",     d->o_launch_fill, 0);
-    check("squashed_load_no_commit",   d->o_wb_valid, 0);
-    // Answer a park if there is one, so a failure here does not hang the rest.
-    d->i_fill_done = d->o_load_pending; d->eval(); tick(d);
-    d->i_fill_done = 0; d->eval();
-    check("squashed_load_no_complete", d->o_complete, 0);
+    drain(d);
+    check("squashed_load_no_request",  m.requests, 0);
+    check("squashed_load_no_commit",   m.wb_n[5], 0);
+    check("squashed_load_no_complete", m.completions, 0);
+
+    // The slot behind a parked load resolves in the first cycle
+    // o_load_pending is low. Whatever it reads from the L1 then has to be
+    // the L1 as it is after the install.
+
+    // ── A load of the line being filled, behind the load that fills it ──
+    watch_reset();
+    run2(d, ld(MEM_SZ_WORD, 0, 5), 0x1280, 5,
+            ld(MEM_SZ_WORD, 0, 6), 0x1284, 6, 1);
+    check("same_line_behind_one_request", m.requests, 1);
+    check("same_line_behind_one_install", m.installs, 1);
+    check("same_line_behind_commits",     m.wb_n[6], 1);
+    check("same_line_behind_value",       m.wb_value[6], mem_word(0x2284));
+    check("same_line_behind_release_lag", m.release_lag, 2);
+
+    // ── A store to the line the fill evicts, behind the load that fills ──
+    // Three lines of one set: 0x12C0, 0x52C0 and 0x72C0. The first two
+    // fill the set; the third evicts the first, the less recently used.
+    run(d, ld(MEM_SZ_WORD, 0, 5), 0x12C0, 5, 1);           // into way 0
+    run(d, ld(MEM_SZ_WORD, 0, 5), 0x52C0, 5, 1);           // into way 1
+    watch_reset();
+    run2(d, ld(MEM_SZ_WORD, 0, 5), 0x72C0, 5,
+            st(MEM_SZ_WORD), 0x12C4, 0, 0, 0xFEEDFACE);
+    check("evicted_store_fill_way",  m.fill_way, 0);
+    run(d, ld(MEM_SZ_WORD, 0, 6), 0x72C4, 6, 1);
+    check("evicted_store_line_hits", m.requests, 1);       // the fill's own, and no other
+    check("evicted_store_line_kept", m.wb_value[6], mem_word(0x82C4));
+
+    // ── A load of another set, behind a load that fills ──
+    watch_reset();
+    run2(d, ld(MEM_SZ_WORD, 0, 5), 0x1300, 5,
+            ld(MEM_SZ_WORD, 0, 6), 0x1024, 6, 1);          // hits a line installed above
+    check("other_set_behind_one_request", m.requests, 1);
+    check("other_set_behind_value",       m.wb_value[6], mem_word(0x2024));
+    check("other_set_behind_release_lag", m.release_lag, 2);
 
     printf("%s: %d/%d checks passed\n", errors ? "FAIL" : "PASS", tests - errors, tests);
     delete d;

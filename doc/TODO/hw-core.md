@@ -152,9 +152,9 @@ skeleton stage-by-stage: each module is forked or written, given a
 *forwarding-release* increment
 (early scoreboard clear + the `i_fwd` broadcasts -- correctness-first leaves
 them tied off today, so a load/divmul-use waits for the registered clear) and
-the *load_pending-freeze / memory-path test* (the load path is wired but the
-skeleton test drives no translate/cache/fill verdicts yet, so the load-miss
-freeze is unexercised).
+the *load_pending-freeze / memory-path test* (MEM2's own test runs loads
+against a real L1 and a modelled uncore, but the spine's test drives no
+translate or cache verdicts yet, so the freeze is unexercised there).
 
 **Memory hierarchy** (the fork in progress):
 
@@ -172,25 +172,16 @@ ranks first ("Levers ranked by measured benefit"):
 1. **The L1 caches:** `penumbra3_l1` is built -- storage, the hit
    verdict, the store-hit write with its forwarding, tree-PLRU, the
    enable, the cache device's sysregs and counters, 8 KB 2-way on the
-   ECP5, and no FSM, since miss orchestration is the consumer's. What
-   remains is wiring it in. Both sides reach memory through the port
-   `doc/internals/penumbra3/uncore-port.md` specifies, and
-   `penumbra3_core` does not have it yet: its data side has
-   `o_launch_fill` and a one-word `i_fill_data`, its fetch side
-   `i_fetch_busy`. **The D-side:** MEM1 launches it, MEM2
-   consumes the verdict, and `load_complete` parks `o_victim_way` with a
-   miss. One fault on the load-miss path comes first: the slot held in
-   MEM2 behind a missing load resumes in the cycle after the fill
-   installs, when the L1 still gives the filled way as it was. The L1
-   reads a held lookup's set again every cycle, but a line shows two
-   cycles after its install, so a load to the same line misses again
-   and installs it in a second way. The hold has to last one cycle past
-   the install.
-
-   With the L1 checking no cacheability on a store hit
-   (`doc/system/mmu.md`, "Uncached Access"), the load's
-   `& i_translate_cacheable` on the hit can go too; the fill shape still
-   reads it.
+   ECP5, and no FSM, since miss orchestration is the consumer's. Both
+   sides reach memory through the port
+   `doc/internals/penumbra3/uncore-port.md` specifies. **The D-side**
+   has it for loads: MEM1 launches the L1, MEM2 consumes the verdict,
+   and `load_complete` parks a miss with the L1's victim way, holds its
+   request up on the port, installs the line and completes the load.
+   Still open there: stores (the open decision below); a bus fault at
+   completion, which the spine still asserts never comes and the three
+   `isa/test_bus_fault*.s` tests need; and the spine-level memory-path
+   test (Spine follow-ons). The fetch side still has `i_fetch_busy`.
 
    **The fetch side:** P0.5 settled the lookup and the IF2 shape
    (`doc/internals/penumbra3/phase0-probes.md`, "P0.5 -- physical-tag
