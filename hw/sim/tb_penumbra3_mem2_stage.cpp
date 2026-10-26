@@ -309,7 +309,7 @@ int main(int argc, char** argv) {
     check("uncached_byte_en",    m.req_byte_en, 0x4);
     check("uncached_value",      m.cpl_value, (mem_word(0x4004) >> 16) & 0xFF);
     check("uncached_no_install", m.installs, 0);
-    check("uncached_release_lag", m.release_lag, 2);
+    check("uncached_release_lag", m.release_lag, 1);       // nothing was installed
 
     // ── A faulted line read installs nothing and completes with the fault ──
     watch_reset();
@@ -384,7 +384,7 @@ int main(int argc, char** argv) {
     check("behind_alu_commits_once",  m.wb_n[4], 1);
     check("behind_alu_value",         m.wb_value[4], 0x11110000);
     check("behind_alu_load_complete", m.completions, 1);
-    check("behind_alu_release_lag",   m.release_lag, 2);
+    check("behind_alu_release_lag",   m.release_lag, 1);   // it reads no lookup
 
     // ── A store behind a parked load writes the L1 once ──
     watch_reset();
@@ -436,7 +436,7 @@ int main(int argc, char** argv) {
     check("same_line_behind_one_install", m.installs, 1);
     check("same_line_behind_commits",     m.wb_n[6], 1);
     check("same_line_behind_value",       m.wb_value[6], mem_word(0x2284));
-    check("same_line_behind_release_lag", m.release_lag, 2);
+    check("same_line_behind_release_lag", m.release_lag, 2);  // the line shows late
 
     // ── A store to the line the fill evicts, behind the load that fills ──
     // Three lines of one set: 0x12C0, 0x52C0 and 0x72C0. The first two
@@ -457,7 +457,7 @@ int main(int argc, char** argv) {
             ld(MEM_SZ_WORD, 0, 6), 0x1024, 6, 1);          // hits a line installed above
     check("other_set_behind_one_request", m.requests, 1);
     check("other_set_behind_value",       m.wb_value[6], mem_word(0x2024));
-    check("other_set_behind_release_lag", m.release_lag, 2);
+    check("other_set_behind_release_lag", m.release_lag, 1);  // its set is as it was
 
     printf("%s: %d/%d checks passed\n", errors ? "FAIL" : "PASS", tests - errors, tests);
     delete d;

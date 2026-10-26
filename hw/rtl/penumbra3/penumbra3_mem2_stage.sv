@@ -61,6 +61,7 @@ module penumbra3_mem2_stage
     output logic           o_dcache_fill_we,
     output logic [DL1_WAY_BITS-1:0] o_dcache_fill_way,
     output logic [31:0]    o_dcache_fill_paddr,
+    input  logic           i_dcache_extra_cycle, // the held lookup needs a cycle more
 
     // -- RDSYS sysreg response ------------------------------------
     input  logic [31:0]    i_sys_rdata,
@@ -191,6 +192,7 @@ module penumbra3_mem2_stage
         .i_load_byte_en     (i_byte_en),
         .i_victim_way       (i_dcache_victim_way),
         .i_l1_enabled       (i_dcache_enabled),
+        .i_mem2_slot_mem    (mem2_is_load | mem2_is_store),
         .o_req_valid        (o_dreq_valid),
         .o_req_cacheable    (o_dreq_cacheable),
         .o_req_addr         (o_dreq_addr),
@@ -201,6 +203,7 @@ module penumbra3_mem2_stage
         .o_fill_we          (o_dcache_fill_we),
         .o_fill_way         (o_dcache_fill_way),
         .o_fill_paddr       (o_dcache_fill_paddr),
+        .i_l1_extra_cycle   (i_dcache_extra_cycle),
         .o_load_pending     (o_load_pending),
         .o_complete         (o_complete),
         .o_complete_dest    (o_complete_dest),

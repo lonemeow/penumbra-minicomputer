@@ -346,10 +346,10 @@ static void test_hold() {
     check("held_fill_miss", lookup(PA_C + 4), 0);
     uint32_t victim = d->o_victim_way;
     fill_now(PA_C, victim, BASE_C);
-    check("held_fill_stale_next", d->o_stale_next, 1);
+    check("held_fill_extra_cycle", d->o_extra_cycle, 1);
     tick(); quiet();
     check("held_fill_between_miss", d->o_hit, 0);
-    check("held_fill_between_quiet", d->o_stale_next, 0);
+    check("held_fill_between_quiet", d->o_extra_cycle, 0);
     tick(); d->eval();
     check("held_fill_hit", d->o_hit, 1);
     check("held_fill_word", d->o_word, line_word(BASE_C, 1));
@@ -358,7 +358,7 @@ static void test_hold() {
     // An install into another set leaves the current lookup as it is.
     check("held_other_fill_setup", lookup(PA_C + 4), 1);
     fill_now(PA_D, 0, BASE_D);                               // set 6
-    check("held_other_fill_stale_next", d->o_stale_next, 0);
+    check("held_other_fill_extra_cycle", d->o_extra_cycle, 0);
     tick(); quiet();
     check("held_other_fill_hit", d->o_hit, 1);
     check("held_other_fill_word", d->o_word, line_word(BASE_C, 1));

@@ -18,8 +18,9 @@
 //   p+1   o_load_pending and o_req_valid rise; the request is held
 //   r     i_rsp_done with the line. o_fill_we writes it into the L1 (a
 //         cacheable load, L1 enabled, no fault); the load's word is taken
-//   r+1   o_req_valid is low. o_complete: the regfile write. A lookup the
-//         L1 holds still gives the filled way as it was before r
+//   r+1   o_req_valid is low. o_complete: the regfile write.
+//         o_load_pending is low, unless the slot in MEM2 reads the L1's
+//         lookup and the L1 asked in r for an extra cycle
 //   r+2   o_load_pending is low
 //
 // The descriptor also keeps what the sub-word extract needs (size, sign,
@@ -46,6 +47,15 @@ module penumbra3_load_complete #(
     input  logic [WAY_BITS-1:0] i_victim_way,     // where the L1 would fill its line
     input  logic                i_l1_enabled,     // the L1's CTRL.ENABLE
 
+    // -- The slot in MEM2 this cycle ------------------------------
+    // While o_load_pending is high the MEM1/MEM2 register is frozen, so
+    // this is the instruction behind the parked load and it does not
+    // change. In the first cycle o_load_pending is low it takes effect on
+    // what the L1 gives its lookup then: it commits, a store writes the L1
+    // if it hit, a load that missed parks. Only a load or a store reads
+    // the lookup.
+    input  logic                i_mem2_slot_mem,  // level: a load or a store
+
     // -- Core-to-uncore port, data side ---------------------------
     output logic                o_req_valid,
     output logic                o_req_cacheable,
@@ -59,6 +69,7 @@ module penumbra3_load_complete #(
     output logic                o_fill_we,
     output logic [WAY_BITS-1:0] o_fill_way,
     output logic [31:0]         o_fill_paddr,
+    input  logic                i_l1_extra_cycle, // the held lookup needs a cycle more
 
     // -- Pipeline gate + completion -------------------------------
     output logic                o_load_pending,   // freezes the launch side
@@ -86,8 +97,10 @@ module penumbra3_load_complete #(
     logic                install_q;    // level: r installs the line unless it faulted
 
     // req_valid_q: a request is up on the port. High from p+1 through r.
-    // pending_q:   the launch side is frozen. High from p+1 through r+1.
-    // settle_q:    high in r+1.
+    // pending_q:   the launch side is frozen. High from p+1 through r,
+    //              and through r+1 as well unless release_at_done was high
+    //              in r.
+    // settle_q:    high in r+1 when release_at_done was low in r.
     logic req_valid_q, pending_q, settle_q;
 
     always_ff @(posedge i_clk)
@@ -112,23 +125,30 @@ module penumbra3_load_complete #(
     assign o_fill_paddr = paddr_q;
 
     // ── Release ──────────────────────────────────────────────────
-    // The instruction held in MEM2 behind the parked load takes effect in
-    // the first cycle o_load_pending is low, on what the L1 gives its
-    // lookup then. A line installed in r shows to a lookup the L1 holds
-    // from r+2, so o_load_pending stays high through r+1.
+    // release_at_done is read in the done cycle r only. High there:
+    // o_load_pending is low from r+1. Low there: it is low from r+2.
+    //
+    // The slot in MEM2 takes effect in that first low cycle, on what the
+    // L1 gives its lookup then. The L1 gives the cache as it is in r+1
+    // unless it asks in r for an extra cycle, and a slot that reads no
+    // lookup has nothing to wait for.
+    logic release_at_done;
+    assign release_at_done = !i_l1_extra_cycle || !i_mem2_slot_mem;
+
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             req_valid_q <= 1'b0;
             pending_q   <= 1'b0;
             settle_q    <= 1'b0;
         end else begin
-            settle_q <= i_rsp_done;
+            settle_q <= i_rsp_done && !release_at_done;
 
             if (i_park)          req_valid_q <= 1'b1;
             else if (i_rsp_done) req_valid_q <= 1'b0;
 
-            if (i_park)        pending_q <= 1'b1;
-            else if (settle_q) pending_q <= 1'b0;
+            if (i_park)                             pending_q <= 1'b1;
+            else if (i_rsp_done && release_at_done) pending_q <= 1'b0;
+            else if (settle_q)                      pending_q <= 1'b0;
         end
     end
     assign o_load_pending = pending_q;

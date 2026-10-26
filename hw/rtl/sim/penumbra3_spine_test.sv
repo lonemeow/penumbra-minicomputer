@@ -55,6 +55,7 @@ module penumbra3_spine_test
     output logic        o_dcache_fill_we,
     output logic        o_dcache_fill_way,
     output logic [31:0] o_dcache_fill_paddr,
+    input  logic        i_dcache_extra_cycle,
 
     // Sysreg
     output logic        o_sys_re,
@@ -133,6 +134,7 @@ module penumbra3_spine_test
         .o_dcache_count_write(o_dcache_count_write),
         .o_dcache_fill_we(o_dcache_fill_we), .o_dcache_fill_way(o_dcache_fill_way),
         .o_dcache_fill_paddr(o_dcache_fill_paddr),
+        .i_dcache_extra_cycle(i_dcache_extra_cycle),
         .o_sys_re(o_sys_re), .o_sys_dev(o_sys_dev), .o_sys_reg(o_sys_reg),
         .i_sys_rdata(i_sys_rdata),
         .o_sys_we(o_sys_we), .o_sys_wr_dev(o_sys_wr_dev), .o_sys_wr_reg(o_sys_wr_reg),

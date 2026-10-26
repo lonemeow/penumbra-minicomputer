@@ -20,7 +20,7 @@
 // that follows the cache, through an invalidate or a line installed under
 // it. A held lookup sees an install a cycle late: in the cycle after its
 // i_fill_we the filled way still gives what it held before.
-// o_stale_next says so in the install cycle, high when the install lands
+// o_extra_cycle says so in the install cycle, high when the install lands
 // in the current lookup's set; a consumer holding that lookup does not act
 // on the next cycle's outputs.
 //
@@ -80,7 +80,7 @@ module penumbra3_l1
     output logic                         o_hit,
     output logic [31:0]                  o_word,       // the hit way's word
     output logic [WAY_BITS-1:0]          o_victim_way, // where a miss would fill
-    output logic                         o_stale_next, // next outputs miss the install
+    output logic                         o_extra_cycle, // held lookup needs a cycle more
 
     // ── Store: a committing store resolving this cycle ───────────
     input  logic                         i_store,
@@ -200,7 +200,7 @@ module penumbra3_l1
     // Every other set reads the same in both cycles, so only a lookup of
     // the filled set is out of date. No lookup launches on a fill, so
     // rd_set is the current lookup's then.
-    assign o_stale_next = i_fill_we && fill_set == rd_set;
+    assign o_extra_cycle = i_fill_we && fill_set == rd_set;
 
     // The hit way, encoded (o_way_hit is one-hot).
     logic [WAY_BITS-1:0] hit_way;

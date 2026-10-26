@@ -189,7 +189,7 @@ module penumbra3_mem2_stage_test
     // The frame candidates as the MMU presents them: candidate 0 is the
     // bypass / pinned frame, which this wrapper has none of, and the rest
     // are the main TLB's ways.
-    logic                 dl1_hit, dl1_enabled;
+    logic                 dl1_hit, dl1_enabled, dl1_extra_cycle;
     logic [31:0]          dl1_word;
     logic [0:0]           dl1_victim_way;
     logic [3:0]           dcache_byte_en;
@@ -212,7 +212,7 @@ module penumbra3_mem2_stage_test
         .o_hit           (dl1_hit),
         .o_word          (dl1_word),
         .o_victim_way    (dl1_victim_way),
-        .o_stale_next    (),
+        .o_extra_cycle   (dl1_extra_cycle),
         .i_store         (o_dcache_we),
         .i_store_wdata   (o_dcache_wdata),
         .i_store_byte_en (dcache_byte_en),
@@ -268,6 +268,7 @@ module penumbra3_mem2_stage_test
         .o_dcache_fill_we       (o_dcache_fill_we),
         .o_dcache_fill_way      (o_dcache_fill_way),
         .o_dcache_fill_paddr    (o_dcache_fill_paddr),
+        .i_dcache_extra_cycle   (dl1_extra_cycle),
         .i_sys_rdata            (32'b0),
         .o_dreq_valid           (o_dreq_valid),
         .o_dreq_cacheable       (o_dreq_cacheable),

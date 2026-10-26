@@ -839,6 +839,38 @@ compare behind the TLB verdict"). That covers the cones through the L1,
 not what the arrays cost a full machine's routing. No replacement has
 been looked at.
 
+## Hardware: a gen3 load behind a fill into its set waits a cycle
+
+The L1 shows an installed line to a lookup it already holds two cycles
+after the install, and says so in the install's cycle (`o_extra_cycle`
+in `penumbra3_l1`). The load or store held in MEM2 behind a miss holds
+such a lookup, so when the fill went into its set the launch side
+resumes a cycle after the miss completes rather than with it. The next
+word of the line just filled is the common case. Against an L2-hit fill
+estimated at about 5 cycles that is one cycle in six, and each hop on
+the fill path is worth several percent of cycles at the measured fill
+rates (`doc/internals/penumbra3/memory-performance.md`, "The line-wide
+transfer").
+
+The cycle goes if the held lookup sees the install at once. Its valid
+bit and word can be given it off the hit path: the valid bit set as the
+output flop reads it, the word as a third input of the store bypass's
+mux. The tag is the cost. A mux after the tag block RAM sits in front of
+the compare, on a path that binds today (P0.5's worst paths start at
+a TLB or an L1 tag block RAM, `doc/internals/penumbra3/phase0-probes.md`,
+"P0.5 -- physical-tag compare behind the TLB verdict"). The
+alternative is the block RAM forwarding it itself: the install written
+through the lookup's own read port in write-through mode when it lands
+in that set, the second port taking other sets. A write-through port
+needs the true dual-port mode, at most 18 bits a port on the ECP5
+(yosys's `DP16KD` map) and on Artix-7, so the 20-bit tag takes two block
+RAMs a way instead of one: four more for the two L1s.
+
+Open: how often a fill has a load or store of its set right behind it,
+counted on a running core or by the ISS cache model, and the
+write-through form's mapping under yosys and Vivado with a sweep on
+both sides of it.
+
 ## Hardware: an L2 INVAL_ALL write is dropped or drops a strobe
 
 `l2_cache.sv` takes a `WRSYS` to `CACHE_INVAL_ALL` as a one-cycle

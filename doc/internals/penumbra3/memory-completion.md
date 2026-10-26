@@ -88,9 +88,15 @@ graph LR
   from the uncore's line register into the L1 and never through the core.
 - **Completion is a registered event** delivering `{data}` or `{fault}` to
   the held load's register in the cycle after the request completes.
-- **The launch side resumes a cycle after completion.** The instruction
-  held in MEM2 behind the miss holds an L1 lookup, and the L1 shows a
-  line to a lookup it already holds two cycles after the install.
+- **The launch side resumes in that same cycle,** with one exception. The
+  L1 shows a line to a lookup it already holds two cycles after the
+  install, and the instruction held in MEM2 behind the miss holds such a
+  lookup. The L1 says so in the install's cycle: it reports an install
+  into the set its current lookup reads. When it does, and the held
+  instruction is a load or a store, `mem_pending_q` clears a cycle later.
+  The completion unit reads only that report, never the L1's sets or
+  ways. A read that installed nothing, an install into another set, and
+  a held instruction that reads no lookup all resume with completion.
 
 ## Stores — write-through, write-no-allocate
 

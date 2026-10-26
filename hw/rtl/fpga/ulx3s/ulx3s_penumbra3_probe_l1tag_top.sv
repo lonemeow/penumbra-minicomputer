@@ -240,7 +240,7 @@ module ulx3s_penumbra3_probe_l1tag_top (
     );
 
     // ── L1-D ─────────────────────────────────────────────────────
-    logic                        dl1_hit, dl1_en;
+    logic                        dl1_hit, dl1_en, dl1_extra_cycle;
     logic [31:0]                 dl1_rdata, dl1_sys_rdata;
     logic [$clog2(D_WAYS)-1:0]   dl1_victim;
 
@@ -272,6 +272,7 @@ module ulx3s_penumbra3_probe_l1tag_top (
         .o_hit           (dl1_hit),
         .o_word          (dl1_rdata),
         .o_victim_way    (dl1_victim),
+        .o_extra_cycle   (dl1_extra_cycle),
         .i_store         (dc_we),
         .i_store_wdata   (dc_wdata),
         .i_store_byte_en (dc_byte_en),
@@ -331,6 +332,7 @@ module ulx3s_penumbra3_probe_l1tag_top (
         .o_dcache_fill_we       (dfill_we),
         .o_dcache_fill_way      (dfill_way),
         .o_dcache_fill_paddr    (dfill_paddr),
+        .i_dcache_extra_cycle   (dl1_extra_cycle),
         .i_sys_rdata            (sys_rdata),
         .o_dreq_valid           (dreq_valid),
         .o_dreq_cacheable       (dreq_cacheable),
@@ -404,6 +406,7 @@ module ulx3s_penumbra3_probe_l1tag_top (
         .o_hit           (il1_hit),
         .o_word          (),                // each way's word decodes before the select
         .o_victim_way    (il1_victim),
+        .o_extra_cycle   (),                // a replay holds no lookup
         .i_store         (1'b0),
         .i_store_wdata   ('0),
         .i_store_byte_en ('0),

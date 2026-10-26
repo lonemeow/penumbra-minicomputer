@@ -92,6 +92,8 @@ module ulx3s_penumbra3_probe_issue_top (
         .i_load_byte_en   (lfsr_q[9:6]),
         .i_victim_way     (lfsr_q[10]),
         .i_l1_enabled     (lfsr_q[11]),
+        .i_mem2_slot_mem  (lfsr_q[13]),
+        .i_l1_extra_cycle (lfsr_q[17]),
         .o_req_valid      (req_valid),
         .i_rsp_done       (lfsr_q[27] & req_valid),   // done only while a request is up
         .i_rsp_fault      (lfsr_q[28]),

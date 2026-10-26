@@ -76,6 +76,7 @@ module penumbra3_spine
     output logic                  o_dcache_fill_we,
     output logic [DL1_WAY_BITS-1:0] o_dcache_fill_way,
     output logic [31:0]           o_dcache_fill_paddr,
+    input  logic                  i_dcache_extra_cycle,
 
     // ── Sysreg read (MEM1 launch) + write (WRSYS drain-commit) ──
     output logic                  o_sys_re,
@@ -504,6 +505,7 @@ module penumbra3_spine
         .o_dcache_count_write(o_dcache_count_write),
         .o_dcache_fill_we(o_dcache_fill_we), .o_dcache_fill_way(o_dcache_fill_way),
         .o_dcache_fill_paddr(o_dcache_fill_paddr),
+        .i_dcache_extra_cycle(i_dcache_extra_cycle),
         .i_sys_rdata(i_sys_rdata),
         .o_dreq_valid(o_dreq_valid), .o_dreq_cacheable(o_dreq_cacheable),
         .o_dreq_addr(o_dreq_addr), .o_dreq_byte_en(o_dreq_byte_en),

@@ -86,6 +86,7 @@ static void dside_benign(Vpenumbra3_core* dut) {
     dut->i_translate_miss_fault = 0; dut->i_translate_prot_fault = 0;
     dut->i_dcache_hit = 1; dut->i_dcache_rdata = 0;
     dut->i_dcache_victim_way = 0; dut->i_dcache_enabled = 1;
+    dut->i_dcache_extra_cycle = 0;
     dut->i_drsp_done = 0; dut->i_rsp_fault = 0;
     for (int k = 0; k < 4; k++) dut->i_rsp_line[k] = 0;
     dut->i_sys_rdata = 0;

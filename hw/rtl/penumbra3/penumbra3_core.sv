@@ -88,6 +88,7 @@ module penumbra3_core
     output logic                  o_dcache_fill_we,
     output logic [DL1_WAY_BITS-1:0] o_dcache_fill_way,
     output logic [31:0]           o_dcache_fill_paddr,
+    input  logic                  i_dcache_extra_cycle,
 
     // ── Sysreg sideband (RDSYS read; WRSYS write committed from EX) ─
     output logic                  o_sys_re,
@@ -322,6 +323,7 @@ module penumbra3_core
         .o_dcache_count_write(o_dcache_count_write),
         .o_dcache_fill_we(o_dcache_fill_we), .o_dcache_fill_way(o_dcache_fill_way),
         .o_dcache_fill_paddr(o_dcache_fill_paddr),
+        .i_dcache_extra_cycle(i_dcache_extra_cycle),
         // Sysreg.
         .o_sys_re(o_sys_re), .o_sys_dev(o_sys_dev), .o_sys_reg(o_sys_reg),
         .i_sys_rdata(i_sys_rdata),
