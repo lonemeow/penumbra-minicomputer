@@ -9,7 +9,7 @@
 // memory verdict never joins the issue cone.
 module penumbra3_issue (
     input  logic i_valid,         // an instruction is present in ID
-    input  logic i_pipe_hold,     // back-end back-pressure (registered: load_pending, ...)
+    input  logic i_pipe_hold,     // back-end back-pressure (registered: mem_pending, ...)
 
     // Source 0
     input  logic i_src0_used,     // the instruction reads source 0

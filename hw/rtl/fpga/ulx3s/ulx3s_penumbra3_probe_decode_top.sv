@@ -80,7 +80,7 @@ module ulx3s_penumbra3_probe_decode_top (
 
     // ── scoreboard / load-completion / issue (reused from P0.1) ──
     logic                src0_pending, src1_pending;
-    logic                load_pending, req_valid, complete, complete_fault;
+    logic                mem_pending, req_valid, complete, complete_fault;
     logic [IDX_BITS-1:0] complete_dest;
     logic [31:0]         complete_data;
     logic                can_issue;
@@ -98,12 +98,12 @@ module ulx3s_penumbra3_probe_decode_top (
         .o_src1_pending (src1_pending)
     );
 
-    penumbra3_load_complete #(
+    penumbra3_mem_completion #(
         .IDX_BITS (IDX_BITS)
-    ) u_lc (
+    ) u_mc (
         .i_clk            (clk_25mhz),
         .i_rst            (rst),
-        .i_park           (lfsr_q[15] & ~lfsr_q[12] & ~load_pending),  // one at a time
+        .i_park           (lfsr_q[15] & ~lfsr_q[12] & ~mem_pending),  // one at a time
         .i_load_dest      (lfsr_q[21 +: IDX_BITS]),
         .i_load_size      (lfsr_q[1:0]),
         .i_load_sign      (lfsr_q[2]),
@@ -118,7 +118,7 @@ module ulx3s_penumbra3_probe_decode_top (
         .i_rsp_done       (lfsr_q[27] & req_valid),   // done only while a request is up
         .i_rsp_fault      (lfsr_q[28]),
         .i_rsp_line       ({4{lfsr_q}}),
-        .o_load_pending   (load_pending),
+        .o_mem_pending    (mem_pending),
         .o_complete       (complete),
         .o_complete_dest  (complete_dest),
         .o_complete_data  (complete_data),
@@ -127,7 +127,7 @@ module ulx3s_penumbra3_probe_decode_top (
 
     penumbra3_issue u_issue (
         .i_valid        (valid_q),
-        .i_pipe_hold    (load_pending),
+        .i_pipe_hold    (mem_pending),
         .i_src0_used    (src0_used_q & src0_tracked),
         .i_src0_pending (src0_pending),
         .i_src0_fwd     (lfsr_q[13]),
@@ -146,7 +146,7 @@ module ulx3s_penumbra3_probe_decode_top (
     always_ff @(posedge clk_25mhz) begin
         led_q <= {7'b0,
                   can_issue_q
-                  ^ load_pending ^ req_valid ^ complete ^ complete_fault
+                  ^ mem_pending ^ req_valid ^ complete ^ complete_fault
                   ^ (^complete_dest) ^ (^complete_data)};
     end
     assign led = led_q;

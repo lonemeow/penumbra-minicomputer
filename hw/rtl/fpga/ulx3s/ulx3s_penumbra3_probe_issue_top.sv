@@ -8,9 +8,9 @@
 //     enable flop). The cone ends at can_issue_q, a clean register, so the
 //     LED keep-alive XOR is off it (the P0.3 lesson).
 //  2. Structure -- the cache-hit verdict reaches the back-end ONLY through
-//     load_complete's registered o_load_pending. It feeds issue's pipe-hold
+//     mem_completion's registered o_mem_pending. It feeds issue's pipe-hold
 //     as a flop, so it can never appear on the can_issue combinational cone.
-//     The timing report's critical path must start at scoreboard/load_pending
+//     The timing report's critical path must start at scoreboard/mem_pending
 //     flops, not at the cache_hit input.
 //
 // An LFSR drives the stimulus every cycle (buttons perturb it) and the
@@ -55,7 +55,7 @@ module ulx3s_penumbra3_probe_issue_top (
 
     // ── Back-end DUT signals ─────────────────────────────────────
     logic                src0_pending, src1_pending;
-    logic                load_pending, req_valid, complete, complete_fault;
+    logic                mem_pending, req_valid, complete, complete_fault;
     logic [IDX_BITS-1:0] complete_dest;
     logic [31:0]         complete_data;
     logic                can_issue;
@@ -77,13 +77,13 @@ module ulx3s_penumbra3_probe_issue_top (
     );
 
     // Load-completion: the cache-hit verdict enters here and leaves only as
-    // the registered load_pending -- the structural break P0.1 checks.
-    penumbra3_load_complete #(
+    // the registered mem_pending -- the structural break P0.1 checks.
+    penumbra3_mem_completion #(
         .IDX_BITS (IDX_BITS)
-    ) u_lc (
+    ) u_mc (
         .i_clk            (clk_25mhz),
         .i_rst            (rst),
-        .i_park           (lfsr_q[15] & ~lfsr_q[16] & ~load_pending),  // one at a time
+        .i_park           (lfsr_q[15] & ~lfsr_q[16] & ~mem_pending),  // one at a time
         .i_load_dest      (lfsr_q[21 +: IDX_BITS]),
         .i_load_size      (lfsr_q[1:0]),
         .i_load_sign      (lfsr_q[2]),
@@ -98,7 +98,7 @@ module ulx3s_penumbra3_probe_issue_top (
         .i_rsp_done       (lfsr_q[27] & req_valid),   // done only while a request is up
         .i_rsp_fault      (lfsr_q[28]),
         .i_rsp_line       ({4{lfsr_q}}),
-        .o_load_pending   (load_pending),
+        .o_mem_pending    (mem_pending),
         .o_complete       (complete),
         .o_complete_dest  (complete_dest),
         .o_complete_data  (complete_data),
@@ -108,7 +108,7 @@ module ulx3s_penumbra3_probe_issue_top (
     // Issue gate (the cone under test).
     penumbra3_issue u_issue (
         .i_valid        (lfsr_q[29]),
-        .i_pipe_hold    (load_pending),
+        .i_pipe_hold    (mem_pending),
         .i_src0_used    (lfsr_q[30]),
         .i_src0_pending (src0_pending),
         .i_src0_fwd     (lfsr_q[31]),
@@ -127,7 +127,7 @@ module ulx3s_penumbra3_probe_issue_top (
     always_ff @(posedge clk_25mhz) begin
         led_q <= {7'b0,
                   can_issue_q
-                  ^ load_pending ^ req_valid ^ complete ^ complete_fault
+                  ^ mem_pending ^ req_valid ^ complete ^ complete_fault
                   ^ (^complete_dest) ^ (^complete_data)};
     end
     assign led = led_q;

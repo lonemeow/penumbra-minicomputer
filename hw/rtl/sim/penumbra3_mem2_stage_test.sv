@@ -5,7 +5,7 @@
 // L1 cannot serve. The testbench plays the uncore at the port's request and
 // response (doc/internals/penumbra3/uncore-port.md).
 //
-// The freeze is wired the way the spine wires it: hold = load_pending |
+// The freeze is wired the way the spine wires it: hold = mem_pending |
 // external stall goes to MEM1, the translate, the L1's launch and MEM2's
 // slot, and the external stall alone holds the MEM2/WB register. A raw
 // instruction word feeds penumbra3_decode for the bundle; the payload's live
@@ -64,7 +64,7 @@ module penumbra3_mem2_stage_test
     output logic        o_wb_fault_pending,
     output logic [3:0]  o_wb_fault_vec,
 
-    output logic        o_load_pending,
+    output logic        o_mem_pending,
     output logic        o_complete,
     output logic [SB_IDX_W-1:0] o_complete_dest,
     output logic [31:0] o_complete_value,
@@ -98,9 +98,9 @@ module penumbra3_mem2_stage_test
         payload.fault_pending = i_fault_pending;
     end
 
-    // -- Spine-style freeze: registered load_pending OR external stall --
+    // -- Spine-style freeze: registered mem_pending OR external stall --
     logic hold;
-    assign hold = o_load_pending | i_ext_stall;
+    assign hold = o_mem_pending | i_ext_stall;
 
     // -- MEM1 launch ----------------------------------------------
     logic        tr_en;
@@ -277,7 +277,7 @@ module penumbra3_mem2_stage_test
         .i_drsp_done            (i_drsp_done),
         .i_rsp_fault            (i_rsp_fault),
         .i_rsp_line             (i_rsp_line),
-        .o_load_pending         (o_load_pending),
+        .o_mem_pending          (o_mem_pending),
         .o_complete             (o_complete),
         .o_complete_dest        (o_complete_dest),
         .o_complete_value       (o_complete_value),

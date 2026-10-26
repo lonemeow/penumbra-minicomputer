@@ -60,7 +60,7 @@ From the [timing outline](./timing-outline.md); everything else is
 hygiene around these:
 
 1. **Registered load-completion back-end.** The pipeline gate moves from
-   the live cache `busy` to a registered `load_pending` flop; a miss parks
+   the live cache `busy` to a registered `mem_pending` flop; a miss parks
    the load in a one-entry hold buffer and completes on a registered event
    (`{data}` or `{fault}`). This deletes the gen2 floor cone — both the
    load-use freeze and the MMU-verdict path, which are the same cone.
@@ -390,7 +390,7 @@ the Phase-1 full-top read calibrates the drop for gen3.
 
 | Probe | What it proves |
 |---|---|
-| P0.1 registered load-completion | `MEM2 hit/miss → registered load_pending → issue/scoreboard gate` is short; the gen2 busy→issue and busy→MMU floor cones are gone |
+| P0.1 registered load-completion | `MEM2 hit/miss → registered mem_pending → issue/scoreboard gate` is short; the gen2 busy→issue and busy→MMU floor cones are gone |
 | P0.2 registered decode→issue | `pre-decoded FIFO slot → regmap → scoreboard/forward compare → issue` starts from flops and fits |
 | P0.3 split MEM + BRAM TLB | MEM1-launch / MEM2-verdict absorbs the 5.8 ns BRAM Tco + tag/permission compare in the period |
 | P0.4 CPU↔bus burst + SDRAM survival | registered line-transaction into the **real `sdram_bus_adapter`** streams without the gapped-read deadlock |

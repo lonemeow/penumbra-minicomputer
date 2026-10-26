@@ -7,7 +7,7 @@
 // forwarding, the scoreboard interlock, the divmul dual-write (the wb_local_stall
 // freeze), precise faults, and in-order commit.
 //
-// Memory ops (loads/stores) and the load_pending freeze are covered in a
+// Memory ops (loads/stores) and the mem_pending freeze are covered in a
 // follow-on once the verdict/fill memory model is added; this round drives the
 // register datapath, divmul, and faults (no external memory needed).
 

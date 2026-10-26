@@ -10,7 +10,7 @@
 //   - the scoreboard clear (the back end tells ID when a tracked producer's
 //     value has landed),
 //   - the back-pressure / freeze distribution -- the timing-critical part: the
-//     registered load_pending freezes the launch side and issue, the MEM2/WB
+//     registered mem_pending freezes the launch side and issue, the MEM2/WB
 //     register is held only by WB back-pressure, and a fault/branch redirect
 //     flushes the younger slots (see "What the pipe gate freezes" in
 //     doc/internals/penumbra3/memory-completion.md).
@@ -21,7 +21,7 @@
 //
 // A faulting load completion (o_complete_fault, e.g. a bus fault on a fill or
 // an erroring device probe) is asserted never to arrive, rather than taken
-// imprecisely: taking it precisely needs load_complete to park the faulting
+// imprecisely: taking it precisely needs mem_completion to park the faulting
 // PC and descriptor (doc/TODO/hw-core.md).
 
 (* keep_hierarchy = "yes" *)
@@ -181,10 +181,10 @@ module penumbra3_spine
     logic [31:0]         mem2_fwd_result;
     logic [SB_IDX_W-1:0] mem2_fwd_dst;
     logic                mem2_fwd_we, mem2_fwd_valid;
-    logic                lc_complete, lc_complete_fault;
-    logic [SB_IDX_W-1:0] lc_complete_dest;
-    logic [31:0]         lc_complete_value;
-    logic                load_pending;
+    logic                mc_complete, mc_complete_fault;
+    logic [SB_IDX_W-1:0] mc_complete_dest;
+    logic [31:0]         mc_complete_value;
+    logic                mem_pending;
 
     // WB write/commit strobes
     logic [SB_IDX_W-1:0] wb_regfile_idx;
@@ -207,7 +207,7 @@ module penumbra3_spine
     // The local stalls each stage exposes (downstream-independent), plus the
     // registered back-end hold. These three are the only inputs the freeze
     // composition needs; everything below is derived from them.
-    //   - load_pending  : registered flop from MEM2's load_complete, never a
+    //   - mem_pending   : registered flop from MEM2's mem_completion, never a
     //                     live cache/TLB verdict.
     //   - wb_local_stall: WB's dual-write hold (flop-shallow).
     //   - ex_local_stall: EX's divmul / drain-commit hold (flop-shallow).
@@ -220,26 +220,26 @@ module penumbra3_spine
     logic id_pipe_hold;   // registered back-end hold (-> ID issue gate)
 
     // The freeze distribution: the five signals above are driven from
-    // {load_pending, wb_local_stall, ex_local_stall}, per the load-completion
+    // {mem_pending, wb_local_stall, ex_local_stall}, per the load-completion
     // freeze contract and the stall audit:
     //   - launch_hold: the launch side (MEM1 register, dtranslate, cache) holds
     //     when a load is pending OR the MEM2/WB register is back-pressured.
     //   - mem2_reg_hold: the MEM2/WB register holds ONLY on WB back-pressure --
-    //     it must NOT include load_pending (it drains older work to commit while
-    //     a load waits; folding load_pending in re-presents a committed
+    //     it must NOT include mem_pending (it drains older work to commit while
+    //     a load waits; folding mem_pending in re-presents a committed
     //     multi-cycle writeback).
     //   - ex_stall_in: MEM1 cannot accept a new slot this cycle (its register is
     //     frozen).
     //   - id_stall_in: EX cannot accept -- EX is itself stalling OR is
-    //     back-pressured. (This must include load_pending so a load-frozen EX
+    //     back-pressured. (This must include mem_pending so a load-frozen EX
     //     holds the ID/EX register instead of bubbling and losing the slot.)
     //   - id_pipe_hold: the registered back-end hold the issue gate reads.
     always_comb begin
-        launch_hold   = load_pending | wb_local_stall;
+        launch_hold   = mem_pending | wb_local_stall;
         mem2_reg_hold = wb_local_stall;
-        ex_stall_in   = load_pending | wb_local_stall;
-        id_stall_in   = ex_local_stall | load_pending | wb_local_stall;
-        id_pipe_hold  = load_pending;
+        ex_stall_in   = mem_pending | wb_local_stall;
+        id_stall_in   = ex_local_stall | mem_pending | wb_local_stall;
+        id_pipe_hold  = mem_pending;
     end
 
     // Inclusive EX stall: used to gate the branch bubble so a held branch (e.g.
@@ -347,9 +347,9 @@ module penumbra3_spine
     logic [SB_IDX_W-1:0] rf_rd_idx_a, rf_rd_idx_b, rf_wr_idx;
     logic [31:0]         rf_rd_data_a, rf_rd_data_b, rf_wr_data;
     logic                rf_wr_en;
-    assign rf_wr_en   = lc_complete ? ~lc_complete_fault : wb_regfile_we;
-    assign rf_wr_idx  = lc_complete ? lc_complete_dest   : wb_regfile_idx;
-    assign rf_wr_data = lc_complete ? lc_complete_value  : wb_regfile_data;
+    assign rf_wr_en   = mc_complete ? ~mc_complete_fault : wb_regfile_we;
+    assign rf_wr_idx  = mc_complete ? mc_complete_dest   : wb_regfile_idx;
+    assign rf_wr_data = mc_complete ? mc_complete_value  : wb_regfile_data;
 
     penumbra3_regfile u_regfile (
         .i_clk(i_clk), .i_rst(i_rst),
@@ -373,9 +373,9 @@ module penumbra3_spine
     logic                aux_wb_cycle;
     assign aux_wb_cycle = mem2wb_valid & ~wb_insn_committed & wb_regfile_we;
     always_comb begin
-        if (lc_complete) begin
+        if (mc_complete) begin
             sb_clr_en  = 1'b1;
-            sb_clr_idx = lc_complete_dest;
+            sb_clr_idx = mc_complete_dest;
         end else if (aux_wb_cycle) begin
             sb_clr_en  = 1'b1;
             sb_clr_idx = wb_regfile_idx;
@@ -507,9 +507,9 @@ module penumbra3_spine
         .o_dreq_valid(o_dreq_valid), .o_dreq_cacheable(o_dreq_cacheable),
         .o_dreq_addr(o_dreq_addr), .o_dreq_byte_en(o_dreq_byte_en),
         .i_drsp_done(i_drsp_done), .i_rsp_fault(i_rsp_fault), .i_rsp_line(i_rsp_line),
-        .o_load_pending(load_pending),
-        .o_complete(lc_complete), .o_complete_dest(lc_complete_dest),
-        .o_complete_value(lc_complete_value), .o_complete_fault(lc_complete_fault),
+        .o_mem_pending(mem_pending),
+        .o_complete(mc_complete), .o_complete_dest(mc_complete_dest),
+        .o_complete_value(mc_complete_value), .o_complete_fault(mc_complete_fault),
         .o_fwd_result(mem2_fwd_result), .o_fwd_dst(mem2_fwd_dst),
         .o_fwd_we(mem2_fwd_we), .o_fwd_valid(mem2_fwd_valid),
         .i_launch_hold(launch_hold),
@@ -562,18 +562,18 @@ module penumbra3_spine
     // ════════════════════════════════════════════════════════════
     // Assertions -- sim-only (Verilator --assert); stripped at synth.
     // ════════════════════════════════════════════════════════════
-    // A faulting load completion needs load_complete to park the faulting PC +
-    // descriptor before it can be taken precisely; that extension is not in yet,
-    // so catch it loudly rather than mis-take it. Not exercised by the skeleton.
+    // Taking a faulting completion precisely needs mem_completion to park the
+    // faulting PC with the access (doc/TODO/hw-core.md); this catches one
+    // rather than mis-taking it.
     always_comb
-        assert (!lc_complete_fault)
-            else $error("penumbra3_spine: faulting load completion not yet handled (needs load_complete PC park)");
+        assert (!mc_complete_fault)
+            else $error("penumbra3_spine: faulting load completion not yet handled (needs mem_completion PC park)");
 
     // The regfile write port is shared: a WB commit and a load completion must
     // never drive it the same cycle (the freeze drains WB to bubbles while a
     // load is pending).
     always_comb
-        assert (!(lc_complete && wb_regfile_we))
+        assert (!(mc_complete && wb_regfile_we))
             else $error("penumbra3_spine: WB commit collided with a load completion on the write port");
 
     /* verilator lint_on PINCONNECTEMPTY */

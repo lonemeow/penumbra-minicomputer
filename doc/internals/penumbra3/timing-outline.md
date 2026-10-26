@@ -74,7 +74,7 @@ Corollary on register placement:
   *and* MMU verdict, one die-spanning cone. Several ~26 ns paths are this *same*
   cone with different tails (load-use, MMU). Fixing it collapses a whole cluster.
 - **No combinational path from cache hit/busy into issue or the MMU.** The fix is a
-  **registered `load_pending` flop**, not the combinational `~hit`. Dependents stall
+  **registered `mem_pending` flop**, not the combinational `~hit`. Dependents stall
   at *issue* reading that flop (scoreboard bit); the `busy → ID` cone is gone.
 - Hazard interlock is **local FU-busy/ready bits** (scoreboard-style), not a global
   spine OR-tree that spans the pipeline. (biRISC-V/CVA6 have no "spine"; the
@@ -87,7 +87,7 @@ Corollary on register placement:
 - On a MEM2 miss, park the load in a **one-entry load-hold buffer** (single-
   outstanding ⇒ one entry). MEM1 is **not** re-run; the fill is **launched once** as
   a registered transaction (the fill FSM holds the request, as gen2 already does).
-- The pipeline gate is the **registered `load_pending`** bit, not the live cache
+- The pipeline gate is the **registered `mem_pending`** bit, not the live cache
   busy. The load is **held, not retired**, until the transaction completes.
 - Completion is a **registered** event delivering `{data}` or `{fault}` to the held
   load → it advances to WB.
@@ -111,7 +111,7 @@ machine has to *work* for; in-order single-outstanding gets it by construction.
   `o_fault`-on-busy-drop is already this — carry it forward unchanged.)
 
 **The only gen3 change** vs gen2's load path: move the pipeline gate from the
-combinational cache `busy` to a registered `load_pending` flop, and park the load in
+combinational cache `busy` to a registered `mem_pending` flop, and park the load in
 a hold buffer instead of freezing the whole pipe combinationally. The fill FSM,
 install-nothing-on-fault, serve-fault-on-completion, and single-beat/uncached paths
 are all reused as-is.
@@ -430,7 +430,7 @@ cycles, never critical-path logic.**
 
 ### The four structural changes that matter most (everything else is hygiene)
 
-1. **Registered load-completion back-end** (hold-buffer + `load_pending` flop, §2) —
+1. **Registered load-completion back-end** (hold-buffer + `mem_pending` flop, §2) —
    kills the load-use freeze *and* the MMU verdict path (same cone). The single
    highest-value change. Faults stay precise by the in-order-oldest invariant; the
    cache's fault machinery is reused as-is.

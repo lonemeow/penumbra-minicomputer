@@ -129,21 +129,21 @@ accordingly.
 
 ### P0.1 — registered load-completion back-end
 
-**Claim.** The pipeline gate is a registered `load_pending` flop, not the
+**Claim.** The pipeline gate is a registered `mem_pending` flop, not the
 live cache `busy`; the gen2 floor cones — `cache busy → issue` and
 `cache busy → MMU verdict`, the same cone with different tails — do not
 exist.
 
 **Build.**
-- A one-entry load-hold buffer + a `load_pending` flop, set by a registered
+- A one-entry load-hold buffer + a `mem_pending` flop, set by a registered
   completion event delivering `{data | fault}`.
 - The issue-side consumer at realistic width: the full scoreboard (~21
   valid bits) read for all decode source operands, the hazard/forward
   compare, `can_issue`, fanning out to every ID/EX flop enable.
 - The cache `busy`/hit verdict wired **only** into the completion FSM whose
-  output is the registered `load_pending` — never into `can_issue`.
+  output is the registered `mem_pending` — never into `can_issue`.
 
-**Path to read.** `load_pending` (and scoreboard flops) → `can_issue` →
+**Path to read.** `mem_pending` (and scoreboard flops) → `can_issue` →
 ID/EX enable. This must be the longest path.
 
 **Structural check (as important as the timing).** Prove by construction

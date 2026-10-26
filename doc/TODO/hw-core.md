@@ -113,10 +113,10 @@ skeleton stage-by-stage: each module is forked or written, given a
 - `penumbra3_ex_stage` -- operand forwarding + ALU + flags + branch + divmul +
   drain-commit, with `penumbra3_alu` / `penumbra3_flag_bypass` leaves (`25d7b28`)
 - `penumbra3_mem1_stage` / `penumbra3_mem2_stage` -- split launch/resolve: TLB
-  verdict + cache hit, sub-word extract, fault merge, the `load_complete` hold
-  buffer; `load_complete` parks the full descriptor and `dtranslate`/`tlb_store`
-  gained an `i_hold` read clock-enable for the freeze; composed
-  mem1->dtranslate->mem2 test (`96da15b`)
+  verdict + cache hit, sub-word extract, fault merge, the `mem_completion`
+  hold buffer; `mem_completion` parks the full descriptor and
+  `dtranslate`/`tlb_store` gained an `i_hold` read clock-enable for the
+  freeze; composed mem1->dtranslate->mem2 test (`96da15b`)
 - `penumbra3_wb_stage` -- the commit point: physical-index write routing
   (regfile vs SPR-file/scratch, USP-to-regfile), the NZCV flag strobe, divmul
   dual-write sequencing through the single regfile port, and precise
@@ -129,7 +129,7 @@ skeleton stage-by-stage: each module is forked or written, given a
   regfile/SPR/scratch files: bundle+payload handoffs, operand/flag forward
   sources into EX, the scoreboard clear, the regfile write-port mux (commit vs
   load completion), drain-commit (ERET/EI/DI, WRSYS) + fault commit/flush, and
-  the freeze distribution (registered `load_pending` freezes the launch side +
+  the freeze distribution (registered `mem_pending` freezes the launch side +
   issue; the MEM2/WB register is held only by WB back-pressure -- the carve-out).
   Fetch-stream unit test: ALU forwarding, divmul dual-write, precise fault
   (`297b12d`)
@@ -152,7 +152,7 @@ skeleton stage-by-stage: each module is forked or written, given a
 *forwarding-release* increment
 (early scoreboard clear + the `i_fwd` broadcasts -- correctness-first leaves
 them tied off today, so a load/divmul-use waits for the registered clear) and
-the *load_pending-freeze / memory-path test* (MEM2's own test runs loads
+the *mem_pending-freeze / memory-path test* (MEM2's own test runs loads
 against a real L1 and a modelled uncore, but the spine's test drives no
 translate or cache verdicts yet, so the freeze is unexercised there).
 
@@ -176,7 +176,7 @@ ranks first ("Levers ranked by measured benefit"):
    sides reach memory through the port
    `doc/internals/penumbra3/uncore-port.md` specifies. **The D-side**
    has it for loads: MEM1 launches the L1, MEM2 consumes the verdict,
-   and `load_complete` parks a miss with the L1's victim way, holds its
+   and `mem_completion` parks a miss with the L1's victim way, holds its
    request up on the port, installs the line and completes the load.
    Still open there: stores (the open decision below); a bus fault at
    completion, which the spine still asserts never comes and the three
@@ -233,18 +233,19 @@ Phase-1's gating checkpoint is then the **full-top composition timing read**
   flags, PC, fault verdict) carried as a unit across the EX->MEM->WB registers
   alongside `ctrl_bundle_t`; `store_data` rides its own EX->MEM1 wire (consumed
   in MEM2, never reaches WB).
-- The back-end stall is spine-distributed: MEM2's `load_complete` produces the
-  registered `load_pending`, and the spine fans it back to freeze the *launch
-  side* -- MEM1, the MEM1/MEM2 register, `dtranslate`/`tlb_store`/cache, and
-  issue -- so the missing load and everything younger hold. It must NOT freeze
-  the MEM2/WB output register: that drains older work to commit (the held load
-  retires via the completion path, not MEM2/WB), and folding `load_pending` into
-  its freeze re-presents an already-committed multi-cycle writeback (the divmul
-  dual-register retire) and retires it twice. The MEM2/WB register's only
-  back-pressure is the WB dual-write hold. Contract:
+- The back-end stall is spine-distributed: MEM2's `mem_completion` produces
+  the registered `mem_pending`, and the spine fans it back to freeze the
+  *launch side* -- MEM1, the MEM1/MEM2 register,
+  `dtranslate`/`tlb_store`/cache, and issue -- so the missing load and
+  everything younger hold. It must NOT freeze the MEM2/WB output register:
+  that drains older work to commit (the held load retires via the completion
+  path, not MEM2/WB), and folding `mem_pending` into its freeze re-presents an
+  already-committed multi-cycle writeback (the divmul dual-register retire)
+  and retires it twice. The MEM2/WB register's only back-pressure is the WB
+  dual-write hold. Contract:
   [load-completion freeze scope](../internals/penumbra3/memory-completion.md#what-the-pipe-gate-freezes).
   A frozen MEM2 slot keeps its own verdict, and no combinational cache/TLB
-  verdict ever reaches issue. Candidate spine assertion: `load_pending` never
+  verdict ever reaches issue. Candidate spine assertion: `mem_pending` never
   gates the MEM2/WB register.
 
 **Deferred (resolve at the named task):**
@@ -255,7 +256,7 @@ Phase-1's gating checkpoint is then the **full-top composition timing read**
   sysreg reads, which forward from MEM2/WB). What remains is a pure spine
   task: drive ID's `i_fwd*` to release a scoreboard-pending load / sysreg read
   at the cycle its value reaches MEM2/WB -- gated on the registered
-  `load_pending`, never a live verdict. ID owns only the match today.
+  `mem_pending`, never a live verdict. ID owns only the match today.
 - *divmul aux-destination scoreboard bit* -- set path done (`4fa078b`): the
   scoreboard has a second set port, ID regmaps the aux (Rdh) and sets its bit at
   issue; the spine drives the matching clear at the aux writeback.
@@ -270,14 +271,14 @@ Phase-1's gating checkpoint is then the **full-top composition timing read**
   the core shape: retire the divmul writeback through the **load-completion
   path** rather than the WB stage. divmul holds in EX until it is the oldest
   in-flight -- `drained` = `~mem1_valid & ~mem2_valid & ~memwb_valid &
-  ~load_pending` (the drain-commit condition extended with `load_pending`) --
+  ~mem_pending` (the drain-commit condition extended with `mem_pending`) --
   then writes Rd/Rdh over two cycles through the completion write-port mux. The
   port is free **by the in-order single-outstanding invariant** (oldest => no
   older writer; younger blocked behind the held divmul), NOT by any cycle count
   -- so a slow uncached MMIO access ahead of the divmul simply makes it wait in
   EX, never write early or out of order. WB then never sees a divmul: the
   dual-write FSM and `wb_local_stall` both delete, and back-pressure reduces to
-  the `load_pending` fan-out plus the one-hop EX->ID stall. Land as its own
+  the `mem_pending` fan-out plus the one-hop EX->ID stall. Land as its own
   increment if HW timing shows the reach binds; until then the WB dual-write is
   correct (WB is the oldest by pipeline position, so it is already drain-gated
   -- only the reach is suboptimal).

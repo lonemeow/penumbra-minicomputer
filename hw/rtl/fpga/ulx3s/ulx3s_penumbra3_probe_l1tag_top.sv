@@ -291,7 +291,7 @@ module ulx3s_penumbra3_probe_l1tag_top (
     );
 
     // ── MEM2: resolve, hold buffer, MEM2/WB register ─────────────
-    logic           load_pending, complete, complete_fault;
+    logic           mem_pending, complete, complete_fault;
     logic [31:0]    complete_value;
     logic [SB_IDX_W-1:0] complete_dest;
     logic           dreq_valid, dreq_cacheable, drsp_done_q;
@@ -341,7 +341,7 @@ module ulx3s_penumbra3_probe_l1tag_top (
         .i_drsp_done            (drsp_done_q),
         .i_rsp_fault            (lfsr_q[1] && lfsr_q[21] && lfsr_q[43]),
         .i_rsp_line             (fill_line),
-        .o_load_pending         (load_pending),
+        .o_mem_pending          (mem_pending),
         .o_complete             (complete),
         .o_complete_dest        (complete_dest),
         .o_complete_value       (complete_value),
@@ -359,7 +359,7 @@ module ulx3s_penumbra3_probe_l1tag_top (
         .o_wb_bcause            (wb_bcause)
     );
 
-    assign d_hold = load_pending;
+    assign d_hold = mem_pending;
 
     // ── The uncore, modeled: done an LFSR-timed wait into the request ──
     // A registered one-cycle done, never in the cycle the request rises.

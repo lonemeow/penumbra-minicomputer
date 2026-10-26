@@ -81,7 +81,7 @@ static struct {
     int      fill_way;  uint32_t fill_paddr;
     uint32_t cpl_value; int cpl_dest, cpl_fault;
     int      wb_n[32];  uint32_t wb_value[32];
-    // Cycles from a done to the first cycle o_load_pending is low after it.
+    // Cycles from a done to the first cycle o_mem_pending is low after it.
     int      done_at, release_lag;
     bool     lag_open;
     bool     prev_valid, prev_done, prev_pending;
@@ -126,12 +126,12 @@ static void tick(Dut* d) {
         m.wb_n[d->o_wb_phys_dst]++;
         m.wb_value[d->o_wb_phys_dst] = d->o_wb_value;
     }
-    if (m.lag_open && m.prev_pending && !d->o_load_pending) {
+    if (m.lag_open && m.prev_pending && !d->o_mem_pending) {
         m.release_lag = m.cycle - m.done_at; m.lag_open = false;
     }
     if (d->i_drsp_done) { m.done_at = m.cycle; m.lag_open = true; }
     m.prev_valid = d->o_dreq_valid; m.prev_done = d->i_drsp_done;
-    m.prev_pending = d->o_load_pending;
+    m.prev_pending = d->o_mem_pending;
     m.cycle++;
 
     d->i_clk = 0; d->eval(); d->i_clk = 1; d->eval();
@@ -162,7 +162,7 @@ static void drive(Dut* d, uint32_t ir, uint32_t ea, int dst, int dst_we,
 }
 // Tick until nothing is parked, then let WB and a completion drain.
 static void drain(Dut* d) {
-    for (int guard = 0; d->o_load_pending && guard < 64; guard++) tick(d);
+    for (int guard = 0; d->o_mem_pending && guard < 64; guard++) tick(d);
     for (int i = 0; i < 4; i++) tick(d);
 }
 // One instruction through the pipe, alone.
@@ -250,10 +250,10 @@ int main(int argc, char** argv) {
     drive(d, ld(MEM_SZ_WORD, 0, 5), 0x1008, 5, 1);
     tick(d);                                   // the load is in MEM2
     drive_none(d);
-    check("miss_park_no_pending",  d->o_load_pending, 0);   // both register at the park
+    check("miss_park_no_pending",  d->o_mem_pending, 0);   // both register at the park
     check("miss_park_no_request",  d->o_dreq_valid, 0);
     tick(d);                                   // p+1
-    check("miss_pending",          d->o_load_pending, 1);
+    check("miss_pending",          d->o_mem_pending, 1);
     check("miss_request",          d->o_dreq_valid, 1);
     check("miss_req_cacheable",    d->o_dreq_cacheable, 1);
     check("miss_req_addr",         d->o_dreq_addr, 0x2008);
@@ -383,7 +383,7 @@ int main(int argc, char** argv) {
             enc_r(0 /* ADD */, 4), 0x11110000, 4, 1);
     check("behind_alu_commits_once",  m.wb_n[4], 1);
     check("behind_alu_value",         m.wb_value[4], 0x11110000);
-    check("behind_alu_load_complete", m.completions, 1);
+    check("behind_alu_mem_completion", m.completions, 1);
     check("behind_alu_release_lag",   m.release_lag, 1);   // it reads no lookup
 
     // ── A store behind a parked load writes the L1 once ──
@@ -401,14 +401,14 @@ int main(int argc, char** argv) {
     drive_none(d);
     d->i_ext_stall = 1; d->eval();
     tick(d);                                   // held: the load is still in MEM2
-    check("held_load_not_parked",       d->o_load_pending, 0);
+    check("held_load_not_parked",       d->o_mem_pending, 0);
     check("held_load_no_request",       d->o_dreq_valid, 0);
     d->i_ext_stall = 0; d->eval();             // released: the load leaves MEM2
     tick(d);
-    check("held_load_parks_on_release", d->o_load_pending, 1);
+    check("held_load_parks_on_release", d->o_mem_pending, 1);
     drain(d);
     check("held_load_one_request",      m.requests, 1);
-    check("held_load_completes_once",   m.completions, 1);
+    check("held_mem_completions_once",   m.completions, 1);
 
     // ── A load squashed in MEM2 by a fault commit does not park ──
     watch_reset();
@@ -418,14 +418,14 @@ int main(int argc, char** argv) {
     d->i_bubble = 1; d->eval();
     tick(d);
     d->i_bubble = 0; d->eval();
-    check("squashed_load_not_parked",  d->o_load_pending, 0);
+    check("squashed_load_not_parked",  d->o_mem_pending, 0);
     drain(d);
     check("squashed_load_no_request",  m.requests, 0);
     check("squashed_load_no_commit",   m.wb_n[5], 0);
     check("squashed_load_no_complete", m.completions, 0);
 
     // The slot behind a parked load resolves in the first cycle
-    // o_load_pending is low. Whatever it reads from the L1 then has to be
+    // o_mem_pending is low. Whatever it reads from the L1 then has to be
     // the L1 as it is after the install.
 
     // ── A load of the line being filled, behind the load that fills it ──

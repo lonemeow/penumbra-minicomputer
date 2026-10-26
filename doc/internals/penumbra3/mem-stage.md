@@ -48,7 +48,7 @@ graph LR
 | Stage | Inputs (registered) | Work | Outputs (registered into next) |
 |---|---|---|---|
 | **MEM1** | effective address (from EX), access type, store data | drive the D-cache index, launch the TLB BRAM read (D-copy), drive the pinned-TLB lookup | vaddr, access type, store data, in-flight access valid |
-| **MEM2** | vaddr, TLB BRAM read output, pinned-TLB output, cache tag/data | tag compare + way select; TLB hit-detect + permission verdict; assemble paddr; sub-word extract | load result or `load_pending`, paddr, fault verdict |
+| **MEM2** | vaddr, TLB BRAM read output, pinned-TLB output, cache tag/data | tag compare + way select; TLB hit-detect + permission verdict; assemble paddr; sub-word extract | load result or `mem_pending`, paddr, fault verdict |
 | **WB** | result / fault | commit; latch fault registers on a fault | architectural state final |
 
 The **only** signal that crosses backward from MEM2 is the registered

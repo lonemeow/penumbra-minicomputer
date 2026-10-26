@@ -49,7 +49,7 @@ module penumbra3_id_stage
     input  logic                  i_stall_in,       // EX cannot accept this cycle
     input  logic                  i_bubble,         // redirect / fault flush
     input  logic                  i_fetch_busy,     // front end memory-bound (bcause split)
-    input  logic                  i_pipe_hold,      // registered back-end hold (load_pending, ...)
+    input  logic                  i_pipe_hold,      // registered back-end hold (mem_pending, ...)
     output logic                  o_local_stall,    // scoreboard interlock (spine back-pressure + perfctr)
 
     // ── Regfile read (external) ──────────────────────────────────

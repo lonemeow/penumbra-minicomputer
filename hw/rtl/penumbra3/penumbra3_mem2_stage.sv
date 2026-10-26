@@ -1,20 +1,20 @@
 // penumbra3_mem2_stage -- Penumbra/3 memory access resolve (second half).
 //
-// Combinational resolve logic plus penumbra3_load_complete and the MEM2/WB
+// Combinational resolve logic plus penumbra3_mem_completion and the MEM2/WB
 // pipeline register. Reads the MEM1/MEM2 register and the verdicts the launch
 // resolved a cycle later -- the translation (paddr, hit, faults) and the
 // L1-D's (hit, word, victim way) -- and produces the writeback: sub-word
 // extract for a load hit, the fault merge for the commit point, and the L1's
 // store strobe. A load the L1 cannot serve (a miss, or an uncacheable page)
-// is parked in penumbra3_load_complete as it leaves; that unit asks the
+// is parked in penumbra3_mem_completion as it leaves; that unit asks the
 // uncore for it, installs the line, and writes the register back later.
 //
 // The back-end stall is the whole point: the only thing that holds the pipe is
-// the registered o_load_pending out of the hold buffer, distributed by the
+// the registered o_mem_pending out of the hold buffer, distributed by the
 // spine -- never a combinational cache/TLB verdict reaching into issue.
 //
 // The spine holds a slot in MEM2 in two ways: behind a parked access
-// (o_load_pending) and under WB back-pressure. Either way the slot's verdict
+// (o_mem_pending) and under WB back-pressure. Either way the slot's verdict
 // stands every cycle it waits, and its effects -- the commit to WB, the park,
 // the L1 write -- happen once, in the cycle it leaves (mem2_fire).
 
@@ -78,7 +78,7 @@ module penumbra3_mem2_stage
     input  logic [UNCORE_LINE_WORDS-1:0][31:0] i_rsp_line,
 
     // -- Back-end hold + completion (to the spine) ----------------
-    output logic                  o_load_pending,
+    output logic                  o_mem_pending,
     output logic                  o_complete,
     output logic [SB_IDX_W-1:0]   o_complete_dest,
     output logic [31:0]           o_complete_value,
@@ -172,15 +172,15 @@ module penumbra3_mem2_stage
     assign load_miss    = ld_valid & ~i_dcache_hit;
     assign mem2_commits = mem2_fire & ~load_miss;
 
-    logic [31:0] lc_complete_data;
-    logic [1:0]  lc_complete_size, lc_complete_addr_lo;
-    logic        lc_complete_sign;
+    logic [31:0] mc_complete_data;
+    logic [1:0]  mc_complete_size, mc_complete_addr_lo;
+    logic        mc_complete_sign;
 
-    penumbra3_load_complete #(
+    penumbra3_mem_completion #(
         .IDX_BITS   (SB_IDX_W),
         .WAYS       (DL1_WAYS),
         .LINE_WORDS (UNCORE_LINE_WORDS)
-    ) u_load_complete (
+    ) u_mem_completion (
         .i_clk              (i_clk),
         .i_rst              (i_rst),
         .i_park             (mem2_fire & load_miss),
@@ -204,23 +204,23 @@ module penumbra3_mem2_stage
         .o_fill_way         (o_dcache_fill_way),
         .o_fill_paddr       (o_dcache_fill_paddr),
         .i_l1_extra_cycle   (i_dcache_extra_cycle),
-        .o_load_pending     (o_load_pending),
+        .o_mem_pending      (o_mem_pending),
         .o_complete         (o_complete),
         .o_complete_dest    (o_complete_dest),
-        .o_complete_data    (lc_complete_data),
+        .o_complete_data    (mc_complete_data),
         .o_complete_fault   (o_complete_fault),
-        .o_complete_size    (lc_complete_size),
-        .o_complete_addr_lo (lc_complete_addr_lo),
-        .o_complete_sign    (lc_complete_sign)
+        .o_complete_size    (mc_complete_size),
+        .o_complete_addr_lo (mc_complete_addr_lo),
+        .o_complete_sign    (mc_complete_sign)
     );
 
     // Completion writeback: extract the sub-word result from the parked
     // descriptor so a byte/halfword miss writes back correctly.
     byte_ext u_byte_ext_complete (
-        .i_data     (lc_complete_data),
-        .i_addr_lo  (lc_complete_addr_lo),
-        .i_size     (lc_complete_size),
-        .i_sign_ext (lc_complete_sign),
+        .i_data     (mc_complete_data),
+        .i_addr_lo  (mc_complete_addr_lo),
+        .i_size     (mc_complete_size),
+        .i_sign_ext (mc_complete_sign),
         .o_data     (o_complete_value)
     );
 
@@ -270,7 +270,7 @@ module penumbra3_mem2_stage
     // The bubble WB gets while an access is parked is that access's, whatever
     // waits behind it in MEM2.
     bcause_e mem2_bcause;
-    assign mem2_bcause = (o_load_pending | load_miss) ? BCAUSE_LOAD
+    assign mem2_bcause = (o_mem_pending | load_miss) ? BCAUSE_LOAD
                        : mem2_is_store                ? BCAUSE_STORE
                        :                                i_bcause;
 
@@ -300,7 +300,7 @@ module penumbra3_mem2_stage
     // parked access freezes the launch side, and WB back-pressure holds the
     // slot behind the register it freezes.
     always_comb
-        assert (i_rst || !(o_load_pending && !i_launch_hold))
+        assert (i_rst || !(o_mem_pending && !i_launch_hold))
             else $error("penumbra3_mem2_stage: an access is parked and the launch side is not held");
     always_comb
         assert (i_rst || !(i_hold && !i_launch_hold))
