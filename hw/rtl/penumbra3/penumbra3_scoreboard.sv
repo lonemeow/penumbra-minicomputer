@@ -22,6 +22,11 @@ module penumbra3_scoreboard #(
     input  logic                     i_clr_en,
     input  logic [$clog2(NREGS)-1:0] i_clr_idx,
 
+    // A fault commit. The faulting instruction is the oldest in flight, so
+    // every bit still set belongs to an instruction the fault squashed, and
+    // nothing will complete to clear it.
+    input  logic                     i_flush,
+
     // Combinational read for the two source operands
     input  logic [$clog2(NREGS)-1:0] i_src0_idx,
     input  logic [$clog2(NREGS)-1:0] i_src1_idx,
@@ -39,7 +44,7 @@ module penumbra3_scoreboard #(
     assign o_src1_pending = pending_q[i_src1_idx];
 
     always_ff @(posedge i_clk) begin
-        if (i_rst)
+        if (i_rst || i_flush)
             pending_q <= '0;
         else begin
             // Clear before set: a register that both completes and is

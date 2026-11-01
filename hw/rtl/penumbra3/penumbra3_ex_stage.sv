@@ -103,7 +103,7 @@ module penumbra3_ex_stage
 
     // -- Pipeline handshake ---------------------------------------
     input  logic                  i_stall_in,        // MEM1 cannot accept this cycle
-    input  logic                  i_wb_active,       // WB holds a live (non-bubble) insn
+    input  logic                  i_back_end_active, // older work past MEM1
     input  logic                  i_bubble,          // force this insn to a bubble (fault flush)
     output logic                  o_local_stall,     // back-pressure to ID (downstream-independent)
     output logic                  o_dc_commit,       // drain-commit insn commits this cycle
@@ -325,17 +325,15 @@ module penumbra3_ex_stage
     // WRSYS, EX holds upstream one extra cycle (post_wait_q) so the device
     // latches before the next insn can observe it.
     //
-    // MEM1 occupancy is EX's own EX/MEM1 register (o_mem1_valid); only WB needs
-    // a separate occupancy feedback (i_wb_active). MEM2 drains as the EX/MEM1
-    // bubble propagates, so the in-flight back end empties from o_mem1_valid
-    // and i_wb_active together.
+    // MEM1 occupancy is EX's own EX/MEM1 register (o_mem1_valid); the rest of
+    // the back end reaches EX as i_back_end_active, parked accesses included.
     logic dc_here;          // a drain-commit insn occupies EX
     logic drained;          // the back end holds no live instruction
     logic dc_commit_now;
     logic post_wait_q;      // the WRSYS post-commit extra-hold cycle
 
     assign dc_here       = i_valid & i_bundle.drain_commit & ~i_fault_pending & ~i_bubble;
-    assign drained       = ~o_mem1_valid & ~i_wb_active;
+    assign drained       = ~o_mem1_valid & ~i_back_end_active;
     assign dc_commit_now = dc_here & drained & ~post_wait_q;
     assign o_dc_commit   = dc_commit_now;
 

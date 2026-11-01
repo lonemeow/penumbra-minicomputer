@@ -292,7 +292,8 @@ module ulx3s_penumbra3_probe_l1tag_top (
 
     // ── MEM2: resolve, hold buffer, MEM2/WB register ─────────────
     logic           mem_pending, complete, complete_we, complete_fault;
-    logic [31:0]    complete_value;
+    logic [31:0]    complete_value, complete_pc, complete_vaddr, complete_status;
+    logic           complete_retires;
     logic [SB_IDX_W-1:0] complete_dest;
     logic           dreq_valid, dreq_cacheable, dreq_we, drsp_done_q;
     logic [31:0]    dreq_addr, dreq_wdata;
@@ -346,9 +347,13 @@ module ulx3s_penumbra3_probe_l1tag_top (
         .o_mem_pending          (mem_pending),
         .o_complete             (complete),
         .o_complete_we          (complete_we),
+        .o_complete_retires     (complete_retires),
         .o_complete_dest        (complete_dest),
         .o_complete_value       (complete_value),
         .o_complete_fault       (complete_fault),
+        .o_complete_pc          (complete_pc),
+        .o_complete_vaddr       (complete_vaddr),
+        .o_complete_status      (complete_status),
         .o_fwd_result           (),
         .o_fwd_dst              (),
         .o_fwd_we               (),
@@ -599,7 +604,8 @@ module ulx3s_penumbra3_probe_l1tag_top (
         fold_q[0] <= fbuf_deq_valid ^ (^fbuf_deq_data);
         fold_q[1] <= wb_valid ^ (^wb_payload) ^ (^wb_bundle) ^ (^wb_bcause);
         fold_q[2] <= complete ^ complete_we ^ complete_fault ^ (^complete_dest)
-                  ^ (^complete_value);
+                  ^ (^complete_value) ^ complete_retires ^ (^complete_pc)
+                  ^ (^complete_vaddr) ^ (^complete_status);
         fold_q[3] <= dreq_valid ^ dreq_cacheable ^ dreq_we ^ (^dreq_addr)
                   ^ (^dreq_byte_en) ^ (^dreq_wdata);
         fold_q[4] <= ^pc_q;

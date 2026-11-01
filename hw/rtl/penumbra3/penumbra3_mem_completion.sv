@@ -21,14 +21,19 @@
 //   r     i_rsp_done. A load's line: o_fill_we writes it into the L1 (a
 //         cacheable load, L1 enabled, no fault), and its word is taken
 //   r+1   o_req_valid is low. o_complete, with the regfile write for a
-//         load. o_mem_pending is low, unless the slot in MEM2 reads the
-//         L1's lookup and the L1 asked in r for an extra cycle
+//         load. o_complete_fault if the uncore's done faulted.
+//         o_complete_retires unless the access is a cacheable store, whose
+//         instruction retired as it parked. o_mem_pending is low, unless
+//         the slot in MEM2 reads the L1's lookup and the L1 asked in r for
+//         an extra cycle
 //   r+2   o_mem_pending is low
 //
-// The descriptor also keeps what a load's sub-word extract needs (size,
-// sign, the address's low bits): the response is a whole word and arrives
-// after the load has left the pipe.
-module penumbra3_mem_completion #(
+// The descriptor also keeps what the instruction has left the pipe with: a
+// load's sub-word extract (size, sign, the address's low bits), and the PC,
+// the virtual address and the mode a bus fault reports.
+module penumbra3_mem_completion
+    import penumbra_pkg::*;
+#(
     parameter  int IDX_BITS   = 5,      // destination scoreboard-index width
     parameter  int WAYS       = 2,      // the L1's ways
     parameter  int LINE_WORDS = 4,      // the port's line
@@ -41,6 +46,9 @@ module penumbra3_mem_completion #(
     // -- Park: an access MEM2 cannot finish leaves MEM2 this cycle --
     input  logic                i_park,           // one cycle; never while o_mem_pending
     input  logic                i_access_we,      // a store
+    input  logic [31:0]         i_access_pc,
+    input  logic [31:0]         i_access_vaddr,
+    input  logic                i_access_user,    // the instruction ran in user mode
     input  logic [31:0]         i_access_paddr,
     input  logic                i_access_cacheable,
     input  logic [3:0]          i_access_byte_en,
@@ -82,20 +90,32 @@ module penumbra3_mem_completion #(
     output logic                o_pending_store,  // with o_mem_pending: a store
     output logic                o_complete,       // the access finished (one cycle)
     output logic                o_complete_we,    // with o_complete: a load
+    output logic                o_complete_retires, // one cycle, with o_complete
     output logic [IDX_BITS-1:0] o_complete_dest,
     output logic [31:0]         o_complete_data,  // the whole word; the consumer extracts
-    output logic                o_complete_fault,
     output logic [1:0]          o_complete_size,
     output logic [1:0]          o_complete_addr_lo,
-    output logic                o_complete_sign
+    output logic                o_complete_sign,
+
+    // -- A bus fault ----------------------------------------------
+    // A cacheable write's fault never comes with its done (uncore-port.md,
+    // "Faults"), so every fault reported here is precise.
+    output logic                o_complete_fault, // one cycle, with o_complete
+    output logic [31:0]         o_complete_pc,
+    output logic [31:0]         o_complete_vaddr,
+    output logic [31:0]         o_complete_status
 );
 
     // ── The parked access ────────────────────────────────────────
     // Loaded every cycle nothing is parked, so only the two flops below
     // carry the park decision, which waits on the TLB verdict and the L1
-    // hit; these registers' enables stay off it. From p+1 through the
-    // last cycle o_mem_pending is high they hold the parked access.
+    // hit; these registers' enables stay off it. They load at the end of a
+    // cycle o_mem_pending is low, so from p+1 they hold the parked access
+    // through the first such cycle, and the completion reads them in r+1.
     logic                we_q;
+    logic [31:0]         pc_q;
+    logic [31:0]         vaddr_q;
+    logic                user_q;
     logic [31:0]         paddr_q;
     logic                cacheable_q;
     logic [3:0]          byte_en_q;
@@ -116,6 +136,9 @@ module penumbra3_mem_completion #(
     always_ff @(posedge i_clk)
         if (!pending_q) begin
             we_q        <= i_access_we;
+            pc_q        <= i_access_pc;
+            vaddr_q     <= i_access_vaddr;
+            user_q      <= i_access_user;
             paddr_q     <= i_access_paddr;
             cacheable_q <= i_access_cacheable;
             byte_en_q   <= i_access_byte_en;
@@ -169,43 +192,42 @@ module penumbra3_mem_completion #(
     assign o_pending_store = we_q;
 
     // ── Completion ───────────────────────────────────────────────
-    // Captured in r, since the parked registers above may load the next
-    // slot from r+1 on. A line read's word is the one the address selects;
-    // a word read's comes back in word 0. A write returns nothing.
+    // The uncore's response lasts only r, so it is captured there; the rest
+    // of the completion reads the parked registers. A line read's word is
+    // the one the address selects; a word read's comes back in word 0. A
+    // write returns nothing.
     logic                complete_q;
-    logic                complete_we_q;
-    logic [IDX_BITS-1:0] complete_dest_q;
     logic [31:0]         complete_data_q;
     logic                complete_fault_q;
-    logic [1:0]          complete_size_q;
-    logic [1:0]          complete_addr_lo_q;
-    logic                complete_sign_q;
 
     logic [WORD_BITS-1:0] rsp_word_idx;
     assign rsp_word_idx = cacheable_q ? paddr_q[2 +: WORD_BITS] : '0;
 
     always_ff @(posedge i_clk) begin
-        if (i_rst) complete_q <= 1'b0;
-        else       complete_q <= i_rsp_done;
-        if (i_rsp_done) begin
-            complete_we_q      <= !we_q;
-            complete_dest_q    <= dest_q;
-            complete_data_q    <= i_rsp_line[rsp_word_idx];
-            complete_fault_q   <= i_rsp_fault;
-            complete_size_q    <= size_q;
-            complete_addr_lo_q <= paddr_q[1:0];
-            complete_sign_q    <= sign_q;
+        if (i_rst) begin
+            complete_q       <= 1'b0;
+            complete_fault_q <= 1'b0;
+        end else begin
+            complete_q       <= i_rsp_done;
+            complete_fault_q <= i_rsp_done && i_rsp_fault;
         end
+        if (i_rsp_done) complete_data_q <= i_rsp_line[rsp_word_idx];
     end
 
     assign o_complete         = complete_q;
-    assign o_complete_we      = complete_we_q;
-    assign o_complete_dest    = complete_dest_q;
+    assign o_complete_we      = !we_q;
+    assign o_complete_retires = complete_q && !(we_q && cacheable_q);
+    assign o_complete_dest    = dest_q;
     assign o_complete_data    = complete_data_q;
-    assign o_complete_fault   = complete_fault_q;
-    assign o_complete_size    = complete_size_q;
-    assign o_complete_addr_lo = complete_addr_lo_q;
-    assign o_complete_sign    = complete_sign_q;
+    assign o_complete_size    = size_q;
+    assign o_complete_addr_lo = paddr_q[1:0];
+    assign o_complete_sign    = sign_q;
+
+    assign o_complete_fault  = complete_fault_q;
+    assign o_complete_pc     = pc_q;
+    assign o_complete_vaddr  = vaddr_q;
+    assign o_complete_status = compose_fault_status(user_q, we_q ? ACC_WRITE : ACC_READ,
+                                                    FAULT_BUS);
 
     // ── Assertions (sim-only; Verilator --assert) ─────────────────
     // One access at a time: the freeze keeps a second from reaching MEM2's

@@ -355,10 +355,11 @@ module penumbra3_core
         .o_commit_idx(o_commit_idx), .o_commit_data(o_commit_data), .o_commit_we(o_commit_we)
     );
 
-    // Instructions retired: a distinct WB instruction commit (insn_committed,
-    // once per instruction -- a dual-write's second register cycle is excluded)
-    // OR a drain-commit, which commits from EX and never reaches WB. The two are
-    // mutually exclusive per cycle, so the OR counts each retire exactly once.
+    // Instructions retired: a distinct instruction commit, at WB or with a
+    // parked access's completion (insn_committed, once per instruction -- a
+    // dual-write's second register cycle is excluded) OR a drain-commit, which
+    // commits from EX and never reaches WB. The two are mutually exclusive per
+    // cycle, so the OR counts each retire exactly once.
     assign o_insn_retired   = insn_committed | dc_commit;
     assign o_insn_committed = insn_committed;
 

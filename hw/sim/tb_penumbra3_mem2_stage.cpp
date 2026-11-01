@@ -33,7 +33,9 @@ enum { MEM_SZ_BYTE = 0, MEM_SZ_HALF = 1, MEM_SZ_WORD = 2 };
 enum { VEC_TLB_MISS = 2 };
 enum { BCAUSE_LOAD = 3, BCAUSE_STORE = 4 };
 // TLB PTE flag bits
-enum { F_V = 0x01, F_C = 0x04, F_R = 0x08, F_W = 0x10 };
+enum { F_V = 0x01, F_C = 0x04, F_R = 0x08, F_W = 0x10, F_U = 0x40 };
+// Bus fault status: the type, the access, the mode
+enum { FAULT_BUS = 4, FSTAT_R = 1 << 8, FSTAT_W = 1 << 9, FSTAT_USR = 1 << 11 };
 // Cache device registers
 enum { CACHE_CTRL = 1, CACHE_READ_HITS = 10, CACHE_READ_MISSES = 11,
        CACHE_WRITE_HITS = 12, CACHE_WRITE_MISSES = 13 };
@@ -97,7 +99,9 @@ static struct {
     uint32_t req_addr;  int req_cacheable, req_byte_en, req_we;
     uint32_t req_wdata;
     int      fill_way;  uint32_t fill_paddr;
-    uint32_t cpl_value; int cpl_dest, cpl_fault, cpl_we;
+    uint32_t cpl_value; int cpl_dest, cpl_fault, cpl_we, cpl_retires;
+    uint32_t cpl_pc, cpl_vaddr, cpl_status;
+    int      strays;    // cycles a completion's pulse rose without o_complete
     int      wb_n[32];  uint32_t wb_value[32];
     // Cycles from a done to the first cycle o_mem_pending is low after it.
     int      done_at, release_lag;
@@ -141,6 +145,11 @@ static void tick(Dut* d) {
         m.completions++;
         m.cpl_value = d->o_complete_value; m.cpl_dest = d->o_complete_dest;
         m.cpl_fault = d->o_complete_fault; m.cpl_we = d->o_complete_we;
+        m.cpl_retires = d->o_complete_retires;
+        m.cpl_pc = d->o_complete_pc; m.cpl_vaddr = d->o_complete_vaddr;
+        m.cpl_status = d->o_complete_status;
+    } else {
+        m.strays += d->o_complete_fault | d->o_complete_retires;
     }
     m.store_strobes += d->o_dcache_we;
     if (d->o_wb_valid) {
@@ -174,10 +183,13 @@ static void drive_none(Dut* d) {
     d->i_fault_pending = 0; d->i_store_data = 0; d->i_valid = 0;
     d->eval();
 }
+// Every instruction's PC is a function of its address.
+static uint32_t pc_of(uint32_t ea) { return ~ea; }
 // Put one instruction in MEM1 for this cycle.
 static void drive(Dut* d, uint32_t ir, uint32_t ea, int dst, int dst_we,
                   uint32_t store = 0) {
-    d->i_ir = ir; d->i_ea = ea; d->i_phys_dst = dst; d->i_phys_dst_we = dst_we;
+    d->i_ir = ir; d->i_pc = pc_of(ea); d->i_ea = ea;
+    d->i_phys_dst = dst; d->i_phys_dst_we = dst_we;
     d->i_fault_pending = 0; d->i_store_data = store; d->i_valid = 1;
     d->eval();
 }
@@ -252,6 +264,7 @@ int main(int argc, char** argv) {
     tlb_install(d, 0x3000, 0x4, F_V | F_R | F_W);         // -> 0x4000, uncacheable
     tlb_install(d, 0x5000, 0x6, F_V | F_C | F_R | F_W);   // -> 0x6000
     tlb_install(d, 0x7000, 0x8, F_V | F_C | F_R | F_W);   // -> 0x8000
+    tlb_install(d, 0xB000, 0xA, F_V | F_U | F_R | F_W);   // -> 0xA000, a user's
 
     // ── L1 disabled: a cacheable load reads a line and installs nothing ──
     watch_reset();
@@ -300,6 +313,7 @@ int main(int argc, char** argv) {
     check("miss_request_stable",   m.req_changed, 0);
     check("miss_one_install",      m.installs, 1);
     check("miss_one_completion",   m.completions, 1);
+    check("miss_completion_retires", m.cpl_retires, 1);
     uc.automatic = true;
 
     // ── Hits on the installed line ──
@@ -340,6 +354,11 @@ int main(int argc, char** argv) {
     check("fault_completes",  m.completions, 1);
     check("fault_reported",   m.cpl_fault, 1);
     check("fault_no_install", m.installs, 0);
+    check("fault_retires",    m.cpl_retires, 1);           // a fault completes it
+    check("fault_pc",         m.cpl_pc, pc_of(0x1040));
+    check("fault_vaddr",      m.cpl_vaddr, 0x1040);        // the page's, not 0x2040
+    check("fault_status",     m.cpl_status, FAULT_BUS | FSTAT_R);
+    check("fault_one_cycle",  d->o_complete_fault, 0);
     run(d, ld(MEM_SZ_WORD, 0, 5), 0x1040, 5, 1);           // so it is asked for again
     check("fault_asks_again", m.requests, 2);
     check("fault_then_value", m.cpl_value, mem_word(0x2040));
@@ -357,6 +376,7 @@ int main(int argc, char** argv) {
     check("store_req_stable",     m.req_changed, 0);
     check("store_retired",        m.wb_n[0], 1);         // its fault is asynchronous
     check("store_completes",      m.completions, 1);
+    check("store_retires_once",   m.cpl_retires, 0);     // it left through WB
     check("store_writes_no_reg",  m.cpl_we, 0);
     check("store_no_install",     m.installs, 0);
     check("store_release_lag",    m.release_lag, 1);
@@ -418,6 +438,7 @@ int main(int argc, char** argv) {
     check("uc_store_byte_en",       m.req_byte_en, 0xC);
     check("uc_store_not_retired",   m.wb_n[0], 0);        // a fault on it is precise
     check("uc_store_completes",     m.completions, 1);
+    check("uc_store_retires",       m.cpl_retires, 1);
     check("uc_store_writes_no_reg", m.cpl_we, 0);
     check("uc_store_memory",        mem_word(0x4004) >> 16, 0xBEEF);
     run(d, ld(MEM_SZ_HALF, 0, 6), 0x3006, 6, 1);
@@ -431,6 +452,17 @@ int main(int argc, char** argv) {
     check("uc_store_fault_completes", m.completions, 1);
     check("uc_store_fault_reported",  m.cpl_fault, 1);
     check("uc_store_fault_no_write",  (uint32_t)written.count(0x4010), 0);
+    check("uc_store_fault_retires",   m.cpl_retires, 1);
+    check("uc_store_fault_status",    m.cpl_status, FAULT_BUS | FSTAT_W);
+
+    // ── A user's bus fault says so ──
+    watch_reset();
+    d->i_user_mode = 1;
+    uc.fault = true;
+    run(d, ld(MEM_SZ_WORD, 0, 5), 0xB010, 5, 1);
+    uc.fault = false;
+    d->i_user_mode = 0;
+    check("user_fault_status", m.cpl_status, FAULT_BUS | FSTAT_R | FSTAT_USR);
 
     // ── A store with a TLB miss retires with the fault and asks for nothing ──
     watch_reset();
@@ -589,6 +621,9 @@ int main(int argc, char** argv) {
             ld(MEM_SZ_WORD, 0, 6), 0x10E4, 6, 1, 0, 0x7E57DA7A);
     check("load_behind_store_miss_requests", m.requests, 2);  // the write, then the line
     check("load_behind_store_miss_value",    m.cpl_value, 0x7E57DA7A);
+
+    // Faults and retires are pulses, never left high between completions.
+    check("no_stray_pulses", m.strays, 0);
 
     printf("%s: %d/%d checks passed\n", errors ? "FAIL" : "PASS", tests - errors, tests);
     delete d;

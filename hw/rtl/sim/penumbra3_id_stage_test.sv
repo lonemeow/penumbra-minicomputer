@@ -95,6 +95,7 @@ module penumbra3_id_stage_test
         .i_supervisor        (i_supervisor),
         .i_stall_in          (i_stall_in),
         .i_bubble            (i_bubble),
+        .i_fault_flush       (1'b0),
         .i_fetch_busy        (i_fetch_busy),
         .i_pipe_hold         (i_pipe_hold),
         .o_local_stall       (o_local_stall),

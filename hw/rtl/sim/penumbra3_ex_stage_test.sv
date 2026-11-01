@@ -59,7 +59,7 @@ module penumbra3_ex_stage_test
     input  logic [3:0]            i_irq_vec,
 
     input  logic                  i_stall_in,
-    input  logic                  i_wb_active,
+    input  logic                  i_back_end_active,
     input  logic                  i_bubble,
     output logic                  o_local_stall,
     output logic                  o_dc_commit,
@@ -138,7 +138,7 @@ module penumbra3_ex_stage_test
         .i_irq_inject           (i_irq_inject),
         .i_irq_vec              (i_irq_vec),
         .i_stall_in             (i_stall_in),
-        .i_wb_active            (i_wb_active),
+        .i_back_end_active      (i_back_end_active),
         .i_bubble               (i_bubble),
         .o_local_stall          (o_local_stall),
         .o_dc_commit            (o_dc_commit),

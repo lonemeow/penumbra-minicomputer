@@ -83,6 +83,8 @@ module ulx3s_penumbra3_probe_decode_top (
     logic                mem_pending, req_valid, complete, complete_fault;
     logic [IDX_BITS-1:0] complete_dest;
     logic [31:0]         complete_data;
+    logic                complete_retires;
+    logic [31:0]         complete_pc, complete_vaddr, complete_status;
     logic                can_issue;
 
     penumbra3_scoreboard #(.NREGS (NREGS)) u_sb (
@@ -92,6 +94,7 @@ module ulx3s_penumbra3_probe_decode_top (
         .i_set_idx      (lfsr_q[16 +: IDX_BITS]),
         .i_clr_en       (complete),
         .i_clr_idx      (complete_dest),
+        .i_flush        (complete_fault),
         .i_src0_idx     (src0_pidx),
         .i_src1_idx     (src1_pidx),
         .o_src0_pending (src0_pending),
@@ -105,6 +108,9 @@ module ulx3s_penumbra3_probe_decode_top (
         .i_rst              (rst),
         .i_park             (lfsr_q[15] & ~lfsr_q[12] & ~mem_pending),  // one at a time
         .i_access_we        (lfsr_q[4]),
+        .i_access_pc        ({lfsr_q[15:0], lfsr_q[31:16]}),
+        .i_access_vaddr     ({lfsr_q[7:0], lfsr_q[31:8]}),
+        .i_access_user      (lfsr_q[12]),
         .i_access_paddr     (lfsr_q),
         .i_access_cacheable (lfsr_q[5]),
         .i_access_byte_en   (lfsr_q[9:6]),
@@ -122,9 +128,13 @@ module ulx3s_penumbra3_probe_decode_top (
         .i_rsp_line         ({4{lfsr_q}}),
         .o_mem_pending      (mem_pending),
         .o_complete         (complete),
+        .o_complete_retires (complete_retires),
         .o_complete_dest    (complete_dest),
         .o_complete_data    (complete_data),
-        .o_complete_fault   (complete_fault)
+        .o_complete_fault   (complete_fault),
+        .o_complete_pc      (complete_pc),
+        .o_complete_vaddr   (complete_vaddr),
+        .o_complete_status  (complete_status)
     );
 
     penumbra3_issue u_issue (
@@ -149,7 +159,8 @@ module ulx3s_penumbra3_probe_decode_top (
         led_q <= {7'b0,
                   can_issue_q
                   ^ mem_pending ^ req_valid ^ complete ^ complete_fault
-                  ^ (^complete_dest) ^ (^complete_data)};
+                  ^ (^complete_dest) ^ (^complete_data) ^ complete_retires
+                  ^ (^complete_pc) ^ (^complete_vaddr) ^ (^complete_status)};
     end
     assign led = led_q;
 

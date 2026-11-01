@@ -83,9 +83,13 @@ module penumbra3_mem2_stage
     output logic                  o_mem_pending,
     output logic                  o_complete,
     output logic                  o_complete_we,     // with o_complete: a load
+    output logic                  o_complete_retires, // one cycle, with o_complete
     output logic [SB_IDX_W-1:0]   o_complete_dest,
     output logic [31:0]           o_complete_value,
-    output logic                  o_complete_fault,
+    output logic                  o_complete_fault,  // one cycle, with o_complete
+    output logic [31:0]           o_complete_pc,
+    output logic [31:0]           o_complete_vaddr,
+    output logic [31:0]           o_complete_status,
 
     // -- MEM2->EX forward source (EX's two-ahead leg) -------------
     output logic [31:0]           o_fwd_result,
@@ -228,6 +232,9 @@ module penumbra3_mem2_stage
         .i_rst              (i_rst),
         .i_park             (mem2_parks),
         .i_access_we        (mem2_is_store),
+        .i_access_pc        (i_payload.pc),
+        .i_access_vaddr     (i_payload.value),
+        .i_access_user      (i_user_mode),
         .i_access_paddr     (i_translate_paddr),
         .i_access_cacheable (i_translate_cacheable),
         .i_access_byte_en   (i_byte_en),
@@ -255,12 +262,16 @@ module penumbra3_mem2_stage
         .o_pending_store    (mc_pending_store),
         .o_complete         (o_complete),
         .o_complete_we      (o_complete_we),
+        .o_complete_retires (o_complete_retires),
         .o_complete_dest    (o_complete_dest),
         .o_complete_data    (mc_complete_data),
-        .o_complete_fault   (o_complete_fault),
         .o_complete_size    (mc_complete_size),
         .o_complete_addr_lo (mc_complete_addr_lo),
-        .o_complete_sign    (mc_complete_sign)
+        .o_complete_sign    (mc_complete_sign),
+        .o_complete_fault   (o_complete_fault),
+        .o_complete_pc      (o_complete_pc),
+        .o_complete_vaddr   (o_complete_vaddr),
+        .o_complete_status  (o_complete_status)
     );
 
     // Completion writeback: extract the sub-word result from the parked
@@ -368,8 +379,9 @@ module penumbra3_mem2_stage
     // A held MEM1/MEM2 register keeps its slot through a flush, so a fault
     // commit must never find one held. While an access is parked, WB sees
     // bubbles, or a store that retired as its write parked, carrying no
-    // fault; and WB holds MEM2 only for a divmul's second write, which is
-    // no fault commit.
+    // fault. A completion's bus fault finds o_mem_pending low: the faulted
+    // access installed nothing, so the L1 asked for no extra cycle. And WB
+    // holds MEM2 only for a divmul's second write, which is no fault commit.
     always_comb
         assert (i_rst || !(i_bubble && i_launch_hold))
             else $error("penumbra3_mem2_stage: a fault commit met a held MEM2 slot");

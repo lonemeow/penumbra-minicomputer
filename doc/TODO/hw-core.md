@@ -151,10 +151,7 @@ skeleton stage-by-stage: each module is forked or written, given a
 **Spine follow-ons** (do not block the memory-hierarchy fork): the
 *forwarding-release* increment
 (early scoreboard clear + the `i_fwd` broadcasts -- correctness-first leaves
-them tied off today, so a load/divmul-use waits for the registered clear) and
-the *mem_pending-freeze / memory-path test* (MEM2's own test runs loads
-against a real L1 and a modelled uncore, but the spine's test drives no
-translate or cache verdicts yet, so the freeze is unexercised there).
+them tied off today, so a load/divmul-use waits for the registered clear).
 
 **Memory hierarchy** (the fork in progress):
 
@@ -178,14 +175,10 @@ ranks first ("Levers ranked by measured benefit"):
    has it: MEM1 launches the L1, MEM2 consumes the verdict, and
    `mem_completion` parks a load miss with the L1's victim way and every
    store, holds the request up on the port, installs a load's line and
-   completes the access. Still open there: a bus fault at completion,
-   which the spine still asserts never comes and the three
-   `isa/test_bus_fault*.s` tests need; retiring what finishes at
-   completion, a parked load or an uncached store, since
-   `o_retire_valid` rises only from WB; a register for `store_fault`,
-   which `doc/system` does not define, so the port's pulse goes
-   nowhere; and the spine-level memory-path test (Spine follow-ons).
-   The fetch side still has `i_fetch_busy`.
+   completes the access, taking a bus fault precisely. Still open
+   there: a register for `store_fault`, which `doc/system` does not
+   define, so the port's pulse goes nowhere. The fetch side still has
+   `i_fetch_busy`.
 
    **The fetch side:** P0.5 settled the lookup and the IF2 shape
    (`doc/internals/penumbra3/phase0-probes.md`, "P0.5 -- physical-tag
@@ -872,6 +865,34 @@ Open: how often a fill has a load or store of its set right behind it,
 counted on a running core or by the ISS cache model, and the
 write-through form's mapping under yosys and Vivado with a sweep on
 both sides of it.
+
+## Hardware: a gen3 drain-commit's wait sits on the issue stall
+
+ERET, WRSYS, EI and DI commit from EX, so EX holds one until nothing
+older is unfinished. That test is an OR over EX/MEM1, MEM2, WB, a
+pending access and its completion. It feeds `ex_local_stall` and so
+ID's stall, which every instruction's issue reads, though only these
+four need it. No measurement says what it costs: gen3 has no full top
+to read, and a path's place on a probe attributes nothing.
+
+Two other shapes avoid the gate. Neither is built.
+
+- **A registered `drained`.** While a drain-commit waits in EX nothing
+  enters behind it, so the back end only empties. A flop sampling the
+  gate with the drain-commit already in EX therefore cannot go stale.
+  It costs a cycle per drain-commit and no new flush logic.
+- **Commit at WB.** The instruction flows down the pipe like any other
+  and commits as the oldest, so there is nothing to wait for. Whatever
+  entered behind it ran on the old state, so the commit flushes it,
+  reusing the fault commit's flush and adding a redirect. Each one then
+  costs a refetch where EX waits only for the back end, and they are
+  not rare: `_real_miss_handler` runs at least three WRSYS and an ERET
+  per TLB refill.
+
+Open: the gate's weight in a full-top seed sweep, with and without it,
+and how often real workloads run these four against what a refetch
+costs. The test any shape has to keep is the `dc_*` group in
+`tb_penumbra3_spine`.
 
 ## Hardware: an L2 INVAL_ALL write is dropped or drops a strobe
 

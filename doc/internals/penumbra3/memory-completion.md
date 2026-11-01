@@ -86,8 +86,9 @@ graph LR
 - **The line is installed as the request completes,** into the way the
   miss parked with, unless the read faulted or the L1 is disabled. It runs
   from the uncore's line register into the L1 and never through the core.
-- **Completion is a registered event** delivering `{data}` or `{fault}` to
-  the held load's register in the cycle after the request completes.
+- **Completion is a registered event** in the cycle after the request
+  completes. It delivers the data to the held load's register, or takes the
+  [bus fault](#fault-precision), and retires the instruction.
 - **The launch side resumes in that same cycle,** with one exception. The
   L1 shows a line to a lookup it already holds two cycles after the
   install, and the instruction held in MEM2 behind the miss holds such a
@@ -199,6 +200,14 @@ two cycles). Folding `mem_pending` into the MEM2/WB freeze re-presents that
 already-committed writeback as a fresh slot and retires it twice — the two
 freeze sources stay separate.
 
+A **drain-commit** (ERET, WRSYS, EI, DI) commits from EX, ahead of the back
+end, so the freeze alone does not order it: EX holds one until nothing older
+is unfinished. That covers MEM2, WB, a pending access, and that access's
+completion cycle, which retires an instruction of its own. A pending access
+may yet fault, and nothing younger may have taken effect by then. A cacheable
+store's write counts as well, though its instruction has retired, so a
+sysreg write stays ordered behind it.
+
 ## Fault precision
 
 A memory fault is taken on the held, oldest-in-flight access. Whether it is
@@ -226,12 +235,24 @@ The whole carve-out is one qualifier, registered with the parked access:
 fault_precise = ~(is_store & cacheable)
 ```
 
+The same qualifier says where the instruction retires: a cacheable store as
+its write parks, every other parked access with its completion.
+
 A precise fault reuses the existing data-fault vector and `FADDR`/`FSTAT`;
 the asynchronous path sets the sticky bit only. A cacheable store targets
 memory-backed storage, which answers, so the sticky bit records an otherwise
 unreachable error rather than dropping it silently — the surfacing of that
 bit (an asynchronous-exception vector) is a separate concern, not part of the
 synchronous completion contract here.
+
+The instruction has left the pipe by the time a bus fault arrives, so the
+parked access keeps what the fault reports: the PC for `EPC`, the virtual
+address for `FADDR`, and the mode and access type for `FSTAT`.
+The completion commits the fault in WB's place, with the same flush and
+save-state. Everything issued after the access is squashed with nothing left
+to clear its pending bit, so any fault commit clears the scoreboard: the
+faulting instruction is the oldest in flight, so every bit still set belongs
+to something squashed.
 
 Two invariants hold by construction and are asserted (Verilator `--assert`):
 

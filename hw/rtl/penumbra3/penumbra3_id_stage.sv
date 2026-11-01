@@ -48,6 +48,7 @@ module penumbra3_id_stage
     // ── Pipeline handshake ───────────────────────────────────────
     input  logic                  i_stall_in,       // EX cannot accept this cycle
     input  logic                  i_bubble,         // redirect / fault flush
+    input  logic                  i_fault_flush,    // a fault commit's squash
     input  logic                  i_fetch_busy,     // front end memory-bound (bcause split)
     input  logic                  i_pipe_hold,      // registered back-end hold (mem_pending, ...)
     output logic                  o_local_stall,    // scoreboard interlock (spine back-pressure + perfctr)
@@ -244,6 +245,7 @@ module penumbra3_id_stage
         .i_set2_idx     (gpr_dst_aux),
         .i_clr_en       (i_clr_en),
         .i_clr_idx      (i_clr_idx),
+        .i_flush        (i_fault_flush),
         .i_src0_idx     (phys_src_a),
         .i_src1_idx     (phys_src_b),
         .o_src0_pending (src_a_pending),

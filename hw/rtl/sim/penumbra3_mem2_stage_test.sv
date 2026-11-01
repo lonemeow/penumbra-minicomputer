@@ -19,6 +19,7 @@ module penumbra3_mem2_stage_test
 
     // Access in
     input  logic [31:0] i_ir,
+    input  logic [31:0] i_pc,
     input  logic [31:0] i_ea,
     input  logic [SB_IDX_W-1:0] i_phys_dst,
     input  logic        i_phys_dst_we,
@@ -70,9 +71,13 @@ module penumbra3_mem2_stage_test
     output logic        o_mem_pending,
     output logic        o_complete,
     output logic        o_complete_we,
+    output logic        o_complete_retires,
     output logic [SB_IDX_W-1:0] o_complete_dest,
     output logic [31:0] o_complete_value,
     output logic        o_complete_fault,
+    output logic [31:0] o_complete_pc,
+    output logic [31:0] o_complete_vaddr,
+    output logic [31:0] o_complete_status,
 
     output logic        o_fwd_valid,
     output logic [31:0] o_fwd_result,
@@ -96,6 +101,7 @@ module penumbra3_mem2_stage_test
     penumbra3_decode u_decode (.i_ir (i_ir), .o_bundle (bundle));
     always_comb begin
         payload               = '0;
+        payload.pc            = i_pc;
         payload.value         = i_ea;
         payload.phys_dst      = i_phys_dst;
         payload.phys_dst_we   = i_phys_dst_we;
@@ -285,9 +291,13 @@ module penumbra3_mem2_stage_test
         .o_mem_pending          (o_mem_pending),
         .o_complete             (o_complete),
         .o_complete_we          (o_complete_we),
+        .o_complete_retires     (o_complete_retires),
         .o_complete_dest        (o_complete_dest),
         .o_complete_value       (o_complete_value),
         .o_complete_fault       (o_complete_fault),
+        .o_complete_pc          (o_complete_pc),
+        .o_complete_vaddr       (o_complete_vaddr),
+        .o_complete_status      (o_complete_status),
         .o_fwd_result           (o_fwd_result),
         .o_fwd_dst              (o_fwd_dst),
         .o_fwd_we               (o_fwd_we),

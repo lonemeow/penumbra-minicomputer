@@ -183,9 +183,11 @@ module penumbra3_spine
     logic [31:0]         mem2_fwd_result;
     logic [SB_IDX_W-1:0] mem2_fwd_dst;
     logic                mem2_fwd_we, mem2_fwd_valid;
-    logic                mc_complete, mc_complete_we, mc_complete_fault;
+    logic                mc_complete, mc_complete_we, mc_complete_retires;
     logic [SB_IDX_W-1:0] mc_complete_dest;
     logic [31:0]         mc_complete_value;
+    logic                mc_complete_fault;
+    logic [31:0]         mc_complete_pc, mc_complete_vaddr, mc_complete_status;
     logic                mem_pending;
 
     // WB write/commit strobes
@@ -199,6 +201,9 @@ module penumbra3_spine
     logic                wb_fault_commit;
     logic [3:0]          wb_fault_vec;
     logic [31:0]         wb_fault_pc, wb_fault_vaddr, wb_fault_status;
+    logic                fault_commit;
+    logic [3:0]          fault_vec;
+    logic [31:0]         fault_pc, fault_vaddr, fault_status;
 
     // EX side-effects
     logic                ex_local_stall, ex_dc_commit, ex_branch_taken;
@@ -282,15 +287,43 @@ module penumbra3_spine
     assign o_wrsys_resync    = wrsys_resync_q;
     assign o_wrsys_resync_pc = wrsys_resync_pc_q;
 
-    // Per-stage flush (i_bubble). A fault commit at WB is the oldest, so it
-    // flushes every younger slot (ID/EX/MEM1/MEM2). A taken branch flushes only
-    // its wrong-path successor in ID -- and only once it advances out of EX
+    // A fault commits from one of two places, each the oldest in flight then:
+    // WB with a fault its slot carries, or a parked access's completion with
+    // a bus fault. A pending access drains WB to bubbles, so they never meet.
+    always_comb begin
+        if (mc_complete_fault) begin
+            fault_commit = 1'b1;
+            fault_vec    = VEC_BUS_FAULT;
+            fault_pc     = mc_complete_pc;
+            fault_vaddr  = mc_complete_vaddr;
+            fault_status = mc_complete_status;
+        end else begin
+            fault_commit = wb_fault_commit;
+            fault_vec    = wb_fault_vec;
+            fault_pc     = wb_fault_pc;
+            fault_vaddr  = wb_fault_vaddr;
+            fault_status = wb_fault_status;
+        end
+    end
+
+    // Per-stage flush (i_bubble). A fault commit is the oldest, so it flushes
+    // every younger slot (ID/EX/MEM1/MEM2). A taken branch flushes only its
+    // wrong-path successor in ID -- and only once it advances out of EX
     // (~ex_stall keeps a held branch from being discarded). ERET / WRSYS-resync
     // fire with the pipe drained, so they only flush ID.
     logic id_bubble, younger_flush;
-    assign younger_flush = wb_fault_commit;
+    assign younger_flush = fault_commit;
     assign id_bubble = (ex_branch_taken & ~ex_stall) | younger_flush
                      | eret_commit | wrsys_resync_q;
+
+    // ════════════════════════════════════════════════════════════
+    // Drain-commit gate
+    // ════════════════════════════════════════════════════════════
+    // ERET/WRSYS/EI/DI commit from EX, ahead of the back end, so EX holds one
+    // until everything older than it is finished. EX itself watches its
+    // EX/MEM1 register; this is everything past that.
+    logic back_end_active;
+    assign back_end_active = mem1mem2_valid | mem2wb_valid | mem_pending | mc_complete;
 
     // ════════════════════════════════════════════════════════════
     // Privileged save-state files (SR / EPC / ESR, scratch)
@@ -303,12 +336,12 @@ module penumbra3_spine
 
     // A fault commit drives the save-state pulse (EPC <- faulting PC, ESR <- SR,
     // S=1, I=0); an interrupt rides the same path (EX tags its insn as a
-    // synthetic fault), so wb_fault_commit covers both and wb_fault_pc is the
-    // committing slot's own PC either way.
+    // synthetic fault), so fault_commit covers both and fault_pc is the
+    // committing instruction's own PC either way.
     logic        save_state;
     logic [31:0] save_pc;
-    assign save_state = wb_fault_commit;
-    assign save_pc    = wb_fault_pc;
+    assign save_state = fault_commit;
+    assign save_pc    = fault_pc;
 
     // WB's single SPR strobe routes by SPR number: EPC/ESR to the SPR file, SCRn
     // to the scratch file. USP is regfile-backed, so WB drives it on the regfile
@@ -404,6 +437,7 @@ module penumbra3_spine
         .o_deq_ready(o_deq_ready),
         .i_supervisor(supervisor),
         .i_stall_in(id_stall_in), .i_bubble(id_bubble),
+        .i_fault_flush(younger_flush),
         .i_fetch_busy(i_fetch_busy), .i_pipe_hold(id_pipe_hold),
         .o_local_stall(/* perfctr; surfaced via o_bcause at commit */),
         .o_rd_idx_a(rf_rd_idx_a), .o_rd_idx_b(rf_rd_idx_b),
@@ -454,7 +488,8 @@ module penumbra3_spine
                            & ~mem2wb_payload.fault_pending),
         .i_sr_committed(sr_committed),
         .i_irq_inject(i_irq_inject), .i_irq_vec(i_irq_vec),
-        .i_stall_in(ex_stall_in), .i_wb_active(mem2wb_valid), .i_bubble(younger_flush),
+        .i_stall_in(ex_stall_in), .i_back_end_active(back_end_active),
+        .i_bubble(younger_flush),
         .o_local_stall(ex_local_stall), .o_dc_commit(ex_dc_commit), .o_funit_stall(),
         .o_branch_taken(ex_branch_taken), .o_branch_target(o_branch_target),
         .o_mem1_bundle(exmem1_bundle), .o_mem1_payload(exmem1_payload),
@@ -513,8 +548,10 @@ module penumbra3_spine
         .i_drsp_done(i_drsp_done), .i_rsp_fault(i_rsp_fault), .i_rsp_line(i_rsp_line),
         .o_mem_pending(mem_pending),
         .o_complete(mc_complete), .o_complete_we(mc_complete_we),
-        .o_complete_dest(mc_complete_dest),
-        .o_complete_value(mc_complete_value), .o_complete_fault(mc_complete_fault),
+        .o_complete_retires(mc_complete_retires),
+        .o_complete_dest(mc_complete_dest), .o_complete_value(mc_complete_value),
+        .o_complete_fault(mc_complete_fault), .o_complete_pc(mc_complete_pc),
+        .o_complete_vaddr(mc_complete_vaddr), .o_complete_status(mc_complete_status),
         .o_fwd_result(mem2_fwd_result), .o_fwd_dst(mem2_fwd_dst),
         .o_fwd_we(mem2_fwd_we), .o_fwd_valid(mem2_fwd_valid),
         .i_launch_hold(launch_hold),
@@ -544,22 +581,24 @@ module penumbra3_spine
     // ════════════════════════════════════════════════════════════
     // Exposed commit / fault / observability
     // ════════════════════════════════════════════════════════════
-    assign o_fault_commit = wb_fault_commit;
-    assign o_fault_vec    = wb_fault_vec;
+    assign o_fault_commit = fault_commit;
+    assign o_fault_vec    = fault_vec;
     assign o_eret_commit  = eret_commit;
     assign o_ei_commit    = ei_commit;
     assign o_dc_commit    = ex_dc_commit;
 
-    // MMU fault-register commit: the WB fault-commit qualified to the faults that
-    // carry a data address (status type != FAULT_NONE). The payload rides the
-    // MEM2/WB register, so the latch captures the fault that actually retires.
-    assign o_mmu_fault_commit = wb_fault_commit & (wb_fault_status[3:0] != FAULT_NONE);
-    assign o_mmu_fault_vaddr  = wb_fault_vaddr;
-    assign o_mmu_fault_status = wb_fault_status;
+    // MMU fault-register commit: the fault commit qualified to the faults that
+    // carry a data address (status type != FAULT_NONE), so the latch captures
+    // the fault that actually retires.
+    assign o_mmu_fault_commit = fault_commit & (fault_status[3:0] != FAULT_NONE);
+    assign o_mmu_fault_vaddr  = fault_vaddr;
+    assign o_mmu_fault_status = fault_status;
 
-    assign o_insn_committed = wb_insn_committed;
-    assign o_retire_valid   = mem2wb_valid;
-    assign o_retire_pc      = mem2wb_payload.pc;
+    // An instruction retires at WB, or with its parked access's completion. A
+    // pending access drains WB to bubbles, so the two never share a cycle.
+    assign o_insn_committed = wb_insn_committed | mc_complete_retires;
+    assign o_retire_valid   = mem2wb_valid | mc_complete_retires;
+    assign o_retire_pc      = mc_complete_retires ? mc_complete_pc : mem2wb_payload.pc;
     assign o_commit_idx     = rf_wr_idx;
     assign o_commit_data    = rf_wr_data;
     assign o_commit_we      = rf_wr_en;
@@ -567,19 +606,12 @@ module penumbra3_spine
     // ════════════════════════════════════════════════════════════
     // Assertions -- sim-only (Verilator --assert); stripped at synth.
     // ════════════════════════════════════════════════════════════
-    // Taking a faulting completion precisely needs mem_completion to park the
-    // faulting PC with the access (doc/TODO/hw-core.md); this catches one
-    // rather than mis-taking it.
+    // WB and a completion share the regfile write port, the retire report and
+    // the fault commit, and a completion's fault has to be the oldest in
+    // flight: the freeze drains WB to bubbles while an access is pending.
     always_comb
-        assert (!mc_complete_fault)
-            else $error("penumbra3_spine: faulting load completion not yet handled (needs mem_completion PC park)");
-
-    // The regfile write port is shared: a WB commit and a load completion must
-    // never drive it the same cycle (the freeze drains WB to bubbles while a
-    // load is pending).
-    always_comb
-        assert (!(mc_complete && wb_regfile_we))
-            else $error("penumbra3_spine: WB commit collided with a load completion on the write port");
+        assert (!(mc_complete && mem2wb_valid))
+            else $error("penumbra3_spine: an access completed with a live slot in WB");
 
     /* verilator lint_on PINCONNECTEMPTY */
 endmodule

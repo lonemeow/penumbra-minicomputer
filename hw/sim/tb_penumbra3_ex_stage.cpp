@@ -73,7 +73,7 @@ static void clear(Vpenumbra3_ex_stage_test* dut) {
     dut->i_sr_flags = 0; dut->i_mem2_flags = 0; dut->i_mem2_writes_flags = 0;
     dut->i_wb_flags = 0; dut->i_wb_writes_flags = 0; dut->i_sr_committed = 0;
     dut->i_irq_inject = 0; dut->i_irq_vec = 0;
-    dut->i_stall_in = 0; dut->i_wb_active = 0; dut->i_bubble = 0;
+    dut->i_stall_in = 0; dut->i_back_end_active = 0; dut->i_bubble = 0;
 }
 
 int main(int argc, char** argv) {
