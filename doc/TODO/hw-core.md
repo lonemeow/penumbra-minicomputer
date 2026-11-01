@@ -175,13 +175,17 @@ ranks first ("Levers ranked by measured benefit"):
    ECP5, and no FSM, since miss orchestration is the consumer's. Both
    sides reach memory through the port
    `doc/internals/penumbra3/uncore-port.md` specifies. **The D-side**
-   has it for loads: MEM1 launches the L1, MEM2 consumes the verdict,
-   and `mem_completion` parks a miss with the L1's victim way, holds its
-   request up on the port, installs the line and completes the load.
-   Still open there: stores (the open decision below); a bus fault at
-   completion, which the spine still asserts never comes and the three
-   `isa/test_bus_fault*.s` tests need; and the spine-level memory-path
-   test (Spine follow-ons). The fetch side still has `i_fetch_busy`.
+   has it: MEM1 launches the L1, MEM2 consumes the verdict, and
+   `mem_completion` parks a load miss with the L1's victim way and every
+   store, holds the request up on the port, installs a load's line and
+   completes the access. Still open there: a bus fault at completion,
+   which the spine still asserts never comes and the three
+   `isa/test_bus_fault*.s` tests need; retiring what finishes at
+   completion, a parked load or an uncached store, since
+   `o_retire_valid` rises only from WB; a register for `store_fault`,
+   which `doc/system` does not define, so the port's pulse goes
+   nowhere; and the spine-level memory-path test (Spine follow-ons).
+   The fetch side still has `i_fetch_busy`.
 
    **The fetch side:** P0.5 settled the lookup and the IF2 shape
    (`doc/internals/penumbra3/phase0-probes.md`, "P0.5 -- physical-tag
@@ -196,10 +200,7 @@ ranks first ("Levers ranked by measured benefit"):
    registered fill; an uncached fetch, which never hits, then needs its
    word delivered to the replayed slot. P0.5 never saw the hold form
    as its worst path, so the full-top read is where replay has to show
-   its worth. **Open decision:** the store write-through path is
-   unbuilt -- `mem2_stage` writes the L1 copy (`o_dcache_we`) but issues
-   no write-through to L2/memory and does not block (stores retire via
-   `mem2_commits`).
+   its worth.
 2. **The uncore pipeline:** L2 -- write-through and posted, a look-up
    every cycle, the line-wide transfer with fill-through -- with the
    I/D select and the fill folded in, driving `bus_master`.

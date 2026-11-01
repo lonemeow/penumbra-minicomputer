@@ -134,6 +134,12 @@ transaction, the launch side freezes on `mem_pending_q`, and a registered
 completion releases it. A store writes back no register — completion only
 releases the freeze and resolves the fault (below).
 
+What parks is the access, and its instruction need not wait with it. A
+cacheable store retires as its write parks, because nothing the write can
+report comes back to the instruction
+([fault precision](#fault-precision)). An uncached store retires with its
+completion, as a missed load does.
+
 Decoupling the pipe from the store drain — a store/write buffer, or absorbing
 stores in a write-back L2 so only evictions reach memory — is an orthogonal
 throughput layer, described in the
@@ -180,10 +186,11 @@ differs — no register writeback).
   or squashed by a fault.
 - **Not held:** the MEM2/WB register. It carries instructions *older* than the
   pending access to the commit point, and an older instruction must retire
-  while the access waits. A pending access drives that register to bubbles —
-  its MEM2 verdict does not commit — and a held load reaches a register
-  through the completion path above, never through MEM2/WB, so draining the
-  register is always correct. (A store reaches no register at all.)
+  while the access waits. A pending access drives that register to bubbles,
+  and a held load reaches a register through the completion path above,
+  never through MEM2/WB, so draining the register is always correct. (A
+  store reaches no register at all; a cacheable store passes through this
+  one as it parks, ahead of its write.)
 
 The MEM2/WB register's only back-pressure is a genuine downstream stall: the
 commit stage holding for a multi-cycle writeback (the divmul dual-register

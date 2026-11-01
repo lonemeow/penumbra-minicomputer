@@ -6,8 +6,9 @@
 // L1-D's (hit, word, victim way) -- and produces the writeback: sub-word
 // extract for a load hit, the fault merge for the commit point, and the L1's
 // store strobe. A load the L1 cannot serve (a miss, or an uncacheable page)
-// is parked in penumbra3_mem_completion as it leaves; that unit asks the
-// uncore for it, installs the line, and writes the register back later.
+// and every store are parked in penumbra3_mem_completion as they leave; that
+// unit asks the uncore for a load's data or a store's write, installs a
+// load's line, and writes a load's register back later.
 //
 // The back-end stall is the whole point: the only thing that holds the pipe is
 // the registered o_mem_pending out of the hold buffer, distributed by the
@@ -15,7 +16,7 @@
 //
 // The spine holds a slot in MEM2 in two ways: behind a parked access
 // (o_mem_pending) and under WB back-pressure. Either way the slot's verdict
-// stands every cycle it waits, and its effects -- the commit to WB, the park,
+// stands every cycle it waits, and its effects -- the move into WB, the park,
 // the L1 write -- happen once, in the cycle it leaves (mem2_fire).
 
 module penumbra3_mem2_stage
@@ -67,12 +68,13 @@ module penumbra3_mem2_stage
     input  logic [31:0]    i_sys_rdata,
 
     // -- Core-to-uncore port, data side ---------------------------
-    // doc/internals/penumbra3/uncore-port.md. Reads only: a store's write
-    // does not leave the core yet.
+    // doc/internals/penumbra3/uncore-port.md
     output logic           o_dreq_valid,
     output logic           o_dreq_cacheable,
     output logic [31:0]    o_dreq_addr,
+    output logic           o_dreq_we,
     output logic [3:0]     o_dreq_byte_en,
+    output logic [31:0]    o_dreq_wdata,
     input  logic           i_drsp_done,
     input  logic           i_rsp_fault,
     input  logic [UNCORE_LINE_WORDS-1:0][31:0] i_rsp_line,
@@ -80,6 +82,7 @@ module penumbra3_mem2_stage
     // -- Back-end hold + completion (to the spine) ----------------
     output logic                  o_mem_pending,
     output logic                  o_complete,
+    output logic                  o_complete_we,     // with o_complete: a load
     output logic [SB_IDX_W-1:0]   o_complete_dest,
     output logic [31:0]           o_complete_value,
     output logic                  o_complete_fault,
@@ -160,21 +163,61 @@ module penumbra3_mem2_stage
         end
     end
 
-    // -- Back-end load verdict -> completion unit -----------------
+    // -- What a slot leaving MEM2 does -----------------------------
     // The L1's hit serves a load whatever its page's cacheability: a line is
     // resident for an uncacheable mapping only if software changed the page's
     // cacheability without invalidating (doc/system/mmu.md, "Uncached
-    // Access"). A slot that fires either commits to WB or, a load the L1 did
-    // not serve, parks; both key off the one load_miss, so they never
-    // disagree.
-    logic ld_valid, load_miss, mem2_commits;
-    assign ld_valid     = mem2_is_load & ~mem2_fault;
-    assign load_miss    = ld_valid & ~i_dcache_hit;
-    assign mem2_commits = mem2_fire & ~load_miss;
+    // Access").
+    //
+    // A fired slot (mem2_fire) is an instruction and, for a load or a store,
+    // an access. Each leaves MEM2 its own way:
+    //   mem2_retires  the instruction: the MEM2/WB register takes it and it
+    //                 retires at WB, carrying its fault if it has one; its
+    //                 retire needs nothing more from memory.
+    //   mem2_parks    the access: the completion unit takes it (i_park) and
+    //                 holds it until the uncore's done, asking for a load's
+    //                 data or a store's write, and reports the completion,
+    //                 fault and all, a cycle after the done.
+    // An instruction that does not retire here finishes with its access's
+    // completion.
+    // An access with an MMU-born fault asks memory for nothing. The rule for
+    // which completions may come after the instruction retires is
+    // doc/internals/penumbra3/memory-completion.md, "Fault precision".
+    logic mem2_parks, mem2_retires;
+    always_comb begin
+        mem2_retires = 1'b0;
+        mem2_parks   = 1'b0;
+
+        if (mem2_fire) begin
+            if (mem2_fault) begin
+                mem2_retires = 1'b1;
+                mem2_parks   = 1'b0;
+            end else if (mem2_is_load) begin
+                if (i_dcache_hit) begin
+                    mem2_retires = 1'b1;
+                    mem2_parks   = 1'b0;
+                end else begin
+                    mem2_retires = 1'b0;
+                    mem2_parks   = 1'b1;
+                end
+            end else if (mem2_is_store) begin
+                if (i_translate_cacheable) begin
+                    mem2_retires = 1'b1;
+                    mem2_parks   = 1'b1;
+                end else begin
+                    mem2_retires = 1'b0;
+                    mem2_parks   = 1'b1;
+                end
+            end else begin
+                mem2_retires = 1'b1;
+                mem2_parks   = 1'b0;
+            end
+        end
+    end
 
     logic [31:0] mc_complete_data;
     logic [1:0]  mc_complete_size, mc_complete_addr_lo;
-    logic        mc_complete_sign;
+    logic        mc_complete_sign, mc_pending_store;
 
     penumbra3_mem_completion #(
         .IDX_BITS   (SB_IDX_W),
@@ -183,20 +226,24 @@ module penumbra3_mem2_stage
     ) u_mem_completion (
         .i_clk              (i_clk),
         .i_rst              (i_rst),
-        .i_park             (mem2_fire & load_miss),
+        .i_park             (mem2_parks),
+        .i_access_we        (mem2_is_store),
+        .i_access_paddr     (i_translate_paddr),
+        .i_access_cacheable (i_translate_cacheable),
+        .i_access_byte_en   (i_byte_en),
+        .i_store_wdata      (i_store_wdata),
         .i_load_dest        (i_payload.phys_dst),
         .i_load_size        (i_bundle.mem_size),
         .i_load_sign        (i_bundle.sign_ext),
-        .i_load_paddr       (i_translate_paddr),
-        .i_load_cacheable   (i_translate_cacheable),
-        .i_load_byte_en     (i_byte_en),
         .i_victim_way       (i_dcache_victim_way),
         .i_l1_enabled       (i_dcache_enabled),
         .i_mem2_slot_mem    (mem2_is_load | mem2_is_store),
         .o_req_valid        (o_dreq_valid),
         .o_req_cacheable    (o_dreq_cacheable),
         .o_req_addr         (o_dreq_addr),
+        .o_req_we           (o_dreq_we),
         .o_req_byte_en      (o_dreq_byte_en),
+        .o_req_wdata        (o_dreq_wdata),
         .i_rsp_done         (i_drsp_done),
         .i_rsp_fault        (i_rsp_fault),
         .i_rsp_line         (i_rsp_line),
@@ -205,7 +252,9 @@ module penumbra3_mem2_stage
         .o_fill_paddr       (o_dcache_fill_paddr),
         .i_l1_extra_cycle   (i_dcache_extra_cycle),
         .o_mem_pending      (o_mem_pending),
+        .o_pending_store    (mc_pending_store),
         .o_complete         (o_complete),
+        .o_complete_we      (o_complete_we),
         .o_complete_dest    (o_complete_dest),
         .o_complete_data    (mc_complete_data),
         .o_complete_fault   (o_complete_fault),
@@ -269,24 +318,28 @@ module penumbra3_mem2_stage
 
     // The bubble WB gets while an access is parked is that access's, whatever
     // waits behind it in MEM2.
-    bcause_e mem2_bcause;
-    assign mem2_bcause = (o_mem_pending | load_miss) ? BCAUSE_LOAD
-                       : mem2_is_store                ? BCAUSE_STORE
-                       :                                i_bcause;
+    logic load_miss;
+    assign load_miss = mem2_is_load & ~mem2_fault & ~i_dcache_hit;
 
-    // Only the valid bit carries the commit decision. The bundle and payload
+    bcause_e mem2_bcause;
+    assign mem2_bcause = o_mem_pending ? (mc_pending_store ? BCAUSE_STORE : BCAUSE_LOAD)
+                       : load_miss     ? BCAUSE_LOAD
+                       : mem2_is_store ? BCAUSE_STORE
+                       :                 i_bcause;
+
+    // Only the valid bit carries the retire decision. The bundle and payload
     // load whenever MEM2 advances, and every consumer qualifies them with
-    // o_wb_valid, so their ~350 enables stay off the verdict: the load-miss
+    // o_wb_valid, so their ~350 enables stay off the verdict: the retire
     // decision behind them waits on the TLB permission check, cacheability
     // and the L1 hit. A parked access does not hold this register: it loads a
-    // bubble every cycle the slot behind the access waits, so what is older
-    // than the access drains to commit.
+    // bubble every cycle the slot behind the access waits, so what is ahead
+    // of that slot drains to retire.
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             o_wb_valid  <= 1'b0;
             o_wb_bcause <= BCAUSE_FLUSH;
         end else if (~i_hold) begin
-            o_wb_valid  <= mem2_commits;
+            o_wb_valid  <= mem2_retires;
             o_wb_bcause <= i_bubble ? BCAUSE_FLUSH : mem2_bcause;
         end
         if (~i_hold) begin
@@ -306,9 +359,16 @@ module penumbra3_mem2_stage
         assert (i_rst || !(i_hold && !i_launch_hold))
             else $error("penumbra3_mem2_stage: the MEM2/WB register is held and the slot in MEM2 is not");
 
+    // Every fired slot goes somewhere: one that neither retires nor parks
+    // is an instruction lost from the pipe.
+    always_comb
+        assert (i_rst || !mem2_fire || mem2_retires || mem2_parks)
+            else $error("penumbra3_mem2_stage: a fired slot neither retired nor parked");
+
     // A held MEM1/MEM2 register keeps its slot through a flush, so a fault
-    // commit must never find one held. Nothing commits while an access is
-    // parked, and WB holds MEM2 only for a divmul's second write, which is
+    // commit must never find one held. While an access is parked, WB sees
+    // bubbles, or a store that retired as its write parked, carrying no
+    // fault; and WB holds MEM2 only for a divmul's second write, which is
     // no fault commit.
     always_comb
         assert (i_rst || !(i_bubble && i_launch_hold))

@@ -100,11 +100,13 @@ module penumbra3_core
     output logic [3:0]            o_sys_wr_reg,
     output logic [31:0]           o_sys_wdata,
 
-    // ── Core-to-uncore port, data side (load completion <-> uncore) ──
+    // ── Core-to-uncore port, data side (completion unit <-> uncore) ──
     output logic                  o_dreq_valid,
     output logic                  o_dreq_cacheable,
     output logic [31:0]           o_dreq_addr,
+    output logic                  o_dreq_we,
     output logic [3:0]            o_dreq_byte_en,
+    output logic [31:0]           o_dreq_wdata,
     input  logic                  i_drsp_done,
     input  logic                  i_rsp_fault,
     input  logic [UNCORE_LINE_WORDS-1:0][31:0] i_rsp_line,
@@ -331,7 +333,8 @@ module penumbra3_core
         .o_sys_wdata(o_sys_wdata),
         // Core-to-uncore port, data side.
         .o_dreq_valid(o_dreq_valid), .o_dreq_cacheable(o_dreq_cacheable),
-        .o_dreq_addr(o_dreq_addr), .o_dreq_byte_en(o_dreq_byte_en),
+        .o_dreq_addr(o_dreq_addr), .o_dreq_we(o_dreq_we),
+        .o_dreq_byte_en(o_dreq_byte_en), .o_dreq_wdata(o_dreq_wdata),
         .i_drsp_done(i_drsp_done), .i_rsp_fault(i_rsp_fault), .i_rsp_line(i_rsp_line),
         // Branch resolution -> the front end.
         .o_branch_taken(branch_taken), .o_branch_target(branch_target),

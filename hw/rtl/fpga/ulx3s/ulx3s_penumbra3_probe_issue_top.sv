@@ -81,28 +81,30 @@ module ulx3s_penumbra3_probe_issue_top (
     penumbra3_mem_completion #(
         .IDX_BITS (IDX_BITS)
     ) u_mc (
-        .i_clk            (clk_25mhz),
-        .i_rst            (rst),
-        .i_park           (lfsr_q[15] & ~lfsr_q[16] & ~mem_pending),  // one at a time
-        .i_load_dest      (lfsr_q[21 +: IDX_BITS]),
-        .i_load_size      (lfsr_q[1:0]),
-        .i_load_sign      (lfsr_q[2]),
-        .i_load_paddr     (lfsr_q),
-        .i_load_cacheable (lfsr_q[5]),
-        .i_load_byte_en   (lfsr_q[9:6]),
-        .i_victim_way     (lfsr_q[10]),
-        .i_l1_enabled     (lfsr_q[11]),
-        .i_mem2_slot_mem  (lfsr_q[13]),
-        .i_l1_extra_cycle (lfsr_q[17]),
-        .o_req_valid      (req_valid),
-        .i_rsp_done       (lfsr_q[27] & req_valid),   // done only while a request is up
-        .i_rsp_fault      (lfsr_q[28]),
-        .i_rsp_line       ({4{lfsr_q}}),
-        .o_mem_pending    (mem_pending),
-        .o_complete       (complete),
-        .o_complete_dest  (complete_dest),
-        .o_complete_data  (complete_data),
-        .o_complete_fault (complete_fault)
+        .i_clk              (clk_25mhz),
+        .i_rst              (rst),
+        .i_park             (lfsr_q[15] & ~lfsr_q[16] & ~mem_pending),  // one at a time
+        .i_access_we        (lfsr_q[4]),
+        .i_access_paddr     (lfsr_q),
+        .i_access_cacheable (lfsr_q[5]),
+        .i_access_byte_en   (lfsr_q[9:6]),
+        .i_store_wdata      (~lfsr_q),
+        .i_load_dest        (lfsr_q[21 +: IDX_BITS]),
+        .i_load_size        (lfsr_q[1:0]),
+        .i_load_sign        (lfsr_q[2]),
+        .i_victim_way       (lfsr_q[10]),
+        .i_l1_enabled       (lfsr_q[11]),
+        .i_mem2_slot_mem    (lfsr_q[13]),
+        .i_l1_extra_cycle   (lfsr_q[17]),
+        .o_req_valid        (req_valid),
+        .i_rsp_done         (lfsr_q[27] & req_valid),  // done only while a request is up
+        .i_rsp_fault        (lfsr_q[28]),
+        .i_rsp_line         ({4{lfsr_q}}),
+        .o_mem_pending      (mem_pending),
+        .o_complete         (complete),
+        .o_complete_dest    (complete_dest),
+        .o_complete_data    (complete_data),
+        .o_complete_fault   (complete_fault)
     );
 
     // Issue gate (the cone under test).

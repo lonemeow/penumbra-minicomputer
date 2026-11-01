@@ -291,11 +291,11 @@ module ulx3s_penumbra3_probe_l1tag_top (
     );
 
     // ── MEM2: resolve, hold buffer, MEM2/WB register ─────────────
-    logic           mem_pending, complete, complete_fault;
+    logic           mem_pending, complete, complete_we, complete_fault;
     logic [31:0]    complete_value;
     logic [SB_IDX_W-1:0] complete_dest;
-    logic           dreq_valid, dreq_cacheable, drsp_done_q;
-    logic [31:0]    dreq_addr;
+    logic           dreq_valid, dreq_cacheable, dreq_we, drsp_done_q;
+    logic [31:0]    dreq_addr, dreq_wdata;
     logic [3:0]     dreq_byte_en;
     ctrl_bundle_t   wb_bundle;
     dpath_payload_t wb_payload;
@@ -337,12 +337,15 @@ module ulx3s_penumbra3_probe_l1tag_top (
         .o_dreq_valid           (dreq_valid),
         .o_dreq_cacheable       (dreq_cacheable),
         .o_dreq_addr            (dreq_addr),
+        .o_dreq_we              (dreq_we),
         .o_dreq_byte_en         (dreq_byte_en),
+        .o_dreq_wdata           (dreq_wdata),
         .i_drsp_done            (drsp_done_q),
         .i_rsp_fault            (lfsr_q[1] && lfsr_q[21] && lfsr_q[43]),
         .i_rsp_line             (fill_line),
         .o_mem_pending          (mem_pending),
         .o_complete             (complete),
+        .o_complete_we          (complete_we),
         .o_complete_dest        (complete_dest),
         .o_complete_value       (complete_value),
         .o_complete_fault       (complete_fault),
@@ -595,8 +598,10 @@ module ulx3s_penumbra3_probe_l1tag_top (
     always_ff @(posedge clk) begin
         fold_q[0] <= fbuf_deq_valid ^ (^fbuf_deq_data);
         fold_q[1] <= wb_valid ^ (^wb_payload) ^ (^wb_bundle) ^ (^wb_bcause);
-        fold_q[2] <= complete ^ complete_fault ^ (^complete_dest) ^ (^complete_value);
-        fold_q[3] <= dreq_valid ^ dreq_cacheable ^ (^dreq_addr) ^ (^dreq_byte_en);
+        fold_q[2] <= complete ^ complete_we ^ complete_fault ^ (^complete_dest)
+                  ^ (^complete_value);
+        fold_q[3] <= dreq_valid ^ dreq_cacheable ^ dreq_we ^ (^dreq_addr)
+                  ^ (^dreq_byte_en) ^ (^dreq_wdata);
         fold_q[4] <= ^pc_q;
         fold_q[5] <= ^ras_top;
         fold_q[6] <= ^{dl1_sys_rdata, il1_sys_rdata};

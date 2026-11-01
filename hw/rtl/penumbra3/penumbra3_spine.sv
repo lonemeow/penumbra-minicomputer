@@ -85,11 +85,13 @@ module penumbra3_spine
     output logic [3:0]            o_sys_wr_reg,
     output logic [31:0]           o_sys_wdata,
 
-    // ── Core-to-uncore port, data side (load completion <-> uncore) ──
+    // ── Core-to-uncore port, data side (completion unit <-> uncore) ──
     output logic                  o_dreq_valid,
     output logic                  o_dreq_cacheable,
     output logic [31:0]           o_dreq_addr,
+    output logic                  o_dreq_we,
     output logic [3:0]            o_dreq_byte_en,
+    output logic [31:0]           o_dreq_wdata,
     input  logic                  i_drsp_done,
     input  logic                  i_rsp_fault,
     input  logic [UNCORE_LINE_WORDS-1:0][31:0] i_rsp_line,
@@ -181,7 +183,7 @@ module penumbra3_spine
     logic [31:0]         mem2_fwd_result;
     logic [SB_IDX_W-1:0] mem2_fwd_dst;
     logic                mem2_fwd_we, mem2_fwd_valid;
-    logic                mc_complete, mc_complete_fault;
+    logic                mc_complete, mc_complete_we, mc_complete_fault;
     logic [SB_IDX_W-1:0] mc_complete_dest;
     logic [31:0]         mc_complete_value;
     logic                mem_pending;
@@ -341,13 +343,14 @@ module penumbra3_spine
     // ════════════════════════════════════════════════════════════
     // Register file (ID reads; WB commit + load completion write)
     // ════════════════════════════════════════════════════════════
-    // One write port, muxed between the WB commit and a completed (missed) load.
-    // They are temporally exclusive: while a load is pending the MEM2/WB
-    // register drains to bubbles, so no WB commit coincides with o_complete.
+    // One write port, muxed between the WB commit and a parked load's
+    // completion; a store's completion writes no register. They are
+    // temporally exclusive: while an access is pending the MEM2/WB register
+    // drains to bubbles, so no WB commit coincides with o_complete.
     logic [SB_IDX_W-1:0] rf_rd_idx_a, rf_rd_idx_b, rf_wr_idx;
     logic [31:0]         rf_rd_data_a, rf_rd_data_b, rf_wr_data;
     logic                rf_wr_en;
-    assign rf_wr_en   = mc_complete ? ~mc_complete_fault : wb_regfile_we;
+    assign rf_wr_en   = mc_complete ? mc_complete_we & ~mc_complete_fault : wb_regfile_we;
     assign rf_wr_idx  = mc_complete ? mc_complete_dest   : wb_regfile_idx;
     assign rf_wr_data = mc_complete ? mc_complete_value  : wb_regfile_data;
 
@@ -373,7 +376,7 @@ module penumbra3_spine
     logic                aux_wb_cycle;
     assign aux_wb_cycle = mem2wb_valid & ~wb_insn_committed & wb_regfile_we;
     always_comb begin
-        if (mc_complete) begin
+        if (mc_complete & mc_complete_we) begin
             sb_clr_en  = 1'b1;
             sb_clr_idx = mc_complete_dest;
         end else if (aux_wb_cycle) begin
@@ -505,10 +508,12 @@ module penumbra3_spine
         .i_dcache_extra_cycle(i_dcache_extra_cycle),
         .i_sys_rdata(i_sys_rdata),
         .o_dreq_valid(o_dreq_valid), .o_dreq_cacheable(o_dreq_cacheable),
-        .o_dreq_addr(o_dreq_addr), .o_dreq_byte_en(o_dreq_byte_en),
+        .o_dreq_addr(o_dreq_addr), .o_dreq_we(o_dreq_we),
+        .o_dreq_byte_en(o_dreq_byte_en), .o_dreq_wdata(o_dreq_wdata),
         .i_drsp_done(i_drsp_done), .i_rsp_fault(i_rsp_fault), .i_rsp_line(i_rsp_line),
         .o_mem_pending(mem_pending),
-        .o_complete(mc_complete), .o_complete_dest(mc_complete_dest),
+        .o_complete(mc_complete), .o_complete_we(mc_complete_we),
+        .o_complete_dest(mc_complete_dest),
         .o_complete_value(mc_complete_value), .o_complete_fault(mc_complete_fault),
         .o_fwd_result(mem2_fwd_result), .o_fwd_dst(mem2_fwd_dst),
         .o_fwd_we(mem2_fwd_we), .o_fwd_valid(mem2_fwd_valid),
