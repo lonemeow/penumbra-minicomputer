@@ -34,6 +34,7 @@ static int		ncolors = 8;
 static int		blocks_ok = 1;
 static int		row_offset;	/* rows above the picture */
 static int		pic_rows;	/* rows the picture occupies */
+static int		scroll_region;	/* a region is set and must be lifted */
 static volatile sig_atomic_t interrupted;
 
 /*
@@ -332,9 +333,31 @@ dterm_reset(void)
 	fputs("\033[0m", stdout);
 }
 
+char *
+dterm_scroll_region(char *out, int rows)
+{
+	const struct seq *t = &dec_seq[(row_offset + 1) & (DT_NCOLORS - 1)];
+	const struct seq *b = &dec_seq[(row_offset + rows) & (DT_NCOLORS - 1)];
+
+	*out++ = '\033';
+	*out++ = '[';
+	memcpy(out, t->s, t->len); out += t->len;
+	*out++ = ';';
+	memcpy(out, b->s, b->len); out += b->len;
+	*out++ = 'r';
+	scroll_region = 1;
+	return out;
+}
+
 void
 dterm_end(void)
 {
+	/* A region left in place would trap the shell's own scrolling
+	 * inside the picture's rows. */
+	if (scroll_region) {
+		fputs("\033[r", stdout);
+		scroll_region = 0;
+	}
 	/* Land on the picture's last row and step off it, which scrolls by
 	 * one when the picture reaches the bottom of the screen. */
 	printf("\033[0m\033[%d;1H\n", row_offset + pic_rows);

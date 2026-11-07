@@ -51,7 +51,7 @@ OBJDIR      := $(BUILDDIR)/obj
 # MATH_DEMOS additionally need libm, for sin() while building a lookup
 # table at startup.
 
-DEMOS       := mandelbrot julia plasma lorenz shadebobs penumbra-text
+DEMOS       := mandelbrot julia plasma lorenz shadebobs penumbra-text life1d
 MATH_DEMOS  := plasma shadebobs penumbra-text
 
 SHARED_OBJS := $(OBJDIR)/demo.o $(OBJDIR)/dterm.o $(OBJDIR)/fractal.o \

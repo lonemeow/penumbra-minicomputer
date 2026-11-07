@@ -89,9 +89,18 @@ void	dterm_home(void);
 void	dterm_reset(void);
 
 /*
- * Finish with the picture: attributes off and the cursor parked on the
- * line below it, so whatever a demo prints on the way out starts on a
- * clean line instead of wherever the last cell happened to land.
+ * Confine the terminal's scrolling to the picture's first `rows' rows,
+ * so a newline on the last of them moves the picture up a line and
+ * leaves the rows reserved above and below it alone.  Setting a region
+ * homes the cursor.  dterm_end lifts it again.
+ */
+char   *dterm_scroll_region(char *out, int rows);
+
+/*
+ * Finish with the picture: attributes off, any scroll region lifted,
+ * and the cursor parked on the line below it, so whatever a demo
+ * prints on the way out starts on a clean line instead of wherever the
+ * last cell happened to land.
  */
 void	dterm_end(void);
 
