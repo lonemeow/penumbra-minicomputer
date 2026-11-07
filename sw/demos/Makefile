@@ -78,11 +78,21 @@ $(BUILDDIR) $(OBJDIR):
 # every build and the next one recompiles everything.
 .SECONDARY:
 
-$(OBJDIR)/%.o: %.c | $(OBJDIR)
-	$(CC) $(CFLAGS) -c $< -o $@
+# The compiler lists the headers each object includes, beside the
+# object, so changing a header rebuilds every object that uses it.  A
+# header shared by all the demos would otherwise leave objects compiled
+# against two versions of it linked into one binary — with demo.h, two
+# layouts of the struct demo_main reads.  -MP keeps a header that is
+# later deleted from failing the build.
+DEPFLAGS    := -MMD -MP
 
-$(OBJDIR)/perfctr.o: $(BENCHDIR)/perfctr.c $(BENCHDIR)/perfctr.h | $(OBJDIR)
-	$(CC) $(CFLAGS) -c $< -o $@
+$(OBJDIR)/%.o: %.c | $(OBJDIR)
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
+
+$(OBJDIR)/perfctr.o: $(BENCHDIR)/perfctr.c | $(OBJDIR)
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
+
+-include $(wildcard $(OBJDIR)/*.d)
 
 # One pair of link rules covers every demo; $(if ...) adds libm only
 # where a startup table needs it, so a new demo is a name in DEMOS.
