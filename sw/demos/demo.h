@@ -112,6 +112,13 @@ struct demo {
 	/* Printed after the runtime's own options in a usage message. */
 	const char	*usage_tail;
 
+	/*
+	 * What the demo's own arguments mean, printed by -h/--help below
+	 * the runtime's: lines indented two spaces, as the runtime's are.
+	 * NULL where the synopsis in usage_tail says everything.
+	 */
+	const char	*help;
+
 	/* Handed to every callback; the runtime never looks inside. */
 	void		*state;
 };

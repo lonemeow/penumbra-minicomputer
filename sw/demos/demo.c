@@ -305,14 +305,47 @@ struct demo_opts {
 };
 
 static void
-usage(const char *prog, const struct demo *d)
+usage(FILE *f, const char *prog, const struct demo *d)
 {
-	fprintf(stderr,
+	fprintf(f,
 	    "usage: %s [-b|--blocks | -m|--mono | -f|--fb [DEV]]\n"
 	    "       %*s [-s|--size WxH] [-H|--hold SECONDS]\n"
 	    "       %*s [-t|--run-for SECONDS]%s%s\n",
 	    prog, (int)strlen(prog), "", (int)strlen(prog), "",
 	    d->usage_tail ? " " : "", d->usage_tail ? d->usage_tail : "");
+}
+
+/*
+ * The synopsis alone names the options without saying what they do,
+ * which is what someone asking for help has forgotten.  Of -H and -t,
+ * only the one this kind of demo uses is described; the synopsis keeps
+ * both, since the parser accepts both.
+ */
+static void
+help(const char *prog, const struct demo *d, int one_shot)
+{
+	usage(stdout, prog, d);
+	printf("\n"
+	    "Surface options, given before the demo's own:\n"
+	    "  -f, --fb [DEV]         the framebuffer: stdout's display, "
+	    "or DEV\n"
+	    "  -b, -c, --blocks, --color\n"
+	    "                         the terminal, in colour half-blocks\n"
+	    "  -m, --mono             the terminal, in plain characters\n"
+	    "  -s, --size WxH         picture size on the terminal, "
+	    "in cells\n");
+	if (one_shot)
+		printf("  -H, --hold SECONDS     how long the finished picture "
+		    "stays (0: until a key)\n");
+	else
+		printf("  -t, --run-for SECONDS  stop after this long "
+		    "(0: until a key)\n");
+	printf("  -h, --help             this help\n"
+	    "\n"
+	    "Without a surface option the framebuffer is used where stdout "
+	    "has one.\n");
+	if (d->help != NULL)
+		printf("\n%s options:\n%s", d->name, d->help);
 }
 
 /*
@@ -470,9 +503,20 @@ demo_main(int argc, char **argv, const struct demo *d)
 	memset(&o, 0, sizeof(o));
 	memset(&s, 0, sizeof(s));
 
+	/* Honoured anywhere on the line, not only among the runtime's own
+	 * options: whoever asks for help is the one who does not remember
+	 * which options go where. */
+	for (int i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "-h") == 0 ||
+		    strcmp(argv[i], "--help") == 0) {
+			help(argv[0], d, one_shot);
+			return 0;
+		}
+	}
+
 	argi = parse_opts(argc, argv, &o);
 	if (argi < 0) {
-		usage(argv[0], d);
+		usage(stderr, argv[0], d);
 		return 2;
 	}
 	if (d->parse != NULL &&
