@@ -8,6 +8,12 @@ module machine_penumbra3
 #(
     parameter logic [31:0] RESET_PC        = 32'hFFFF_0000,
 
+    // Cache geometry: the board's, sized to its block RAM; software reads
+    // it from each cache's INFO. An L1 way is one page.
+    parameter int          L1_WAYS         = 2,
+    parameter int          L2_SETS         = 1024,
+    parameter int          L2_WAYS         = 4,
+
     // Machine identity (SYSDEV_MACH): the board's, which the wrapper or
     // board top supplies. The defaults describe an unnamed machine at an
     // unknown clock.
@@ -65,7 +71,6 @@ module machine_penumbra3
     output logic                  o_prog_end
 );
 
-    localparam int L1_WAYS    = 2;                     // 8 KB at a page a way
     localparam int TLB_WAYS   = 2;
     localparam int FRAMES     = TLB_WAYS + 1;          // the MMU's candidates
     localparam int LINE_BYTES = UNCORE_LINE_WORDS * 4;
@@ -391,7 +396,13 @@ module machine_penumbra3
         .o_sys_rdata            (dl1_sys_rdata)
     );
 
-    penumbra3_uncore u_uncore (
+    logic        l2_sys_we, l2_sys_re;
+    logic [31:0] l2_sys_rdata;
+
+    penumbra3_uncore #(
+        .SETS (L2_SETS),
+        .WAYS (L2_WAYS)
+    ) u_uncore (
         .i_clk              (i_clk),
         .i_rst              (i_rst),
         .i_ireq_valid       (ireq_valid),
@@ -409,6 +420,11 @@ module machine_penumbra3
         .o_rsp_line         (rsp_line),
         .o_store_fault      (rsp_store_fault),
         .o_store_fault_addr (rsp_store_fault_addr),
+        .i_sys_reg          (sys_reg_sel),
+        .i_sys_wdata        (sys_wdata),
+        .i_sys_we           (l2_sys_we),
+        .i_sys_re           (l2_sys_re),
+        .o_sys_rdata        (l2_sys_rdata),
         .o_bus_addr         (o_bus_addr),
         .o_bus_wdata        (o_bus_wdata),
         .o_bus_byte_en      (o_bus_byte_en),
@@ -427,11 +443,13 @@ module machine_penumbra3
     assign mmu_sys_we    = sys_we && (sys_wr_dev == SYSDEV_MMU);
     assign dl1_sys_we    = sys_we && (sys_wr_dev == SYSDEV_L1_DCACHE);
     assign il1_sys_we    = sys_we && (sys_wr_dev == SYSDEV_L1_ICACHE);
+    assign l2_sys_we     = sys_we && (sys_wr_dev == SYSDEV_L2_CACHE);
     assign timer_sys_we  = sys_we && (sys_wr_dev == SYSDEV_TIMER);
     assign busctl_sys_we = sys_we && (sys_wr_dev == SYSDEV_BUS);
     assign mmu_sys_re    = sys_re && (sys_dev == SYSDEV_MMU);
     assign dl1_sys_re    = sys_re && (sys_dev == SYSDEV_L1_DCACHE);
     assign il1_sys_re    = sys_re && (sys_dev == SYSDEV_L1_ICACHE);
+    assign l2_sys_re     = sys_re && (sys_dev == SYSDEV_L2_CACHE);
 
     // A WRSYS commits into an empty pipe, so no read is in flight with it
     // (asserted below), and one selector serves both.
@@ -533,10 +551,10 @@ module machine_penumbra3
     );
 
     // ── Read response ────────────────────────────────────────────
-    // The MMU and the L1s answer a cycle after the read, from the register
-    // they latch with it. The other devices answer in the read's cycle, so
-    // their answer is registered then, and the device read picks between
-    // the two. The L2 and every unassigned device read 0.
+    // The MMU, the L1s and the L2 answer a cycle after the read, from the
+    // register they latch with it. The other devices answer in the read's
+    // cycle, so their answer is registered then, and the device read picks
+    // between the two. Every unassigned device reads 0.
     logic [31:0] now_rdata, now_rdata_q;
     logic [3:0]  rd_dev_q;
 
@@ -564,6 +582,7 @@ module machine_penumbra3
             SYSDEV_MMU:       sys_rdata = mmu_sys_rdata;
             SYSDEV_L1_DCACHE: sys_rdata = dl1_sys_rdata;
             SYSDEV_L1_ICACHE: sys_rdata = il1_sys_rdata;
+            SYSDEV_L2_CACHE:  sys_rdata = l2_sys_rdata;
             default:          sys_rdata = now_rdata_q;
         endcase
     end

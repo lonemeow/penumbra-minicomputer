@@ -321,7 +321,8 @@ rom.ld ──────────────────┘
   jumps; off by default because some OS tests probe address 0).
   `+core=` picks the hardware generation the ISS presents, spelled as
   `make CORE=` spells it (`penumbra1` by default, `penumbra2`,
-  `penumbra2_5`): its CPU name and the geometry its caches report.
+  `penumbra2_5`, `penumbra3`): its CPU name and the geometry its caches
+  report.
   The table is `sw/sim/penumbra_cores.h`; a generation's cache or
   TLB geometry, CPU name or multiplier step changing in RTL has to
   change there too.

@@ -34,14 +34,18 @@ def cache_info(sets, ways, line_bytes, vipt):
 # cache_vipt instances at their defaults (64 sets, direct-mapped, 16-byte
 # lines) and cpuid's default name "Penumbra/1".  penumbra2 and penumbra2_5:
 # machine_penumbra2's cache_bram_vipt pair (4 KiB, 2 ways), with the name
-# tagging the variant.  Every generation shares l2_cache's defaults.
+# tagging the variant.  penumbra3: machine_penumbra3's defaults, two
+# penumbra3_l1 instances of 2 ways at a page a way, and its uncore's L2 at
+# l2_cache's geometry.  Every earlier generation shares l2_cache's defaults.
 L2_INFO = cache_info(1024, 4, 16, vipt=False)
 PENUMBRA1_L1 = cache_info(64, 1, 16, vipt=True)
 PENUMBRA2_L1 = cache_info(128, 2, 16, vipt=True)
+PENUMBRA3_L1 = cache_info(256, 2, 16, vipt=True)
 CORE_IDENTITY = {
     "penumbra1":   {2: 0x0000312F, 3: PENUMBRA1_L1, 4: PENUMBRA1_L1, 5: L2_INFO},
     "penumbra2":   {2: 0x0000322F, 3: PENUMBRA2_L1, 4: PENUMBRA2_L1, 5: L2_INFO},
     "penumbra2_5": {2: 0x352E322F, 3: PENUMBRA2_L1, 4: PENUMBRA2_L1, 5: L2_INFO},
+    "penumbra3":   {2: 0x0000332F, 3: PENUMBRA3_L1, 4: PENUMBRA3_L1, 5: L2_INFO},
 }
 CTRL_READBACK = {6: 0, 7: 1}
 

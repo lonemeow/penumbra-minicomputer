@@ -230,11 +230,11 @@ RUNNER_TBS_penumbra2      = tb_penumbra2_prog tb_penumbra2_intr
 # assert. A forwarding/predicting variant changes them, so it drops it (below).
 RUNNER_PROVIDES_penumbra2 = mmu mmu-d mmu-i cache l2 wrspr machid perfctr timer irq uart bus bus-fault pinned-stalls
 
-# The gen3 machine's uncore has no L2. Its pipeline is not gen2's, so the
-# stall counts gen2's perfctr tests pin (pinned-stalls) are not its own.
+# gen3's pipeline is not gen2's, so the stall counts gen2's perfctr tests
+# pin (pinned-stalls) are not its own.
 RUNNER_MOD_penumbra3      = machine_penumbra3_sim
 RUNNER_TBS_penumbra3      = tb_penumbra3_prog
-RUNNER_PROVIDES_penumbra3 = mmu mmu-d mmu-i cache wrspr machid perfctr timer irq uart bus bus-fault
+RUNNER_PROVIDES_penumbra3 = mmu mmu-d mmu-i cache l2 wrspr machid perfctr timer irq uart bus bus-fault
 
 # Runner config keys on the base generation, so a variant inherits the
 # DUT wrapper, testbenches, and capability set unchanged. A variant whose

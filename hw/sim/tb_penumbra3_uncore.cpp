@@ -1,26 +1,37 @@
-// Verilator testbench for penumbra3_uncore (the gen3 uncore with no L2).
+// Verilator testbench for penumbra3_uncore.
 //
-// Plays both L1s as requesters on the core-to-uncore port and a bus slave
-// at the external bus, and checks the contract in
-// doc/internals/penumbra3/uncore-port.md and
-// doc/internals/penumbra3/machine.md ("The uncore with no L2"):
-//   - what each transaction puts on the bus: a line read's four whole-word
-//     reads from the line's address, in order and back to back; a word
-//     read, a word write and a cacheable write each one access, with its
-//     address and byte lanes as they are; a fetch reading all four lanes
-//   - what comes back: the line, or the bus word in word 0; the fault with
-//     the done, any of a line read's four; a cacheable write's done with no
-//     fault and, when the bus faulted it, a store fault with its address
-//     in the same cycle
+// Plays both L1s as requesters on the core-to-uncore port, a bus slave with
+// a memory at the external bus, and software at the L2's cache device, and
+// checks the contract in doc/internals/penumbra3/uncore-port.md and
+// doc/internals/penumbra3/uncore.md:
+//   - with the L2 disabled, what each transaction puts on the bus: a line
+//     read's four whole-word reads from the line's address, in order and
+//     back to back; a word read and a word write one access each, with
+//     its address and byte lanes as they are; a fetch reading all four
+//     lanes; what comes back, and the faults
+//   - a cacheable write posted: its done before its bus write, no fault on
+//     the done, and a bus fault as a store fault with its address after it
+//   - the posted write ahead of every later bus access, and a second
+//     cacheable write behind the first
 //   - the handshake: the done never in the cycle a request rises, one done
-//     at a time, the data side first when both wait, and a request held
-//     through its done never taken twice
+//     a cycle, the data side first when both wait, a request held through
+//     its done never taken twice
+//   - with the L2 enabled: a miss's line installed and served at i+2 to
+//     either side; a write hit's bytes merged into the line; a write miss
+//     installing nothing; uncacheable accesses never served from the L2; a
+//     faulted read installing nothing; the lowest invalid way filled
+//     first, then the tree-PLRU victim; two sides' hits back to back; a
+//     hit dropped under a miss and served after it
+//   - the cache device: INFO, CTRL, STATUS through the walk after reset
+//     and after INVAL_ALL, accesses passing through during a walk, and the
+//     counters counting each lookup once
 //
 // The slave acks each access LAT cycles after it is presented and faults
 // any address in the 0xFFFE0000 page.
 
 #include <cstdio>
 #include <cstdint>
+#include <map>
 #include <vector>
 #include "Vpenumbra3_uncore.h"
 #include "verilated.h"
@@ -34,10 +45,18 @@ static void check(const char* n, uint32_t g, uint32_t e) {
     if (g != e) { printf("  FAIL [%s]: got 0x%X, expected 0x%X\n", n, g, e); errors++; }
 }
 
-// ── The bus slave ────────────────────────────────────────────────
+// The L2's geometry at the module's defaults, and the cache device's
+// registers (penumbra_pkg).
+enum { SETS = 1024, WAYS = 4, SET_STRIDE = SETS * 16 };
+enum { REG_INFO = 0, REG_CTRL = 1, REG_INVAL_ALL = 2, REG_STATUS = 6,
+       REG_READ_HITS = 10, REG_READ_MISSES = 11, REG_WRITE_HITS = 12,
+       REG_WRITE_MISSES = 13 };
+
+// ── The bus slave and its memory ─────────────────────────────────
 static const int LAT = 2;
 struct Beat { uint32_t addr; int we; uint32_t be, wdata; };
 static std::vector<Beat> beats;
+static std::map<uint32_t, uint32_t> ram;
 static int waited;
 // Strobe cycles, and the first and last cycle with a strobe: a burst with
 // no gap presents an access on every cycle from its first to its last.
@@ -47,12 +66,27 @@ static int gaps() {
 }
 
 static bool     faults(uint32_t a) { return (a >> 16) == 0xFFFE; }
-static uint32_t mem(uint32_t a)    { return 0xC0DE0000u ^ (a & ~3u); }
+static uint32_t mem(uint32_t a) {
+    a &= ~3u;
+    auto it = ram.find(a);
+    return it == ram.end() ? (0xC0DE0000u ^ a) : it->second;
+}
+static void mem_write(uint32_t a, uint32_t be, uint32_t data) {
+    uint32_t v = mem(a);
+    for (int b = 0; b < 4; b++)
+        if (be >> b & 1) v = (v & ~(0xFFu << 8 * b)) | (data & (0xFFu << 8 * b));
+    ram[a & ~3u] = v;
+}
+
+// Store faults seen, wherever they come.
+static int      store_faults;
+static uint32_t store_fault_addr;
 
 // The slave, for the cycle a clock edge has just begun.
 static void bus() {
     d->i_bus_ack = 0; d->i_bus_fault = 0; d->i_bus_rdata = 0;
     cycle++;
+    if (d->o_store_fault) { store_faults++; store_fault_addr = d->o_store_fault_addr; }
     if (d->o_bus_re || d->o_bus_we) {
         strobed++;
         if (first_strobe < 0) first_strobe = cycle;
@@ -63,6 +97,7 @@ static void bus() {
             d->i_bus_ack = 1;
             d->i_bus_fault = faults(a);
             d->i_bus_rdata = mem(a);
+            if (d->o_bus_we && !faults(a)) mem_write(a, d->o_bus_byte_en, d->o_bus_wdata);
             beats.push_back({a, d->o_bus_we, d->o_bus_byte_en, d->o_bus_wdata});
         }
     } else {
@@ -84,6 +119,19 @@ static void idle() {
     d->eval();
 }
 
+// ── Software at the cache device ─────────────────────────────────
+static void sys_write(int reg, uint32_t v) {
+    d->i_sys_reg = reg; d->i_sys_wdata = v; d->i_sys_we = 1; d->eval();
+    tick();
+    d->i_sys_we = 0; d->eval();
+}
+static uint32_t sys_read(int reg) {
+    d->i_sys_reg = reg; d->i_sys_re = 1; d->eval();
+    tick();
+    d->i_sys_re = 0; d->eval();
+    return d->o_sys_rdata;                  // a cycle after the read
+}
+
 // ── A requester ──────────────────────────────────────────────────
 // What a transaction's done showed, and how it got there.
 struct Done {
@@ -91,26 +139,24 @@ struct Done {
     int      other = 0;         // the other side's done meanwhile
     int      fault = 0;
     uint32_t line[4] = {0, 0, 0, 0};
-    int      store_fault = 0;
-    uint32_t store_fault_addr = 0;
-    int      store_fault_early = 0;  // a store fault before the done
+    int      store_fault_early = 0;  // a store fault up to the done
+    size_t   beats_at_done = 0;      // bus accesses completed by the done
 };
 
 // Raise a request in this cycle and hold it through its done; leaves the
 // DUT in the cycle after the done with the request dropped.
 static Done hold_to_done(bool dside) {
     Done r;
-    for (int c = 0; c < 200; c++) {
+    for (int c = 0; c < 300; c++) {
         bool done  = dside ? d->o_drsp_done : d->o_irsp_done;
         bool other = dside ? d->o_irsp_done : d->o_drsp_done;
         r.other += other;
-        if (d->o_store_fault && !done) r.store_fault_early = 1;
+        if (d->o_store_fault) r.store_fault_early = 1;
         if (done) {
             r.cycles = c;
             r.fault = d->o_rsp_fault;
             for (int k = 0; k < 4; k++) r.line[k] = d->o_rsp_line[k];
-            r.store_fault = d->o_store_fault;
-            r.store_fault_addr = d->o_store_fault_addr;
+            r.beats_at_done = beats.size();
             tick();
             idle();
             return r;
@@ -126,6 +172,8 @@ static Done dreq(bool cacheable, uint32_t addr, bool we, uint32_t be, uint32_t w
     d->eval();
     return hold_to_done(true);
 }
+static Done dread(uint32_t addr)  { return dreq(true, addr, false, 0xF, 0); }
+static Done dwrite(uint32_t addr, uint32_t be, uint32_t v) { return dreq(true, addr, true, be, v); }
 
 static Done ireq(bool cacheable, uint32_t addr) {
     d->i_ireq_valid = 1; d->i_ireq_cacheable = cacheable; d->i_ireq_addr = addr;
@@ -133,22 +181,39 @@ static Done ireq(bool cacheable, uint32_t addr) {
     return hold_to_done(false);
 }
 
+// Let a posted write drain, then forget the bus's history.
 static void settle() {
     idle();
-    for (int i = 0; i < 4; i++) tick();
+    for (int i = 0; i < 16; i++) tick();
     beats.clear();
     strobed = 0; first_strobe = last_strobe = -1;
+    store_faults = 0;
 }
+
+static void check_line(const char* tag, const Done& r, uint32_t line_addr) {
+    for (int k = 0; k < 4; k++) {
+        char n[48];
+        snprintf(n, sizeof(n), "%s_line%d", tag, k);
+        check(n, r.line[k], mem(line_addr + 4 * k));
+    }
+}
+
+static uint32_t counter(int reg) { return sys_read(reg); }
 
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
     d = new Dut;
     idle();
+    d->i_sys_we = 0; d->i_sys_re = 0;
     d->i_rst = 1; tick(); tick(); d->i_rst = 0; d->eval();
     check("rst_idone", d->o_irsp_done, 0);
     check("rst_ddone", d->o_drsp_done, 0);
     check("rst_bus",   d->o_bus_re | d->o_bus_we, 0);
+    check("rst_walking", sys_read(REG_STATUS), 1);     // the walk after reset
+    check("rst_ctrl",    sys_read(REG_CTRL), 0);
     settle();
+
+    // ═══ The L2 disabled: every access passes through ═══════════
 
     // ── A fetch's word read: one read, all four lanes ────────────
     {
@@ -174,12 +239,14 @@ int main(int argc, char** argv) {
             check(n, beats[k].addr, 0x00005670 + 4 * k);
             snprintf(n, sizeof(n), "dl_be%d", k);
             check(n, beats[k].be, 0xF);
-            snprintf(n, sizeof(n), "dl_line%d", k);
-            check(n, r.line[k], mem(0x00005670 + 4 * k));
         }
+        check_line("dl", r, 0x00005670);
         check("dl_no_gaps", gaps(), 0);
         check("dl_fault",   r.fault, 0);
         check("dl_other",   r.other, 0);
+        settle();
+        r = dread(0x00005670);                      // disabled: no line kept
+        check("dl_again_beats", beats.size(), 4);
         settle();
     }
 
@@ -202,27 +269,30 @@ int main(int argc, char** argv) {
         settle();
     }
 
-    // ── A word write: one write, as it is ────────────────────────
+    // ── A word write: one write, as it is, done once the bus took it ─
     {
         Done r = dreq(false, 0x00008001, true, 0x2, 0x0000AB00);
-        check("ww_beats", beats.size(), 1);
+        check("ww_beats_at_done", r.beats_at_done, 1);
         check("ww_addr",  beats.size() ? beats[0].addr : 0, 0x00008001);
         check("ww_write", beats.size() ? beats[0].we : 0, 1);
         check("ww_be",    beats.size() ? beats[0].be : 0, 0x2);
         check("ww_data",  beats.size() ? beats[0].wdata : 0, 0x0000AB00);
         check("ww_fault", r.fault, 0);
-        check("ww_no_sf", r.store_fault, 0);
         settle();
+        check("ww_no_sf", store_faults, 0);
     }
 
-    // ── A cacheable write: one write, as it is ───────────────────
+    // ── A cacheable write: posted, done ahead of its one write ───
     {
-        Done r = dreq(true, 0x00009004, true, 0xF, 0x12345678);
+        Done r = dwrite(0x00009004, 0xF, 0x12345678);
+        check("cw_done_at", r.cycles, 2);
+        check("cw_posted",  r.beats_at_done, 0);
+        check("cw_fault",   r.fault, 0);
+        for (int i = 0; i < 16; i++) tick();
         check("cw_beats", beats.size(), 1);
         check("cw_addr",  beats.size() ? beats[0].addr : 0, 0x00009004);
         check("cw_data",  beats.size() ? beats[0].wdata : 0, 0x12345678);
-        check("cw_fault", r.fault, 0);
-        check("cw_no_sf", r.store_fault, 0);
+        check("cw_no_sf", store_faults, 0);
         settle();
     }
 
@@ -233,26 +303,53 @@ int main(int argc, char** argv) {
         settle();
         r = dreq(false, 0xFFFE0020, true, 0xF, 0x55);
         check("fw_write_fault", r.fault, 1);
-        check("fw_write_no_sf", r.store_fault, 0);
         settle();
+        check("fw_write_no_sf", store_faults, 0);
         r = ireq(true, 0xFFFE0030);
         check("fl_line_fault",  r.fault, 1);
         check("fl_line_beats",  beats.size(), 4);    // the whole line still read
         settle();
 
-        // A cacheable write the bus faults: no fault on its done, a store
-        // fault with its address in the same cycle, and none before.
-        r = dreq(true, 0xFFFE0044, true, 0x3, 0x7777);
+        // A cacheable write the bus faults: no fault on its done, and a
+        // store fault with its address after it, once.
+        r = dwrite(0xFFFE0044, 0x3, 0x7777);
         check("sf_done_no_fault", r.fault, 0);
-        check("sf_store_fault",   r.store_fault, 1);
-        check("sf_addr",          r.store_fault_addr, 0xFFFE0044);
         check("sf_not_early",     r.store_fault_early, 0);
-        check("sf_one_cycle",     d->o_store_fault, 0);
+        for (int i = 0; i < 16; i++) tick();
+        check("sf_store_fault",   store_faults, 1);
+        check("sf_addr",          store_fault_addr, 0xFFFE0044);
         settle();
 
         // The next transaction carries no fault from it.
         r = dreq(false, 0x0000A000, false, 0xF, 0);
-        check("sf_after_clean", r.fault | r.store_fault, 0);
+        check("sf_after_clean", r.fault, 0);
+        settle();
+        check("sf_after_no_sf", store_faults, 0);
+    }
+
+    // ── The posted write goes ahead of later bus accesses ────────
+    {
+        Done w = dwrite(0x0000E004, 0x3, 0x0000BEEF);
+        check("ord_posted", w.beats_at_done, 0);
+        Done r = dreq(false, 0x0000E004, false, 0xF, 0);    // a word read of it
+        check("ord_write_first", beats.size() >= 1 ? beats[0].we : 0, 1);
+        check("ord_read_second", beats.size() >= 2 ? beats[1].we : 1, 0);
+        check("ord_read_sees",   r.line[0], mem(0x0000E004));
+        check("ord_read_value",  r.line[0] & 0xFFFF, 0xBEEF);
+        settle();
+
+        // A line read follows it as well, and so does a second write.
+        dwrite(0x0000E108, 0xF, 0x11112222);
+        Done l = ireq(true, 0x0000E100);
+        check("ord_line_after",  beats.size() >= 1 ? beats[0].we : 0, 1);
+        check("ord_line_sees",   l.line[2], 0x11112222);
+        settle();
+        dwrite(0x0000E200, 0xF, 0xAAAA0001);
+        dwrite(0x0000E204, 0xF, 0xAAAA0002);
+        for (int i = 0; i < 16; i++) tick();
+        check("ord_two_writes",  beats.size(), 2);
+        check("ord_two_first",   beats.size() >= 1 ? beats[0].addr : 0, 0x0000E200);
+        check("ord_two_second",  beats.size() >= 2 ? beats[1].addr : 0, 0x0000E204);
         settle();
     }
 
@@ -291,6 +388,228 @@ int main(int argc, char** argv) {
         tick();                                  // the cycle after the done
         check("held_not_retaken", d->o_bus_re | d->o_bus_we, 0);
         idle();
+        settle();
+    }
+
+    // ═══ The cache device ════════════════════════════════════════
+    {
+        uint32_t info = (0u << 26) | (WAYS << 21) | (SETS << 6) | 4;
+        check("info", sys_read(REG_INFO), info);
+        int c = 0;
+        while (sys_read(REG_STATUS) && c < 2 * SETS) c++;
+        check("walk_ends", sys_read(REG_STATUS), 0);
+        sys_write(REG_CTRL, 1);
+        check("ctrl_on", sys_read(REG_CTRL), 1);
+        // Nothing counted while the L2 was disabled.
+        check("ctr_quiet_rh", counter(REG_READ_HITS), 0);
+        check("ctr_quiet_rm", counter(REG_READ_MISSES), 0);
+        check("ctr_quiet_wh", counter(REG_WRITE_HITS), 0);
+        check("ctr_quiet_wm", counter(REG_WRITE_MISSES), 0);
+        settle();
+    }
+
+    // ═══ The L2 enabled ══════════════════════════════════════════
+
+    // ── A miss installs; the line then hits, from either side ────
+    {
+        const uint32_t A = 0x00020040;
+        Done r = dread(A + 8);
+        check("miss_beats", beats.size(), 4);
+        check_line("miss", r, A);
+        settle();
+        r = dread(A + 4);
+        check("hit_no_beats", beats.size(), 0);
+        check("hit_at",       r.cycles, 2);
+        check("hit_fault",    r.fault, 0);
+        check_line("hit", r, A);
+        r = ireq(true, A);
+        check("hit_fetch_no_beats", beats.size(), 0);
+        check("hit_fetch_at",       r.cycles, 2);
+        check_line("hit_fetch", r, A);
+        check("ctr_rm1", counter(REG_READ_MISSES), 1);
+        check("ctr_rh2", counter(REG_READ_HITS), 2);
+        settle();
+
+        // An uncacheable read of the line goes to the bus, and counts
+        // nothing.
+        r = dreq(false, A + 4, false, 0xF, 0);
+        check("uc_of_cached_beats", beats.size(), 1);
+        check("ctr_uc_quiet", counter(REG_READ_MISSES) + counter(REG_READ_HITS), 3);
+        settle();
+    }
+
+    // ── A write hit: posted, its bytes merged into the line ──────
+    {
+        const uint32_t A = 0x00020040;
+        uint32_t old1 = mem(A + 4);
+        Done w = dwrite(A + 6, 0xC, 0x5A5A0000);     // the upper halfword of word 1
+        check("wh_done_at", w.cycles, 2);
+        check("wh_posted",  w.beats_at_done, 0);
+        Done r = dread(A);                            // straight after: a hit
+        bool no_read = true;
+        for (const Beat& b : beats) if (!b.we) no_read = false;
+        check("wh_read_hits",  no_read, 1);
+        check("wh_word1", r.line[1], (old1 & 0x0000FFFF) | 0x5A5A0000);
+        check("wh_word0", r.line[0], mem(A));
+        settle();
+        check("wh_written_through", mem(A + 4), (old1 & 0x0000FFFF) | 0x5A5A0000);
+        r = dread(A + 4);
+        check("wh_line_matches_mem", r.line[1], mem(A + 4));
+        check("ctr_wh1", counter(REG_WRITE_HITS), 1);
+        settle();
+    }
+
+    // ── A write miss installs nothing ────────────────────────────
+    {
+        const uint32_t B = 0x00030080;
+        Done w = dwrite(B, 0xF, 0x0BADF00D);
+        check("wm_posted", w.beats_at_done, 0);
+        settle();
+        Done r = dread(B);
+        check("wm_then_miss", beats.size(), 4);
+        check("wm_line_sees", r.line[0], 0x0BADF00D);
+        check("ctr_wm1", counter(REG_WRITE_MISSES), 1);
+        settle();
+    }
+
+    // ── A faulted line read installs nothing ─────────────────────
+    {
+        Done r = dread(0xFFFE0100);
+        check("fault_miss", r.fault, 1);
+        settle();
+        r = dread(0xFFFE0100);
+        check("fault_not_kept", beats.size(), 4);
+        settle();
+    }
+
+    // ── Replacement: invalid ways first, then tree-PLRU ──────────
+    // Five lines in one set. Four fill the ways; a hit on the first makes
+    // the third the least recently used, so the fifth evicts it.
+    {
+        const uint32_t S = 0x00041230;
+        uint32_t L[5];
+        for (int k = 0; k < 5; k++) L[k] = S + k * SET_STRIDE;
+        for (int k = 0; k < 4; k++) dread(L[k]);
+        settle();
+        for (int k = 0; k < 4; k++) {
+            dread(L[k]);
+            char n[32]; snprintf(n, sizeof(n), "fill_way%d_kept", k);
+            check(n, beats.size(), 0);
+        }
+        dread(L[0]);                                  // ways in use 0,1,2,3, then 0
+        settle();
+        dread(L[4]);                                  // evicts L[2]
+        settle();
+        const int kept[4] = {0, 1, 3, 4};
+        for (int k : kept) {
+            dread(L[k]);
+            char n[32]; snprintf(n, sizeof(n), "plru_kept%d", k);
+            check(n, beats.size(), 0);
+        }
+        dread(L[2]);
+        check("plru_evicted2", beats.size(), 4);
+        settle();
+    }
+
+    // ── Two sides' hits back to back; a hit dropped under a miss ─
+    {
+        const uint32_t A = 0x00020040, C = 0x00050000;
+        d->i_dreq_valid = 1; d->i_dreq_cacheable = 1; d->i_dreq_addr = A;
+        d->i_dreq_we = 0; d->i_dreq_byte_en = 0xF;
+        d->i_ireq_valid = 1; d->i_ireq_cacheable = 1; d->i_ireq_addr = A + 4;
+        d->eval();
+        int ddone_at = -1, idone_at = -1;
+        for (int c = 0; c < 20 && idone_at < 0; c++) {
+            if (d->o_drsp_done) ddone_at = c;
+            if (d->o_irsp_done) idone_at = c;
+            tick();
+            if (ddone_at == c) { d->i_dreq_valid = 0; d->eval(); }
+        }
+        idle();
+        check("b2b_d_at", ddone_at, 2);
+        check("b2b_i_at", idone_at, 3);
+        check("b2b_no_bus", beats.size(), 0);
+        settle();
+
+        // The data side misses; the fetch side's hit waits out the miss.
+        // The hit dropped under the miss counts once, when it is served.
+        uint32_t rh = counter(REG_READ_HITS), rm = counter(REG_READ_MISSES);
+        d->i_dreq_valid = 1; d->i_dreq_cacheable = 1; d->i_dreq_addr = C;
+        d->i_ireq_valid = 1; d->i_ireq_cacheable = 1; d->i_ireq_addr = A;
+        d->eval();
+        ddone_at = idone_at = -1;
+        int both = 0;
+        for (int c = 0; c < 100 && idone_at < 0; c++) {
+            if (d->o_drsp_done && d->o_irsp_done) both = 1;
+            if (d->o_drsp_done) ddone_at = c;
+            if (d->o_irsp_done) idone_at = c;
+            tick();
+            if (ddone_at == c) { d->i_dreq_valid = 0; d->eval(); }
+        }
+        idle();
+        check("hum_miss_first", ddone_at >= 0 && idone_at > ddone_at, 1);
+        check("hum_one_done",   both, 0);
+        check("hum_one_line",   beats.size(), 4);
+        check("hum_hits_once",   counter(REG_READ_HITS) - rh, 1);
+        check("hum_misses_once", counter(REG_READ_MISSES) - rm, 1);
+        settle();
+
+        // A fetch rising as a write hit's update stage writes its word: it
+        // issues after the write, and reads the merged word.
+        uint32_t old0 = mem(A);
+        d->i_dreq_valid = 1; d->i_dreq_cacheable = 1; d->i_dreq_addr = A;
+        d->i_dreq_we = 1; d->i_dreq_byte_en = 0x1; d->i_dreq_wdata = 0x000000EE;
+        d->eval();
+        ddone_at = idone_at = -1;
+        uint32_t iword = 0;
+        for (int c = 0; c < 30 && idone_at < 0; c++) {
+            if (c == 2) {
+                d->i_ireq_valid = 1; d->i_ireq_cacheable = 1; d->i_ireq_addr = A;
+                d->eval();
+            }
+            if (d->o_drsp_done) ddone_at = c;
+            if (d->o_irsp_done) { idone_at = c; iword = d->o_rsp_line[0]; }
+            tick();
+            if (ddone_at == c) { d->i_dreq_valid = 0; d->eval(); }
+        }
+        idle();
+        check("upd_write_done_at", ddone_at, 2);
+        check("upd_fetch_after",   idone_at > 3, 1);
+        check("upd_fetch_merged",  iword, (old0 & ~0xFFu) | 0xEE);
+        settle();
+    }
+
+    // ── INVAL_ALL: busy through its walk, nothing kept meanwhile ─
+    {
+        const uint32_t A = 0x00020040;
+        uint32_t rh = counter(REG_READ_HITS), rm = counter(REG_READ_MISSES);
+        sys_write(REG_INVAL_ALL, 0);
+        check("inval_busy", sys_read(REG_STATUS), 1);
+        Done r = dread(A);                            // during the walk
+        check("inval_walk_passes", beats.size(), 4);
+        check_line("inval_walk", r, A);
+        settle();
+        r = dread(A);                                 // still nothing kept
+        check("inval_walk_no_install", beats.size(), 4);
+        check("inval_walk_uncounted", counter(REG_READ_HITS) - rh
+                                    + counter(REG_READ_MISSES) - rm, 0);
+        int c = 0;
+        while (sys_read(REG_STATUS) && c < 2 * SETS) c++;
+        check("inval_ends", sys_read(REG_STATUS), 0);
+        settle();
+        r = dread(A);
+        check("inval_then_miss", beats.size(), 4);
+        settle();
+        r = dread(A);
+        check("inval_then_hit", beats.size(), 0);
+        settle();
+    }
+
+    // ── Disabling stops the hits ─────────────────────────────────
+    {
+        sys_write(REG_CTRL, 0);
+        dread(0x00020040);
+        check("off_passes", beats.size(), 4);
         settle();
     }
 
