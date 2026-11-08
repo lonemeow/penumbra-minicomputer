@@ -389,6 +389,7 @@ MODULE_TESTS = \
     penumbra3_mmu \
     penumbra3_l1 \
     penumbra3_uncore \
+    penumbra3_perfctr \
     penumbra3_predecode \
     penumbra3_return_stack \
     penumbra3_direction_table \
