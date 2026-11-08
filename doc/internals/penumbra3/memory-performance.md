@@ -514,17 +514,17 @@ instructions:
 
 ### Store buffer at the core boundary
 
-A small FIFO of cacheable stores between the completion unit and the
-uncore. A cacheable store completes when it enters the buffer instead
-of when its write-through is acknowledged; the buffer drains through the
-uncore in the background. Its shape comes from the
+A small FIFO of cacheable stores between the L1-D and the uncore. A
+cacheable store completes when it enters the buffer instead of when its
+write-through is acknowledged; the buffer drains through the uncore in
+the background. Its shape comes from the
 [store-buffer model](#the-store-buffer-in-the-model): eight line
 entries, a fill that waits only for the entries up to its own line, and
 an L2 that posts its write-through.
 
 ```mermaid
 graph LR
-    M2["MEM2 / completion unit"] -->|cacheable store| SB["store buffer<br/>(8 line entries)"]
+    M2["L1-D"] -->|cacheable store| SB["store buffer<br/>(8 line entries)"]
     M2 -->|"fill (waits for entries<br/>up to its line)"| UC
     M2 -->|"uncached access<br/>(waits for SB empty)"| UC
     SB -->|drain| UC["uncore<br/>(L2 + I/D select + fill)"]
@@ -669,8 +669,8 @@ option behind the store buffer.
 gen2 registers every module boundary — arbiter, fill sequencer, L2 —
 because each register cut a cone that crossed modules. The sum is one
 register per *hand-off* rather than one per *pipeline stage*. gen3's
-completion unit already parks a miss in a register before it leaves the
-core, so the I/D choice can be a shallow select of two registered valid
+L1s already hold each miss in a register before it reaches the uncore,
+so the I/D choice can be a shallow select of two registered valid
 bits feeding the L2's stage-0 flops. That allows folding the arbiter and
 the fill sequencer into `penumbra3_l2`, with three registered edges:
 requests in, the tag verdict, and the outputs (fill stream and bus

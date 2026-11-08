@@ -12,10 +12,10 @@ machinery, so they are specified here too.
 
 It builds on the [timing outline](./timing-outline.md) (the back-end stall
 section), the [MEM1/MEM2 stage](./mem-stage.md) (which produces the verdict
-this consumes), and the [core-to-uncore port](./uncore-port.md) (which
-every access that leaves the core crosses). The full forwarding network
-is a separate spec; this doc covers the load path, the store path, and the
-issue gate they feed.
+this consumes), and the [L1-D](./l1-cache.md) (which carries every access
+that leaves the core onto the [core-to-uncore port](./uncore-port.md)).
+The full forwarding network is a separate spec; this doc covers the load
+path, the store path, and the issue gate they feed.
 
 ## The gen2 floor this deletes
 
@@ -59,17 +59,21 @@ A miss does **not** re-run MEM1 each cycle. It is *held* and *completed*:
 
 ```mermaid
 graph LR
-    M2[MEM2 miss] --> HB[one-entry<br/>hold buffer]
-    HB --> LP[mem_pending_q<br/>set]
-    HB --> FILL[fill launched once<br/>registered txn]
-    FILL --> BUS[penumbra3_bus_master<br/>line fill]
-    BUS --> CMP[registered completion<br/>{data | fault}]
-    CMP --> WB[held load -> WB,<br/>mem_pending_q clear]
+    M2[MEM2 miss] --> CU[completion unit<br/>parks the load]
+    M2 --> L1[L1-D takes<br/>the access]
+    L1 --> LP[mem_pending:<br/>the L1-D busy]
+    L1 --> BUS[uncore<br/>line read]
+    BUS --> D[L1-D installs,<br/>registered done]
+    D --> CMP[completion<br/>data or fault]
+    CU --> CMP
+    CMP --> WB[held load -> its register,<br/>mem_pending clear]
 ```
 
-- **One-entry hold buffer** parks the missing load (single-outstanding ⇒ one
+- **The completion unit parks the missing load:** what the instruction
+  needs when its data or fault comes back (single-outstanding ⇒ one
   entry). MEM1 is not replayed.
-- **`mem_pending_q`** (a flop) is the pipeline gate. The pipe holds via
+- **`mem_pending`**, the L1-D's busy register, is the pipeline gate
+  ([busy and done](./l1-cache.md#busy-and-done)). The pipe holds via
   back-pressure off *that flop*, not off the live `busy` — this is the only
   change vs gen2's load path. **Hold-the-pipe is the design point, not a
   placeholder.** Issuing independent work past a miss (non-blocking loads)
@@ -78,26 +82,23 @@ graph LR
   works to keep shallow. It trades the fmax gen3 exists to protect for IPC
   only on miss-heavy code, and going multi-outstanding would also cost the
   precise-fault property below. It is out of scope by design, not deferred.
-- **The fill is requested once,** as a line read on the
-  [core-to-uncore port](./uncore-port.md): the hold buffer's registers hold
-  the request up until it completes, and the
+- **The fill is requested once.** The L1-D takes the load's access as it
+  parks and holds a line read up on the
+  [core-to-uncore port](./uncore-port.md) until it completes, and the
   [bus master](./overview.md#fork-boundary) carries it out as one registered
   line transaction (validated in P0.4).
-- **The line is installed as the request completes,** into the way the
-  miss parked with, unless the read faulted or the L1 is disabled. It runs
-  from the uncore's line register into the L1 and never through the core.
-- **Completion is a registered event** in the cycle after the request
-  completes. It delivers the data to the held load's register, or takes the
-  [bus fault](#fault-precision), and retires the instruction.
-- **The launch side resumes in that same cycle,** with one exception. The
-  L1 shows a line to a lookup it already holds two cycles after the
-  install, and the instruction held in MEM2 behind the miss holds such a
-  lookup. The L1 says so in the install's cycle: it reports an install
-  into the set its current lookup reads. When it does, and the held
-  instruction is a load or a store, `mem_pending_q` clears a cycle later.
-  The completion unit reads only that report, never the L1's sets or
-  ways. A read that installed nothing, an install into another set, and
-  a held instruction that reads no lookup all resume with completion.
+- **The L1-D installs the line** as the read completes, unless the read
+  faulted or the L1 is disabled. Neither the line nor the install reaches
+  the completion unit, which takes the load's word whatever the L1 did.
+- **Completion is the L1-D's registered `done`,** in the cycle after the
+  read completes. The completion unit delivers the word to the held load's
+  register, or takes the [bus fault](#fault-precision), and retires the
+  instruction.
+- **The launch side resumes when `mem_pending` drops:** with completion,
+  or a cycle later when the load or store held in MEM2 behind the miss has
+  its lookup in the set the line went into, which the L1 shows it a cycle
+  late. The L1-D folds that cycle into its busy, so the completion unit
+  sees only busy and `done`.
 
 ## Stores — write-through, write-no-allocate
 
@@ -130,10 +131,10 @@ only its lanes. The line-write transaction is reserved for whole-line
 write-back evictions, never write-through.
 
 The write rides the **same single-outstanding hold-and-complete path** as a
-load miss: the store parks, the write is launched once as a registered
-transaction, the launch side freezes on `mem_pending_q`, and a registered
-completion releases it. A store writes back no register — completion only
-releases the freeze and resolves the fault (below).
+load miss: the store parks, the L1-D takes its write as one access, the
+launch side freezes on `mem_pending`, and the L1-D's `done` releases it. A
+store writes back no register — completion only releases the freeze and
+resolves the fault (below).
 
 What parks is the access, and its instruction need not wait with it. A
 cacheable store retires as its write parks, because nothing the write can
@@ -150,10 +151,10 @@ It does not change this completion contract.
 ## One completion unit, four access shapes
 
 A single single-outstanding unit parks any access that does **not** resolve
-as a cache hit in MEM2 and drives it to completion (a cacheable hit —
-**including a sub-word hit** — is served in MEM2 by byte extraction and never
-enters this unit). Single-outstanding falls
-out of the one `PENDING` state; the launch-side freeze serializes the next
+as a cache hit in MEM2 and completes it when the L1-D's access is done (a
+cacheable hit — **including a sub-word hit** — is served in MEM2 by byte
+extraction and never enters this unit). Single-outstanding falls out of
+the L1-D's one access at a time; the launch-side freeze serializes the next
 memory op behind the in-flight one, so the bus master never sees two
 transactions and no cross-unit interlock is needed. Per-access behaviour
 reduces to three orthogonal choices — transaction shape, writeback, and
@@ -276,10 +277,10 @@ be *measured* by swapping the memory-hierarchy side alone.
 
 What makes that hold is the [deferral principle](./overview.md#build-plan) made
 structural: **write policy lives entirely on the bus side of the MEM2 verdict**
-— L1 storage, the fill/completion sequencer, and the bus master — never in the
-core's verdict / freeze / issue cones. The core sees only a registered hit/miss
-verdict in and a registered completion out; it never learns which policy
-produced them, so experimenting with policy cannot perturb the fmax the
+— the L1, the uncore, and the bus master — never in the core's verdict /
+freeze / issue cones. The core sees only a registered hit/miss verdict in
+and a registered completion out; it never learns which policy produced
+them, so experimenting with policy cannot perturb the fmax the
 [structural probes](./phase0-probes.md) prove.
 
 The policy is two orthogonal knobs, each defaulting to the cheap leg:
@@ -287,7 +288,7 @@ The policy is two orthogonal knobs, each defaulting to the cheap leg:
 | Knob | Default | Alternative | What the alternative adds — all bus-side |
 |---|---|---|---|
 | **Store-miss allocate** | no-allocate — write the datum through to memory only | write-allocate — line fill + merge the store lanes + install | reuses the load-miss line-fill path plus a write-merge step |
-| **Store-hit write** | write-through — update L1 *and* memory | write-back — update L1 and mark dirty; memory is written at eviction | per-line dirty bits + an eviction-then-fill sequence in the sequencer (L1 stays passive storage); the bus master's line-write eviction path (already present, P0.4-validated) |
+| **Store-hit write** | write-through — update L1 *and* memory | write-back — update L1 and mark dirty; memory is written at eviction | per-line dirty bits + an eviction-then-fill sequence in the L1's access to the uncore; the bus master's line-write eviction path (already present, P0.4-validated) |
 
 Two invariants every policy must preserve — they are what keep the doors open:
 
@@ -359,10 +360,11 @@ carry a pending bit. Stores carry none — they produce no register result.
 
 The correctness of the whole scheme rests on one assertion-by-construction,
 which P0.1 verifies: **no combinational arc from a cache `busy`/hit input to
-any issue-enable or MMU output**. `busy`/hit feed only the completion FSM,
-whose output is the registered `mem_pending_q`. The probe confirms the
-longest path into the issue enable originates at a flop, and a Verilator
-assertion guards the wiring.
+any issue-enable or MMU output**. The hit feeds only the L1-D's request
+register and the completion unit's park, and the gate is the L1-D's
+registered busy, `mem_pending`. The probe confirms the longest path into
+the issue enable originates at a flop, and a Verilator assertion guards
+the wiring.
 
 ## What P0.1 proves
 
@@ -370,7 +372,7 @@ P0.1 wires the issue gate (scoreboard read → `can_issue` → ID/EX enable)
 with realistic fanout (all source operands, all enabled flops) and the
 registered load-completion path, and confirms two things:
 
-1. **Timing** — the `mem_pending_q`/scoreboard → `can_issue` → enable cone
+1. **Timing** — the `mem_pending`/scoreboard → `can_issue` → enable cone
    closes at 50 MHz with the probe→full margin.
 2. **Structure** — there is no combinational `busy → issue`/`busy → MMU`
    arc; the gen2 floor cone cannot form.

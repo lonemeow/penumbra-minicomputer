@@ -204,8 +204,8 @@ skeleton:
 8. **A native port for on-board RAM** — stretch.
 
 The store buffer needs no reserved seam in the core's cones: it sits
-between the completion unit and the uncore and reaches the core only
-through a registered `full`.
+between the L1-D and the uncore and reaches the core only through a
+registered `full`.
 
 ### Store-traffic strategy — store buffer first, write-back L2 only if it earns it
 
@@ -235,8 +235,8 @@ That sets the order:
   A later load misses WnA L1-D and fills from L2, which already holds the
   completed store.
 - **A store buffer is the primary store-traffic fix.** Cacheable stores
-  retire into a small FIFO between the completion unit and the uncore
-  and drain in the background. It needs no load disambiguation: L1-D is
+  retire into a small FIFO between the L1-D and the uncore and drain
+  in the background. It needs no load disambiguation: L1-D is
   updated in place at commit on a hit, so only a fill searches the
   buffer, waiting for the entries up to the youngest holding its line,
   and every uncached access waits for the buffer to drain. L2 posts its
@@ -432,7 +432,7 @@ correctness-validated against a real OS before perf work begins.
 ### Phase 4 — store buffer (store-traffic perf)
 
 The primary store-traffic optimization: a cacheable-only store buffer
-between the completion unit and the uncore
+between the L1-D and the uncore
 ([design](./memory-performance.md#store-buffer-at-the-core-boundary)),
 its entries a line wide with a byte mask. It meets the core only through
 registered signals, so it lands here, late, with no risk to the core
@@ -457,7 +457,9 @@ the seed sweep, not into a higher clock.
      duplicated BRAM TLB.
    - [`memory-completion.md`](./memory-completion.md) — the registered
      back-end stall and the load/store completion + fault-precision contract.
-   - [`uncore-port.md`](./uncore-port.md) — the port between the core and
+   - [`l1-cache.md`](./l1-cache.md) — the two L1s as their clients see
+     them: lookups, stores, and the accesses each L1 carries past it.
+   - [`uncore-port.md`](./uncore-port.md) — the port between the L1s and
      the uncore: its four transactions, handshake and faults.
    - [`memory-performance.md`](./memory-performance.md) — measured
      memory-path costs, gen2.5 workload profiles, and the uncore levers

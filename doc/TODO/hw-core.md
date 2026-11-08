@@ -169,31 +169,30 @@ ranks first ("Levers ranked by measured benefit"):
 1. **The L1 caches:** `penumbra3_l1` is built -- storage, the hit
    verdict, the store-hit write with its forwarding, tree-PLRU, the
    enable, the cache device's sysregs and counters, 8 KB 2-way on the
-   ECP5, and no FSM, since miss orchestration is the consumer's. Both
-   sides reach memory through the port
-   `doc/internals/penumbra3/uncore-port.md` specifies. **The D-side**
-   has it: MEM1 launches the L1, MEM2 consumes the verdict, and
-   `mem_completion` parks a load miss with the L1's victim way and every
-   store, holds the request up on the port, installs a load's line and
-   completes the access, taking a bus fault precisely. Still open
-   there: a register for `store_fault`, which `doc/system` does not
-   define, so the port's pulse goes nowhere. The fetch side still has
-   `i_fetch_busy`.
+   ECP5. Each L1 is its side's requester on the uncore port, and its
+   clients see only lookups, stores and accesses
+   (`doc/internals/penumbra3/l1-cache.md`). The RTL has the L1 without
+   a request of its own: `mem_completion` holds the D-side's request,
+   picks the victim way and installs the line. Open, in order:
 
-   **The fetch side:** P0.5 settled the lookup and the IF2 shape
-   (`doc/internals/penumbra3/phase0-probes.md`, "P0.5 -- physical-tag
-   compare behind the TLB verdict"); the real IF2 takes it from the
-   probe top: each way's word decoded and pre-decoded beside the
-   compare, the hit selecting. It moves to replay
-   (`doc/internals/penumbra3/timing-outline.md`, "4. Caches"):
-   today IF2 reads busy low as word valid and IF1 folds busy into its
-   hold and the block RAM enable, which puts the I-cache hit on that
-   cone. Under replay a miss sets a flop that steers IF1 back to the
-   missed PC next cycle, and IF1 holds only on FIFO-full or a
-   registered fill; an uncached fetch, which never hits, then needs its
-   word delivered to the replayed slot. P0.5 never saw the hold form
-   as its worst path, so the full-top read is where replay has to show
-   its worth.
+   - **The L1 takes its access:** the request, the install and the
+     busy/done/discard contract move into `penumbra3_l1`.
+   - **The D-side moves onto it:** `mem_completion` keeps the
+     instruction's descriptor and completes on the L1's done, and the
+     victim way, the enable, the fill port and the extra cycle leave
+     the MEM2, spine and core ports. Still open there: a register for
+     `store_fault`, which `doc/system` does not define, so the port's
+     pulse goes nowhere.
+   - **The fetch side moves onto it, with replay:** today IF2 reads
+     busy low as word valid and IF1 folds busy into its hold and the
+     block RAM enable, which puts the I-cache hit on that cone. Under
+     replay a miss steers IF1 back to the missed PC the next cycle,
+     IF1 holds only on FIFO-full or the L1-I's registered busy, and the
+     replayed slot takes the access's word. P0.5 settled the lookup and
+     the IF2 shape (`doc/internals/penumbra3/phase0-probes.md`, "P0.5
+     -- physical-tag compare behind the TLB verdict") but never saw the
+     hold form as its worst path, so the full-top read is where replay
+     has to show its worth.
 2. **The uncore pipeline:** L2 -- write-through and posted, a look-up
    every cycle, the line-wide transfer with fill-through -- with the
    I/D select and the fill folded in, driving `bus_master`.
@@ -837,8 +836,9 @@ been looked at.
 ## Hardware: a gen3 load behind a fill into its set waits a cycle
 
 The L1 shows an installed line to a lookup it already holds two cycles
-after the install, and says so in the install's cycle (`o_extra_cycle`
-in `penumbra3_l1`). The load or store held in MEM2 behind a miss holds
+after the install, so it stays busy a cycle longer when an install
+lands in a held lookup's set (`doc/internals/penumbra3/l1-cache.md`,
+"Busy and done"). The load or store held in MEM2 behind a miss holds
 such a lookup, so when the fill went into its set the launch side
 resumes a cycle after the miss completes rather than with it. The next
 word of the line just filled is the common case. Against an L2-hit fill

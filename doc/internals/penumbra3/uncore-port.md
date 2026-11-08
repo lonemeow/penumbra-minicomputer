@@ -13,11 +13,11 @@ Three terms:
 - The **uncore** is everything between this port and the external bus:
   the choice between the two sides' requests, the L2, and the
   [bus master](./overview.md#fork-boundary).
-- A **requester** is the part of the core that holds a request up.
-  There are two, one per **side**: the
-  [completion unit](./memory-completion.md) in MEM2 for data, and the
-  fetch stages' miss handling for instructions. Each side has its own
-  copy of the request fields and at most one request up at a time.
+- A **requester** holds a request up. There are two, one per
+  **side**, and each is that side's [L1](./l1-cache.md): the L1-D for
+  data, the L1-I for instructions. An L1 carries every access of its
+  side that goes past it. Each side has its own copy of the request
+  fields and at most one request up at a time.
 - A **line** is 16 bytes at a 16-byte-aligned physical address, four
   words: the unit every cache level stores.
 
@@ -31,12 +31,12 @@ asks for between the core and its memory hierarchy.
 
 ```mermaid
 graph LR
-    CU["completion unit<br/>(data side)"] -->|request| UC
-    FM["fetch miss handling<br/>(fetch side)"] -->|request| UC
+    DL1["L1-D<br/>(data side)"] -->|request| UC
+    IL1["L1-I<br/>(fetch side)"] -->|request| UC
     UC["uncore<br/>I/D select, L2, bus master"] ---|sync bus| BUS["external bus"]
-    UC -->|"done"| CU
-    UC -->|"done"| FM
-    UC -->|"fault, line<br/>(one register each)"| BOTH["both requesters,<br/>both L1 fill ports"]
+    UC -->|"done"| DL1
+    UC -->|"done"| IL1
+    UC -->|"fault, line<br/>(one register each)"| BOTH["both L1s"]
 ```
 
 ## The four transactions
@@ -62,13 +62,13 @@ whatever its cache enables say, and a device is never read as a line:
 its pages are mapped with `C=0`
 ([uncached access](../../system/mmu.md#uncached-access)).
 
-**A requester does not fold its L1's enable into `cacheable`.** With
-the MMU on and the L1 disabled, a load or fetch on a `C=1` page is
-still a line read, and the requester takes its word from the line and
-installs nothing. That is the disabled cache passing its accesses to
-the next level ([`CTRL`](../../system/sysregs.md#ctrl-reg-1)), so an
-enabled L2 still serves them. With both levels disabled, each such
-access reads four words from memory and uses one.
+**An L1 does not fold its enable into `cacheable`.** With the MMU on
+and the L1 disabled, a load or fetch on a `C=1` page is still a line
+read, and the L1 takes its word from the line and installs nothing.
+That is the disabled cache passing its accesses to the next level
+([`CTRL`](../../system/sysregs.md#ctrl-reg-1)), so an enabled L2 still
+serves them. With both levels disabled, each such access reads four
+words from memory and uses one.
 
 **Line read.** The uncore ignores `addr[3:0]` and returns the line
 holding `addr`. A sub-word load is a line read like any other. The
@@ -156,8 +156,9 @@ aims for are in
   word `k` of `line` holds the bytes at the line's address plus `4k`.
   The requester takes the word `addr[3:2]` selects.
 - **A word read** returns the bus's 32 bits in word 0, each byte in
-  its bus lane. The requester extracts its bytes by `addr[1:0]` and
-  the access size, as it does from a word its L1 hit.
+  its bus lane. The requester passes the word on whole, and its client
+  extracts the bytes by `addr[1:0]` and the access size, as it does
+  from a word the L1 hit.
 - `line` is defined only in the `done` cycle of a read that did not
   fault.
 
@@ -173,7 +174,7 @@ reach the port.
   keeps nothing of the line and the requester installs nothing, so the
   fault belongs to the access that asked and nothing remembers it.
 - **A word read or a word write** reports its one access's fault,
-  which the requester delivers
+  which the requester passes to its client; the data side delivers it
   [precisely](./memory-completion.md#fault-precision).
 - **A cacheable write** completes with `fault` low whatever the bus
   said. Its bus fault is asynchronous by the same contract: the uncore
@@ -193,22 +194,22 @@ Both directions of the port run from registers.
   path runs from a request field to a response within a cycle.
 - **What may sit between.** The uncore may select between the two
   sides' requests ahead of its first register. A requester may gate
-  `done` with its own flops ahead of its registers and its L1's write
-  enable, and `line` may drive both L1 fill ports directly.
+  `done` with its own flops ahead of its registers and its arrays'
+  write enables, and `line` may drive both L1s' arrays directly.
 
 ## What stays off the port
 
-- **The L1's decisions** are the requester's: whether an access hit,
-  which way a line goes to, whether to install it at all, and the
-  sub-word extract.
+- **The L1's decisions** stay inside the L1: whether an access hit,
+  which way a line goes to, whether to install it at all. The sub-word
+  extract belongs to its client.
 - **L2's cache device** (its enable, invalidation and counters) is
   reached through the sysreg sideband, like every sysreg device.
 - **How the uncore gets a line** shows only as latency: L2, a line
   taken from the bus as it fills L2, prefetch
   ([one uncore pipeline](./memory-performance.md#one-uncore-pipeline)).
 - **A store buffer,** where the core has one, takes a cacheable store
-  as it commits and issues the write itself, so the completion unit
-  issues no cacheable write. The port's other three transactions are
-  unchanged: the uncore holds a line read or a word access back until
-  the buffered writes it must follow have left the buffer
+  as it commits and issues the write itself, so the L1-D issues no
+  cacheable write. The port's other three transactions are unchanged:
+  the uncore holds a line read or a word access back until the
+  buffered writes it must follow have left the buffer
   ([store buffer](./memory-performance.md#store-buffer-at-the-core-boundary)).
