@@ -447,6 +447,12 @@ the shared module.
   single-ended D+/D- on the `usb_fpga_bd` pads), display adapter on
   the GPDI connector (autoconfig; dedicated video PLL, splash preload),
   boot ROM, `btn[1]` reset.
+- `ulx3s/ulx3s_penumbra3_top.sv` — gen3 system on the ULX3S: a fork of
+  the gen2 top (`ulx3s_penumbra2_top.sv`) with `machine_penumbra3` in
+  its place, the same devices, clocks and SDRAM stack, and the cache
+  geometry as the machine's parameters (two-way L1s, a 1024-set four-way
+  L2). No floorplan: gen2's regions were measured against its own
+  core's placement.
 - `ulx3s/ulx3s_penumbra2_probe_top.sv` — gen2 machine timing probe
   (`VARIANT=probe`): `machine_penumbra2` + a BRAM bus memory at
   25 MHz, terminal outputs folded onto the LEDs so synthesis keeps the

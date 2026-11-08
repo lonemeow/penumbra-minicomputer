@@ -1376,7 +1376,7 @@ XDC = $(if $(XDC_$(TOP)),$(XDC_$(TOP)),$(XDC_$(TOP_MODULE)))
 FPGA_TOPS = ulx3s_penumbra1_top ulx3s_penumbra2_probe_top ulx3s_penumbra2_top \
             ulx3s_penumbra2_5_top ulx3s_penumbra3_probe_memtlb_top \
             ulx3s_penumbra3_probe_issue_top ulx3s_penumbra3_probe_decode_top \
-            ulx3s_penumbra3_probe_l1tag_top \
+            ulx3s_penumbra3_probe_l1tag_top ulx3s_penumbra3_top \
             nexysvideo_penumbra2_top nexysvideo_penumbra2_5_top
 
 FPGA_SRC_ulx3s_penumbra1_top = $(SRC_COMMON) $(SRC_CORE_penumbra1) \
@@ -1403,6 +1403,13 @@ FPGA_SRC_ulx3s_penumbra2_top = $(SRC_COMMON) $(SRC_CORE) \
                                $(SRC_FABRIC) $(SRC_BOARD_ulx3s) \
                                hw/rtl/machine/machine_penumbra2.sv \
                                $(FPGA_RTL)/ulx3s/ulx3s_penumbra2_top.sv
+
+# The gen3 full board system: the gen2 top's fabric around machine_penumbra3,
+# whose closure beyond penumbra3/ is soc/, which SRC_FABRIC already covers.
+FPGA_SRC_ulx3s_penumbra3_top = $(SRC_COMMON) $(SRC_CORE_penumbra3) \
+                               $(SRC_FABRIC) $(SRC_BOARD_ulx3s) \
+                               hw/rtl/machine/machine_penumbra3.sv \
+                               $(FPGA_RTL)/ulx3s/ulx3s_penumbra3_top.sv
 
 # gen3 Phase-0 probe P0.3: the MEM1/MEM2 + BRAM-TLB translate cone in front
 # of nextpnr (make timing BOARD=ulx3s CORE=penumbra3 VARIANT=probe_memtlb).
@@ -1533,6 +1540,7 @@ XDC_nexysvideo_penumbra2_top = $(XDC_MACHINE_nexysvideo)
 # generated before synthesis and inlined by inline_hex.py.
 # gen2 embeds the boot ROM (no microcode — the gen2 core is hardwired).
 FPGA_ROM_TOPS   = ulx3s_penumbra1_top ulx3s_penumbra2_top ulx3s_penumbra2_5_top \
+                  ulx3s_penumbra3_top \
                   nexysvideo_penumbra2_top nexysvideo_penumbra2_5_top
 FPGA_UCODE_TOPS = ulx3s_penumbra1_top
 # Tops that embed the display font image: it must exist at the repo
@@ -1542,6 +1550,7 @@ FPGA_UCODE_TOPS = ulx3s_penumbra1_top
 # tree.
 FPGA_VIDEO_TOPS = ulx3s_video_test_top ulx3s_penumbra1_top \
                   ulx3s_penumbra2_top ulx3s_penumbra2_5_top \
+                  ulx3s_penumbra3_top \
                   nexysvideo_penumbra2_top nexysvideo_penumbra2_5_top
 # Tops that also embed a preloaded cell image — the CPU-free bring-up
 # probe only. A machine draws its own screen from software.
@@ -1580,6 +1589,7 @@ DEFAULT_SEED_ulx3s_penumbra2_5_top := 23
 SDRAM_STACK_ulx3s_penumbra1_top   := word
 SDRAM_STACK_ulx3s_penumbra2_top   := line
 SDRAM_STACK_ulx3s_penumbra2_5_top := line
+SDRAM_STACK_ulx3s_penumbra3_top   := line
 SDRAM_STACK ?= $(or $(SDRAM_STACK_$(TOP)),word)
 
 
@@ -1679,7 +1689,7 @@ audio-sweep:
 # Lint covers every registered top (plus the bring-up probes)
 # regardless of TOP. Use Verilator --lint-only with each family's
 # primitive stubs.
-fpga-lint: $(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_SRC_ulx3s_penumbra2_probe_top) $(FPGA_SRC_ulx3s_penumbra2_top) $(FPGA_SRC_ulx3s_video_test_top) $(FPGA_SRC_ulx3s_audio_test_top) $(FPGA_LINT_STUBS) \
+fpga-lint: $(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_SRC_ulx3s_penumbra2_probe_top) $(FPGA_SRC_ulx3s_penumbra2_top) $(FPGA_SRC_ulx3s_penumbra3_top) $(FPGA_SRC_ulx3s_video_test_top) $(FPGA_SRC_ulx3s_audio_test_top) $(FPGA_LINT_STUBS) \
            $(FPGA_SRC_nexysvideo_uart_test_top) $(FPGA_SRC_nexysvideo_penumbra2_top) \
            $(FPGA_LINT_STUBS_xc7)
 	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall -Wno-fatal \
@@ -1691,6 +1701,9 @@ fpga-lint: $(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_SRC_ulx3s_penumbra2_probe_top)
 	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall -Wno-fatal \
 		-Wno-PINMISSING -Wno-PINCONNECTEMPTY \
 		$(FPGA_SRC_ulx3s_penumbra2_top) $(FPGA_LINT_STUBS) --top ulx3s_penumbra2_top
+	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall -Wno-fatal \
+		-Wno-PINMISSING -Wno-PINCONNECTEMPTY \
+		$(FPGA_SRC_ulx3s_penumbra3_top) $(FPGA_LINT_STUBS) --top ulx3s_penumbra3_top
 	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall -Wno-fatal \
 		-Wno-PINMISSING -Wno-PINCONNECTEMPTY \
 		$(FPGA_SRC_ulx3s_video_test_top) $(FPGA_LINT_STUBS) --top ulx3s_video_test_top

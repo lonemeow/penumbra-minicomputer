@@ -178,24 +178,28 @@ them tied off today, so a load/divmul-use waits for the registered clear).
   posted write, and `bus_master`
   (`doc/internals/penumbra3/uncore.md`; `4bb3ab5`, `9801486`)
 - `make simulate-rtl CORE=penumbra3` -- the console shim, a fork of gen2's
-  over the gen3 sim wrapper
+  over the gen3 sim wrapper (`2d46035`)
+- `ulx3s_penumbra3_top` -- the gen2 board top around `machine_penumbra3`,
+  the ULX3S's cache geometry as its parameters
 
-**Next, in order** -- the shapes `doc/internals/penumbra3/overview.md`
-ranks first ("Levers ranked by measured benefit"):
-
-1. **`ulx3s_penumbra3_top`.**
+**Next:** Phase-1's gating checkpoint, the **full-top composition timing
+read** (`make fpga BOARD=ulx3s CORE=penumbra3` across a seed sweep; bare
+skeleton, no BTB) -- calibrates the probe->full margin before feature work.
+It is also where the fetch side's replay shows its worth: P0.5 settled the
+lookup and the IF2 shape (`doc/internals/penumbra3/phase0-probes.md`, "P0.5 --
+physical-tag compare behind the TLB verdict") but never saw IF1's hold form as
+its worst path. Two of the top's placement choices are gen2's, unmeasured on
+gen3, and the sweep settles both: the line SDRAM stack
+(`SDRAM_STACK_ulx3s_penumbra3_top`), and no floorplan, since gen2's regions
+(`hw/constraints/ulx3s_penumbra2_floorplan.py`) were measured against gen2's
+core filling X75..113. Feature work then follows the order
+`doc/internals/penumbra3/overview.md` ranks ("Levers ranked by measured
+benefit").
 
 **Before the TLB store's geometry is fixed:** the proposed 256x2 needs
 `MMU_CONFIG` version 2 and a wider `TLB_INDEX` in `doc/system/mmu.md`
 (evidence: `doc/internals/penumbra3/memory-performance.md`, "TLB: sets, and a
 cheaper refill").
-
-Phase-1's gating checkpoint is then the **full-top composition timing read**
-(bare skeleton, no BTB) -- calibrates the probe->full margin before feature work.
-It is also where the fetch side's replay shows its worth: P0.5 settled the
-lookup and the IF2 shape (`doc/internals/penumbra3/phase0-probes.md`, "P0.5 --
-physical-tag compare behind the TLB verdict") but never saw IF1's hold form as
-its worst path.
 
 **Locked hazard-model decisions** (context for resuming):
 

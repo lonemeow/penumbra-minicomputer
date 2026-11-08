@@ -24,14 +24,19 @@ with openFPGALoader, all in containers (`DEVELOP.md`, "FPGA Synthesis
 | `ulx3s_penumbra1_top` | `make fpga BOARD=ulx3s CORE=penumbra1` | the gen1 machine |
 | `ulx3s_penumbra2_top` | `make fpga BOARD=ulx3s CORE=penumbra2_5` (or `penumbra2`) | the gen2 machine |
 | `ulx3s_penumbra2_probe_top` | `VARIANT=probe` | the bare gen2 machine against a block-RAM memory, for timing only |
+| `ulx3s_penumbra3_top` | `make fpga BOARD=ulx3s CORE=penumbra3` | the gen3 machine |
 | `ulx3s_penumbra3_probe_*_top` | registered per probe | gen3 timing probes |
 | `ulx3s_video_test_top`, `ulx3s_audio_test_top` | `TOP=` | the display and audio paths alone |
 
-Both machine tops carry a 64 KiB boot ROM, the UART, the SD slot over
+Every machine top carries a 64 KiB boot ROM, the UART, the SD slot over
 SPI, the USB host controller, the display adapter and the audio
 device, with SDRAM as system RAM. Each assembles the external bus
 around its core, the device decode and the response fabric with its
 watchdog, in the same shape the simulation wrappers present.
+
+The gen3 machine takes its cache geometry from the board, and the
+ULX3S gives it two-way L1s, 8 KiB each at a page a way, and a 64 KiB
+L2 of four ways, all in block RAM.
 
 ## Clocking and reset
 
@@ -41,7 +46,7 @@ dividers derived from `CPU_HZ` and the SDRAM rate by
 
 | Output | Rate | Drives |
 |--------|------|--------|
-| CLKOP | `CPU_HZ`: 25 MHz (gen1), 37.5 MHz (gen2) | the CPU and system bus |
+| CLKOP | `CPU_HZ`: 25 MHz (gen1), 37.5 MHz (gen2, gen3) | the CPU and system bus |
 | CLKOS | 100 MHz | the SDRAM controller |
 | CLKOS2 | 100 MHz, phase-shifted | the SDRAM clock pin, forwarded through `ODDRX1F` |
 | CLKOS3 | 60 MHz | the USB host controller |
@@ -80,8 +85,8 @@ PLL's lock; the other six are dark.
 repository's own controller at 100 MHz, crossing from the CPU clock
 through `sdram_cdc` ([SDRAM Controller v2](../sdram-controller.md)).
 A top picks its stack as a fileset: the gen1 top the word stack, the
-gen2 tops the line stack (`SDRAM_STACK_<top>` in the Makefile), a
-choice measured per top like a placement seed. The PHY
+gen2 and gen3 tops the line stack (`SDRAM_STACK_<top>` in the
+Makefile), a choice measured per top like a placement seed. The PHY
 (`sdram_phy_ecp5`) holds every SDRAM signal in I/O flip-flops.
 
 ## Devices and connectors
