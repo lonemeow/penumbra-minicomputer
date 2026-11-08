@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <vector>
 #include <set>
+#include <map>
 #include "Vpenumbra3_spine_test.h"
 #include "verilated.h"
 
@@ -51,7 +52,10 @@ static uint32_t ldw(int rd, int rb, uint16_t off) { return enc_m(1, 2, rd, rb, o
 static uint32_t stw(int rd, int rb, uint16_t off) { return enc_m(0, 2, rd, rb, off); }
 
 enum { OP_L_LLI = 0, OP_L_ADDI = 3, OP_R_ADD = 0, OP_R_MUL = 16, OP_R_RESERVED = 12,
-       OP_R_DI = 29 };
+       OP_R_WRSYS = 23, OP_R_DI = 29 };
+static uint32_t wrsys(int rd, int dev, int reg) {
+    return enc_r(OP_R_WRSYS, rd, 0, 0) | ((dev & 0xF) << 12) | ((reg & 0xF) << 8);
+}
 enum { VEC_BUS_FAULT = 0, VEC_ILLEGAL = 7, VEC_ALIGN = 8 };
 enum { FAULT_BUS = 4, FSTAT_R = 1 << 8, FSTAT_W = 1 << 9 };
 enum { OPC_ALU = 0, OPC_LOAD = 1, OPC_STORE = 2, OPC_DI = 12 };   // op_class_e
@@ -66,6 +70,8 @@ struct Trace {
     std::vector<uint32_t> retire_pcs, retire_cycles, retire_ops, retire_srs;
     std::vector<uint32_t> dc_cycles, dc_pcs, dc_ops;
     std::set<uint32_t>    ex_pcs, mem_pcs;   // every PC seen in EX, in MEM2
+    std::map<uint32_t, uint32_t> ex_arrival;  // PC -> the cycle it first reached EX
+    std::vector<uint32_t> sys_wdata, sys_cycles;   // each sysreg write
     std::vector<uint32_t> done_cycles;
     uint32_t mmu_faults = 0, fault_vaddr = 0, fault_status = 0, epc = 0;
     uint32_t requests = 0;
@@ -158,6 +164,12 @@ static void run_mem(Vpenumbra3_spine_test* dut, const std::vector<uint32_t>& pro
             t.dc_ops.push_back(dut->o_dc_commit_op_class);
         }
         if (dut->o_ex_valid)  t.ex_pcs.insert(dut->o_ex_pc);
+        if (dut->o_ex_valid && !t.ex_arrival.count(dut->o_ex_pc))
+            t.ex_arrival[dut->o_ex_pc] = cyc;
+        if (dut->o_sys_we) {
+            t.sys_wdata.push_back(dut->o_sys_wdata);
+            t.sys_cycles.push_back(cyc);
+        }
         if (dut->o_mem_valid) t.mem_pcs.insert(dut->o_mem_pc);
         if (dut->o_insn_committed && dut->o_dc_commit) t.retire_with_dc++;
         if (dut->o_mmu_fault_commit) {
@@ -276,6 +288,40 @@ int main(int argc, char** argv) {
         run(dut, prog, 64, got, flt);
         check_commits("raw", got, {{2,0},{3,0},{4,0},{5,0},{6,0},{1,0x1234},
                                    {2,0x1234},{3,0x1234},{4,0x1234},{5,0x1234},{6,0x1234}});
+    }
+
+    // ── A WRSYS's value at every distance from its producer ──────
+    // The WRSYS takes its Rd as it reaches EX, from the leg its producer is
+    // on (d=1..3) or the regfile (4, 5), and writes it once the back end has
+    // drained, by when the producer has left every leg. The regfile keeps its
+    // contents across runs, so each run's value is its own.
+    for (int d = 1; d <= 5; d++) {
+        const uint16_t v = (uint16_t)(0x4D00 | d);
+        std::vector<uint32_t> prog = {enc_l(OP_L_LLI, 1, v)};
+        for (int k = 1; k < d; k++) prog.push_back(enc_l(OP_L_LLI, 2, (uint16_t)k));
+        prog.push_back(wrsys(1, 0, 5));
+        Trace t;
+        run_mem(dut, prog, {}, 60, t);
+        char tag[32];
+        snprintf(tag, sizeof tag, "wrsys_d%d_writes", d);
+        check(tag, (uint32_t)t.sys_wdata.size(), 1);
+        snprintf(tag, sizeof tag, "wrsys_d%d_value", d);
+        check(tag, t.sys_wdata.empty() ? 0 : t.sys_wdata[0], v);
+    }
+
+    // Behind a DI, which drains the back end, the WRSYS reaches EX with
+    // nothing in flight and commits in that first cycle, with the value read
+    // at issue.
+    {
+        Trace t;
+        run_mem(dut,
+                {enc_l(OP_L_LLI, 1, 0x5678), enc_r(OP_R_DI, 0, 0, 0), wrsys(1, 0, 5)},
+                {}, 60, t);
+        check("wrsys_drained_writes", (uint32_t)t.sys_wdata.size(), 1);
+        check("wrsys_drained_value", t.sys_wdata.empty() ? 0 : t.sys_wdata[0], 0x5678);
+        check("wrsys_drained_first_cycle",
+              !t.sys_cycles.empty() && t.ex_arrival.count(8)
+                  && t.sys_cycles[0] == t.ex_arrival[8], 1);
     }
 
     // ── divmul dual-write (the wb_local_stall freeze) ────────────

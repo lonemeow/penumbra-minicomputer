@@ -93,6 +93,7 @@ module penumbra3_id_stage
     output logic [31:0]           o_ex_pc,
     output logic [31:0]           o_ex_next_pc,
     output logic                  o_ex_valid,
+    output logic                  o_ex_first_cycle,    // loaded at the last edge
     output logic                  o_ex_fault_pending,
     output logic [3:0]            o_ex_fault_vec,
     output logic [31:0]           o_ex_fault_status,
@@ -316,11 +317,13 @@ module penumbra3_id_stage
     // ── ID/EX register ───────────────────────────────────────────
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
-            o_ex_valid  <= 1'b0;
-            o_ex_bcause <= BCAUSE_FLUSH;
+            o_ex_valid       <= 1'b0;
+            o_ex_first_cycle <= 1'b0;
+            o_ex_bcause      <= BCAUSE_FLUSH;
         end else begin
-            o_ex_valid  <= next_valid;
-            o_ex_bcause <= next_bcause;
+            o_ex_valid       <= next_valid;
+            o_ex_first_cycle <= issue;
+            o_ex_bcause      <= next_bcause;
             if (issue) begin
                 o_ex_bundle          <= i_bundle;
                 o_ex_op_a            <= op_a_sel;

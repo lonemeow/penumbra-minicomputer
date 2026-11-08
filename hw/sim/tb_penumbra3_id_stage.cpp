@@ -9,7 +9,8 @@
 //   - a privileged op faults in user mode (priv_op & ~supervisor -> VEC_PRIV)
 //     but not in supervisor mode; an undefined opcode faults VEC_ILLEGAL --
 //     both still advance (faults are taken at WB)
-//   - the handshake: i_stall_in holds ID/EX, i_bubble flushes it
+//   - the handshake: i_stall_in holds ID/EX, i_bubble flushes it, and
+//     o_ex_first_cycle marks only the edge that loaded the slot
 
 #include <cstdio>
 #include <cstdint>
@@ -60,6 +61,7 @@ int main(int argc, char** argv) {
     dut->i_rst = 1; tick(dut); tick(dut); dut->i_rst = 0;
     dut->eval();
     check("rst_valid", dut->o_ex_valid, 0);
+    check("rst_first", dut->o_ex_first_cycle, 0);
 
     // ── ALU issue: read indices, operands, ID/EX latch ───────────
     clear(dut);
@@ -135,13 +137,16 @@ int main(int argc, char** argv) {
     dut->i_ir = enc_r(ALU_ADD, 1, 2, 0); dut->i_valid = 1; dut->eval();
     tick(dut); dut->eval();
     check("hs_valid", dut->o_ex_valid, 1);         // a valid slot is in ID/EX
+    check("hs_first", dut->o_ex_first_cycle, 1);   // loaded at this edge
     dut->i_stall_in = 1; dut->i_valid = 0; dut->eval();
     check("hs_stall_deq", dut->o_deq_ready, 0);    // does not consume under stall
     tick(dut); dut->eval();
     check("hs_held", dut->o_ex_valid, 1);          // ID/EX holds its slot
+    check("hs_held_first", dut->o_ex_first_cycle, 0);  // held, not loaded
     dut->i_stall_in = 0; dut->i_bubble = 1; dut->eval();
     tick(dut); dut->eval();
     check("hs_flushed", dut->o_ex_valid, 0);       // bubble clears ID/EX
+    check("hs_flushed_first", dut->o_ex_first_cycle, 0);
 
     // ── divmul: aux (Rdh) maps to its own GPR and is scoreboarded ──
     dut->i_rst = 1; tick(dut); dut->i_rst = 0;     // clear the scoreboard first

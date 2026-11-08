@@ -213,6 +213,11 @@ may yet fault, and nothing younger may have taken effect by then. A cacheable
 store's write counts as well, though its instruction has retired, so a
 sysreg write stays ordered behind it.
 
+A WRSYS writes its register's value as the WRSYS reaches EX. The forward
+legs supply it then, from wherever its producer is, and the WRSYS keeps it
+through the wait, since by the time the back end has drained every producer
+has left the legs.
+
 ## Fault precision
 
 A memory fault is taken on the held, oldest-in-flight access. Whether it is

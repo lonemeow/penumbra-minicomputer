@@ -54,6 +54,7 @@ module penumbra3_ex_stage
     input  logic [31:0]           i_pc,
     input  logic [31:0]           i_next_pc,        // PC + 4: BL/JALR link value
     input  logic                  i_valid,          // 0 = bubble in
+    input  logic                  i_first_cycle,    // the slot arrived at the last edge
     input  logic                  i_fault_pending,
     input  logic [3:0]            i_fault_vec,
     input  logic [31:0]           i_fault_status,   // carried payload; FAULT_NONE when none
@@ -111,6 +112,7 @@ module penumbra3_ex_stage
     input  logic                  i_bubble,          // force this insn to a bubble (fault flush)
     output logic                  o_local_stall,     // back-pressure to ID (downstream-independent)
     output logic                  o_dc_commit,       // drain-commit insn commits this cycle
+    output logic [31:0]           o_sys_wdata,       // a WRSYS's value, with its commit
     output logic                  o_funit_stall,     // stall cause: waiting on divmul (perfctr)
 
     // -- Branch resolution (to IF: redirect + flush IF1/IF2/ID) ---
@@ -345,6 +347,20 @@ module penumbra3_ex_stage
         if (i_rst) post_wait_q <= 1'b0;
         else       post_wait_q <= dc_commit_now & i_bundle.commit_wait;
     end
+
+    // A WRSYS writes the value of its Rd, operand B. The value forwards only
+    // while its producer is on a forward leg, and the ID/EX register holds it
+    // as read at issue; the WRSYS waits here until the back end has drained,
+    // by when every producer has left the legs. So operand B is taken in the
+    // first cycle here, when each producer still in flight is on a leg and
+    // each older one wrote the regfile before ID read it. A commit in that
+    // cycle finds the back end already drained, nothing forwarding, so the
+    // value read at issue is the one to write.
+    logic [31:0] dc_op_b_q;
+    always_ff @(posedge i_clk) begin
+        if (i_first_cycle) dc_op_b_q <= op_b;
+    end
+    assign o_sys_wdata = i_first_cycle ? i_op_b : dc_op_b_q;
 
     // ================================================================
     // divmul peer unit
@@ -590,6 +606,12 @@ module penumbra3_ex_stage
     assert property (@(posedge i_clk) disable iff (i_rst)
         post_wait_q |=> !post_wait_q)
         else $error("penumbra3_ex_stage: post-commit hold exceeded one cycle");
+
+    // A drain-commit committing in its first cycle here takes operand B as
+    // read at issue, which holds only if nothing forwards to it.
+    always_comb
+        assert (i_rst || !(dc_commit_now && i_first_cycle && (op_b != i_op_b)))
+            else $error("penumbra3_ex_stage: a first-cycle commit with B forwarding");
 
     // A divmul never advances into EX/MEM1 while the unit is still busy.
     always_comb

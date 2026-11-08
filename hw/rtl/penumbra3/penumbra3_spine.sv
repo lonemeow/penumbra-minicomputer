@@ -155,6 +155,7 @@ module penumbra3_spine
     logic                idex_src_a_fwdable, idex_src_b_fwdable;
     logic [31:0]         idex_pc, idex_next_pc;
     logic                idex_valid, idex_fault_pending;
+    logic                idex_first_cycle;
     logic [3:0]          idex_fault_vec;
     logic [31:0]         idex_fault_status;
     bcause_e             idex_bcause;
@@ -270,14 +271,16 @@ module penumbra3_spine
     assign ei_commit   = ex_dc_commit & (idex_bundle.op_class == OPC_EI);
     assign di_commit   = ex_dc_commit & (idex_bundle.op_class == OPC_DI);
 
-    // WRSYS sysreg write, composed from the held ID/EX fields at the commit; the
-    // value rode op_b (the Rd read). Context-synchronizing: one cycle later (the
-    // post-commit-wait window, by when the device has latched) re-fetch the
-    // successor so it observes the new state.
+    // WRSYS sysreg write, composed at the commit from the held ID/EX fields and
+    // the value EX took for it (its Rd, forwarded as the WRSYS arrived).
+    // Context-synchronizing: one cycle later (the post-commit-wait window, by
+    // when the device has latched) re-fetch the successor so it observes the
+    // new state.
+    logic [31:0] ex_sys_wdata;
     assign o_sys_we     = ex_dc_commit & (idex_bundle.op_class == OPC_WRSYS);
     assign o_sys_wr_dev = idex_bundle.sys_dev;
     assign o_sys_wr_reg = idex_bundle.sys_reg;
-    assign o_sys_wdata  = idex_op_b;
+    assign o_sys_wdata  = ex_sys_wdata;
 
     logic        wrsys_resync_q;
     logic [31:0] wrsys_resync_pc_q;
@@ -454,7 +457,8 @@ module penumbra3_spine
         .o_ex_phys_src_a(idex_phys_src_a), .o_ex_src_a_fwdable(idex_src_a_fwdable),
         .o_ex_phys_src_b(idex_phys_src_b), .o_ex_src_b_fwdable(idex_src_b_fwdable),
         .o_ex_pc(idex_pc), .o_ex_next_pc(idex_next_pc),
-        .o_ex_valid(idex_valid), .o_ex_fault_pending(idex_fault_pending),
+        .o_ex_valid(idex_valid), .o_ex_first_cycle(idex_first_cycle),
+        .o_ex_fault_pending(idex_fault_pending),
         .o_ex_fault_vec(idex_fault_vec), .o_ex_fault_status(idex_fault_status),
         .o_ex_bcause(idex_bcause)
     );
@@ -473,6 +477,7 @@ module penumbra3_spine
         .i_phys_dst(idex_phys_dst), .i_phys_dst_we(idex_phys_dst_we),
         .i_phys_dst_aux(idex_phys_dst_aux), .i_phys_dst_aux_we(idex_phys_dst_aux_we),
         .i_pc(idex_pc), .i_next_pc(idex_next_pc), .i_valid(idex_valid),
+        .i_first_cycle(idex_first_cycle),
         .i_fault_pending(idex_fault_pending), .i_fault_vec(idex_fault_vec),
         .i_fault_status(idex_fault_status), .i_bcause(idex_bcause),
         .i_phys_src_a(idex_phys_src_a), .i_src_a_fwdable(idex_src_a_fwdable),
@@ -493,7 +498,8 @@ module penumbra3_spine
         .i_deferred_inject(i_deferred_inject), .i_deferred_addr(i_deferred_addr),
         .i_stall_in(ex_stall_in), .i_back_end_active(back_end_active),
         .i_bubble(younger_flush),
-        .o_local_stall(ex_local_stall), .o_dc_commit(ex_dc_commit), .o_funit_stall(),
+        .o_local_stall(ex_local_stall), .o_dc_commit(ex_dc_commit),
+        .o_sys_wdata(ex_sys_wdata), .o_funit_stall(),
         .o_branch_taken(ex_branch_taken), .o_branch_target(o_branch_target),
         .o_mem1_bundle(exmem1_bundle), .o_mem1_payload(exmem1_payload),
         .o_mem1_store_data(exmem1_store_data), .o_mem1_valid(exmem1_valid),

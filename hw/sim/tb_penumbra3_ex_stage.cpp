@@ -22,7 +22,7 @@
 // op_class enumerators (penumbra3_pkg)
 enum { OPC_ALU = 0, OPC_STORE = 2, OPC_DIVMUL = 5 };
 // Format-R opcodes (penumbra_pkg)
-enum { OP_R_ADD = 0, OP_R_MOV = 8, OP_R_MUL = 16 };
+enum { OP_R_ADD = 0, OP_R_MOV = 8, OP_R_MUL = 16, OP_R_WRSYS = 23 };
 // Format-L opcodes
 enum { OP_L_JMP = 11 };
 enum { COND_EQ = 1 };
@@ -62,7 +62,7 @@ static void clear(Vpenumbra3_ex_stage_test* dut) {
     dut->i_op_a = 0; dut->i_op_b = 0; dut->i_store_data = 0;
     dut->i_phys_dst = 0; dut->i_phys_dst_we = 0;
     dut->i_phys_dst_aux = 0; dut->i_phys_dst_aux_we = 0;
-    dut->i_pc = 0; dut->i_next_pc = 0; dut->i_valid = 0;
+    dut->i_pc = 0; dut->i_next_pc = 0; dut->i_valid = 0; dut->i_first_cycle = 0;
     dut->i_fault_pending = 0; dut->i_fault_vec = 0; dut->i_fault_status = 0;
     dut->i_phys_src_a = 0; dut->i_src_a_fwdable = 0;
     dut->i_phys_src_b = 0; dut->i_src_b_fwdable = 0;
@@ -234,6 +234,44 @@ int main(int argc, char** argv) {
     check("mul_done",   done, 1);
     check("mul_lo",     dut->o_mem1_result, 42);
     check("mul_hi",     dut->o_mem1_result_aux, 0);
+
+    // ── WRSYS: the value forwarded as it arrives, through the drain ─
+    // WRSYS R5 arrives with a stale R5 read and the real value in MEM2. The
+    // producer leaves the legs while the back end is still busy, and the
+    // drained commit writes the value forwarded in the first cycle.
+    clear(dut);
+    dut->i_ir = enc_r(OP_R_WRSYS, 5, 0, 0) | (0u << 12) | (5u << 8);
+    dut->i_op_b = 0xBAD;                       // stale regfile read
+    dut->i_phys_src_b = 5; dut->i_src_b_fwdable = 1;
+    dut->i_mem2_valid = 1; dut->i_mem2_dst_we = 1;
+    dut->i_mem2_phys_dst = 5; dut->i_mem2_result = 0x1234;
+    dut->i_back_end_active = 1;
+    dut->i_valid = 1; dut->i_first_cycle = 1; dut->eval();
+    check("wrsys_arrive_wait", dut->o_dc_commit, 0);
+    tick(dut);
+    dut->i_first_cycle = 0; dut->i_mem2_valid = 0;   // the producer moved on
+    dut->eval();
+    check("wrsys_held_wait", dut->o_dc_commit, 0);
+    tick(dut);
+    dut->i_back_end_active = 0; dut->eval();
+    check("wrsys_commit", dut->o_dc_commit, 1);
+    check("wrsys_value", dut->o_sys_wdata, 0x1234);
+    tick(dut);
+    dut->i_valid = 0; dut->eval();
+    tick(dut);
+
+    // Arriving with the back end drained, it commits in its first cycle,
+    // with the value read at issue.
+    clear(dut);
+    dut->i_ir = enc_r(OP_R_WRSYS, 5, 0, 0) | (0u << 12) | (5u << 8);
+    dut->i_op_b = 0x5678;
+    dut->i_phys_src_b = 5; dut->i_src_b_fwdable = 1;
+    dut->i_valid = 1; dut->i_first_cycle = 1; dut->eval();
+    check("wrsys_first_commit", dut->o_dc_commit, 1);
+    check("wrsys_first_value", dut->o_sys_wdata, 0x5678);
+    tick(dut);
+    dut->i_valid = 0; dut->i_first_cycle = 0; dut->eval();
+    tick(dut);
 
     // ── Handshake: stall holds EX/MEM1, bubble flushes it ────────
     clear(dut);
