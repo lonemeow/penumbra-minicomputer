@@ -176,15 +176,14 @@ them tied off today, so a load/divmul-use waits for the registered clear).
 - the uncore pipeline -- the I/D select, the write-through L2 with a
   look-up every cycle and the line-wide transfer with fill-through, the
   posted write, and `bus_master`
-  (`doc/internals/penumbra3/uncore.md`; `4bb3ab5`)
+  (`doc/internals/penumbra3/uncore.md`; `4bb3ab5`, `9801486`)
+- `make simulate-rtl CORE=penumbra3` -- the console shim, a fork of gen2's
+  over the gen3 sim wrapper
 
 **Next, in order** -- the shapes `doc/internals/penumbra3/overview.md`
 ranks first ("Levers ranked by measured benefit"):
 
-1. **`make simulate-rtl CORE=penumbra3`:** a console shim for the gen3
-   sim wrapper, so the boot ROM reaches its monitor in simulation before
-   the board top runs it.
-2. **`ulx3s_penumbra3_top`.**
+1. **`ulx3s_penumbra3_top`.**
 
 **Before the TLB store's geometry is fixed:** the proposed 256x2 needs
 `MMU_CONFIG` version 2 and a wider `TLB_INDEX` in `doc/system/mmu.md`

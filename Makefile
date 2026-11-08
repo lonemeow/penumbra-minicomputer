@@ -823,13 +823,16 @@ else
 DOCKER_RUN_IT = docker run --rm -u $(shell id -u):$(shell id -g) -it -v $(CURDIR):/work -w /work
 endif
 
-# simulate-rtl and benchmark-rtl are CORE-aware: both cores share the
-# sim_console.cpp frontend behind a per-core shim. gen1 uses machine_sim +
-# tb_penumbra1_interactive and needs microcode.hex; gen2 uses
-# machine_penumbra2_sim + tb_penumbra2_interactive and has no microcode (CORE
-# defaults to penumbra2_5, set above). Both wrappers load the boot ROM from
-# program.hex (their INIT_FILE default), built by hw/rom.
-ifeq ($(CORE_BASE),penumbra2)
+# simulate-rtl and benchmark-rtl run sim_console.cpp behind a generation's
+# shim, over its sim wrapper. A generation with no shim leaves SIMRTL_TOP
+# empty, which both targets refuse.
+ifeq ($(CORE_BASE),penumbra1)
+SIMRTL_TOP    := machine_sim
+SIMRTL_OUT    := V$(CORE)_machine_sim_interactive
+SIMRTL_TOPSV  := hw/rtl/sim/machine_sim.sv
+SIMRTL_TB     := hw/sim/tb_penumbra1_interactive.cpp
+SIMRTL_GFLAGS :=
+else ifeq ($(CORE_BASE),penumbra2)
 SIMRTL_TOP    := machine_penumbra2_sim
 SIMRTL_OUT    := V$(CORE)$(SIM_MEM_TAG)_machine_penumbra2_sim_interactive
 SIMRTL_TOPSV  := $(call sim_wrapper_sv,machine_penumbra2_sim)
@@ -840,16 +843,20 @@ SIMRTL_TB     := hw/sim/tb_penumbra2_interactive.cpp
 # test/fpga builds, so penumbra2_5 reports "Penumbra/2.5" in the ROM banner
 # here too.
 SIMRTL_GFLAGS := -DPENUMBRA_CPU_VARIANT=$(CPU_VARIANT)
-else
-SIMRTL_TOP    := machine_sim
-SIMRTL_OUT    := V$(CORE)_machine_sim_interactive
-SIMRTL_TOPSV  := hw/rtl/sim/machine_sim.sv
-SIMRTL_TB     := hw/sim/tb_penumbra1_interactive.cpp
+else ifeq ($(CORE_BASE),penumbra3)
+SIMRTL_TOP    := machine_penumbra3_sim
+SIMRTL_OUT    := V$(CORE)$(SIM_MEM_TAG)_machine_penumbra3_sim_interactive
+SIMRTL_TOPSV  := $(call sim_wrapper_sv,machine_penumbra3_sim)
+SIMRTL_TB     := hw/sim/tb_penumbra3_interactive.cpp
 SIMRTL_GFLAGS :=
 endif
 
+SIMRTL_CHECK = @test -n "$(SIMRTL_TOP)" || \
+	{ echo "ERROR: no RTL console for CORE '$(CORE)' — known bases: penumbra1 penumbra2 penumbra3 (+ variants)"; exit 1; }
+
 .PHONY: simulate-rtl
 simulate-rtl:
+	$(SIMRTL_CHECK)
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
 	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) $(SIMRTL_GFLAGS) \
 		--top-module $(SIMRTL_TOP) \
@@ -857,7 +864,7 @@ simulate-rtl:
 		-o ../$(SIMRTL_OUT) \
 		$(PKG_SV) $(SIMRTL_TOPSV) $(SIMRTL_TB) hw/sim/sim_console.cpp
 	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX)
-ifneq ($(CORE_BASE),penumbra2)
+ifeq ($(CORE_BASE),penumbra1)
 	@$(UASM) hw/microcode/microcode.uasm -o microcode.hex
 endif
 	@$(DOCKER_RUN_IT) --entrypoint ./$(BUILD_DIR)/$(SIMRTL_OUT) $(DOCKER_IMAGE) $(if $(SDCARD),+sdcard=$(SDCARD)) $(if $(TRACE),+trace=$(TRACE)) $(if $(TRACE_WINDOW),+trace_window=$(TRACE_WINDOW)) $(if $(HALT_ON),'+halt_on=$(HALT_ON)') $(if $(STDIN_FILE),+stdin_file=$(STDIN_FILE)) $(if $(PIPE_LO),+pipe_lo=$(PIPE_LO)) $(if $(PIPE_HI),+pipe_hi=$(PIPE_HI))
@@ -1104,6 +1111,7 @@ benchmark: sdimage-bench $(ISS)
 
 .PHONY: benchmark-rtl
 benchmark-rtl: sdimage-bench
+	$(SIMRTL_CHECK)
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR)
 	$(DOCKER_RUN) $(DOCKER_IMAGE) $(VERILATOR_FLAGS) $(SIMRTL_GFLAGS) \
 		--top-module $(SIMRTL_TOP) \
@@ -1111,7 +1119,7 @@ benchmark-rtl: sdimage-bench
 		-o ../$(SIMRTL_OUT) \
 		$(PKG_SV) $(SIMRTL_TOPSV) $(SIMRTL_TB) hw/sim/sim_console.cpp
 	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX)
-ifneq ($(CORE_BASE),penumbra2)
+ifeq ($(CORE_BASE),penumbra1)
 	@$(UASM) hw/microcode/microcode.uasm -o microcode.hex
 endif
 	@for elf in $(BENCH_ELFS); do \

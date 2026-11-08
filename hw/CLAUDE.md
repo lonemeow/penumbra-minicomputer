@@ -581,10 +581,11 @@ stdin poll, trace-file management, and the main loop. It includes no
 Verilated header — it drives a `SimCore` (`sim_console.h`). Each
 generation supplies a thin shim that owns the DUT: `tb_penumbra1_interactive.cpp`
 (`Vmachine_sim`, 4:1 SDRAM clock, full `o_trace_*` + `o_dbg_reg`
-instruction trace) and `tb_penumbra2_interactive.cpp`
-(`Vmachine_penumbra2_sim`, single clock, BREAK via `o_prog_end`; no
-trace ports yet, so `+trace=` is ignored). Both are built by
-`make simulate-rtl [CORE=…]`. Plusargs: `+sdcard=disk.img` (SDCARD),
+instruction trace), `tb_penumbra2_interactive.cpp`
+(`Vmachine_penumbra2_sim`, BREAK via `o_prog_end`, a trace rebuilt from
+the commit/retire ports) and `tb_penumbra3_interactive.cpp`, its fork
+over `Vmachine_penumbra3_sim`. Each is built by
+`make simulate-rtl [CORE=…]`, which refuses a generation with no shim. Plusargs: `+sdcard=disk.img` (SDCARD),
 `+trace=file.log` (TRACE), `+trace_window=N`, `+halt_on=str`,
 `+stdin_file=path`.
 
