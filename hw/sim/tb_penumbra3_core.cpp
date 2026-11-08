@@ -1,22 +1,27 @@
-// Verilator testbench for penumbra3_core.
+// Verilator testbench for penumbra3_core (via penumbra3_core_test).
 //
-// Exercises the whole core integration -- IF1/IF2 + elastic fetch buffer +
-// spine + vecfetch + irq -- driven through the real instruction-fetch port. A
-// sync-read instruction ROM models the I-side front port: the address IF1 drives
-// is latched at the posedge under the o_fetch_en clock-enable and the word is
-// presented the next cycle, paired with the IF1/IF2 register (the BRAM timing
-// the front end is built around). The D-side verdict inputs are tied benign --
-// the programs are ALU + branch only, so no load/store consults them.
+// Exercises the whole core integration -- IF1/IF2 + fetch replay + elastic
+// fetch buffer + spine + vecfetch + irq -- through a real L1-I and a model of the
+// uncore's fetch side: each request answers a set number of cycles after it
+// rises, with the line, or the word in word 0, from a ROM. A read of an
+// address in the 0xFFFE0000 page finds no device and faults. The programs are
+// ALU + branch only, so the D-side is tied off. What the L1 kept shows as the
+// line reads that later fetches do not make.
+//
+// Each run sets the page verdict and the L1's enable, so the same programs run
+// as an uncached machine does (the boot ROM's: every fetch a word read), as a
+// cached one does, and with the L1 off on a cacheable page.
 //
 // Coverage:
-//   - streaming + in-order commit: an ALU chain fetched through the front end
-//     commits the expected values (front-end <-> spine integration)
-//   - branch redirect: a taken branch steers the fetch stream past the
-//     wrong-path instructions, which must never commit (the redirect arm of the
-//     front-end composition)
-//   - interrupt entry: an external IRQ injects at the EX frontier, the vector
-//     fetch reads the handler address, and the handler runs (irq + vecfetch +
-//     the vector-fetch arm of the front-end composition)
+//   - streaming + in-order commit, a replay at every miss
+//   - branch redirect: wrong-path instructions never commit, and a read the
+//     redirect left in flight neither reaches the target nor is lost to the L1
+//   - interrupt entry: the vector fetch reads the handler address as a word
+//     read, and the handler runs
+//   - a fault with a read in flight: the vector read waits for it
+//   - a fetch bus fault, on a word read and on a line read
+//   - each line read once; the L1's counters seeing one miss per read
+//   - a slot held for FIFO room, its L1 lookup standing
 //
 // ERET and WRSYS-resync redirects share the same composition arm as the branch
 // and vector-fetch cases and are exercised at the machine + program-suite level
@@ -26,14 +31,19 @@
 #include <cstdint>
 #include <vector>
 #include <map>
-#include "Vpenumbra3_core.h"
+#include "Vpenumbra3_core_test.h"
 #include "verilated.h"
 
+typedef Vpenumbra3_core_test Dut;
+
 // ── ISA constants (penumbra_pkg / penumbra3_pkg) ─────────────────
-enum { OP_R_ADD = 0, OP_R_EI = 28 };
+enum { OP_R_ADD = 0, OP_R_RESERVED = 12, OP_R_MUL = 16, OP_R_EI = 28 };
 enum { OP_L_LLI = 0, OP_L_ADDI = 3 };
 enum { COND_AL = 0 };
-enum { VEC_EXT_IRQ = 9 };
+enum { VEC_BUS_FAULT = 0, VEC_ILLEGAL = 7, VEC_EXT_IRQ = 9 };
+enum { FAULT_BUS = 4, FSTAT_X = 1 << 10 };
+// Cache device registers
+enum { CACHE_CTRL = 1, CACHE_READ_HITS = 10, CACHE_READ_MISSES = 11 };
 
 static const uint32_t RESET_PC = 0xFFFF0000u;
 
@@ -61,12 +71,11 @@ static uint32_t enc_b_to(uint32_t at, uint32_t tgt, int cond) {
     return enc_b(cond, (uint32_t)off);
 }
 
-// ── Sync-read instruction ROM ────────────────────────────────────
+// ── The ROM behind the uncore ────────────────────────────────────
 // Unfilled addresses read a branch-to-self (target = PC + 0): the PC parks
 // there committing nothing, so a program halts simply by running off its end.
 static const uint32_t ROM_FILLER = (3u << 30);   // enc_b(COND_AL, 0)
 static std::map<uint32_t, uint32_t> g_rom;
-static uint32_t g_addr_q;
 
 static uint32_t rom_at(uint32_t a) {
     auto it = g_rom.find(a);
@@ -75,53 +84,97 @@ static uint32_t rom_at(uint32_t a) {
 static void load(uint32_t base, const std::vector<uint32_t>& prog) {
     for (size_t i = 0; i < prog.size(); i++) g_rom[base + i * 4] = prog[i];
 }
+static bool no_device(uint32_t a) { return (a >> 16) == 0xFFFE; }
 
-// Present the benign D-side verdicts (no load/store in these programs, so they
-// are never actually consumed -- just held off the fault path).
-static void dside_benign(Vpenumbra3_core* dut) {
-    dut->i_fetch_busy = 0; dut->i_fetch_fault = 0;
-    dut->i_fetch_mmu_fault = 0; dut->i_fetch_mmu_fault_status = 0;
-    dut->i_translate_hit = 1; dut->i_translate_paddr = 0;
-    dut->i_translate_cacheable = 1;
-    dut->i_translate_miss_fault = 0; dut->i_translate_prot_fault = 0;
-    dut->i_dcache_hit = 1; dut->i_dcache_rdata = 0;
-    dut->i_dcache_busy = 0; dut->i_dcache_access_done = 0;
-    dut->i_dcache_access_word = 0; dut->i_dcache_access_fault = 0;
-    dut->i_sys_rdata = 0;
-}
-
-// One clock with the sync-read instruction ROM folded in. A sync-read BRAM
-// holds its data output stable across the posedge (= rom of the address latched
-// at the *previous* edge) and latches the new address at this edge. So present
-// this cycle's word, evaluate through the edge with it held, and only then
-// update the address register from the pre-edge o_fetch_addr (gated by the
-// o_fetch_en clock-enable) -- otherwise the FIFO would capture a word paired
-// with the wrong PC.
-static void tick(Vpenumbra3_core* dut) {
-    dut->i_fetch_rdata = rom_at(g_addr_q);
-    dside_benign(dut);
-    dut->i_clk = 0; dut->eval();
-    uint32_t latched = dut->o_fetch_en ? dut->o_fetch_addr : g_addr_q;
-    dut->i_clk = 1; dut->eval();
-    g_addr_q = latched;
-}
-
+// ── One run's setup and what it observed ─────────────────────────
+struct Config {
+    bool cacheable = false;   // the page verdict for every fetch
+    bool l1_on = false;
+    int  latency = 3;         // cycles from a request rising to its done
+    int  irq_cycle = -1;
+};
+struct Req { uint32_t addr; int cacheable; };
 struct Commit { uint32_t idx, data; };
+struct Trace {
+    std::vector<Commit>   commits;
+    std::vector<uint32_t> fault_vecs;
+    std::vector<Req>      reqs;
+    uint32_t mmu_faults = 0, fault_vaddr = 0, fault_status = 0;
+};
 
-static void run(Vpenumbra3_core* dut, int max_cycles,
-                std::vector<Commit>& commits, std::vector<uint32_t>& fault_vecs,
-                int irq_cycle) {
-    g_addr_q = RESET_PC;
-    dut->i_irq = 0; dut->i_timer_irq = 0;
-    dut->i_rst = 1; tick(dut); tick(dut); dut->i_rst = 0;
+static Config g_cfg;
+static Trace* g_t;
+static int    g_waited;
+static bool   g_req_prev;
+
+// The uncore, for the cycle a clock edge has just begun.
+static void uncore(Dut* dut) {
+    bool req = dut->o_ireq_valid;
+    if (req && !g_req_prev && g_t)
+        g_t->reqs.push_back({dut->o_ireq_addr, dut->o_ireq_cacheable});
+    g_req_prev = req;
+    dut->i_irsp_done = 0;
+    dut->i_rsp_fault = 0;
+    if (req && ++g_waited == g_cfg.latency) {
+        uint32_t a = dut->o_ireq_addr;
+        g_waited = 0;
+        dut->i_irsp_done = 1;
+        dut->i_rsp_fault = no_device(a);
+        for (int k = 0; k < 4; k++) {
+            if (dut->o_ireq_cacheable) dut->i_rsp_line[k] = rom_at((a & ~0xFu) + 4 * k);
+            else                       dut->i_rsp_line[k] = k ? 0xBAD00000u : rom_at(a);
+        }
+    }
+    dut->eval();
+}
+
+static void tick(Dut* dut) {
+    dut->i_clk = 0; dut->eval();
+    dut->i_clk = 1; dut->eval();
+    uncore(dut);
+}
+
+static void l1_write(Dut* dut, int reg, uint32_t value) {
+    dut->i_l1_sys_reg = reg; dut->i_l1_sys_wdata = value; dut->i_l1_sys_we = 1;
+    tick(dut);
+    dut->i_l1_sys_we = 0; dut->eval();
+}
+static uint32_t l1_read(Dut* dut, int reg) {
+    for (int i = 0; i < 3; i++) tick(dut);    // the counters trail their events
+    dut->i_l1_sys_reg = reg; dut->i_l1_sys_re = 1;
+    tick(dut);
+    dut->i_l1_sys_re = 0; dut->eval();
+    return dut->o_l1_sys_rdata;
+}
+
+static void run(Dut* dut, const Config& cfg, int max_cycles, Trace& t) {
+    g_cfg = cfg;
+    g_t = nullptr;
+    g_waited = 0;
+    g_req_prev = false;
+    dut->i_cacheable = cfg.cacheable;
+    dut->i_irq = 0;
+    dut->i_l1_sys_reg = 0; dut->i_l1_sys_wdata = 0;
+    dut->i_l1_sys_we = 0; dut->i_l1_sys_re = 0;
+    dut->i_irsp_done = 0; dut->i_rsp_fault = 0;
+    dut->i_rst = 1; dut->i_core_rst = 1; tick(dut); tick(dut); dut->i_rst = 0;
+    if (cfg.l1_on) l1_write(dut, CACHE_CTRL, 1);
+    dut->i_core_rst = 0;
+    g_t = &t;
     bool irq_fired = false;
     for (int c = 0; c < max_cycles; c++) {
-        if (irq_cycle >= 0 && c >= irq_cycle && !irq_fired) dut->i_irq = 1;
+        if (cfg.irq_cycle >= 0 && c >= cfg.irq_cycle && !irq_fired) dut->i_irq = 1;
         tick(dut);
-        if (dut->o_commit_we) commits.push_back({dut->o_commit_idx, dut->o_commit_data});
+        if (dut->o_commit_we)
+            t.commits.push_back({dut->o_commit_idx, dut->o_commit_data});
         if (dut->o_fault_commit) {
-            fault_vecs.push_back(dut->o_fault_vec);
+            t.fault_vecs.push_back(dut->o_fault_vec);
             if (dut->o_fault_vec == VEC_EXT_IRQ) { dut->i_irq = 0; irq_fired = true; }
+        }
+        if (dut->o_mmu_fault_commit) {
+            t.mmu_faults++;
+            t.fault_vaddr = dut->o_mmu_fault_vaddr;
+            t.fault_status = dut->o_mmu_fault_status;
         }
     }
 }
@@ -139,23 +192,90 @@ static void check_commits(const char* tag, const std::vector<Commit>& got,
     }
 }
 
+// How many requests asked for a line (or a word) at this address's line.
+static uint32_t reqs_of_line(const Trace& t, uint32_t a) {
+    uint32_t n = 0;
+    for (const Req& r : t.reqs) n += (r.addr & ~0xFu) == (a & ~0xFu);
+    return n;
+}
+static uint32_t reqs_of_cacheable(const Trace& t, int cacheable) {
+    uint32_t n = 0;
+    for (const Req& r : t.reqs) n += r.cacheable == cacheable;
+    return n;
+}
+static bool committed(const Trace& t, uint32_t idx, uint32_t data) {
+    for (const Commit& c : t.commits) if (c.idx == idx && c.data == data) return true;
+    return false;
+}
+
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
-    Vpenumbra3_core* dut = new Vpenumbra3_core;
+    Dut* dut = new Dut;
 
-    // ── Streaming + in-order commit ──────────────────────────────
+    Config uncached;
+    Config cached;   cached.cacheable = true; cached.l1_on = true;
+    Config l1_off;   l1_off.cacheable = true;
+
+    const std::vector<Commit> stream_commits = {{1,0x10},{1,0x11},{2,0x55},{1,0x66}};
+    g_rom.clear();
+    load(RESET_PC, {
+        enc_l(OP_L_LLI,  1, 0x10),   // R1 = 0x10
+        enc_l(OP_L_ADDI, 1, 0x01),   // R1 = 0x11
+        enc_l(OP_L_LLI,  2, 0x55),   // R2 = 0x55
+        enc_r(OP_R_ADD,  1, 2, 0),   // R1 = R1 + R2 = 0x66
+    });
+
+    // ── Streaming, every fetch a word read ───────────────────────
+    {
+        Trace t;
+        run(dut, uncached, 120, t);
+        check_commits("uc_stream", t.commits, stream_commits);
+        check("uc_stream_nofault", (uint32_t)t.fault_vecs.size(), 0);
+        check("uc_stream_no_line_read", reqs_of_cacheable(t, 1), 0);
+        check("uc_stream_first_read", t.reqs.empty() ? 0 : t.reqs[0].addr, RESET_PC);
+    }
+
+    // ── Streaming from the L1: each line read once ───────────────
+    {
+        Trace t;
+        run(dut, cached, 120, t);
+        check_commits("c_stream", t.commits, stream_commits);
+        check("c_stream_nofault", (uint32_t)t.fault_vecs.size(), 0);
+        check("c_stream_no_word_read", reqs_of_cacheable(t, 0), 0);
+        check("c_stream_line_once", reqs_of_line(t, RESET_PC), 1);   // it was kept
+        // One miss per read: a replay's lookup is not counted again.
+        check("c_stream_misses", l1_read(dut, CACHE_READ_MISSES),
+              (uint32_t)t.reqs.size());
+        check("c_stream_hits_some", l1_read(dut, CACHE_READ_HITS) > 0, 1);
+    }
+
+    // ── L1 off on a cacheable page: line reads, nothing kept ─────
+    {
+        Trace t;
+        run(dut, l1_off, 200, t);
+        check_commits("off_stream", t.commits, stream_commits);
+        check("off_stream_line_reads", reqs_of_cacheable(t, 0), 0);
+        check("off_stream_reads_again", reqs_of_line(t, RESET_PC) >= 4, 1);
+    }
+
+    // ── A slot held for FIFO room ────────────────────────────────
+    // The MUL holds EX, the fetch buffer fills, and a slot waits in IF2.
     {
         g_rom.clear();
         load(RESET_PC, {
-            enc_l(OP_L_LLI,  1, 0x10),   // R1 = 0x10
-            enc_l(OP_L_ADDI, 1, 0x01),   // R1 = 0x11
-            enc_l(OP_L_LLI,  2, 0x55),   // R2 = 0x55
-            enc_r(OP_R_ADD,  1, 2, 0),   // R1 = R1 + R2 = 0x66
+            enc_l(OP_L_LLI, 1, 6),
+            enc_l(OP_L_LLI, 2, 7),
+            enc_r(OP_R_MUL, 1, 2, 0) | (3 << 12),    // R1=lo=42, R3=hi=0
+            enc_l(OP_L_LLI, 4, 0x44),
+            enc_l(OP_L_LLI, 5, 0x55),
+            enc_l(OP_L_LLI, 6, 0x66),
+            enc_l(OP_L_LLI, 7, 0x77),
+            enc_l(OP_L_LLI, 8, 0x88),
         });
-        std::vector<Commit> got; std::vector<uint32_t> flt;
-        run(dut, 80, got, flt, -1);
-        check_commits("stream", got, {{1,0x10},{1,0x11},{2,0x55},{1,0x66}});
-        check("stream_nofault", (uint32_t)flt.size(), 0);
+        Trace t;
+        run(dut, cached, 160, t);
+        check_commits("held", t.commits, {{1,6},{2,7},{1,42},{3,0},{4,0x44},{5,0x55},
+                                          {6,0x66},{7,0x77},{8,0x88}});
     }
 
     // ── Branch redirect: wrong-path instructions never commit ────
@@ -164,15 +284,47 @@ int main(int argc, char** argv) {
         uint32_t b = RESET_PC;
         load(b, {
             enc_l(OP_L_LLI, 1, 0x10),               // +0x00  R1 = 0x10
-            enc_b_to(b + 0x04, b + 0x10, COND_AL),  // +0x04  BR -> +0x10
+            enc_b_to(b + 0x04, b + 0x20, COND_AL),  // +0x04  BR -> +0x20
             enc_l(OP_L_LLI, 1, 0xBAD),              // +0x08  wrong path
             enc_l(OP_L_LLI, 1, 0xBAD),              // +0x0C  wrong path
-            enc_l(OP_L_LLI, 2, 0x22),               // +0x10  target: R2 = 0x22
         });
-        std::vector<Commit> got; std::vector<uint32_t> flt;
-        run(dut, 80, got, flt, -1);
-        check_commits("branch", got, {{1,0x10},{2,0x22}});
-        check("branch_nofault", (uint32_t)flt.size(), 0);
+        load(b + 0x20, {enc_l(OP_L_LLI, 2, 0x22)}); // +0x20  target: R2 = 0x22
+
+        // The word read of +0x08 is in flight when the branch resolves. Its
+        // word must not reach the slot at the target.
+        Config slow = uncached; slow.latency = 16;
+        Trace t;
+        run(dut, slow, 200, t);
+        check_commits("uc_branch", t.commits, {{1,0x10},{2,0x22}});
+        check("uc_branch_nofault", (uint32_t)t.fault_vecs.size(), 0);
+        check("uc_branch_wrong_path_read",
+              t.reqs.size() > 2 && t.reqs[2].addr == b + 0x08, 1);
+    }
+    {
+        g_rom.clear();
+        uint32_t b = RESET_PC;
+        load(b, {
+            enc_l(OP_L_LLI, 1, 0x10),               // +0x00  R1 = 0x10
+            enc_l(OP_L_LLI, 2, 0x11),               // +0x04
+            enc_l(OP_L_LLI, 3, 0x12),               // +0x08
+            enc_b_to(b + 0x0C, b + 0x20, COND_AL),  // +0x0C  BR -> +0x20
+            enc_l(OP_L_LLI, 1, 0xBAD),              // +0x10  wrong path, the next line
+            enc_l(OP_L_LLI, 4, 0x44),               // +0x14  reached from +0x24
+        });
+        load(b + 0x20, {
+            enc_l(OP_L_LLI, 2, 0x22),               // +0x20  target
+            enc_b_to(b + 0x24, b + 0x14, COND_AL),  // +0x24  BR -> +0x14
+        });
+
+        // The next line's read is in flight when the branch resolves. The
+        // read runs to its done and the L1 keeps the line, so the branch
+        // back into it reads nothing more.
+        Config slow = cached; slow.latency = 16;
+        Trace t;
+        run(dut, slow, 300, t);
+        check_commits("c_branch", t.commits,
+                      {{1,0x10},{2,0x11},{3,0x12},{2,0x22},{4,0x44}});
+        check("c_branch_line_kept", reqs_of_line(t, b + 0x10), 1);
     }
 
     // ── Interrupt entry via the vector fetch ─────────────────────
@@ -191,16 +343,64 @@ int main(int argc, char** argv) {
         });
         g_rom[VEC_EXT_IRQ << 2] = base + 0x100;   // vector_table[VEC_EXT_IRQ] = handler
 
-        std::vector<Commit> got; std::vector<uint32_t> flt;
-        run(dut, 120, got, flt, /*irq_cycle=*/0);
+        Config irq = cached; irq.irq_cycle = 0;
+        Trace t;
+        run(dut, irq, 200, t);
 
         bool saw_irq_fault = false;
-        for (uint32_t v : flt) if (v == VEC_EXT_IRQ) saw_irq_fault = true;
+        for (uint32_t v : t.fault_vecs) if (v == VEC_EXT_IRQ) saw_irq_fault = true;
         check("irq_fault", saw_irq_fault ? 1 : 0, 1);
+        check("irq_handler_ran", committed(t, 5, 0xABC), 1);
 
-        bool saw_handler = false;
-        for (const Commit& c : got) if (c.idx == 5 && c.data == 0xABC) saw_handler = true;
-        check("irq_handler_ran", saw_handler ? 1 : 0, 1);
+        bool vec_word_read = false;
+        for (const Req& r : t.reqs)
+            if (r.addr == (VEC_EXT_IRQ << 2)) vec_word_read = r.cacheable == 0;
+        check("irq_vector_word_read", vec_word_read, 1);
+    }
+
+    // ── A fault with a read in flight: the vector read waits ─────
+    {
+        g_rom.clear();
+        uint32_t base = RESET_PC;
+        load(base, {enc_r(OP_R_RESERVED, 1, 2, 0)});   // reserved opcode -> VEC_ILLEGAL
+        load(base + 0x100, {enc_l(OP_L_LLI, 5, 0xABC)});
+        g_rom[VEC_ILLEGAL << 2] = base + 0x100;
+
+        Config slow = uncached; slow.latency = 16;
+        Trace t;
+        run(dut, slow, 200, t);
+        check("wait_fault", t.fault_vecs.empty() ? 0xFF : t.fault_vecs[0], VEC_ILLEGAL);
+        check("wait_killed_read", t.reqs.size() > 1 ? t.reqs[1].addr : 0, base + 4);
+        check("wait_vector_read", t.reqs.size() > 2 ? t.reqs[2].addr : 0,
+              VEC_ILLEGAL << 2);
+        check("wait_handler_ran", committed(t, 5, 0xABC), 1);
+    }
+
+    // ── A fetch bus fault: a word read and a line read ───────────
+    for (int pass = 0; pass < 2; pass++) {
+        const char* tag = pass ? "bf_line" : "bf_word";
+        char n[48];
+        g_rom.clear();
+        uint32_t base = RESET_PC, target = 0xFFFE0040;
+        load(base, {
+            enc_l(OP_L_LLI, 1, 0x11),
+            enc_b_to(base + 4, target, COND_AL),
+        });
+        load(base + 0x100, {enc_l(OP_L_LLI, 5, 0xABC)});
+        g_rom[VEC_BUS_FAULT << 2] = base + 0x100;
+
+        Trace t;
+        run(dut, pass ? cached : uncached, 200, t);
+        snprintf(n, sizeof(n), "%s_vec", tag);
+        check(n, t.fault_vecs.empty() ? 0xFF : t.fault_vecs[0], VEC_BUS_FAULT);
+        snprintf(n, sizeof(n), "%s_one_fault", tag);
+        check(n, t.mmu_faults, 1);
+        snprintf(n, sizeof(n), "%s_vaddr", tag);
+        check(n, t.fault_vaddr, target);
+        snprintf(n, sizeof(n), "%s_status", tag);
+        check(n, t.fault_status, FAULT_BUS | FSTAT_X);
+        snprintf(n, sizeof(n), "%s_handler_ran", tag);
+        check(n, committed(t, 5, 0xABC), 1);
     }
 
     printf("%s: %d/%d checks passed\n",

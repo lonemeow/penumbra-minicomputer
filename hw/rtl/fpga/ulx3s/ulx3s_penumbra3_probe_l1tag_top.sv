@@ -15,26 +15,29 @@
 //
 // Everything memory-shaped is the real gen3 RTL: penumbra3_mmu (both
 // translate copies, the pinned TLB, bypass), penumbra3_l1 per side,
-// penumbra3_mem1_stage and
-// penumbra3_mem2_stage, penumbra3_decode and penumbra3_fetch_buffer, and the
-// predictor pieces. What the probe models is the stimulus (an LFSR standing
-// in for EX, ID, the bus and the sysreg writes) and the fetch control.
+// penumbra3_mem1_stage and penumbra3_mem2_stage, penumbra3_if2_stage,
+// penumbra3_fetch_replay and penumbra3_fetch_buffer, and the predictor
+// pieces. What the probe models is the stimulus (an LFSR standing in for
+// EX, ID, the bus and the sysreg writes), the fetch PC and the predictor's
+// place beside IF2.
 //
-// The fetch control follows the replay contract: an I-cache miss is the
-// L1-I's access, and next cycle a flop steers IF1 back to the missed PC
-// while the access runs, so the hit never reaches IF1's hold. The hold is
-// FIFO-full or the L1-I's registered busy. A predicted redirect steers the
-// PC in the cycle IF2 presents the transfer and bubbles the fetch behind
-// it; EX's redirect and the replay, both registered, outrank it.
+// The fetch follows the replay contract (doc/internals/penumbra3/
+// l1-cache.md, "The fetch side"): an I-cache miss is the L1-I's access,
+// and the replay unit steers IF1 back to the missed PC while the access
+// runs, so the hit never reaches IF1's hold. The hold is FIFO-full or the
+// L1-I's registered busy. A predicted redirect steers the PC in the cycle
+// IF2 presents the transfer and bubbles the fetch behind it; EX's redirect
+// and the replay, both registered, outrank it.
 //
-// Two rules keep IF2's cones short. The word->bundle decode runs once per
-// way, on each way's word straight off the block RAM, beside the TLB match
-// and the tag compare; the hit only selects a finished bundle. And the
-// predicted redirect waits on neither the translation fault nor the
-// cacheable hit: a slot that faults traps from registered state, and one
-// that misses is replayed, so steering the next fetch from its word costs
-// at most that wrong-path fetch. The return stack, which must not take a
-// wrong-path push or pop, updates a cycle after its transfer enqueues.
+// The predictor keeps IF2's rule: each way's pre-decode runs on that way's
+// word straight off the block RAM, and the hit only selects a finished
+// redirect. The redirect waits on neither the translation fault nor IF2's
+// verdict: a slot that faults traps from registered state, and one that
+// misses is replayed, so steering the next fetch from its word costs at
+// most that wrong-path fetch. A slot taking a delivered word predicts from
+// its own lookup, whose hit way holds the same word. The return stack,
+// which must not take a wrong-path push or pop, updates a cycle after its
+// transfer enqueues.
 //
 // Every output folds onto the LEDs through registers, so no keep-alive XOR
 // lands on a measured cone. Clocking is the 25 MHz crystal directly, one
@@ -100,7 +103,7 @@ module ulx3s_penumbra3_probe_l1tag_top (
     logic ex_redirect_q, sys_we_q, sys_re_q, train_q, bubble_q;
     logic [31:0] ex_target_q, sys_wdata_q;
     logic [3:0]  sys_reg_q;
-    logic        user_q, force_bypass_q, fault_commit_q, deq_ready_q;
+    logic        user_q, fault_commit_q, deq_ready_q;
     always_ff @(posedge clk) begin
         ex_redirect_q  <= !rst && lfsr_q[3] && lfsr_q[17] && lfsr_q[29];
         ex_target_q    <= {lfsr_q[45:16], 2'b00};
@@ -111,7 +114,6 @@ module ulx3s_penumbra3_probe_l1tag_top (
         train_q        <= lfsr_q[8] && lfsr_q[26];
         bubble_q       <= lfsr_q[13] && lfsr_q[37] && lfsr_q[49];
         user_q         <= lfsr_q[14];
-        force_bypass_q <= lfsr_q[15] && lfsr_q[39];
         fault_commit_q <= lfsr_q[16] && lfsr_q[42];
         deq_ready_q    <= lfsr_q[18];
     end
@@ -139,7 +141,6 @@ module ulx3s_penumbra3_probe_l1tag_top (
         .i_i_lookup_en    (1'b1),
         .i_i_vaddr        (pc_q),
         .i_i_user_mode    (user_q),
-        .i_i_force_bypass (force_bypass_q),
         .i_i_hold         (fetch_hold),
         .o_i_paddr        (i_paddr),
         .o_i_cacheable    (i_cacheable),
@@ -381,18 +382,16 @@ module ulx3s_penumbra3_probe_l1tag_top (
     // ══════════════════════════════════════════════════════════
     logic [31:0] if2_pc_q;
     logic        if2_valid_q;
-    logic        replay_q, il1_busy, fbuf_enq_ready;
-    logic [31:0] replay_pc_q;
+    logic        if2_hold, if2_flush, if2_miss, il1_busy, fbuf_enq_ready;
 
     // The hold: the IF2 slot waits on FIFO room, or the L1-I is busy.
-    assign fetch_hold = (if2_valid_q && !fbuf_enq_ready) || il1_busy;
+    assign fetch_hold = if2_hold || il1_busy;
 
     // ── L1-I ─────────────────────────────────────────────────────
     logic [I_WAYS-1:0]         il1_way_hit;
     logic [I_WAYS-1:0][31:0]   il1_word;
-    logic                      il1_hit, il1_count_read, il1_fault;
+    logic                      il1_hit, il1_count_read, il1_done, il1_fault;
     logic [31:0]               il1_sys_rdata, il1_access_word;
-    logic                      replay_d;      // IF2's miss: the L1-I's access
     logic                      ireq_valid, ireq_cacheable, irsp_done_q;
     logic [31:0]               ireq_addr;
 
@@ -405,7 +404,7 @@ module ulx3s_penumbra3_probe_l1tag_top (
         .i_rst           (rst),
         .i_launch           (!fetch_hold),
         .i_offset           (pc_q[11:0]),
-        .i_discard          (replay_q || ex_redirect_q),   // the slot in IF2 is flushed
+        .i_discard          (if2_flush),
         .i_frame            (i_frame),
         .i_frame_sel        (i_frame_sel),
         .o_way_hit          (il1_way_hit),
@@ -417,14 +416,14 @@ module ulx3s_penumbra3_probe_l1tag_top (
         .i_store_byte_en    ('0),
         .i_count_read       (il1_count_read),
         .i_count_write      (1'b0),
-        .i_access_req       (replay_d),
+        .i_access_req       (if2_miss),
         .i_access_we        (1'b0),
         .i_access_addr      (i_paddr),
         .i_access_cacheable (i_cacheable),
         .i_access_byte_en   (4'hF),
         .i_access_wdata     ('0),
         .o_busy             (il1_busy),
-        .o_access_done      (),
+        .o_access_done      (il1_done),
         .o_access_word      (il1_access_word),
         .o_access_fault     (il1_fault),
         .o_req_valid        (ireq_valid),
@@ -443,10 +442,77 @@ module ulx3s_penumbra3_probe_l1tag_top (
         .o_sys_rdata        (il1_sys_rdata)
     );
 
+    // The I-side uncore, modeled like the D-side one.
+    always_ff @(posedge clk) begin
+        if (rst) irsp_done_q <= 1'b0;
+        else     irsp_done_q <= ireq_valid && !irsp_done_q && lfsr_q[50];
+    end
+
+    // ── IF2 and the replay ───────────────────────────────────────
+    logic         if2_enq_valid, if2_enq_fire, if2_fault_pending;
+    ctrl_bundle_t if2_bundle;
+    logic [31:0]  if2_enq_pc, if2_enq_next_pc, if2_fault_status;
+    logic [3:0]   if2_fault_vec;
+    logic         frep_replay, frep_replayed, frep_deliver;
+    logic [31:0]  frep_replay_pc;
+
+    // EX's redirect, or the replay's discard of the slot behind a miss.
+    assign if2_flush = ex_redirect_q || frep_replay;
+
+    penumbra3_if2_stage #(
+        .WAYS (I_WAYS)
+    ) u_if2 (
+        .i_clk               (clk),
+        .i_rst               (rst),
+        .i_pc                (if2_pc_q),
+        .i_next_pc           (if2_pc_q + 32'd4),
+        .i_valid             (if2_valid_q),
+        .i_way_hit           (il1_way_hit),
+        .i_way_word          (il1_word),
+        .i_hit               (il1_hit),
+        .i_cacheable         (i_cacheable),
+        .i_user_mode         (user_q),
+        .i_mmu_fault         (i_fault),
+        .i_mmu_fault_status  (i_fault_status),
+        .i_replayed          (frep_replayed),
+        .i_deliver           (frep_deliver),
+        .i_deliver_word      (il1_access_word),
+        .i_deliver_fault     (il1_fault),
+        .o_miss              (if2_miss),
+        .i_flush             (if2_flush),
+        .i_enq_ready         (fbuf_enq_ready),
+        .o_enq_valid         (if2_enq_valid),
+        .o_enq_fire          (if2_enq_fire),
+        .o_enq_bundle        (if2_bundle),
+        .o_enq_pc            (if2_enq_pc),
+        .o_enq_next_pc       (if2_enq_next_pc),
+        .o_enq_fault_pending (if2_fault_pending),
+        .o_enq_fault_vec     (if2_fault_vec),
+        .o_enq_fault_status  (if2_fault_status),
+        .o_count_read        (il1_count_read),
+        .o_hold              (if2_hold)
+    );
+
+    penumbra3_fetch_replay u_fetch_replay (
+        .i_clk         (clk),
+        .i_rst         (rst),
+        .i_miss        (if2_miss),
+        .i_miss_pc     (if2_pc_q),
+        .i_busy        (il1_busy),
+        .i_access_done (il1_done),
+        .i_flush       (ex_redirect_q),
+        .i_slot_left   (if2_enq_fire),
+        .o_replay      (frep_replay),
+        .o_replay_pc   (frep_replay_pc),
+        .o_replayed    (frep_replayed),
+        .o_deliver     (frep_deliver)
+    );
+
     // ── Predictor: direction table, return stack, per-way pre-decode ─
     logic [1:0]  dir_counter;
     logic [31:0] ras_top;
     logic        ras_push, ras_pop;
+    logic [31:0] ras_push_addr_q;
 
     penumbra3_direction_table #(
         .ENTRIES (DIR_ENTRIES)
@@ -485,16 +551,12 @@ module ulx3s_penumbra3_probe_l1tag_top (
         );
     end
 
-    // ── IF2: enqueue, predicted redirect, replay ─────────────────
-    // A slot EX's redirect or the replay steers past is wrong-path. The
-    // redirect needs only a way to hit (the AND-OR below) and FIFO room.
-    logic slot_live, ihit, enq_valid, enq_fire, word_enq;
-    assign slot_live = if2_valid_q && !replay_q && !ex_redirect_q;
-    assign il1_count_read = slot_live && i_cacheable;
-    assign ihit      = il1_hit && i_cacheable;
-    assign enq_valid = slot_live && (i_fault || ihit);
-    assign enq_fire  = enq_valid && fbuf_enq_ready;
-    assign word_enq  = enq_fire && !i_fault;
+    // ── The predicted redirect ───────────────────────────────────
+    // A slot IF2 flushes is wrong-path. The redirect needs only a way to hit
+    // (the AND-OR below) and FIFO room.
+    logic slot_live, word_enq;
+    assign slot_live = if2_valid_q && !if2_flush;
+    assign word_enq  = if2_enq_fire && !if2_fault_pending;
 
     logic [I_WAYS-1:0]       way_redirect;
     logic [I_WAYS-1:0][31:0] way_target;
@@ -514,8 +576,7 @@ module ulx3s_penumbra3_probe_l1tag_top (
     end
     assign pred_redirect = slot_live && fbuf_enq_ready && |(il1_way_hit & way_redirect);
 
-    logic        ras_push_q, ras_pop_q;
-    logic [31:0] ras_push_addr_q;
+    logic ras_push_q, ras_pop_q;
     always_ff @(posedge clk) begin
         ras_push_q      <= !rst && word_enq && |(il1_way_hit & pd_call);
         ras_pop_q       <= !rst && word_enq && |(il1_way_hit & pd_return);
@@ -524,13 +585,11 @@ module ulx3s_penumbra3_probe_l1tag_top (
     assign ras_push = ras_push_q;
     assign ras_pop  = ras_pop_q;
 
-    assign replay_d = slot_live && !i_fault && !ihit;
-
     // ── PC and the IF1/IF2 register ──────────────────────────────
     always_ff @(posedge clk) begin
         if (rst)                pc_q <= 32'hFFFF_0000;
         else if (ex_redirect_q) pc_q <= ex_target_q;
-        else if (replay_q)      pc_q <= replay_pc_q;
+        else if (frep_replay)   pc_q <= frep_replay_pc;
         else if (pred_redirect) pc_q <= pred_target;
         else if (!fetch_hold)   pc_q <= pc_q + 32'd4;
     end
@@ -538,7 +597,7 @@ module ulx3s_penumbra3_probe_l1tag_top (
     always_ff @(posedge clk) begin
         if (rst) begin
             if2_valid_q <= 1'b0;
-        end else if (ex_redirect_q || replay_q || pred_redirect) begin
+        end else if (ex_redirect_q || frep_replay || pred_redirect) begin
             if2_valid_q <= 1'b0;
         end else if (!fetch_hold) begin
             if2_valid_q <= 1'b1;
@@ -546,38 +605,7 @@ module ulx3s_penumbra3_probe_l1tag_top (
         end
     end
 
-    // ── Replay, and the I-side uncore modeled like the D-side one ─
-    always_ff @(posedge clk) begin
-        replay_q <= !rst && replay_d;
-        if (replay_d) replay_pc_q <= if2_pc_q;
-        if (rst) irsp_done_q <= 1'b0;
-        else     irsp_done_q <= ireq_valid && !irsp_done_q && lfsr_q[50];
-    end
-
-    // ── Word -> bundle decode, per way, into the fetch FIFO ──────
-    localparam int BUNDLE_W = $bits(ctrl_bundle_t);
-    logic [I_WAYS-1:0][BUNDLE_W-1:0] way_bundle;
-    for (genvar gw = 0; gw < I_WAYS; gw++) begin : g_decode
-        ctrl_bundle_t bundle;
-        penumbra3_decode u_decode (
-            .i_ir     (il1_word[gw]),
-            .o_bundle (bundle)
-        );
-        assign way_bundle[gw] = bundle;
-    end
-
-    ctrl_bundle_t if2_bundle;
-    always_comb begin
-        logic [BUNDLE_W-1:0] selected;
-        selected = '0;
-        for (int w = 0; w < I_WAYS; w++)
-            selected |= {BUNDLE_W{il1_way_hit[w]}} & way_bundle[w];
-        if2_bundle = ctrl_bundle_t'(selected);
-    end
-
-    logic [3:0] if2_fault_vec;
-    assign if2_fault_vec = i_fault ? fault_vec_of(i_fault_status[3:0]) : 4'd0;
-
+    // ── The fetch FIFO ───────────────────────────────────────────
     logic              fbuf_deq_valid;
     logic [FBUF_W-1:0] fbuf_deq_data;
     penumbra3_fetch_buffer #(
@@ -587,9 +615,9 @@ module ulx3s_penumbra3_probe_l1tag_top (
         .i_clk       (clk),
         .i_rst       (rst),
         .i_flush     (ex_redirect_q),
-        .i_enq_valid (enq_valid),
-        .i_enq_data  ({if2_bundle, if2_pc_q, if2_pc_q + 32'd4,
-                       i_fault_status, if2_fault_vec, i_fault}),
+        .i_enq_valid (if2_enq_valid),
+        .i_enq_data  ({if2_bundle, if2_enq_pc, if2_enq_next_pc,
+                       if2_fault_status, if2_fault_vec, if2_fault_pending}),
         .o_enq_ready (fbuf_enq_ready),
         .o_deq_valid (fbuf_deq_valid),
         .o_deq_data  (fbuf_deq_data),
@@ -612,8 +640,7 @@ module ulx3s_penumbra3_probe_l1tag_top (
         fold_q[4] <= ^pc_q;
         fold_q[5] <= ^ras_top;
         fold_q[6] <= ^{dl1_sys_rdata, il1_sys_rdata};
-        fold_q[7] <= ^{ireq_valid, ireq_cacheable, ireq_addr, replay_pc_q,
-                       il1_access_word, il1_fault};
+        fold_q[7] <= ^{ireq_valid, ireq_cacheable, ireq_addr};
         led_q     <= fold_q;
     end
     assign led = led_q;

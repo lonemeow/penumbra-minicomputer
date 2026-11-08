@@ -371,6 +371,7 @@ MODULE_TESTS = \
     penumbra3_bus_master_test:tb_penumbra3_bus_master \
     penumbra3_decode_test:tb_penumbra3_decode \
     penumbra3_fetch_buffer \
+    penumbra3_fetch_replay \
     penumbra3_if1_stage \
     penumbra3_if2_stage_test:tb_penumbra3_if2_stage \
     penumbra3_id_stage_test:tb_penumbra3_id_stage \
@@ -384,7 +385,7 @@ MODULE_TESTS = \
     penumbra3_spine_test:tb_penumbra3_spine \
     penumbra3_vecfetch \
     penumbra3_irq \
-    penumbra3_core \
+    penumbra3_core_test:tb_penumbra3_core \
     penumbra3_mmu \
     penumbra3_l1 \
     penumbra3_predecode \

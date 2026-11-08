@@ -8,12 +8,12 @@
 //
 // Three redirect-class actors steer or bubble the fetch:
 //
-//   - Taken-branch / vector-fetch / ERET redirect (i_redirect): steers PC to
-//     the target and bubbles the in-flight fetch (IF1 is the deepest wrong-path
-//     slot a taken branch flushes). The PC steer overrides back-pressure -- the
-//     target is captured even while IF2 holds us -- but its launch follows the
-//     normal hold gate: the read fires the cycle the fetch is no longer held,
-//     from the steered PC.
+//   - Taken-branch / vector-fetch / ERET redirect, and a miss's replay
+//     (i_redirect): steers PC to the target and bubbles the in-flight fetch
+//     (IF1 is the deepest wrong-path slot a taken branch flushes). The PC steer
+//     overrides back-pressure -- the target is captured even while we are held
+//     -- but its launch follows the normal hold gate: the read fires the cycle
+//     the hold falls, from the steered PC.
 //
 //   - Fault flush (i_flush): at the fault commit, bubbles the in-flight
 //     (wrong-path) fetch *without* steering PC -- the handler address is not
@@ -29,11 +29,10 @@
 //     next-fetch PC, one past the held fetch, so a dropped held instruction
 //     would be lost).
 //
-// i_mem_busy is the I-side front port's transaction-in-flight signal. While it
-// is high no new lookup may launch -- o_fetch_en is gated and PC holds --
-// including for a redirect target: the PC steers immediately, but its launch
-// waits for the busy drop. The in-flight (now wrong-path) fill completes into
-// the void; IF2 discards it.
+// i_stall_in holds the fetch for three reasons, each read from a flop: IF2's
+// slot waits for FIFO room, the L1-I is busy with an access, or the vector
+// fetch is under way. A hit or a miss never reaches it: a miss steers PC back
+// through i_redirect a cycle later instead.
 
 // keep_hierarchy: hold this stage boundary through synth_ecp5 so the backward
 // stall path places compactly instead of smearing across the die, and reads
@@ -46,8 +45,7 @@ module penumbra3_if1_stage #(
     input  logic        i_rst,
 
     // ── Pipeline handshake ───────────────────────────────────────
-    input  logic        i_stall_in,    // IF2 cannot accept (hold PC + IF1/IF2)
-    input  logic        i_mem_busy,    // I-side front port mid-transaction: no launch
+    input  logic        i_stall_in,    // hold PC + IF1/IF2: no launch
 
     // ── Taken-branch / vector-fetch redirect ─────────────────────
     input  logic        i_redirect,    // steer PC to the target + bubble this fetch
@@ -69,29 +67,24 @@ module penumbra3_if1_stage #(
     output logic        o_valid
 );
 
-    // The fetch holds -- PC unchanged, IF1/IF2 register frozen -- whenever IF2
-    // back-pressures or the front port is mid-transaction; otherwise it
-    // advances by one instruction. A redirect is the third actor: it wins over
-    // both hold and sequential advance. Busy folds into hold here, not only
-    // into the enable gate: advancing PC past a fetch whose launch was
-    // suppressed would silently drop that instruction.
+    // The fetch holds -- PC unchanged, IF1/IF2 register frozen -- under
+    // i_stall_in; otherwise it advances by one instruction. A redirect wins
+    // over both hold and sequential advance.
     logic [31:0] pc;
     logic [31:0] pc_plus_4;
     logic        hold;
     logic        redirect;
 
     assign pc_plus_4 = pc + 32'd4;
-    assign hold      = i_stall_in | i_mem_busy;
+    assign hold      = i_stall_in;
     assign redirect  = i_redirect;
 
     // Drive the current PC to the I-cache BRAM every cycle. The BRAM read
     // advances only when the fetch does, so under stall the registered output
     // freezes in lockstep with the IF1/IF2 register below. The launch gate is
-    // purely ~hold: no new lookup while IF2 back-pressures or the front port is
-    // mid-transaction -- both fold into hold, so this enable never reaches the
-    // front port mid-fill. A redirect does not force its own launch; it only
-    // steers PC. Keeping every redirect source out of this enable holds the
-    // fetch address off the back end's stall cone.
+    // purely ~hold. A redirect does not force its own launch; it only steers
+    // PC. Keeping every redirect source out of this enable holds the fetch
+    // address off the back end's stall cone.
     assign o_fetch_addr = pc;
     assign o_fetch_en   = ~hold;
 
@@ -150,11 +143,5 @@ module penumbra3_if1_stage #(
     assert property (@(posedge i_clk) disable iff (i_rst)
         (i_fetch_stop && !hold) |=> !o_valid)
         else $error("penumbra3_if1_stage: advancing fetch-stop did not bubble the IF1/IF2 slot");
-    // The launch gate folds i_mem_busy into hold, so no lookup ever launches
-    // while the front port is mid-transaction -- the "no new launch while busy"
-    // obligation IF2's skid and fill logic both rely on.
-    assert property (@(posedge i_clk) disable iff (i_rst)
-        !(o_fetch_en && i_mem_busy))
-        else $error("penumbra3_if1_stage: launch asserted while front port busy");
 
 endmodule

@@ -9,13 +9,13 @@
 // earlier generations (see doc/system/mmu.md); only the MEM1-launch /
 // MEM2-verdict pipelining is gen3.
 //
-// Per-port verdict (resolve cycle): bypass > pinned > main. Bypass (MMUCR.M=0,
-// or the I-port's per-fetch force_bypass for vector reads) identity-maps to an
-// uncacheable physical address with no checks. Otherwise a pinned hit overrides
-// the main-TLB verdict (pinned-hit-wins). The pinned lookup runs on the live
-// (launch-cycle) vaddr and its resolved verdict is registered to the resolve
-// cycle, keeping the fully-associative compare off the MEM2 main-TLB cone; the
-// bypass identity paddr rides the same launch->resolve register.
+// Per-port verdict (resolve cycle): bypass > pinned > main. Bypass (MMUCR.M=0)
+// identity-maps to an uncacheable physical address with no checks. Otherwise
+// a pinned hit overrides the main-TLB verdict (pinned-hit-wins). The pinned
+// lookup runs on the live (launch-cycle) vaddr and its resolved verdict is
+// registered to the resolve cycle, keeping the fully-associative compare off
+// the MEM2 main-TLB cone; the bypass identity paddr rides the same
+// launch->resolve register.
 //
 // Pinned-hit-wins lives here, not inside tlb_verdict: the shared tlb_pinned
 // produces a resolved verdict (paddr / cacheable / fault), while tlb_verdict
@@ -42,7 +42,6 @@ module penumbra3_mmu
     input  logic        i_i_lookup_en,
     input  logic [31:0] i_i_vaddr,
     input  logic        i_i_user_mode,
-    input  logic        i_i_force_bypass,   // vector fetch: physical read
     input  logic        i_i_hold,           // freeze the launch->resolve register
     output logic [31:0] o_i_paddr,
     output logic        o_i_cacheable,
@@ -282,9 +281,8 @@ module penumbra3_mmu
     logic        i_phit_q, i_pcache_q, i_pprot_q;
     logic [31:0] i_ppaddr_q;
 
-    logic d_bypass_d, i_bypass_d;
-    assign d_bypass_d = ~mmu_m;
-    assign i_bypass_d = ~mmu_m | i_i_force_bypass;
+    logic bypass_d;
+    assign bypass_d = ~mmu_m;
 
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
@@ -292,7 +290,7 @@ module penumbra3_mmu
             d_phit_q <= 1'b0; i_phit_q <= 1'b0;
         end else begin
             if (!i_d_hold) begin
-                d_bypass_q <= d_bypass_d;
+                d_bypass_q <= bypass_d;
                 d_lookup_q <= i_d_lookup_en;
                 d_vaddr_q  <= i_d_vaddr;
                 d_phit_q   <= pin_d_hit;
@@ -301,7 +299,7 @@ module penumbra3_mmu
                 d_pprot_q  <= pin_d_fault;
             end
             if (!i_i_hold) begin
-                i_bypass_q <= i_bypass_d;
+                i_bypass_q <= bypass_d;
                 i_lookup_q <= i_i_lookup_en;
                 i_user_q   <= i_i_user_mode;
                 i_vaddr_q  <= i_i_vaddr;

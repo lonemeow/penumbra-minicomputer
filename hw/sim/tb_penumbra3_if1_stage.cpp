@@ -1,16 +1,14 @@
 // Verilator testbench for penumbra3_if1_stage.
 //
-// Drives the handshake (back-pressure, front-port busy), the redirect/flush/
-// fetch-stop actors, and checks the launch interface and the IF1/IF2 register
+// Drives the back-pressure, the redirect/flush/fetch-stop actors, and checks
+// the launch interface and the IF1/IF2 register
 // against the IF1 contract:
 //   - reset drives RESET_PC with the launch enabled, IF1/IF2 invalid
 //   - free streaming advances PC by 4 each cycle and marks fetches valid
 //   - back-pressure (i_stall_in) holds PC and the IF1/IF2 register, launch off
-//   - a busy front port (i_mem_busy) holds exactly like back-pressure -- PC
-//     must not advance past a fetch whose launch was suppressed
 //   - a redirect steers PC at the edge and bubbles the in-flight fetch
-//   - a redirect while busy steers PC but holds the target's launch until
-//     the busy drop, then launches from the steered PC
+//   - a redirect while held steers PC but holds the target's launch until
+//     the hold falls, then launches from the steered PC
 //   - i_fetch_stop freezes PC at the boundary and bubbles the output
 
 #include <cstdio>
@@ -31,7 +29,7 @@ static void tick(Vpenumbra3_if1_stage* dut) {
 }
 
 static void clear(Vpenumbra3_if1_stage* dut) {
-    dut->i_stall_in = 0; dut->i_mem_busy = 0;
+    dut->i_stall_in = 0;
     dut->i_redirect = 0; dut->i_redirect_pc = 0;
     dut->i_flush = 0; dut->i_fetch_stop = 0;
 }
@@ -70,21 +68,7 @@ int main(int argc, char** argv) {
     tick(dut); dut->eval();
     check("unstall_pc",  dut->o_pc, 8);           // resumed
 
-    // ── Busy front port holds exactly like back-pressure ─────────
-    // (PC must not advance past a fetch whose launch was suppressed.)
-    dut->i_mem_busy = 1; dut->eval();
-    check("busy_en",     dut->o_fetch_en, 0);
-    tick(dut); dut->eval();
-    check("busy_addr",   dut->o_fetch_addr, 12);  // PC held
-    check("busy_pc",     dut->o_pc, 8);           // IF1/IF2 held
-    tick(dut); dut->eval();
-    check("busy_addr2",  dut->o_fetch_addr, 12);  // still held
-    dut->i_mem_busy = 0; dut->eval();
-    check("drop_en",     dut->o_fetch_en, 1);     // launch fires at the drop
-    tick(dut); dut->eval();
-    check("drop_pc",     dut->o_pc, 12);
-
-    // ── Redirect with the port free: steer + bubble, launch flows ─
+    // ── Redirect, not held: steer + bubble, launch flows ─────────
     dut->i_redirect = 1; dut->i_redirect_pc = 0x100; dut->eval();
     check("redir_en",    dut->o_fetch_en, 1);     // read may advance
     tick(dut);
@@ -95,21 +79,21 @@ int main(int argc, char** argv) {
     check("redir_pc",    dut->o_pc, 0x100);
     check("redir_valid", dut->o_valid, 1);
 
-    // ── Redirect while busy: steer now, launch at the busy drop ──
-    // The wrong-path transaction must finish before any new lookup; the
-    // target waits, parked in PC, with the launch gated.
-    dut->i_mem_busy = 1; dut->eval();
+    // ── Redirect while held: steer at once, launch when the hold falls ──
+    // A read in flight holds IF1 like this: the target waits, parked in PC,
+    // with the launch gated.
+    dut->i_stall_in = 1; dut->eval();
     dut->i_redirect = 1; dut->i_redirect_pc = 0x200; dut->eval();
-    check("rb_en",       dut->o_fetch_en, 0);     // busy outranks the redirect
+    check("rb_en",       dut->o_fetch_en, 0);     // the hold outranks the redirect
     tick(dut);
     dut->i_redirect = 0; dut->eval();
     check("rb_addr",     dut->o_fetch_addr, 0x200); // PC steered anyway
     check("rb_bub",      dut->o_valid, 0);
-    tick(dut); dut->eval();                          // fill still draining
+    tick(dut); dut->eval();                          // still held
     check("rb_hold_en",  dut->o_fetch_en, 0);
     check("rb_hold",     dut->o_fetch_addr, 0x200);
     check("rb_hold_bub", dut->o_valid, 0);           // nothing launched: no valid fetch
-    dut->i_mem_busy = 0; dut->eval();
+    dut->i_stall_in = 0; dut->eval();
     check("rb_drop_en",  dut->o_fetch_en, 1);        // held launch fires
     tick(dut); dut->eval();
     check("rb_pc",       dut->o_pc, 0x200);

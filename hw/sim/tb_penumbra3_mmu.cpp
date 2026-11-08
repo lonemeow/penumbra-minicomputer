@@ -5,7 +5,7 @@
 //   - install a main-TLB entry, enable M=1, translate a hit (paddr + offset)
 //   - a TLB miss and a protection fault (R-only page, write access)
 //   - a pinned entry overriding the main TLB (pinned-hit-wins)
-//   - the I-side translate and per-fetch force_bypass (vector fetch)
+//   - the I-side translate
 //   - sysreg TLB read-back (RDSYS TLB_VPN / TLB_PTE)
 //   - commit-time fault registers (FADDR / FSTAT)
 //
@@ -35,7 +35,7 @@ static void tick(Vpenumbra3_mmu* d) {
 
 static void clear(Vpenumbra3_mmu* d) {
     d->i_i_lookup_en = 0; d->i_i_vaddr = 0; d->i_i_user_mode = 0;
-    d->i_i_force_bypass = 0; d->i_i_hold = 0;
+    d->i_i_hold = 0;
     d->i_d_lookup_en = 0; d->i_d_vaddr = 0; d->i_d_access_type = 0;
     d->i_d_user_mode = 0; d->i_d_hold = 0;
     d->i_fault_commit = 0; d->i_fault_vaddr = 0; d->i_fault_status = 0;
@@ -75,9 +75,8 @@ static void query_d(Vpenumbra3_mmu* d, uint32_t va, int acc, int user) {
     d->i_d_lookup_en = 0;   // verdict is from the registered query; safe to drop
 }
 
-static void query_i(Vpenumbra3_mmu* d, uint32_t va, int user, int force_bypass) {
-    d->i_i_lookup_en = 1; d->i_i_vaddr = va; d->i_i_user_mode = user;
-    d->i_i_force_bypass = force_bypass; d->eval();
+static void query_i(Vpenumbra3_mmu* d, uint32_t va, int user) {
+    d->i_i_lookup_en = 1; d->i_i_vaddr = va; d->i_i_user_mode = user; d->eval();
     tick(d);
     d->i_i_lookup_en = 0;
 }
@@ -96,7 +95,7 @@ int main(int argc, char** argv) {
     check("flat_d_cache", d->o_d_cacheable, 0);
     check("flat_d_miss",  d->o_d_miss_fault, 0);
     check("flat_d_prot",  d->o_d_prot_fault, 0);
-    query_i(d, 0xFFFF0000, 0, 0);
+    query_i(d, 0xFFFF0000, 0);
     check("flat_i_paddr", d->o_i_paddr, 0xFFFF0000);
     check("flat_i_fault", d->o_i_fault, 0);
 
@@ -132,13 +131,10 @@ int main(int argc, char** argv) {
     check("pin_paddr", d->o_d_paddr, 0x00077100);
     check("pin_cache", d->o_d_cacheable, 1);
 
-    // ── I-side translate + force_bypass ──────────────────────────
-    query_i(d, 0x00010000, 0, 0);                  // mapped (VPN 0x10 -> PPN 0x20)
+    // ── I-side translate ─────────────────────────────────────────
+    query_i(d, 0x00010000, 0);                     // mapped (VPN 0x10 -> PPN 0x20)
     check("i_hit_paddr", d->o_i_paddr, 0x00020000);
     check("i_hit_fault", d->o_i_fault, 0);
-    query_i(d, 0x00010000, 0, 1);                  // vector fetch: physical
-    check("i_bypass_paddr", d->o_i_paddr, 0x00010000);
-    check("i_bypass_fault", d->o_i_fault, 0);
 
     // ── Sysreg TLB read-back (main entry at set 0x10, way 0) ─────
     wrsys(d, TIDX, 0x10);

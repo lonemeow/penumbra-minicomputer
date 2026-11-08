@@ -6,36 +6,25 @@
 // normal pipeline can't issue, because it was just flushed. This small FSM
 // performs it, then redirects fetch to the handler.
 //
-// It drives the instruction-fetch port (shared, muxed in the core: while
-// o_active is high the FSM owns the port and IF1 is held). The vector table is
-// read at a physical address with MMU translation bypassed -- mandatory, so the
-// vector page is reachable with no TLB entry and entry never recurses into a
-// TLB miss. The kernel stores the handler word at that physical address; the
-// read goes through the cache hierarchy as an uncacheable pass-through.
+// The read is the L1-I's access with no lookup: an uncacheable read at a
+// physical address (doc/internals/penumbra3/l1-cache.md, "The fetch side").
+// While o_active is high IF1 is held, so the FSM has the fetch side to
+// itself. No translation and no lookup is mandatory: the vector page is
+// reachable with no TLB entry, entry never recurses into a TLB miss, and a
+// handler software has just stored is read rather than a stale line.
 //
-// Timing tracks the front port's launch/resolve contract: launch the read into
-// an idle port (the fault may have killed a fetch whose fill is still draining
-// -- no lookup may launch while the port is busy), then hold the read request
-// until the completion cycle -- i_mem_busy low, drop-equals-valid. The vector
-// read is a bypass-translated (hence uncacheable) pass-through, so the
-// completion waits out the downstream round trip. No flush is needed on the
-// redirect -- the pipeline downstream was already emptied by the fault-commit
-// flush.
+// The fault may have killed a fetch whose access is still in flight, and the
+// L1-I takes one access at a time, so the FSM waits until it is not busy
+// before it asks. No flush is needed on the redirect -- the pipeline
+// downstream was already emptied by the fault-commit flush.
 //
-//   IDLE  -- dormant; the fetch port belongs to IF1.
-//   DRIVE -- own the port; once it is idle, drive vec<<2 + read-enable
-//            (launch the read).
-//   WAIT  -- hold the read request; at the completion cycle capture the
-//            handler word from i_mem_rdata and return.
+//   IDLE  -- dormant; the fetch side belongs to IF1.
+//   DRIVE -- wait out any access in flight, then ask for vec<<2.
+//   WAIT  -- at the read's done capture the handler word and return.
 //
-// The redirect fires from a register, one cycle after the completion, with the
-// captured handler word -- not combinationally at the busy drop. The
-// request/busy mesh demands it: every memory layer's busy combinationally
-// follows its consumer's request (the sync-bus contract), so no request -- and
-// nothing a request is gated on, like the front-end flush this redirect drives
-// -- may combinationally depend on a busy, or the mesh closes into a false
-// combinational loop. o_active covers the redirect cycle, so the FSM owns the
-// port until its redirect has fired.
+// The redirect fires from a register, one cycle after the done, with the
+// captured handler word. o_active covers the redirect cycle, so the FSM owns
+// the fetch side until its redirect has fired.
 
 module penumbra3_vecfetch (
     input  logic        i_clk,
@@ -45,15 +34,13 @@ module penumbra3_vecfetch (
     input  logic        i_fault_commit,    // a fault was taken this cycle
     input  logic [3:0]  i_fault_vec,        // its vector number
 
-    // ── Front port (shared with IF2; muxed onto port A in the core) ──
-    input  logic [31:0] i_mem_rdata,        // handler address, valid at completion
-    input  logic        i_mem_busy,         // port mid-transaction: no launch / not done
-
-    // ── Fetch-port ownership ─────────────────────────────────────
-    output logic        o_active,           // FSM owns the fetch port + holds IF1
-    output logic [31:0] o_fetch_addr,       // vector_table[vec<<2], physical
-    output logic        o_fetch_en,         // launch the table read
-    output logic        o_fetch_re,         // the read request, held until completion
+    // ── The read: the L1-I's access ──────────────────────────────
+    input  logic        i_busy,             // the L1-I is busy
+    input  logic        i_access_done,      // the L1-I's access is done (one cycle)
+    input  logic [31:0] i_access_word,      // handler address, valid from the done
+    output logic        o_active,           // the FSM owns the fetch side + holds IF1
+    output logic        o_req,              // one cycle: ask for the table word
+    output logic [31:0] o_req_addr,         // vector_table[vec<<2], physical
 
     // ── PC redirect to the handler ───────────────────────────────
     output logic        o_redirect,
@@ -80,12 +67,11 @@ module penumbra3_vecfetch (
     end
 
     // Per-state work + transition, together so each state reads as "do this,
-    // therefore advance". o_fetch_en and o_redirect are the control strobes
-    // (the actual work); the data outputs below are state-independent muxes.
-    // The table read completes this cycle: the request is up and the port
-    // reports done (busy low, drop-equals-valid).
+    // therefore advance". o_req and o_redirect are the control strobes (the
+    // actual work); the data outputs below are state-independent muxes. A done
+    // in DRIVE is the killed fetch's.
     logic read_done;
-    assign read_done = (state == S_WAIT) && !i_mem_busy;
+    assign read_done = (state == S_WAIT) && i_access_done;
 
     always_comb begin
         next_state = state;
@@ -95,11 +81,9 @@ module penumbra3_vecfetch (
                 if (i_fault_commit) next_state = S_DRIVE;
             end
             S_DRIVE: begin
-                // Hold until the port is idle: the fault may have killed a
-                // fetch whose fill is still draining, and no lookup may launch
-                // while it is busy. The launch (o_fetch_en below) fires with
-                // this transition.
-                if (!i_mem_busy) next_state = S_WAIT;
+                // Hold until the L1-I is not busy. The request (o_req below)
+                // fires with this transition.
+                if (!i_busy) next_state = S_WAIT;
             end
             S_WAIT: begin
                 if (read_done) next_state = S_IDLE;
@@ -108,11 +92,7 @@ module penumbra3_vecfetch (
         endcase
     end
 
-    // The launch fires on DRIVE's exit; the request holds through WAIT. The
-    // enable's busy gate is safe (a launch clock-enable feeds no busy), but the
-    // request must be busy-independent -- see the header.
-    assign o_fetch_en = (state == S_DRIVE) && !i_mem_busy;
-    assign o_fetch_re = (state == S_WAIT);
+    assign o_req = (state == S_DRIVE) && !i_busy;
 
     // ── Registered redirect: captured word, next-cycle pulse ─────
     logic        redirect_q;
@@ -120,16 +100,16 @@ module penumbra3_vecfetch (
     always_ff @(posedge i_clk) begin
         if (i_rst) redirect_q <= 1'b0;
         else       redirect_q <= read_done;
-        if (read_done) handler_q <= i_mem_rdata;
+        if (read_done) handler_q <= i_access_word;
     end
     assign o_redirect = redirect_q;
 
     // ── Data outputs (function of the latched vector / captured word) ─
-    // Ownership covers the redirect cycle: the port stays the FSM's until the
-    // redirect has fired, so IF1 cannot slip a launch in between.
+    // Ownership covers the redirect cycle: the fetch side stays the FSM's until
+    // the redirect has fired, so IF1 cannot slip a launch in between.
     assign o_active      = (state != S_IDLE) || redirect_q;
-    assign o_fetch_addr  = {26'b0, vec_q, 2'b00};   // vec<<2, physical (RAM region: bit31=0)
-    assign o_redirect_pc = handler_q;               // captured at the completion
+    assign o_req_addr    = {26'b0, vec_q, 2'b00};   // vec<<2, physical
+    assign o_redirect_pc = handler_q;               // captured at the done
 
     // ══════════════════════════════════════════════════════════
     // Assertions -- sim-only (Verilator --assert); stripped at synth.

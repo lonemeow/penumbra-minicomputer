@@ -2,21 +2,20 @@
 //
 // The bare pipelined core: the front end (penumbra3_if1_stage,
 // penumbra3_if2_stage) through the elastic fetch buffer onto penumbra3_spine
-// (ID->EX->MEM1->MEM2->WB + regfile + scoreboard + SPR/scratch files), plus the
-// two exception-path units -- penumbra3_vecfetch (vector-table read + handler
-// redirect) and penumbra3_irq (recognition + EX-frontier injection). Everything
-// memory-shaped lives outside, behind the port groups the machine integration
-// (machine_penumbra3) binds to the duplicated-BRAM MMU/TLB, the split L1s, the
-// arbiter + registered bus master, the fill sequencer, and the sysreg device
-// complex:
+// (ID->EX->MEM1->MEM2->WB + regfile + scoreboard + SPR/scratch files), plus
+// penumbra3_fetch_replay (a miss's replay) and the two exception-path units
+// -- penumbra3_vecfetch (vector-table read + handler redirect) and
+// penumbra3_irq (recognition + EX-frontier injection). Everything
+// memory-shaped lives outside, behind the port groups the machine
+// integration (machine_penumbra3) binds to the duplicated-BRAM MMU/TLB, the
+// split L1s, the uncore and the sysreg device complex:
 //
-//   - The fetch front port: launch (o_fetch_addr/o_fetch_en, the registered
-//     lookup the I-side L1 and the MMU I-port sample together), the request
-//     (o_fetch_re, held level until the completion cycle), and the response
-//     (i_fetch_rdata valid when i_fetch_busy is low -- drop-equals-valid). IF1
-//     and the vector-fetch FSM share the port through the mux here: while
-//     o_fetch_bypass (vecf active) is high the FSM owns it and its reads are
-//     physical (MMU bypass, which also makes them uncacheable).
+//   - The fetch side: the launch (o_fetch_addr/o_fetch_en, the lookup the L1-I
+//     and the MMU I-port sample together), their verdicts a cycle later, and
+//     the L1-I's access (doc/internals/penumbra3/l1-cache.md). IF1 launches
+//     and IF2 resolves; a miss is the L1-I's access, and
+//     penumbra3_fetch_replay replays the fetch. The vector-fetch FSM reads
+//     the vector table as an access with no lookup.
 //   - The D-side memory ports the spine drives directly: the translation
 //     launch/verdict (MEM1 launch, MEM2 verdict), the L1-D's launch, resolve,
 //     store strobe and access (doc/internals/penumbra3/l1-cache.md), and the
@@ -33,7 +32,8 @@ module penumbra3_core
     import penumbra_pkg::*;
     import penumbra3_pkg::*;
 #(
-    parameter  logic [31:0] RESET_PC = 32'hFFFF_0000   // the hw-test --org convention
+    parameter  logic [31:0] RESET_PC = 32'hFFFF_0000,  // the hw-test --org convention
+    parameter  int          IL1_WAYS = 2               // the L1-I's ways
 )(
     input  logic                  i_clk,
     input  logic                  i_rst,
@@ -42,19 +42,32 @@ module penumbra3_core
     input  logic                  i_irq,
     input  logic                  i_timer_irq,
 
-    // ── Fetch front port (launch / request / response) ───────────
+    // ── Fetch launch (the L1-I and the MMU I-port sample this together) ──
     output logic [31:0]           o_fetch_addr,
-    output logic                  o_fetch_en,      // lookup launch (I-L1 + MMU I-port sample this)
-    output logic                  o_fetch_re,      // word request, held until completion
-    input  logic [31:0]           i_fetch_rdata,   // valid when i_fetch_busy low
-    input  logic                  i_fetch_busy,
-    input  logic                  i_fetch_fault,   // bus fault on the fetch, at i_fetch_busy drop
-
-    // ── Fetch translation context + MMU I-port verdict ───────────
-    output logic                  o_fetch_bypass,  // vector-fetch owns the port: physical read
+    output logic                  o_fetch_en,      // low holds both lookups
     output logic                  o_fetch_user,    // fetch privilege (query + status info)
+
+    // ── MMU I-port verdict ───────────────────────────────────────
+    input  logic [31:0]           i_fetch_paddr,
+    input  logic                  i_fetch_cacheable,
     input  logic                  i_fetch_mmu_fault,
     input  logic [31:0]           i_fetch_mmu_fault_status,
+
+    // ── L1-I (verdict, counting, discard, access) ────────────────
+    // The L1 launches on o_fetch_en. A miss and the vector read are its
+    // accesses, one at a time.
+    input  logic [IL1_WAYS-1:0]       i_icache_way_hit,
+    input  logic [IL1_WAYS-1:0][31:0] i_icache_way_word,
+    input  logic                      i_icache_hit,
+    output logic                      o_icache_count_read,
+    output logic                      o_icache_discard,     // IF2's slot is flushed
+    output logic                      o_icache_access_req,
+    output logic [31:0]               o_icache_access_addr, // physical
+    output logic                      o_icache_access_cacheable,
+    input  logic                      i_icache_busy,
+    input  logic                      i_icache_access_done,
+    input  logic [31:0]               i_icache_access_word,
+    input  logic                      i_icache_access_fault,
 
     // ── D-side translation (MEM1 launch / MEM2 verdict) ──────────
     output logic                  o_translate_en,
@@ -126,18 +139,21 @@ module penumbra3_core
 );
 
     // ── Front-end wires ──────────────────────────────────────────
-    logic [31:0] if1_fetch_addr;
-    logic        if1_fetch_en;
     logic [31:0] if1_pc, if1_next_pc;
     logic        if1_valid;
 
-    logic         if2_fetch_re;
+    logic         if2_miss;
+    logic         if2_enq_fire;
     logic         if2_enq_valid;
     ctrl_bundle_t if2_enq_bundle;
     logic [31:0]  if2_enq_pc, if2_enq_next_pc, if2_enq_fault_status;
     logic [3:0]   if2_enq_fault_vec;
     logic         if2_enq_fault_pending;
-    logic         if2_stall;     // IF2 -> IF1 back-pressure
+    logic         if2_hold;      // IF2 -> IF1 back-pressure
+
+    // ── Fetch replay wires ───────────────────────────────────────
+    logic        frep_replay, frep_replayed, frep_deliver;
+    logic [31:0] frep_replay_pc;
 
     // ── Fetch buffer handshake ───────────────────────────────────
     logic              fbuf_enq_ready, fbuf_deq_valid;
@@ -170,9 +186,8 @@ module penumbra3_core
 
     // ── Vector-fetch FSM wires ───────────────────────────────────
     logic        vecf_active;
-    logic [31:0] vecf_fetch_addr;
-    logic        vecf_fetch_en;
-    logic        vecf_fetch_re;
+    logic        vecf_req;
+    logic [31:0] vecf_req_addr;
     logic        vecf_redirect;
     logic [31:0] vecf_redirect_pc;
 
@@ -199,71 +214,98 @@ module penumbra3_core
     // A fault flushes the wrong-path slot now but does NOT steer here -- its
     // redirect comes later, via the vector fetch (IF1's fault flush is i_flush
     // = fault_commit, wired below).
-    logic        if1_redirect;      // steer PC + bubble IF1's slot: any event fired
-    logic [31:0] if1_redirect_pc;   // the target for that redirect
+    logic        if_redirect;       // one of the four fired
+    logic [31:0] if1_redirect_pc;   // the target IF1 steers to
 
-    // The redirect is "any steering event"; only the target needs the priority
-    // select. Since the events are mutually exclusive, the priority is arbitrary
-    // and the final leg doubles as the (don't-care) idle target.
-    assign if1_redirect = branch_taken | vecf_redirect | eret_commit | wrsys_resync;
+    // A fifth steers IF1 without being a flush: a miss's replay discards only
+    // what fetch launched behind the miss, and what the fetch buffer holds is
+    // older than it. Any of the four is older than the fetch that missed, so
+    // the replay takes the last leg, which doubles as the (don't-care) idle
+    // target.
+    assign if_redirect = branch_taken | vecf_redirect | eret_commit | wrsys_resync;
     always_comb begin
         if      (branch_taken)  if1_redirect_pc = branch_target;
         else if (vecf_redirect) if1_redirect_pc = vecf_redirect_pc;
         else if (eret_commit)   if1_redirect_pc = epc;
-        else                    if1_redirect_pc = wrsys_resync_pc;
+        else if (wrsys_resync)  if1_redirect_pc = wrsys_resync_pc;
+        else                    if1_redirect_pc = frep_replay_pc;
     end
 
     // Any front-end kill bubbles IF2 + the fetch buffer: the four steering
-    // events (folded into if1_redirect) plus a fault, which flushes the
-    // wrong-path word the cycle it commits.
+    // events plus a fault, which flushes the wrong-path word the cycle it
+    // commits.
     logic if_flush;
-    assign if_flush = if1_redirect | fault_commit;
+    assign if_flush = if_redirect | fault_commit;
 
-    // The fetch port: IF1 drives it normally, the vector-fetch FSM while it owns
-    // it (o_fetch_bypass tells the MMU those reads are physical). IF2's request
-    // can never overlap the FSM's -- entry flushed IF2's slot first.
-    assign o_fetch_addr   = vecf_active ? vecf_fetch_addr : if1_fetch_addr;
-    assign o_fetch_en     = vecf_active ? vecf_fetch_en   : if1_fetch_en;
-    assign o_fetch_re     = vecf_active ? vecf_fetch_re   : if2_fetch_re;
-    assign o_fetch_bypass = vecf_active;
+    // IF2 also loses the slot behind a miss to the miss's replay.
+    logic if2_flush;
+    assign if2_flush = if_flush | frep_replay;
 
     // ══════════════════════════════════════════════════════════
     // IF1 -- PC + fetch address generation
     // ══════════════════════════════════════════════════════════
     penumbra3_if1_stage #(.RESET_PC(RESET_PC)) u_if1 (
         .i_clk(i_clk), .i_rst(i_rst),
-        .i_stall_in(if2_stall | vecf_active),   // held while the FSM owns the fetch port
-        .i_mem_busy(i_fetch_busy),
-        .i_redirect(if1_redirect), .i_redirect_pc(if1_redirect_pc),
+        .i_stall_in(if2_hold | i_icache_busy | vecf_active),
+        .i_redirect(if_redirect | frep_replay), .i_redirect_pc(if1_redirect_pc),
         .i_flush(fault_commit),                 // bubble the wrong-path fetch at the fault
         .i_fetch_stop(1'b0),                    // unused: the interrupt drains at the EX frontier
-        .o_fetch_addr(if1_fetch_addr), .o_fetch_en(if1_fetch_en),
+        .o_fetch_addr(o_fetch_addr), .o_fetch_en(o_fetch_en),
         .o_pc(if1_pc), .o_next_pc(if1_next_pc), .o_valid(if1_valid)
     );
 
     // ══════════════════════════════════════════════════════════
     // IF2 -- deliver fetched word (pre-decoded bundle) to the FIFO
     // ══════════════════════════════════════════════════════════
-    penumbra3_if2_stage u_if2 (
+    penumbra3_if2_stage #(
+        .WAYS(IL1_WAYS)
+    ) u_if2 (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_pc(if1_pc), .i_next_pc(if1_next_pc), .i_valid(if1_valid),
-        .i_ir(i_fetch_rdata),
-        .i_mem_busy(i_fetch_busy), .i_mem_fault(i_fetch_fault),
-        .o_fetch_re(if2_fetch_re),
-        // I-side MMU verdict -- the registered, held result for the fetch IF1
+        // The L1-I's and the MMU's registered, held results for the fetch IF1
         // launched (paired by the shared launch strobe).
+        .i_way_hit(i_icache_way_hit), .i_way_word(i_icache_way_word),
+        .i_hit(i_icache_hit),
+        .i_cacheable(i_fetch_cacheable),
         .i_user_mode(o_fetch_user),
         .i_mmu_fault(i_fetch_mmu_fault),
         .i_mmu_fault_status(i_fetch_mmu_fault_status),
-        .i_flush(if_flush),
+        .i_replayed(frep_replayed),
+        .i_deliver(frep_deliver), .i_deliver_word(i_icache_access_word),
+        .i_deliver_fault(i_icache_access_fault),
+        .o_miss(if2_miss),
+        .i_flush(if2_flush),
         .i_enq_ready(fbuf_enq_ready),
         .o_enq_valid(if2_enq_valid),
+        .o_enq_fire(if2_enq_fire),
         .o_enq_bundle(if2_enq_bundle),
         .o_enq_pc(if2_enq_pc), .o_enq_next_pc(if2_enq_next_pc),
         .o_enq_fault_pending(if2_enq_fault_pending),
         .o_enq_fault_vec(if2_enq_fault_vec),
         .o_enq_fault_status(if2_enq_fault_status),
-        .o_stall(if2_stall)
+        .o_count_read(o_icache_count_read),
+        .o_hold(if2_hold)
+    );
+
+    // ══════════════════════════════════════════════════════════
+    // The L1-I's access, and the replay of a miss
+    // ══════════════════════════════════════════════════════════
+    // A miss is the access of the lookup IF2 resolves; the vector read has no
+    // lookup, and comes only while IF1 is held and no access is in flight.
+    assign o_icache_access_req       = if2_miss | vecf_req;
+    assign o_icache_access_addr      = vecf_req ? vecf_req_addr : i_fetch_paddr;
+    assign o_icache_access_cacheable = !vecf_req && i_fetch_cacheable;
+
+    // IF2's flush throws its slot's lookup away.
+    assign o_icache_discard = if2_flush;
+
+    penumbra3_fetch_replay u_fetch_replay (
+        .i_clk(i_clk), .i_rst(i_rst),
+        .i_miss(if2_miss), .i_miss_pc(if1_pc),
+        .i_busy(i_icache_busy), .i_access_done(i_icache_access_done),
+        .i_flush(if_flush), .i_slot_left(if2_enq_fire),
+        .o_replay(frep_replay), .o_replay_pc(frep_replay_pc),
+        .o_replayed(frep_replayed), .o_deliver(frep_deliver)
     );
 
     // ══════════════════════════════════════════════════════════
@@ -292,7 +334,7 @@ module penumbra3_core
         .i_bundle(id_bundle), .i_pc(id_pc), .i_next_pc(id_next_pc),
         .i_valid(fbuf_deq_valid),
         .i_if_fault_pending(id_fault_pending), .i_if_fault_vec(id_fault_vec),
-        .i_if_fault_status(id_fault_status), .i_fetch_busy(i_fetch_busy),
+        .i_if_fault_status(id_fault_status), .i_fetch_busy(i_icache_busy),
         .o_deq_ready(id_deq_ready),
         // D-side translation -- MEM1 launch, MEM2 verdict.
         .o_translate_en(o_translate_en), .o_translate_vaddr(o_translate_vaddr),
@@ -359,17 +401,16 @@ module penumbra3_core
     // Vector-fetch FSM -- reads the handler address, redirects PC
     // ══════════════════════════════════════════════════════════
     // On a fault commit (an interrupt is one such commit -- the EX stage tags
-    // its instruction as a synthetic fault) it borrows the fetch port (muxed
-    // above) to read vector_table[vec<<2] -- the handler address the kernel
-    // stored there -- then redirects IF1 to the handler.
+    // its instruction as a synthetic fault) it reads vector_table[vec<<2] --
+    // the handler address the kernel stored there -- as the L1-I's access,
+    // then redirects IF1 to the handler.
     penumbra3_vecfetch u_vecfetch (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_fault_commit(fault_commit), .i_fault_vec(fault_vec),
-        .i_mem_rdata(i_fetch_rdata),
-        .i_mem_busy(i_fetch_busy),
+        .i_busy(i_icache_busy),
+        .i_access_done(i_icache_access_done), .i_access_word(i_icache_access_word),
         .o_active(vecf_active),
-        .o_fetch_addr(vecf_fetch_addr), .o_fetch_en(vecf_fetch_en),
-        .o_fetch_re(vecf_fetch_re),
+        .o_req(vecf_req), .o_req_addr(vecf_req_addr),
         .o_redirect(vecf_redirect), .o_redirect_pc(vecf_redirect_pc)
     );
 
@@ -385,5 +426,17 @@ module penumbra3_core
         .i_fault_commit(fault_commit), .i_vecf_active(vecf_active),
         .o_irq_inject(irq_inject), .o_irq_vec(irq_vec)
     );
+
+    // ── Assertions (sim-only; Verilator --assert) ─────────────────
+    // The fetch side's accesses come one at a time.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        !(if2_miss && vecf_req))
+        else $error("penumbra3_core: a miss and the vector read in one cycle");
+
+    // The front end holds no lookup across an access: the replay or a flush
+    // discards the slot behind it. So the L1-I's busy ends with its done.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        !(i_icache_access_done && i_icache_busy))
+        else $error("penumbra3_core: the L1-I stayed busy past its done");
 
 endmodule

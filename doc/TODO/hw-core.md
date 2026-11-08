@@ -171,22 +171,9 @@ ranks first ("Levers ranked by measured benefit"):
    enable, the cache device's sysregs and counters, 8 KB 2-way on the
    ECP5. Each L1 is its side's requester on the uncore port, and its
    clients see only lookups, stores and accesses
-   (`doc/internals/penumbra3/l1-cache.md`). The D-side is built that
-   way: MEM2 hands the L1-D a load it had no word for and every store,
-   and `mem_completion` completes the access on the L1's done. Still
-   open there: a register for `store_fault`, which `doc/system` does
-   not define, so the port's pulse goes nowhere.
-
-   **The fetch side moves onto it, with replay:** today IF2 reads busy
-   low as word valid and IF1 folds busy into its hold and the block RAM
-   enable, which puts the I-cache hit on that cone. Under replay a miss
-   steers IF1 back to the missed PC the next cycle, IF1 holds only on
-   FIFO-full or the L1-I's registered busy, and the replayed slot takes
-   the access's word. P0.5 settled the lookup and the IF2 shape
-   (`doc/internals/penumbra3/phase0-probes.md`, "P0.5 -- physical-tag
-   compare behind the TLB verdict") but never saw the hold form as its
-   worst path, so the full-top read is where replay has to show its
-   worth.
+   (`doc/internals/penumbra3/l1-cache.md`). Still open: a register for
+   `store_fault`, which `doc/system` does not define, so the port's
+   pulse goes nowhere.
 2. **The uncore pipeline:** L2 -- write-through and posted, a look-up
    every cycle, the line-wide transfer with fill-through -- with the
    I/D select and the fill folded in, driving `bus_master`.
@@ -199,6 +186,10 @@ cheaper refill").
 
 Phase-1's gating checkpoint is then the **full-top composition timing read**
 (bare skeleton, no BTB) -- calibrates the probe->full margin before feature work.
+It is also where the fetch side's replay shows its worth: P0.5 settled the
+lookup and the IF2 shape (`doc/internals/penumbra3/phase0-probes.md`, "P0.5 --
+physical-tag compare behind the TLB verdict") but never saw IF1's hold form as
+its worst path.
 
 **Locked hazard-model decisions** (context for resuming):
 
@@ -214,8 +205,8 @@ Phase-1's gating checkpoint is then the **full-top composition timing read**
 - Forward broadcasts to ID are producer *stages* (not source lanes), so every
   source matches every broadcast slot.
 - The fetch FIFO *is* the IF2/ID register (decode folds into enqueue, no extra
-  stage); the IF2 skid is retained for the drop-equals-valid I-cache
-  completion when the FIFO is momentarily full.
+  stage); a slot with no FIFO room holds IF1 and stays in IF2, its lookup read
+  again every cycle, so IF2 needs no skid.
 - The resolved datapath rides a packed `dpath_payload_t` (value, dest routing,
   flags, PC, fault verdict) carried as a unit across the EX->MEM->WB registers
   alongside `ctrl_bundle_t`; `store_data` rides its own EX->MEM1 wire (consumed
