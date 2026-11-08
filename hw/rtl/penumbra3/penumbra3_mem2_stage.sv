@@ -285,12 +285,15 @@ module penumbra3_mem2_stage
     // load's or sysreg read's value resolves here, behind a block RAM read
     // and the tag compare; carried on into EX's operand mux and ALU, that
     // would make one cycle of the translate, the cache and the add, so
-    // those forward from the MEM2/WB register instead.
+    // those forward from the MEM2/WB register instead. For the same reason
+    // the leg checks the slot's fault from the register: a fault born here
+    // comes only with a load or a store (asserted below), and neither
+    // forwards on this leg, a load excluded and a store writing no register.
     assign o_fwd_result = i_payload.value;
     assign o_fwd_dst    = i_payload.phys_dst;
     assign o_fwd_we     = i_payload.phys_dst_we;
-    assign o_fwd_valid  = i_valid & ~mem2_is_load & ~mem2_is_rdsys & ~mem2_fault
-                        & i_payload.phys_dst_we;
+    assign o_fwd_valid  = i_valid & ~mem2_is_load & ~mem2_is_rdsys
+                        & ~i_payload.fault_pending & i_payload.phys_dst_we;
 
     // -- MEM2/WB register -----------------------------------------
     // Assemble the WB payload from the carried payload, overriding value (the
@@ -364,6 +367,14 @@ module penumbra3_mem2_stage
     always_comb
         assert (i_rst || !(i_bubble && i_launch_hold))
             else $error("penumbra3_mem2_stage: a fault commit met a held MEM2 slot");
+
+    // A fault born here comes only with an access: MEM1 checks alignment
+    // and launches the translate for loads and stores alone. The MEM2->EX
+    // forward reads its slot's fault from the register on that guarantee.
+    always_comb
+        assert (i_rst || !(i_valid && !mem2_is_load && !mem2_is_store
+                           && (align_f || tlbmiss_f || prot_f)))
+            else $error("penumbra3_mem2_stage: a MEM2-born fault on a non-access slot");
 
     // A protection fault implies a TLB hit (the verdict module guarantees it).
     always_comb

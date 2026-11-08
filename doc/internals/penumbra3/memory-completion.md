@@ -51,7 +51,11 @@ before it: a load's word resolves during MEM2, behind the TLB and cache
 block RAM reads and the tag compare, and forwarding it from there would
 carry that cone on through EX's operand mux and ALU in the same cycle.
 Sysreg reads, which resolve in MEM2 the same way, forward from MEM2/WB
-too.
+too. Whether a result forwards from MEM2 is decided from registered
+state as well. The faults MEM2 raises (alignment, a TLB miss,
+protection) come only with loads and stores, and neither forwards from
+MEM2, so the choice depends on the fault an instruction brought into
+MEM2 and never on the translate's verdict.
 
 ## Load miss — hold-and-complete
 
