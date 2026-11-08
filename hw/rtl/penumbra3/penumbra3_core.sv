@@ -19,9 +19,8 @@
 //     physical (MMU bypass, which also makes them uncacheable).
 //   - The D-side memory ports the spine drives directly: the translation
 //     launch/verdict (MEM1 launch, MEM2 verdict), the L1-D's launch, resolve,
-//     store strobe and line install, the data side of the core-to-uncore port
-//     (doc/internals/penumbra3/uncore-port.md), and the WB-qualified MMU
-//     fault-register commit.
+//     store strobe and access (doc/internals/penumbra3/l1-cache.md), and the
+//     WB-qualified MMU fault-register commit.
 //   - The sysreg sideband: the RDSYS read selectors + launch strobe with the
 //     response due at data-ready, and the WRSYS write port committed from EX.
 //
@@ -34,9 +33,7 @@ module penumbra3_core
     import penumbra_pkg::*;
     import penumbra3_pkg::*;
 #(
-    parameter  logic [31:0] RESET_PC = 32'hFFFF_0000,  // the hw-test --org convention
-    parameter  int          DL1_WAYS = 2,              // the L1-D's ways
-    localparam int          DL1_WAY_BITS = $clog2(DL1_WAYS)
+    parameter  logic [31:0] RESET_PC = 32'hFFFF_0000   // the hw-test --org convention
 )(
     input  logic                  i_clk,
     input  logic                  i_rst,
@@ -71,24 +68,26 @@ module penumbra3_core
     input  logic                  i_translate_miss_fault,
     input  logic                  i_translate_prot_fault,
 
-    // ── L1-D (MEM1 launch / MEM2 resolve, store strobe, counting, install) ──
-    // The L1 launches on o_dcache_en outside o_mem_launch_hold. The line an
-    // install writes runs from the uncore's i_rsp_line to the L1 directly.
+    // ── L1-D (MEM1 launch / MEM2 resolve, store strobe, counting, access) ──
+    // The L1 launches on o_dcache_en outside o_mem_launch_hold. A store's
+    // data and lanes serve its hit write and its access both.
     output logic                  o_dcache_en,
     output logic [31:0]           o_dcache_vaddr,
     input  logic                  i_dcache_hit,
     input  logic [31:0]           i_dcache_rdata,
-    input  logic [DL1_WAY_BITS-1:0] i_dcache_victim_way,
-    input  logic                  i_dcache_enabled,
     output logic                  o_dcache_we,
     output logic [31:0]           o_dcache_wdata,
     output logic [3:0]            o_dcache_byte_en,
     output logic                  o_dcache_count_read,
     output logic                  o_dcache_count_write,
-    output logic                  o_dcache_fill_we,
-    output logic [DL1_WAY_BITS-1:0] o_dcache_fill_way,
-    output logic [31:0]           o_dcache_fill_paddr,
-    input  logic                  i_dcache_extra_cycle,
+    output logic                  o_dcache_access_req,
+    output logic                  o_dcache_access_we,
+    output logic [31:0]           o_dcache_access_addr,
+    output logic                  o_dcache_access_cacheable,
+    input  logic                  i_dcache_busy,
+    input  logic                  i_dcache_access_done,
+    input  logic [31:0]           i_dcache_access_word,
+    input  logic                  i_dcache_access_fault,
 
     // ── Sysreg sideband (RDSYS read; WRSYS write committed from EX) ─
     output logic                  o_sys_re,
@@ -99,17 +98,6 @@ module penumbra3_core
     output logic [3:0]            o_sys_wr_dev,
     output logic [3:0]            o_sys_wr_reg,
     output logic [31:0]           o_sys_wdata,
-
-    // ── Core-to-uncore port, data side (completion unit <-> uncore) ──
-    output logic                  o_dreq_valid,
-    output logic                  o_dreq_cacheable,
-    output logic [31:0]           o_dreq_addr,
-    output logic                  o_dreq_we,
-    output logic [3:0]            o_dreq_byte_en,
-    output logic [31:0]           o_dreq_wdata,
-    input  logic                  i_drsp_done,
-    input  logic                  i_rsp_fault,
-    input  logic [UNCORE_LINE_WORDS-1:0][31:0] i_rsp_line,
 
     // ── MMU fault-register commit (WB's qualified strobe + payload) ──
     output logic                  o_mmu_fault_commit,
@@ -299,9 +287,7 @@ module penumbra3_core
     // ══════════════════════════════════════════════════════════
     // Datapath spine -- ID -> EX -> MEM1 -> MEM2 -> WB
     // ══════════════════════════════════════════════════════════
-    penumbra3_spine #(
-        .DL1_WAYS(DL1_WAYS)
-    ) u_spine (
+    penumbra3_spine u_spine (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_bundle(id_bundle), .i_pc(id_pc), .i_next_pc(id_next_pc),
         .i_valid(fbuf_deq_valid),
@@ -318,24 +304,22 @@ module penumbra3_core
         // L1-D.
         .o_dcache_en(o_dcache_en), .o_dcache_vaddr(o_dcache_vaddr),
         .i_dcache_hit(i_dcache_hit), .i_dcache_rdata(i_dcache_rdata),
-        .i_dcache_victim_way(i_dcache_victim_way), .i_dcache_enabled(i_dcache_enabled),
         .o_dcache_we(o_dcache_we),
         .o_dcache_wdata(o_dcache_wdata), .o_dcache_byte_en(o_dcache_byte_en),
         .o_dcache_count_read(o_dcache_count_read),
         .o_dcache_count_write(o_dcache_count_write),
-        .o_dcache_fill_we(o_dcache_fill_we), .o_dcache_fill_way(o_dcache_fill_way),
-        .o_dcache_fill_paddr(o_dcache_fill_paddr),
-        .i_dcache_extra_cycle(i_dcache_extra_cycle),
+        .o_dcache_access_req(o_dcache_access_req),
+        .o_dcache_access_we(o_dcache_access_we),
+        .o_dcache_access_addr(o_dcache_access_addr),
+        .o_dcache_access_cacheable(o_dcache_access_cacheable),
+        .i_dcache_busy(i_dcache_busy), .i_dcache_access_done(i_dcache_access_done),
+        .i_dcache_access_word(i_dcache_access_word),
+        .i_dcache_access_fault(i_dcache_access_fault),
         // Sysreg.
         .o_sys_re(o_sys_re), .o_sys_dev(o_sys_dev), .o_sys_reg(o_sys_reg),
         .i_sys_rdata(i_sys_rdata),
         .o_sys_we(o_sys_we), .o_sys_wr_dev(o_sys_wr_dev), .o_sys_wr_reg(o_sys_wr_reg),
         .o_sys_wdata(o_sys_wdata),
-        // Core-to-uncore port, data side.
-        .o_dreq_valid(o_dreq_valid), .o_dreq_cacheable(o_dreq_cacheable),
-        .o_dreq_addr(o_dreq_addr), .o_dreq_we(o_dreq_we),
-        .o_dreq_byte_en(o_dreq_byte_en), .o_dreq_wdata(o_dreq_wdata),
-        .i_drsp_done(i_drsp_done), .i_rsp_fault(i_rsp_fault), .i_rsp_line(i_rsp_line),
         // Branch resolution -> the front end.
         .o_branch_taken(branch_taken), .o_branch_target(branch_target),
         // Exception entry / return / WRSYS resync -> the front end.

@@ -171,28 +171,22 @@ ranks first ("Levers ranked by measured benefit"):
    enable, the cache device's sysregs and counters, 8 KB 2-way on the
    ECP5. Each L1 is its side's requester on the uncore port, and its
    clients see only lookups, stores and accesses
-   (`doc/internals/penumbra3/l1-cache.md`). The RTL has the L1 without
-   a request of its own: `mem_completion` holds the D-side's request,
-   picks the victim way and installs the line. Open, in order:
+   (`doc/internals/penumbra3/l1-cache.md`). The D-side is built that
+   way: MEM2 hands the L1-D a load it had no word for and every store,
+   and `mem_completion` completes the access on the L1's done. Still
+   open there: a register for `store_fault`, which `doc/system` does
+   not define, so the port's pulse goes nowhere.
 
-   - **The L1 takes its access:** the request, the install and the
-     busy/done/discard contract move into `penumbra3_l1`.
-   - **The D-side moves onto it:** `mem_completion` keeps the
-     instruction's descriptor and completes on the L1's done, and the
-     victim way, the enable, the fill port and the extra cycle leave
-     the MEM2, spine and core ports. Still open there: a register for
-     `store_fault`, which `doc/system` does not define, so the port's
-     pulse goes nowhere.
-   - **The fetch side moves onto it, with replay:** today IF2 reads
-     busy low as word valid and IF1 folds busy into its hold and the
-     block RAM enable, which puts the I-cache hit on that cone. Under
-     replay a miss steers IF1 back to the missed PC the next cycle,
-     IF1 holds only on FIFO-full or the L1-I's registered busy, and the
-     replayed slot takes the access's word. P0.5 settled the lookup and
-     the IF2 shape (`doc/internals/penumbra3/phase0-probes.md`, "P0.5
-     -- physical-tag compare behind the TLB verdict") but never saw the
-     hold form as its worst path, so the full-top read is where replay
-     has to show its worth.
+   **The fetch side moves onto it, with replay:** today IF2 reads busy
+   low as word valid and IF1 folds busy into its hold and the block RAM
+   enable, which puts the I-cache hit on that cone. Under replay a miss
+   steers IF1 back to the missed PC the next cycle, IF1 holds only on
+   FIFO-full or the L1-I's registered busy, and the replayed slot takes
+   the access's word. P0.5 settled the lookup and the IF2 shape
+   (`doc/internals/penumbra3/phase0-probes.md`, "P0.5 -- physical-tag
+   compare behind the TLB verdict") but never saw the hold form as its
+   worst path, so the full-top read is where replay has to show its
+   worth.
 2. **The uncore pipeline:** L2 -- write-through and posted, a look-up
    every cycle, the line-wide transfer with fill-through -- with the
    I/D select and the fill folded in, driving `bus_master`.
@@ -226,9 +220,9 @@ Phase-1's gating checkpoint is then the **full-top composition timing read**
   flags, PC, fault verdict) carried as a unit across the EX->MEM->WB registers
   alongside `ctrl_bundle_t`; `store_data` rides its own EX->MEM1 wire (consumed
   in MEM2, never reaches WB).
-- The back-end stall is spine-distributed: MEM2's `mem_completion` produces
-  the registered `mem_pending`, and the spine fans it back to freeze the
-  *launch side* -- MEM1, the MEM1/MEM2 register,
+- The back-end stall is spine-distributed: the L1-D's registered busy reaches
+  the spine through MEM2 as `mem_pending`, and the spine fans it back to
+  freeze the *launch side* -- MEM1, the MEM1/MEM2 register,
   `dtranslate`/`tlb_store`/cache, and issue -- so the missing load and
   everything younger hold. It must NOT freeze the MEM2/WB output register:
   that drains older work to commit (the held load retires via the completion

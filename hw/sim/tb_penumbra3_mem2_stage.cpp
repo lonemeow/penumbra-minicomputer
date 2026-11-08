@@ -1,15 +1,15 @@
 // Verilator testbench for penumbra3_mem2_stage as the data side composes it
 // (penumbra3_mem2_stage_test): MEM1, the TLB's D-copy, a real L1 and MEM2
 // with its completion unit. The testbench is the uncore: it answers the
-// requests the completion unit raises, from a memory whose content is a
-// function of the address.
+// requests the L1 raises, from a memory whose content is a function of the
+// address. What the L1 installed shows as what later accesses hit.
 //
 // Timing: an access driven in cycle A is in MEM1; one tick later it is in
 // MEM2 with the translation and the L1 verdict resolved; it leaves MEM2 at
 // the next tick, into WB or into the completion unit.
 //
-// Covers: a load with the L1 disabled; a miss, its request, the line
-// install and the completion, cycle by cycle; hits on the installed line
+// Covers: a load with the L1 disabled; a miss, its request and the
+// completion, cycle by cycle; hits on the installed line
 // (+ sub-word); an uncached load as a word read; a faulted line read;
 // stores -- a hit and a miss written through, a sub-word store's lane, an
 // uncached store retiring with its completion, a faulted one, the launch
@@ -95,10 +95,9 @@ static void uncore_idle(Dut* d) {
 // ── What the testbench watches every cycle ───────────────────────
 static struct {
     int      cycle;
-    int      requests, installs, completions, store_strobes, req_changed;
+    int      requests, completions, store_strobes, req_changed;
     uint32_t req_addr;  int req_cacheable, req_byte_en, req_we;
     uint32_t req_wdata;
-    int      fill_way;  uint32_t fill_paddr;
     uint32_t cpl_value; int cpl_dest, cpl_fault, cpl_we, cpl_retires;
     uint32_t cpl_pc, cpl_vaddr, cpl_status;
     int      strays;    // cycles a completion's pulse rose without o_complete
@@ -136,10 +135,6 @@ static void tick(Dut* d) {
                       || d->o_dreq_byte_en != m.req_byte_en
                       || d->o_dreq_we != m.req_we
                       || d->o_dreq_wdata != m.req_wdata;
-    }
-    if (d->o_dcache_fill_we) {
-        m.installs++;
-        m.fill_way = d->o_dcache_fill_way; m.fill_paddr = d->o_dcache_fill_paddr;
     }
     if (d->o_complete) {
         m.completions++;
@@ -272,14 +267,13 @@ int main(int argc, char** argv) {
     check("off_request",       m.requests, 1);
     check("off_cacheable",     m.req_cacheable, 1);
     check("off_addr",          m.req_addr, 0x2008);
-    check("off_no_install",    m.installs, 0);
     check("off_value",         m.cpl_value, mem_word(0x2008));
     run(d, ld(MEM_SZ_WORD, 0, 5), 0x1008, 5, 1);
     check("off_asks_again",    m.requests, 2);
 
     l1_write(d, CACHE_CTRL, 1);
 
-    // ── A miss, cycle by cycle: park, request, install, completion ──
+    // ── A miss, cycle by cycle: park, request, completion ──
     uc.automatic = false;
     watch_reset();
     drive(d, ld(MEM_SZ_WORD, 0, 5), 0x1008, 5, 1);
@@ -297,9 +291,6 @@ int main(int argc, char** argv) {
     tick(d); tick(d);
     check("miss_request_held",     d->o_dreq_valid, 1);
     uncore_answer(d, false);                   // r
-    check("miss_install",          d->o_dcache_fill_we, 1);
-    check("miss_install_way",      d->o_dcache_fill_way, 0);   // the lowest invalid way
-    check("miss_install_paddr",    d->o_dcache_fill_paddr >> 4, 0x2008 >> 4);
     check("miss_no_complete_yet",  d->o_complete, 0);
     tick(d);                                   // r+1
     uncore_idle(d);
@@ -311,7 +302,6 @@ int main(int argc, char** argv) {
     drain(d);
     check("miss_one_request",      m.requests, 1);
     check("miss_request_stable",   m.req_changed, 0);
-    check("miss_one_install",      m.installs, 1);
     check("miss_one_completion",   m.completions, 1);
     check("miss_completion_retires", m.cpl_retires, 1);
     uc.automatic = true;
@@ -344,8 +334,9 @@ int main(int argc, char** argv) {
     check("uncached_addr",       m.req_addr, 0x4006);      // the byte address, unchanged
     check("uncached_byte_en",    m.req_byte_en, 0x4);
     check("uncached_value",      m.cpl_value, (mem_word(0x4004) >> 16) & 0xFF);
-    check("uncached_no_install", m.installs, 0);
     check("uncached_release_lag", m.release_lag, 1);       // nothing was installed
+    run(d, ld(MEM_SZ_BYTE, 0, 5), 0x3006, 5, 1);
+    check("uncached_asks_again", m.requests, 2);
 
     // ── A faulted line read installs nothing and completes with the fault ──
     watch_reset();
@@ -353,7 +344,6 @@ int main(int argc, char** argv) {
     run(d, ld(MEM_SZ_WORD, 0, 5), 0x1040, 5, 1);
     check("fault_completes",  m.completions, 1);
     check("fault_reported",   m.cpl_fault, 1);
-    check("fault_no_install", m.installs, 0);
     check("fault_retires",    m.cpl_retires, 1);           // a fault completes it
     check("fault_pc",         m.cpl_pc, pc_of(0x1040));
     check("fault_vaddr",      m.cpl_vaddr, 0x1040);        // the page's, not 0x2040
@@ -378,7 +368,6 @@ int main(int argc, char** argv) {
     check("store_completes",      m.completions, 1);
     check("store_retires_once",   m.cpl_retires, 0);     // it left through WB
     check("store_writes_no_reg",  m.cpl_we, 0);
-    check("store_no_install",     m.installs, 0);
     check("store_release_lag",    m.release_lag, 1);
     check("store_in_memory",      mem_word(0x2008), 0xAABBCCDD);
     run(d, ld(MEM_SZ_WORD, 0, 6), 0x1008, 6, 1);
@@ -424,7 +413,6 @@ int main(int argc, char** argv) {
     watch_reset();
     run(d, st(MEM_SZ_WORD), 0x10A4, 0, 0, 0x0BADF00D);   // a line the L1 does not hold
     check("store_miss_request",    m.requests, 1);
-    check("store_miss_no_install", m.installs, 0);
     run(d, ld(MEM_SZ_WORD, 0, 6), 0x10A4, 6, 1);
     check("store_miss_load_misses", m.requests, 2);      // nothing was allocated
     check("store_miss_read_back",  m.cpl_value, 0x0BADF00D);
@@ -578,7 +566,6 @@ int main(int argc, char** argv) {
     run2(d, ld(MEM_SZ_WORD, 0, 5), 0x1280, 5,
             ld(MEM_SZ_WORD, 0, 6), 0x1284, 6, 1);
     check("same_line_behind_one_request", m.requests, 1);
-    check("same_line_behind_one_install", m.installs, 1);
     check("same_line_behind_retires",     m.wb_n[6], 1);
     check("same_line_behind_value",       m.wb_value[6], mem_word(0x2284));
     check("same_line_behind_release_lag", m.release_lag, 2);  // the line shows late
@@ -591,11 +578,15 @@ int main(int argc, char** argv) {
     watch_reset();
     run2(d, ld(MEM_SZ_WORD, 0, 5), 0x72C0, 5,
             st(MEM_SZ_WORD), 0x12C4, 0, 0, 0xFEEDFACE);
-    check("evicted_store_fill_way",  m.fill_way, 0);
     check("evicted_store_written",   mem_word(0x22C4), 0xFEEDFACE);
     run(d, ld(MEM_SZ_WORD, 0, 6), 0x72C4, 6, 1);
     check("evicted_store_line_hits", m.requests, 2);       // the fill and the write
     check("evicted_store_line_kept", m.wb_value[6], mem_word(0x82C4));
+    run(d, ld(MEM_SZ_WORD, 0, 6), 0x52C4, 6, 1);
+    check("evicted_store_other_kept", m.requests, 2);      // way 1's line stayed
+    run(d, ld(MEM_SZ_WORD, 0, 6), 0x12C4, 6, 1);
+    check("evicted_store_victim_gone", m.requests, 3);     // the fill took way 0
+    check("evicted_store_victim_value", m.cpl_value, 0xFEEDFACE);
 
     // ── A load of another set, behind a load that fills ──
     watch_reset();

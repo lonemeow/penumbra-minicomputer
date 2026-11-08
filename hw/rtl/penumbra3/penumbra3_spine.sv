@@ -28,10 +28,7 @@
 module penumbra3_spine
     import penumbra_pkg::*;
     import penumbra3_pkg::*;
-#(
-    parameter  int DL1_WAYS     = 2,     // the L1-D's ways
-    localparam int DL1_WAY_BITS = $clog2(DL1_WAYS)
-) (
+(
     input  logic                  i_clk,
     input  logic                  i_rst,
 
@@ -58,22 +55,26 @@ module penumbra3_spine
     input  logic                  i_translate_miss_fault,
     input  logic                  i_translate_prot_fault,
 
-    // ── L1-D (MEM1 launch / MEM2 resolve, store strobe, counting, install) ──
+    // ── L1-D (MEM1 launch / MEM2 resolve, store strobe, counting, access) ──
+    // doc/internals/penumbra3/l1-cache.md. A store's data and lanes serve
+    // its hit write and its access both.
     output logic                  o_dcache_en,
     output logic [31:0]           o_dcache_vaddr,
     input  logic                  i_dcache_hit,
     input  logic [31:0]           i_dcache_rdata,
-    input  logic [DL1_WAY_BITS-1:0] i_dcache_victim_way,
-    input  logic                  i_dcache_enabled,
     output logic                  o_dcache_we,
     output logic [31:0]           o_dcache_wdata,
     output logic [3:0]            o_dcache_byte_en,
     output logic                  o_dcache_count_read,
     output logic                  o_dcache_count_write,
-    output logic                  o_dcache_fill_we,
-    output logic [DL1_WAY_BITS-1:0] o_dcache_fill_way,
-    output logic [31:0]           o_dcache_fill_paddr,
-    input  logic                  i_dcache_extra_cycle,
+    output logic                  o_dcache_access_req,
+    output logic                  o_dcache_access_we,
+    output logic [31:0]           o_dcache_access_addr,
+    output logic                  o_dcache_access_cacheable,
+    input  logic                  i_dcache_busy,
+    input  logic                  i_dcache_access_done,
+    input  logic [31:0]           i_dcache_access_word,
+    input  logic                  i_dcache_access_fault,
 
     // ── Sysreg read (MEM1 launch) + write (WRSYS drain-commit) ──
     output logic                  o_sys_re,
@@ -84,17 +85,6 @@ module penumbra3_spine
     output logic [3:0]            o_sys_wr_dev,
     output logic [3:0]            o_sys_wr_reg,
     output logic [31:0]           o_sys_wdata,
-
-    // ── Core-to-uncore port, data side (completion unit <-> uncore) ──
-    output logic                  o_dreq_valid,
-    output logic                  o_dreq_cacheable,
-    output logic [31:0]           o_dreq_addr,
-    output logic                  o_dreq_we,
-    output logic [3:0]            o_dreq_byte_en,
-    output logic [31:0]           o_dreq_wdata,
-    input  logic                  i_drsp_done,
-    input  logic                  i_rsp_fault,
-    input  logic [UNCORE_LINE_WORDS-1:0][31:0] i_rsp_line,
 
     // ── Branch resolution (to the front end) ──
     output logic                  o_branch_taken,
@@ -214,7 +204,7 @@ module penumbra3_spine
     // The local stalls each stage exposes (downstream-independent), plus the
     // registered back-end hold. These three are the only inputs the freeze
     // composition needs; everything below is derived from them.
-    //   - mem_pending   : registered flop from MEM2's mem_completion, never a
+    //   - mem_pending   : the L1-D's registered busy, through MEM2, never a
     //                     live cache/TLB verdict.
     //   - wb_local_stall: WB's dual-write hold (flop-shallow).
     //   - ex_local_stall: EX's divmul / drain-commit hold (flop-shallow).
@@ -521,9 +511,7 @@ module penumbra3_spine
     // ════════════════════════════════════════════════════════════
     // MEM2 -- memory access resolve + back-end completion
     // ════════════════════════════════════════════════════════════
-    penumbra3_mem2_stage #(
-        .DL1_WAYS(DL1_WAYS)
-    ) u_mem2 (
+    penumbra3_mem2_stage u_mem2 (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_bundle(mem1mem2_bundle), .i_payload(mem1mem2_payload),
         .i_store_wdata(mem1mem2_store_wdata), .i_byte_en(mem1mem2_byte_en),
@@ -533,19 +521,18 @@ module penumbra3_spine
         .i_translate_hit(i_translate_hit), .i_translate_miss_fault(i_translate_miss_fault),
         .i_translate_prot_fault(i_translate_prot_fault),
         .i_dcache_hit(i_dcache_hit), .i_dcache_rdata(i_dcache_rdata),
-        .i_dcache_victim_way(i_dcache_victim_way), .i_dcache_enabled(i_dcache_enabled),
         .o_dcache_we(o_dcache_we),
         .o_dcache_wdata(o_dcache_wdata), .o_dcache_byte_en(o_dcache_byte_en),
         .o_dcache_count_read(o_dcache_count_read),
         .o_dcache_count_write(o_dcache_count_write),
-        .o_dcache_fill_we(o_dcache_fill_we), .o_dcache_fill_way(o_dcache_fill_way),
-        .o_dcache_fill_paddr(o_dcache_fill_paddr),
-        .i_dcache_extra_cycle(i_dcache_extra_cycle),
+        .o_dcache_access_req(o_dcache_access_req),
+        .o_dcache_access_we(o_dcache_access_we),
+        .o_dcache_access_addr(o_dcache_access_addr),
+        .o_dcache_access_cacheable(o_dcache_access_cacheable),
+        .i_dcache_busy(i_dcache_busy), .i_dcache_access_done(i_dcache_access_done),
+        .i_dcache_access_word(i_dcache_access_word),
+        .i_dcache_access_fault(i_dcache_access_fault),
         .i_sys_rdata(i_sys_rdata),
-        .o_dreq_valid(o_dreq_valid), .o_dreq_cacheable(o_dreq_cacheable),
-        .o_dreq_addr(o_dreq_addr), .o_dreq_we(o_dreq_we),
-        .o_dreq_byte_en(o_dreq_byte_en), .o_dreq_wdata(o_dreq_wdata),
-        .i_drsp_done(i_drsp_done), .i_rsp_fault(i_rsp_fault), .i_rsp_line(i_rsp_line),
         .o_mem_pending(mem_pending),
         .o_complete(mc_complete), .o_complete_we(mc_complete_we),
         .o_complete_retires(mc_complete_retires),

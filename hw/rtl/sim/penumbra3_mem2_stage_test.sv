@@ -1,13 +1,14 @@
 // Unit-test wrapper for penumbra3_mem2_stage: the data side as the machine
 // composes it, less the uncore. MEM1 launches; penumbra3_translate (the TLB's
 // D-copy) and a real penumbra3_l1 resolve a cycle later into MEM2; MEM2
-// resolves the access, and its completion unit asks the uncore for what the
-// L1 cannot serve. The testbench plays the uncore at the port's request and
-// response (doc/internals/penumbra3/uncore-port.md).
+// resolves the access, and the L1 carries what it had no word for to the
+// uncore. The testbench plays the uncore at the port's request and response
+// (doc/internals/penumbra3/uncore-port.md).
 //
 // The freeze is wired the way the spine wires it: hold = mem_pending |
 // external stall goes to MEM1, the translate, the L1's launch and MEM2's
-// slot, and the external stall alone holds the MEM2/WB register. A raw
+// slot, and the external stall alone holds the MEM2/WB register. The data
+// side discards no lookup. A raw
 // instruction word feeds penumbra3_decode for the bundle; the payload's live
 // fields come in flat (value = the effective address).
 module penumbra3_mem2_stage_test
@@ -84,12 +85,9 @@ module penumbra3_mem2_stage_test
     output logic [SB_IDX_W-1:0] o_fwd_dst,
     output logic        o_fwd_we,
 
-    // L1-D store strobe and line install, as MEM2 drives them
+    // L1-D store strobe, as MEM2 drives it
     output logic        o_dcache_we,
-    output logic [31:0] o_dcache_wdata,
-    output logic        o_dcache_fill_we,
-    output logic        o_dcache_fill_way,
-    output logic [31:0] o_dcache_fill_paddr
+    output logic [31:0] o_dcache_wdata
 );
 
     localparam int D_WAYS   = 2;
@@ -199,11 +197,11 @@ module penumbra3_mem2_stage_test
     // The frame candidates as the MMU presents them: candidate 0 is the
     // bypass / pinned frame, which this wrapper has none of, and the rest
     // are the main TLB's ways.
-    logic                 dl1_hit, dl1_enabled, dl1_extra_cycle;
-    logic [31:0]          dl1_word;
-    logic [0:0]           dl1_victim_way;
+    logic                 dl1_hit, dl1_busy, dl1_done, dl1_fault;
+    logic [31:0]          dl1_word, dl1_access_word, dcache_access_addr;
     logic [3:0]           dcache_byte_en;
     logic                 dcache_count_read, dcache_count_write;
+    logic                 dcache_access_req, dcache_access_we, dcache_access_cacheable;
 
     /* verilator lint_off PINCONNECTEMPTY */
     penumbra3_l1 #(
@@ -213,31 +211,44 @@ module penumbra3_mem2_stage_test
     ) u_dl1 (
         .i_clk           (i_clk),
         .i_rst           (i_rst),
-        .i_launch        (dc_en && !hold),
-        .i_offset        (dc_vaddr[11:0]),
-        .i_frame         ({tr_way_frame, 20'b0}),
-        .i_frame_sel     ({tr_way_sel, 1'b0}),
-        .o_way_hit       (),
-        .o_way_word      (),
-        .o_hit           (dl1_hit),
-        .o_word          (dl1_word),
-        .o_victim_way    (dl1_victim_way),
-        .o_extra_cycle   (dl1_extra_cycle),
-        .i_store         (o_dcache_we),
-        .i_store_wdata   (o_dcache_wdata),
-        .i_store_byte_en (dcache_byte_en),
-        .i_count_read    (dcache_count_read),
-        .i_count_write   (dcache_count_write),
-        .i_fill_we       (o_dcache_fill_we),
-        .i_fill_paddr    (o_dcache_fill_paddr),
-        .i_fill_way      (o_dcache_fill_way),
-        .i_fill_line     (i_rsp_line),
-        .i_sys_reg       (i_l1_sys_reg),
-        .i_sys_wdata     (i_l1_sys_wdata),
-        .i_sys_we        (i_l1_sys_we),
-        .i_sys_re        (i_l1_sys_re),
-        .o_sys_rdata     (o_l1_sys_rdata),
-        .o_enabled       (dl1_enabled)
+        .i_launch           (dc_en && !hold),
+        .i_offset           (dc_vaddr[11:0]),
+        .i_discard          (1'b0),
+        .i_frame            ({tr_way_frame, 20'b0}),
+        .i_frame_sel        ({tr_way_sel, 1'b0}),
+        .o_way_hit          (),
+        .o_way_word         (),
+        .o_hit              (dl1_hit),
+        .o_word             (dl1_word),
+        .i_store            (o_dcache_we),
+        .i_store_wdata      (o_dcache_wdata),
+        .i_store_byte_en    (dcache_byte_en),
+        .i_count_read       (dcache_count_read),
+        .i_count_write      (dcache_count_write),
+        .i_access_req       (dcache_access_req),
+        .i_access_we        (dcache_access_we),
+        .i_access_addr      (dcache_access_addr),
+        .i_access_cacheable (dcache_access_cacheable),
+        .i_access_byte_en   (dcache_byte_en),
+        .i_access_wdata     (o_dcache_wdata),
+        .o_busy             (dl1_busy),
+        .o_access_done      (dl1_done),
+        .o_access_word      (dl1_access_word),
+        .o_access_fault     (dl1_fault),
+        .o_req_valid        (o_dreq_valid),
+        .o_req_cacheable    (o_dreq_cacheable),
+        .o_req_addr         (o_dreq_addr),
+        .o_req_we           (o_dreq_we),
+        .o_req_byte_en      (o_dreq_byte_en),
+        .o_req_wdata        (o_dreq_wdata),
+        .i_rsp_done         (i_drsp_done),
+        .i_rsp_fault        (i_rsp_fault),
+        .i_rsp_line         (i_rsp_line),
+        .i_sys_reg          (i_l1_sys_reg),
+        .i_sys_wdata        (i_l1_sys_wdata),
+        .i_sys_we           (i_l1_sys_we),
+        .i_sys_re           (i_l1_sys_re),
+        .o_sys_rdata        (o_l1_sys_rdata)
     );
     /* verilator lint_on PINCONNECTEMPTY */
 
@@ -247,9 +258,7 @@ module penumbra3_mem2_stage_test
     dpath_payload_t wb_payload;      // value / dst / fault fanned out
     /* verilator lint_on UNUSEDSIGNAL */
 
-    penumbra3_mem2_stage #(
-        .DL1_WAYS (D_WAYS)
-    ) u_mem2 (
+    penumbra3_mem2_stage u_mem2 (
         .i_clk                  (i_clk),
         .i_rst                  (i_rst),
         .i_bundle               (mem2_bundle),
@@ -267,27 +276,20 @@ module penumbra3_mem2_stage_test
         .i_translate_prot_fault (tr_prot_fault),
         .i_dcache_hit           (dl1_hit),
         .i_dcache_rdata         (dl1_word),
-        .i_dcache_victim_way    (dl1_victim_way),
-        .i_dcache_enabled       (dl1_enabled),
         .o_dcache_we            (o_dcache_we),
         .o_dcache_wdata         (o_dcache_wdata),
         .o_dcache_byte_en       (dcache_byte_en),
         .o_dcache_count_read    (dcache_count_read),
         .o_dcache_count_write   (dcache_count_write),
-        .o_dcache_fill_we       (o_dcache_fill_we),
-        .o_dcache_fill_way      (o_dcache_fill_way),
-        .o_dcache_fill_paddr    (o_dcache_fill_paddr),
-        .i_dcache_extra_cycle   (dl1_extra_cycle),
+        .o_dcache_access_req    (dcache_access_req),
+        .o_dcache_access_we     (dcache_access_we),
+        .o_dcache_access_addr   (dcache_access_addr),
+        .o_dcache_access_cacheable (dcache_access_cacheable),
+        .i_dcache_busy          (dl1_busy),
+        .i_dcache_access_done   (dl1_done),
+        .i_dcache_access_word   (dl1_access_word),
+        .i_dcache_access_fault  (dl1_fault),
         .i_sys_rdata            (32'b0),
-        .o_dreq_valid           (o_dreq_valid),
-        .o_dreq_cacheable       (o_dreq_cacheable),
-        .o_dreq_addr            (o_dreq_addr),
-        .o_dreq_we              (o_dreq_we),
-        .o_dreq_byte_en         (o_dreq_byte_en),
-        .o_dreq_wdata           (o_dreq_wdata),
-        .i_drsp_done            (i_drsp_done),
-        .i_rsp_fault            (i_rsp_fault),
-        .i_rsp_line             (i_rsp_line),
         .o_mem_pending          (o_mem_pending),
         .o_complete             (o_complete),
         .o_complete_we          (o_complete_we),

@@ -6,8 +6,8 @@
 //
 //   MEM2: TLB and L1 block RAM outputs -> frame candidates -> per-way tag
 //     compare -> way select -> word -> sub-word extract -> the MEM2/WB
-//     register, the load-completion hold buffer, and the store's byte
-//     merge into the L1's registered write.
+//     register, the L1's request register, and the store's byte merge
+//     into the L1's registered write.
 //   IF2: the same compare on the I-side -> the way select of bundles each
 //     way decoded from its own word -> the fetch FIFO; and each way's
 //     pre-decode, the direction counter and the return stack's top -> the
@@ -20,13 +20,12 @@
 // predictor pieces. What the probe models is the stimulus (an LFSR standing
 // in for EX, ID, the bus and the sysreg writes) and the fetch control.
 //
-// The fetch control follows the replay contract, not today's IF1/IF2
-// stall: an I-cache miss sets a flop and next cycle steers IF1 back to the
-// missed PC while the fill runs, so the hit never reaches IF1's hold. The
-// hold is FIFO-full or a registered fill in progress, both flops. A
-// predicted redirect steers the PC in the cycle IF2 presents the transfer
-// and bubbles the fetch behind it; EX's redirect and the replay, both
-// registered, outrank it.
+// The fetch control follows the replay contract: an I-cache miss is the
+// L1-I's access, and next cycle a flop steers IF1 back to the missed PC
+// while the access runs, so the hit never reaches IF1's hold. The hold is
+// FIFO-full or the L1-I's registered busy. A predicted redirect steers the
+// PC in the cycle IF2 presents the transfer and bubbles the fetch behind
+// it; EX's redirect and the replay, both registered, outrank it.
 //
 // Two rules keep IF2's cones short. The word->bundle decode runs once per
 // way, on each way's word straight off the block RAM, beside the TLB match
@@ -240,17 +239,17 @@ module ulx3s_penumbra3_probe_l1tag_top (
     );
 
     // ── L1-D ─────────────────────────────────────────────────────
-    logic                        dl1_hit, dl1_en, dl1_extra_cycle;
-    logic [31:0]                 dl1_rdata, dl1_sys_rdata;
-    logic [$clog2(D_WAYS)-1:0]   dl1_victim;
+    logic                        dl1_hit, dl1_busy, dl1_done, dl1_fault;
+    logic [31:0]                 dl1_rdata, dl1_sys_rdata, dl1_access_word;
 
-    logic                        dfill_we;
-    logic [31:0]                 dfill_paddr;
-    logic [$clog2(D_WAYS)-1:0]   dfill_way;
     logic [LINE_WORDS-1:0][31:0] fill_line;
     logic                        dc_we, dc_count_read, dc_count_write;
-    logic [31:0]                 dc_wdata;
+    logic [31:0]                 dc_wdata, dc_access_addr;
     logic [3:0]                  dc_byte_en;
+    logic                        dc_access_req, dc_access_we, dc_access_cacheable;
+    logic                        dreq_valid, dreq_cacheable, dreq_we, drsp_done_q;
+    logic [31:0]                 dreq_addr, dreq_wdata;
+    logic [3:0]                  dreq_byte_en;
 
     always_comb
         for (int c = 0; c < LINE_WORDS; c++)
@@ -263,49 +262,57 @@ module ulx3s_penumbra3_probe_l1tag_top (
     ) u_dl1 (
         .i_clk           (clk),
         .i_rst           (rst),
-        .i_launch        (dc_en && !d_hold),
-        .i_offset        (dc_vaddr[11:0]),
-        .i_frame         (d_frame),
-        .i_frame_sel     (d_frame_sel),
-        .o_way_hit       (),
-        .o_way_word      (),
-        .o_hit           (dl1_hit),
-        .o_word          (dl1_rdata),
-        .o_victim_way    (dl1_victim),
-        .o_extra_cycle   (dl1_extra_cycle),
-        .i_store         (dc_we),
-        .i_store_wdata   (dc_wdata),
-        .i_store_byte_en (dc_byte_en),
-        .i_count_read    (dc_count_read),
-        .i_count_write   (dc_count_write),
-        .i_fill_we       (dfill_we),
-        .i_fill_paddr    (dfill_paddr),
-        .i_fill_way      (dfill_way),
-        .i_fill_line     (fill_line),
-        .i_sys_reg       (sys_reg_q),
-        .i_sys_wdata     (sys_wdata_q),
-        .i_sys_we        (sys_we_q),
-        .i_sys_re        (sys_re_q),
-        .o_sys_rdata     (dl1_sys_rdata),
-        .o_enabled       (dl1_en)
+        .i_launch           (dc_en && !d_hold),
+        .i_offset           (dc_vaddr[11:0]),
+        .i_discard          (1'b0),
+        .i_frame            (d_frame),
+        .i_frame_sel        (d_frame_sel),
+        .o_way_hit          (),
+        .o_way_word         (),
+        .o_hit              (dl1_hit),
+        .o_word             (dl1_rdata),
+        .i_store            (dc_we),
+        .i_store_wdata      (dc_wdata),
+        .i_store_byte_en    (dc_byte_en),
+        .i_count_read       (dc_count_read),
+        .i_count_write      (dc_count_write),
+        .i_access_req       (dc_access_req),
+        .i_access_we        (dc_access_we),
+        .i_access_addr      (dc_access_addr),
+        .i_access_cacheable (dc_access_cacheable),
+        .i_access_byte_en   (dc_byte_en),
+        .i_access_wdata     (dc_wdata),
+        .o_busy             (dl1_busy),
+        .o_access_done      (dl1_done),
+        .o_access_word      (dl1_access_word),
+        .o_access_fault     (dl1_fault),
+        .o_req_valid        (dreq_valid),
+        .o_req_cacheable    (dreq_cacheable),
+        .o_req_addr         (dreq_addr),
+        .o_req_we           (dreq_we),
+        .o_req_byte_en      (dreq_byte_en),
+        .o_req_wdata        (dreq_wdata),
+        .i_rsp_done         (drsp_done_q),
+        .i_rsp_fault        (lfsr_q[1] && lfsr_q[21] && lfsr_q[43]),
+        .i_rsp_line         (fill_line),
+        .i_sys_reg          (sys_reg_q),
+        .i_sys_wdata        (sys_wdata_q),
+        .i_sys_we           (sys_we_q),
+        .i_sys_re           (sys_re_q),
+        .o_sys_rdata        (dl1_sys_rdata)
     );
 
-    // ── MEM2: resolve, hold buffer, MEM2/WB register ─────────────
+    // ── MEM2: resolve, completion unit, MEM2/WB register ─────────
     logic           mem_pending, complete, complete_we, complete_fault;
     logic [31:0]    complete_value, complete_pc, complete_vaddr, complete_status;
     logic           complete_retires;
     logic [SB_IDX_W-1:0] complete_dest;
-    logic           dreq_valid, dreq_cacheable, dreq_we, drsp_done_q;
-    logic [31:0]    dreq_addr, dreq_wdata;
-    logic [3:0]     dreq_byte_en;
     ctrl_bundle_t   wb_bundle;
     dpath_payload_t wb_payload;
     logic           wb_valid;
     bcause_e        wb_bcause;
 
-    penumbra3_mem2_stage #(
-        .DL1_WAYS (D_WAYS)
-    ) u_mem2 (
+    penumbra3_mem2_stage u_mem2 (
         .i_clk                  (clk),
         .i_rst                  (rst),
         .i_bundle               (mem2_bundle),
@@ -323,27 +330,20 @@ module ulx3s_penumbra3_probe_l1tag_top (
         .i_translate_prot_fault (d_prot_fault),
         .i_dcache_hit           (dl1_hit),
         .i_dcache_rdata         (dl1_rdata),
-        .i_dcache_victim_way    (dl1_victim),
-        .i_dcache_enabled       (dl1_en),
         .o_dcache_we            (dc_we),
         .o_dcache_wdata         (dc_wdata),
         .o_dcache_byte_en       (dc_byte_en),
         .o_dcache_count_read    (dc_count_read),
         .o_dcache_count_write   (dc_count_write),
-        .o_dcache_fill_we       (dfill_we),
-        .o_dcache_fill_way      (dfill_way),
-        .o_dcache_fill_paddr    (dfill_paddr),
-        .i_dcache_extra_cycle   (dl1_extra_cycle),
+        .o_dcache_access_req    (dc_access_req),
+        .o_dcache_access_we     (dc_access_we),
+        .o_dcache_access_addr   (dc_access_addr),
+        .o_dcache_access_cacheable (dc_access_cacheable),
+        .i_dcache_busy          (dl1_busy),
+        .i_dcache_access_done   (dl1_done),
+        .i_dcache_access_word   (dl1_access_word),
+        .i_dcache_access_fault  (dl1_fault),
         .i_sys_rdata            (sys_rdata),
-        .o_dreq_valid           (dreq_valid),
-        .o_dreq_cacheable       (dreq_cacheable),
-        .o_dreq_addr            (dreq_addr),
-        .o_dreq_we              (dreq_we),
-        .o_dreq_byte_en         (dreq_byte_en),
-        .o_dreq_wdata           (dreq_wdata),
-        .i_drsp_done            (drsp_done_q),
-        .i_rsp_fault            (lfsr_q[1] && lfsr_q[21] && lfsr_q[43]),
-        .i_rsp_line             (fill_line),
         .o_mem_pending          (mem_pending),
         .o_complete             (complete),
         .o_complete_we          (complete_we),
@@ -381,22 +381,20 @@ module ulx3s_penumbra3_probe_l1tag_top (
     // ══════════════════════════════════════════════════════════
     logic [31:0] if2_pc_q;
     logic        if2_valid_q;
-    logic        replay_q, ifill_busy_q, fbuf_enq_ready;
+    logic        replay_q, il1_busy, fbuf_enq_ready;
     logic [31:0] replay_pc_q;
 
-    // The hold: the IF2 slot waits on FIFO room, or a fill is in flight.
-    assign fetch_hold = (if2_valid_q && !fbuf_enq_ready) || ifill_busy_q;
+    // The hold: the IF2 slot waits on FIFO room, or the L1-I is busy.
+    assign fetch_hold = (if2_valid_q && !fbuf_enq_ready) || il1_busy;
 
     // ── L1-I ─────────────────────────────────────────────────────
     logic [I_WAYS-1:0]         il1_way_hit;
     logic [I_WAYS-1:0][31:0]   il1_word;
-    logic                      il1_hit, il1_en, il1_count_read;
-    logic [31:0]               il1_sys_rdata;
-    logic [$clog2(I_WAYS)-1:0] il1_victim;
-
-    logic        ifill_we;
-    logic [31:0] ifill_paddr_q;
-    logic [$clog2(I_WAYS)-1:0] ifill_way_q;
+    logic                      il1_hit, il1_count_read, il1_fault;
+    logic [31:0]               il1_sys_rdata, il1_access_word;
+    logic                      replay_d;      // IF2's miss: the L1-I's access
+    logic                      ireq_valid, ireq_cacheable, irsp_done_q;
+    logic [31:0]               ireq_addr;
 
     penumbra3_l1 #(
         .WAYS       (I_WAYS),
@@ -405,31 +403,44 @@ module ulx3s_penumbra3_probe_l1tag_top (
     ) u_il1 (
         .i_clk           (clk),
         .i_rst           (rst),
-        .i_launch        (!fetch_hold),
-        .i_offset        (pc_q[11:0]),
-        .i_frame         (i_frame),
-        .i_frame_sel     (i_frame_sel),
-        .o_way_hit       (il1_way_hit),
-        .o_way_word      (il1_word),
-        .o_hit           (il1_hit),
-        .o_word          (),                // each way's word decodes before the select
-        .o_victim_way    (il1_victim),
-        .o_extra_cycle   (),                // a replay holds no lookup
-        .i_store         (1'b0),
-        .i_store_wdata   ('0),
-        .i_store_byte_en ('0),
-        .i_count_read    (il1_count_read),
-        .i_count_write   (1'b0),
-        .i_fill_we       (ifill_we),
-        .i_fill_paddr    (ifill_paddr_q),
-        .i_fill_way      (ifill_way_q),
-        .i_fill_line     (fill_line),
-        .i_sys_reg       (sys_reg_q),
-        .i_sys_wdata     (sys_wdata_q),
-        .i_sys_we        (sys_we_q),
-        .i_sys_re        (sys_re_q),
-        .o_sys_rdata     (il1_sys_rdata),
-        .o_enabled       (il1_en)
+        .i_launch           (!fetch_hold),
+        .i_offset           (pc_q[11:0]),
+        .i_discard          (replay_q || ex_redirect_q),   // the slot in IF2 is flushed
+        .i_frame            (i_frame),
+        .i_frame_sel        (i_frame_sel),
+        .o_way_hit          (il1_way_hit),
+        .o_way_word         (il1_word),
+        .o_hit              (il1_hit),
+        .o_word             (),             // each way's word decodes before the select
+        .i_store            (1'b0),
+        .i_store_wdata      ('0),
+        .i_store_byte_en    ('0),
+        .i_count_read       (il1_count_read),
+        .i_count_write      (1'b0),
+        .i_access_req       (replay_d),
+        .i_access_we        (1'b0),
+        .i_access_addr      (i_paddr),
+        .i_access_cacheable (i_cacheable),
+        .i_access_byte_en   (4'hF),
+        .i_access_wdata     ('0),
+        .o_busy             (il1_busy),
+        .o_access_done      (),
+        .o_access_word      (il1_access_word),
+        .o_access_fault     (il1_fault),
+        .o_req_valid        (ireq_valid),
+        .o_req_cacheable    (ireq_cacheable),
+        .o_req_addr         (ireq_addr),
+        .o_req_we           (),
+        .o_req_byte_en      (),
+        .o_req_wdata        (),
+        .i_rsp_done         (irsp_done_q),
+        .i_rsp_fault        (lfsr_q[2] && lfsr_q[22] && lfsr_q[44]),
+        .i_rsp_line         (fill_line),
+        .i_sys_reg          (sys_reg_q),
+        .i_sys_wdata        (sys_wdata_q),
+        .i_sys_we           (sys_we_q),
+        .i_sys_re           (sys_re_q),
+        .o_sys_rdata        (il1_sys_rdata)
     );
 
     // ── Predictor: direction table, return stack, per-way pre-decode ─
@@ -513,7 +524,6 @@ module ulx3s_penumbra3_probe_l1tag_top (
     assign ras_push = ras_push_q;
     assign ras_pop  = ras_pop_q;
 
-    logic replay_d;
     assign replay_d = slot_live && !i_fault && !ihit;
 
     // ── PC and the IF1/IF2 register ──────────────────────────────
@@ -536,21 +546,12 @@ module ulx3s_penumbra3_probe_l1tag_top (
         end
     end
 
-    // ── Replay and the I-fill, modeled like the D-side one ───────
-    logic ifill_done, ifill_cacheable_q;
-    assign ifill_done = ifill_busy_q && lfsr_q[50];
-    assign ifill_we   = ifill_done && ifill_cacheable_q && il1_en;
+    // ── Replay, and the I-side uncore modeled like the D-side one ─
     always_ff @(posedge clk) begin
         replay_q <= !rst && replay_d;
-        if (replay_d) begin
-            replay_pc_q       <= if2_pc_q;
-            ifill_paddr_q     <= i_paddr;
-            ifill_cacheable_q <= i_cacheable;
-            ifill_way_q       <= il1_victim;
-        end
-        if (rst)             ifill_busy_q <= 1'b0;
-        else if (replay_d)   ifill_busy_q <= 1'b1;
-        else if (ifill_done) ifill_busy_q <= 1'b0;
+        if (replay_d) replay_pc_q <= if2_pc_q;
+        if (rst) irsp_done_q <= 1'b0;
+        else     irsp_done_q <= ireq_valid && !irsp_done_q && lfsr_q[50];
     end
 
     // ── Word -> bundle decode, per way, into the fetch FIFO ──────
@@ -611,7 +612,8 @@ module ulx3s_penumbra3_probe_l1tag_top (
         fold_q[4] <= ^pc_q;
         fold_q[5] <= ^ras_top;
         fold_q[6] <= ^{dl1_sys_rdata, il1_sys_rdata};
-        fold_q[7] <= ^{ifill_paddr_q, replay_pc_q};
+        fold_q[7] <= ^{ireq_valid, ireq_cacheable, ireq_addr, replay_pc_q,
+                       il1_access_word, il1_fault};
         led_q     <= fold_q;
     end
     assign led = led_q;

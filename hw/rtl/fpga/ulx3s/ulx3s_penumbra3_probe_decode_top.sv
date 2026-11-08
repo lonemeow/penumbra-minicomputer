@@ -80,7 +80,7 @@ module ulx3s_penumbra3_probe_decode_top (
 
     // ── scoreboard / load-completion / issue (reused from P0.1) ──
     logic                src0_pending, src1_pending;
-    logic                mem_pending, req_valid, complete, complete_fault;
+    logic                mem_pending, complete, complete_fault;
     logic [IDX_BITS-1:0] complete_dest;
     logic [31:0]         complete_data;
     logic                complete_retires;
@@ -101,32 +101,48 @@ module ulx3s_penumbra3_probe_decode_top (
         .o_src1_pending (src1_pending)
     );
 
+    // The L1-D's access, modeled: its busy register is the flop the back end
+    // waits on -- the structural break P0.1 checks -- and its done and result
+    // come from registers, as the L1's do. The park stands for the cache-hit
+    // verdict.
+    logic        park, l1_busy_q, l1_done_q, l1_fault_q, l1_answer;
+    logic [31:0] l1_word_q;
+    assign park      = lfsr_q[15] & ~lfsr_q[12] & ~l1_busy_q;   // one at a time
+    assign l1_answer = l1_busy_q & lfsr_q[27];
+    always_ff @(posedge clk_25mhz) begin
+        if (rst) begin
+            l1_busy_q <= 1'b0;
+            l1_done_q <= 1'b0;
+        end else begin
+            l1_done_q <= l1_answer;
+            if (park)           l1_busy_q <= 1'b1;
+            else if (l1_answer) l1_busy_q <= 1'b0;
+        end
+        if (l1_answer) begin
+            l1_word_q  <= lfsr_q;
+            l1_fault_q <= lfsr_q[28];
+        end
+    end
+    assign mem_pending = l1_busy_q;
+
     penumbra3_mem_completion #(
         .IDX_BITS (IDX_BITS)
     ) u_mc (
         .i_clk              (clk_25mhz),
         .i_rst              (rst),
-        .i_park             (lfsr_q[15] & ~lfsr_q[12] & ~mem_pending),  // one at a time
+        .i_park             (park),
         .i_access_we        (lfsr_q[4]),
         .i_access_pc        ({lfsr_q[15:0], lfsr_q[31:16]}),
         .i_access_vaddr     ({lfsr_q[7:0], lfsr_q[31:8]}),
         .i_access_user      (lfsr_q[12]),
-        .i_access_paddr     (lfsr_q),
         .i_access_cacheable (lfsr_q[5]),
-        .i_access_byte_en   (lfsr_q[9:6]),
-        .i_store_wdata      (~lfsr_q),
         .i_load_dest        (lfsr_q[21 +: IDX_BITS]),
         .i_load_size        (lfsr_q[1:0]),
         .i_load_sign        (lfsr_q[2]),
-        .i_victim_way       (lfsr_q[10]),
-        .i_l1_enabled       (lfsr_q[11]),
-        .i_mem2_slot_mem    (lfsr_q[13]),
-        .i_l1_extra_cycle   (lfsr_q[17]),
-        .o_req_valid        (req_valid),
-        .i_rsp_done         (lfsr_q[27] & req_valid),  // done only while a request is up
-        .i_rsp_fault        (lfsr_q[28]),
-        .i_rsp_line         ({4{lfsr_q}}),
-        .o_mem_pending      (mem_pending),
+        .i_l1_busy          (l1_busy_q),
+        .i_l1_done          (l1_done_q),
+        .i_l1_word          (l1_word_q),
+        .i_l1_fault         (l1_fault_q),
         .o_complete         (complete),
         .o_complete_retires (complete_retires),
         .o_complete_dest    (complete_dest),
@@ -158,7 +174,7 @@ module ulx3s_penumbra3_probe_decode_top (
     always_ff @(posedge clk_25mhz) begin
         led_q <= {7'b0,
                   can_issue_q
-                  ^ mem_pending ^ req_valid ^ complete ^ complete_fault
+                  ^ mem_pending ^ l1_done_q ^ complete ^ complete_fault
                   ^ (^complete_dest) ^ (^complete_data) ^ complete_retires
                   ^ (^complete_pc) ^ (^complete_vaddr) ^ (^complete_status)};
     end

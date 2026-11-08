@@ -3,15 +3,15 @@
 // Combinational resolve logic plus penumbra3_mem_completion and the MEM2/WB
 // pipeline register. Reads the MEM1/MEM2 register and the verdicts the launch
 // resolved a cycle later -- the translation (paddr, hit, faults) and the
-// L1-D's (hit, word, victim way) -- and produces the writeback: sub-word
-// extract for a load hit, the fault merge for the commit point, and the L1's
-// store strobe. A load the L1 cannot serve (a miss, or an uncacheable page)
-// and every store are parked in penumbra3_mem_completion as they leave; that
-// unit asks the uncore for a load's data or a store's write, installs a
-// load's line, and writes a load's register back later.
+// L1-D's (hit, word) -- and produces the writeback: sub-word extract for a
+// load hit, the fault merge for the commit point, and the L1's store strobe.
+// A load the L1 had no word for and every store leave as an access the L1-D
+// takes (doc/internals/penumbra3/l1-cache.md), and their descriptors park in
+// penumbra3_mem_completion, which writes a load's register back when the
+// L1-D's access is done.
 //
 // The back-end stall is the whole point: the only thing that holds the pipe is
-// the registered o_mem_pending out of the hold buffer, distributed by the
+// the L1-D's registered busy, reported as o_mem_pending and distributed by the
 // spine -- never a combinational cache/TLB verdict reaching into issue.
 //
 // The spine holds a slot in MEM2 in two ways: behind a parked access
@@ -22,10 +22,7 @@
 module penumbra3_mem2_stage
     import penumbra_pkg::*;
     import penumbra3_pkg::*;
-#(
-    parameter  int DL1_WAYS     = 2,     // the L1-D's ways
-    localparam int DL1_WAY_BITS = $clog2(DL1_WAYS)
-) (
+(
     input  logic           i_clk,
     input  logic           i_rst,
 
@@ -48,36 +45,28 @@ module penumbra3_mem2_stage
     input  logic           i_translate_prot_fault,
 
     // -- L1-D resolve, store strobe, counting ---------------------
+    // The data and lanes serve a store's hit write and its access both.
     input  logic           i_dcache_hit,
     input  logic [31:0]    i_dcache_rdata,
-    input  logic [DL1_WAY_BITS-1:0] i_dcache_victim_way,  // where a miss would fill
-    input  logic           i_dcache_enabled,     // the L1's CTRL.ENABLE
     output logic           o_dcache_we,          // a store leaves MEM2: written on a hit
     output logic [31:0]    o_dcache_wdata,
     output logic [3:0]     o_dcache_byte_en,
     output logic           o_dcache_count_read,  // a cacheable load leaves MEM2
     output logic           o_dcache_count_write, // a cacheable store leaves MEM2
 
-    // -- L1-D line install (the line runs from the uncore to the L1) --
-    output logic           o_dcache_fill_we,
-    output logic [DL1_WAY_BITS-1:0] o_dcache_fill_way,
-    output logic [31:0]    o_dcache_fill_paddr,
-    input  logic           i_dcache_extra_cycle, // the held lookup needs a cycle more
+    // -- L1-D access: a load it had no word for, or a store's write --
+    // doc/internals/penumbra3/l1-cache.md
+    output logic           o_dcache_access_req,  // one cycle, as the access leaves MEM2
+    output logic           o_dcache_access_we,
+    output logic [31:0]    o_dcache_access_addr, // physical
+    output logic           o_dcache_access_cacheable,
+    input  logic           i_dcache_busy,
+    input  logic           i_dcache_access_done,
+    input  logic [31:0]    i_dcache_access_word,
+    input  logic           i_dcache_access_fault,
 
     // -- RDSYS sysreg response ------------------------------------
     input  logic [31:0]    i_sys_rdata,
-
-    // -- Core-to-uncore port, data side ---------------------------
-    // doc/internals/penumbra3/uncore-port.md
-    output logic           o_dreq_valid,
-    output logic           o_dreq_cacheable,
-    output logic [31:0]    o_dreq_addr,
-    output logic           o_dreq_we,
-    output logic [3:0]     o_dreq_byte_en,
-    output logic [31:0]    o_dreq_wdata,
-    input  logic           i_drsp_done,
-    input  logic           i_rsp_fault,
-    input  logic [UNCORE_LINE_WORDS-1:0][31:0] i_rsp_line,
 
     // -- Back-end hold + completion (to the spine) ----------------
     output logic                  o_mem_pending,
@@ -178,10 +167,10 @@ module penumbra3_mem2_stage
     //   mem2_retires  the instruction: the MEM2/WB register takes it and it
     //                 retires at WB, carrying its fault if it has one; its
     //                 retire needs nothing more from memory.
-    //   mem2_parks    the access: the completion unit takes it (i_park) and
-    //                 holds it until the uncore's done, asking for a load's
-    //                 data or a store's write, and reports the completion,
-    //                 fault and all, a cycle after the done.
+    //   mem2_parks    the access: the L1-D takes it, and the completion unit
+    //                 parks its descriptor (i_park) and reports the
+    //                 completion, fault and all, when the L1-D's access is
+    //                 done.
     // An instruction that does not retire here finishes with its access's
     // completion.
     // An access with an MMU-born fault asks memory for nothing. The rule for
@@ -223,10 +212,15 @@ module penumbra3_mem2_stage
     logic [1:0]  mc_complete_size, mc_complete_addr_lo;
     logic        mc_complete_sign, mc_pending_store;
 
+    // The access leaves for the L1-D as its descriptor parks.
+    assign o_dcache_access_req       = mem2_parks;
+    assign o_dcache_access_we        = mem2_is_store;
+    assign o_dcache_access_addr      = i_translate_paddr;
+    assign o_dcache_access_cacheable = i_translate_cacheable;
+    assign o_mem_pending             = i_dcache_busy;
+
     penumbra3_mem_completion #(
-        .IDX_BITS   (SB_IDX_W),
-        .WAYS       (DL1_WAYS),
-        .LINE_WORDS (UNCORE_LINE_WORDS)
+        .IDX_BITS (SB_IDX_W)
     ) u_mem_completion (
         .i_clk              (i_clk),
         .i_rst              (i_rst),
@@ -235,30 +229,14 @@ module penumbra3_mem2_stage
         .i_access_pc        (i_payload.pc),
         .i_access_vaddr     (i_payload.value),
         .i_access_user      (i_user_mode),
-        .i_access_paddr     (i_translate_paddr),
         .i_access_cacheable (i_translate_cacheable),
-        .i_access_byte_en   (i_byte_en),
-        .i_store_wdata      (i_store_wdata),
         .i_load_dest        (i_payload.phys_dst),
         .i_load_size        (i_bundle.mem_size),
         .i_load_sign        (i_bundle.sign_ext),
-        .i_victim_way       (i_dcache_victim_way),
-        .i_l1_enabled       (i_dcache_enabled),
-        .i_mem2_slot_mem    (mem2_is_load | mem2_is_store),
-        .o_req_valid        (o_dreq_valid),
-        .o_req_cacheable    (o_dreq_cacheable),
-        .o_req_addr         (o_dreq_addr),
-        .o_req_we           (o_dreq_we),
-        .o_req_byte_en      (o_dreq_byte_en),
-        .o_req_wdata        (o_dreq_wdata),
-        .i_rsp_done         (i_drsp_done),
-        .i_rsp_fault        (i_rsp_fault),
-        .i_rsp_line         (i_rsp_line),
-        .o_fill_we          (o_dcache_fill_we),
-        .o_fill_way         (o_dcache_fill_way),
-        .o_fill_paddr       (o_dcache_fill_paddr),
-        .i_l1_extra_cycle   (i_dcache_extra_cycle),
-        .o_mem_pending      (o_mem_pending),
+        .i_l1_busy          (i_dcache_busy),
+        .i_l1_done          (i_dcache_access_done),
+        .i_l1_word          (i_dcache_access_word),
+        .i_l1_fault         (i_dcache_access_fault),
         .o_pending_store    (mc_pending_store),
         .o_complete         (o_complete),
         .o_complete_we      (o_complete_we),
@@ -292,7 +270,7 @@ module penumbra3_mem2_stage
 
     // A store writes the L1 as it leaves MEM2 fault-free, and each
     // cacheable access is counted in that same cycle. The L1 folds its own
-    // enable and hit into both.
+    // enable and hit into both. Its access takes the same data and lanes.
     assign o_dcache_wdata       = i_store_wdata;
     assign o_dcache_byte_en     = i_byte_en;
     assign o_dcache_we          = mem2_is_store & ~mem2_fault & mem2_fire;
@@ -380,8 +358,9 @@ module penumbra3_mem2_stage
     // commit must never find one held. While an access is parked, WB sees
     // bubbles, or a store that retired as its write parked, carrying no
     // fault. A completion's bus fault finds o_mem_pending low: the faulted
-    // access installed nothing, so the L1 asked for no extra cycle. And WB
-    // holds MEM2 only for a divmul's second write, which is no fault commit.
+    // access installed nothing, so no held lookup keeps the L1-D busy past
+    // its done. And WB holds MEM2 only for a divmul's second write, which is
+    // no fault commit.
     always_comb
         assert (i_rst || !(i_bubble && i_launch_hold))
             else $error("penumbra3_mem2_stage: a fault commit met a held MEM2 slot");

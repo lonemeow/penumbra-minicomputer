@@ -1,28 +1,23 @@
 // penumbra3_l1 -- one gen3 L1 cache: storage, the hit verdict, and the
-// cache device around them.
+// side's access to the uncore.
 //
 // penumbra3_l1_store's arrays and penumbra3_l1_match's compare, plus what
-// makes them a cache: the store-hit write, replacement, the enable, and
-// the cache device's sysreg registers. It has no access FSM and no request
-// port. A lookup reports a verdict and nothing more; its consumer (MEM2's
-// completion unit on the D-side, IF2's replay on the I-side) registers a
-// miss, runs the fill and installs the line through the fill port, so no
-// miss reaches the pipeline except through the consumer's registers. One
-// module serves both sides; the I-side ties the store off.
+// makes them a cache: the store-hit write, replacement, the enable, the
+// cache device's sysreg registers, and penumbra3_requester, through which
+// the cache carries everything that goes past it on its side of the
+// core-to-uncore port. Its client sees lookups, stores and accesses
+// (doc/internals/penumbra3/l1-cache.md); which way a line goes to, whether
+// it goes in at all, and the enable stay in here. One module serves both
+// sides; the I-side ties the store and the write fields off.
 //
-// Timing. A lookup takes two cycles. In the first, i_launch (a real
-// access, pipe not frozen) reads the set the page offset indexes, in every
-// way. In the second the MMU's candidate frames arrive and the outputs
-// give the verdict, combinationally: the hit per way, each way's word, the
-// hit way's word, and the way a miss would fill. The outputs go on
+// Lookups. A lookup takes two cycles. In the first, i_launch reads the set
+// the page offset indexes, in every way. In the second the MMU's candidate
+// frames arrive and the outputs give the verdict, combinationally: the hit
+// per way, each way's word, and the hit way's word. The outputs go on
 // belonging to that lookup, the current lookup, until the next launch, and
-// its set is read again every cycle: a frozen consumer keeps a verdict
-// that follows the cache, through an invalidate or a line installed under
-// it. A held lookup sees an install a cycle late: in the cycle after its
-// i_fill_we the filled way still gives what it held before.
-// o_extra_cycle says so in the install cycle, high when the install lands
-// in the current lookup's set; a consumer holding that lookup does not act
-// on the next cycle's outputs.
+// its set is read again every cycle: a frozen client keeps a verdict that
+// follows the cache, through an invalidate, a store or a line installed
+// under it.
 //
 // Stores. i_store marks a committing store whose lookup is the current
 // one. On a hit the cache merges the store's bytes over the hit way's word
@@ -30,26 +25,46 @@
 // reaches a register's D and never a block RAM's write enable. A lookup of
 // that word is given it from the cycle of the write on, ahead of the block
 // RAM's own output (penumbra3_l1_store), so a load directly behind a store
-// needs no stall. A miss allocates nothing (write-no-allocate). Writing
-// through to memory is the consumer's. A store's hit is not qualified by
-// the page's cacheability: a line can be resident for an uncacheable
-// mapping only if software changed the page's cacheability without
-// invalidating the cache.
+// needs no stall. A miss allocates nothing (write-no-allocate); the write
+// to memory is the store's access. A store's hit is not qualified by the
+// page's cacheability: a line can be resident for an uncacheable mapping
+// only if software changed the page's cacheability without invalidating
+// the cache.
+//
+// Accesses. The client requests one (i_access_req) in the resolve cycle of
+// its own lookup, or with no lookup at all, and the cache carries it as the
+// port transaction its write bit and cacheability name. A line read's line
+// goes in as the read completes. o_busy is high from the cycle after the
+// request until the cache's lookups show what the access did, and the
+// client launches, requests and stores nothing meanwhile. One access, cycle
+// by cycle; q is the request, r the uncore's done:
+//
+//   q       i_access_req: the access is latched
+//   q+1..r  o_busy; the request is up on the port
+//   r       a line read's line is installed
+//   r+1     o_access_done; o_access_word and o_access_fault hold the
+//           result until the next done. o_busy is low, unless a held
+//           lookup reads the set the install wrote: then it is low from r+2
+//
+// A held lookup is one the client launched and has neither discarded
+// (i_discard) nor requested an access from. The arrays give the way a fill
+// writes as it was for one cycle after the fill, so a held lookup of the
+// filled set needs that cycle, and o_busy covers it.
 //
 // Replacement: an invalid way first, lowest index first, else tree-PLRU.
 // Each tree bit names the less recently used side below it, and a touch
 // only writes the bits on its way's path, never reading the old ones. A
 // touch lands two cycles after the hit or install it records, off the hit
-// path. The victim is read from the current lookup's set, for the
-// consumer to park with a miss.
+// path. The victim is read from the current lookup's set, so an access
+// latches the way its own lookup would fill.
 //
 // Disabled (CTRL.ENABLE=0, the reset state): a lookup reads every way
 // invalid, so nothing hits and no store is absorbed. The enable folds into
 // the valid bits as a lookup launches, not into the compare. Lines installed
 // before a disable survive it; software pairs an enable change with
-// INVAL_ALL. A disabled access on a cacheable page still brings a line
-// back (doc/internals/penumbra3/uncore-port.md, "The four transactions");
-// o_enabled tells the consumer not to install it (asserted).
+// INVAL_ALL. A disabled cache still reads a cacheable page's line, and
+// installs nothing (doc/internals/penumbra3/uncore-port.md, "The four
+// transactions").
 module penumbra3_l1
     import penumbra_pkg::*;
 #(
@@ -66,21 +81,20 @@ module penumbra3_l1
     input  logic                         i_clk,
     input  logic                         i_rst,
 
-    // ── Launch ───────────────────────────────────────────────────
-    input  logic                         i_launch,     // a real access, pipe not frozen
+    // ── Lookup: launch ───────────────────────────────────────────
+    input  logic                         i_launch,     // a real access, not while busy
     /* verilator lint_off UNUSEDSIGNAL */
     input  logic [11:0]                  i_offset,     // the access's page offset; its byte bits index nothing
     /* verilator lint_on UNUSEDSIGNAL */
+    input  logic                         i_discard,    // the current lookup is flushed
 
-    // ── Resolve ──────────────────────────────────────────────────
+    // ── Lookup: resolve ──────────────────────────────────────────
     input  logic [FRAMES-1:0][19:0]      i_frame,      // the MMU's candidate frames
     input  logic [FRAMES-1:0]            i_frame_sel,  // one-hot; empty on a TLB miss
     output logic [WAYS-1:0]              o_way_hit,    // one-hot
     output logic [WAYS-1:0][31:0]        o_way_word,
     output logic                         o_hit,
     output logic [31:0]                  o_word,       // the hit way's word
-    output logic [WAY_BITS-1:0]          o_victim_way, // where a miss would fill
-    output logic                         o_extra_cycle, // held lookup needs a cycle more
 
     // ── Store: a committing store resolving this cycle ───────────
     input  logic                         i_store,
@@ -91,13 +105,28 @@ module penumbra3_l1
     input  logic                         i_count_read,
     input  logic                         i_count_write,
 
-    // ── Line install ─────────────────────────────────────────────
-    input  logic                         i_fill_we,
-    /* verilator lint_off UNUSEDSIGNAL */
-    input  logic [31:0]                  i_fill_paddr, // any address in the line
-    /* verilator lint_on UNUSEDSIGNAL */
-    input  logic [WAY_BITS-1:0]          i_fill_way,
-    input  logic [LINE_WORDS-1:0][31:0]  i_fill_line,
+    // ── Access: what goes past the cache ─────────────────────────
+    input  logic                         i_access_req,       // one cycle, not while busy
+    input  logic                         i_access_we,        // a write
+    input  logic [31:0]                  i_access_addr,      // physical
+    input  logic                         i_access_cacheable, // the translation's verdict
+    input  logic [3:0]                   i_access_byte_en,
+    input  logic [31:0]                  i_access_wdata,     // each byte in its lane
+    output logic                         o_busy,
+    output logic                         o_access_done,      // one cycle
+    output logic [31:0]                  o_access_word,      // held to the next done
+    output logic                         o_access_fault,     // the bus faulted the access
+
+    // ── Core-to-uncore port, this side ───────────────────────────
+    output logic                         o_req_valid,
+    output logic                         o_req_cacheable,
+    output logic [31:0]                  o_req_addr,
+    output logic                         o_req_we,
+    output logic [3:0]                   o_req_byte_en,
+    output logic [31:0]                  o_req_wdata,
+    input  logic                         i_rsp_done,   // one cycle, while o_req_valid
+    input  logic                         i_rsp_fault,  // valid with i_rsp_done
+    input  logic [LINE_WORDS-1:0][31:0]  i_rsp_line,
 
     // ── Sysreg interface (this cache's device) ───────────────────
     input  logic [3:0]                   i_sys_reg,
@@ -106,8 +135,7 @@ module penumbra3_l1
     /* verilator lint_on UNUSEDSIGNAL */
     input  logic                         i_sys_we,
     input  logic                         i_sys_re,
-    output logic [31:0]                  o_sys_rdata,
-    output logic                         o_enabled
+    output logic [31:0]                  o_sys_rdata
 );
 
     build_check #(
@@ -135,7 +163,6 @@ module penumbra3_l1
                 rd_reg_q <= i_sys_reg;
         end
     end
-    assign o_enabled = cache_en_q;
 
     // ── Storage and the compare ──────────────────────────────────
     logic [SET_BITS-1:0]   rd_set;
@@ -149,8 +176,15 @@ module penumbra3_l1
     logic [WAY_BITS-1:0]   st_way_q;
     logic [31:0]           st_wdata_q;
 
+    // The install, from the access below.
+    logic                  fill_we;
+    logic [WAY_BITS-1:0]   fill_way;
+    // fill_paddr is the access's address, whose offset bits index nothing.
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic [31:0]           fill_paddr;
+    /* verilator lint_on UNUSEDSIGNAL */
     logic [SET_BITS-1:0]   fill_set;
-    assign fill_set = i_fill_paddr[OFFSET_BITS +: SET_BITS];
+    assign fill_set = fill_paddr[OFFSET_BITS +: SET_BITS];
 
     penumbra3_l1_store #(
         .WAYS       (WAYS),
@@ -167,11 +201,11 @@ module penumbra3_l1
         .o_rd_valid    (rd_valid),
         .o_rd_tag      (rd_tag),
         .o_rd_word     (o_way_word),
-        .i_fill_we     (i_fill_we),
+        .i_fill_we     (fill_we),
         .i_fill_set    (fill_set),
-        .i_fill_way    (i_fill_way),
-        .i_fill_tag    (i_fill_paddr[31:12]),
-        .i_fill_line   (i_fill_line),
+        .i_fill_way    (fill_way),
+        .i_fill_tag    (fill_paddr[31:12]),
+        .i_fill_line   (i_rsp_line),
         .i_store_we    (st_we_q),
         .i_store_set   (st_set_q),
         .i_store_word  (st_word_q),
@@ -193,14 +227,6 @@ module penumbra3_l1
         .o_hit       (o_hit),
         .o_word      (o_word)
     );
-
-    // ── A lookup held across an install ──────────────────────────
-    // penumbra3_l1_store reads nothing of the way a fill writes in the
-    // fill's cycle, so the next cycle's outputs give that way as it was.
-    // Every other set reads the same in both cycles, so only a lookup of
-    // the filled set is out of date. No lookup launches on a fill, so
-    // rd_set is the current lookup's then.
-    assign o_extra_cycle = i_fill_we && fill_set == rd_set;
 
     // The hit way, encoded (o_way_hit is one-hot).
     logic [WAY_BITS-1:0] hit_way;
@@ -240,10 +266,10 @@ module penumbra3_l1
             touch_q       <= 1'b0;
         end else begin
             first_cycle_q <= i_launch;
-            touch_q       <= i_fill_we || (first_cycle_q && o_hit);
+            touch_q       <= fill_we || (first_cycle_q && o_hit);
         end
-        touch_set_q <= i_fill_we ? fill_set   : rd_set;
-        touch_way_q <= i_fill_we ? i_fill_way : hit_way;
+        touch_set_q <= fill_we ? fill_set : rd_set;
+        touch_way_q <= fill_we ? fill_way : hit_way;
     end
 
     // pair0 picks within ways 0-1; with four ways, root picks the pair
@@ -270,11 +296,84 @@ module penumbra3_l1
         assign lru_way = WAY_BITS'(plru_pair0_q[rd_set]);
     end
 
+    // victim_way: where a line the current lookup missed would go.
+    logic [WAY_BITS-1:0] victim_way;
     always_comb begin
-        o_victim_way = lru_way;
+        victim_way = lru_way;
         for (int w = WAYS - 1; w >= 0; w--)
-            if (!rd_valid[w]) o_victim_way = WAY_BITS'(w);
+            if (!rd_valid[w]) victim_way = WAY_BITS'(w);
     end
+
+    // ── The access ───────────────────────────────────────────────
+    // The request is the access's own lookup's, so the victim the
+    // requester latches with it is the way that lookup's line would fill.
+    penumbra3_requester #(
+        .WAYS       (WAYS),
+        .LINE_WORDS (LINE_WORDS)
+    ) u_request (
+        .i_clk           (i_clk),
+        .i_rst           (i_rst),
+        .i_issue         (i_access_req),
+        .i_we            (i_access_we),
+        .i_addr          (i_access_addr),
+        .i_cacheable     (i_access_cacheable),
+        .i_byte_en       (i_access_byte_en),
+        .i_wdata         (i_access_wdata),
+        .i_victim_way    (victim_way),
+        .i_enabled       (cache_en_q),
+        .o_req_valid     (o_req_valid),
+        .o_req_cacheable (o_req_cacheable),
+        .o_req_addr      (o_req_addr),
+        .o_req_we        (o_req_we),
+        .o_req_byte_en   (o_req_byte_en),
+        .o_req_wdata     (o_req_wdata),
+        .i_rsp_done      (i_rsp_done),
+        .i_rsp_fault     (i_rsp_fault),
+        .i_rsp_line      (i_rsp_line),
+        .o_fill_we       (fill_we),
+        .o_fill_way      (fill_way),
+        .o_fill_paddr    (fill_paddr),
+        .o_rsp_word      (o_access_word),
+        .o_rsp_fault     (o_access_fault)
+    );
+
+    // ── Busy and done ────────────────────────────────────────────
+    // held_q: the current lookup is held -- launched, and since then
+    // neither discarded nor requested from. A launch in the request's
+    // cycle is the next lookup's, which is held. An access with no lookup
+    // releases the current one too: a client holds no lookup across one.
+    logic held_q;
+    always_ff @(posedge i_clk)
+        if (i_rst)                         held_q <= 1'b0;
+        else if (i_launch)                 held_q <= 1'b1;
+        else if (i_discard || i_access_req) held_q <= 1'b0;
+
+    // held_late: this cycle's install lands in the set a held lookup
+    // reads, which shows the filled way as it was for one cycle more
+    // (penumbra3_l1_store). No lookup launches while the cache is busy,
+    // so rd_set is the held lookup's.
+    logic held_late;
+    assign held_late = fill_we && fill_set == rd_set && held_q;
+
+    // busy_q: high from q+1 through r, or through r+1 when held_late was
+    // high in r. late_q: r+1 of such an access.
+    logic busy_q, late_q, done_q;
+    always_ff @(posedge i_clk) begin
+        if (i_rst) begin
+            busy_q <= 1'b0;
+            late_q <= 1'b0;
+            done_q <= 1'b0;
+        end else begin
+            late_q <= held_late;
+            done_q <= i_rsp_done;
+
+            if (i_access_req)                  busy_q <= 1'b1;
+            else if (i_rsp_done && !held_late) busy_q <= 1'b0;
+            else if (late_q)                   busy_q <= 1'b0;
+        end
+    end
+    assign o_busy        = busy_q;
+    assign o_access_done = done_q;
 
     // ── Counters ─────────────────────────────────────────────────
     // The events are registered, so the hit reaches four flops' D rather
@@ -327,12 +426,11 @@ module penumbra3_l1
     end
 
     // ── Assertions (sim-only; Verilator --assert) ─────────────────
+    // The client launches, requests and stores nothing while the cache is
+    // busy: an install never meets a launch or a store, and one access is
+    // in flight at a time.
     assert property (@(posedge i_clk) disable iff (i_rst)
-        !(i_fill_we && !cache_en_q))
-        else $error("penumbra3_l1: a line installed into a disabled cache");
-
-    assert property (@(posedge i_clk) disable iff (i_rst)
-        !(i_store && i_fill_we))
-        else $error("penumbra3_l1: a store resolved on a fill install");
+        !(o_busy && (i_launch || i_access_req || i_store)))
+        else $error("penumbra3_l1: a launch, an access or a store while busy");
 
 endmodule

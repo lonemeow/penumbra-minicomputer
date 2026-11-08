@@ -39,10 +39,11 @@
 // adds no read-during-write bypass after the EBRs. A fill gates off every
 // read of the way it writes, at any address, and no lookup launches on a
 // fill (asserted). What that costs is one cycle: in the cycle after a fill
-// the filled way's outputs are out of date, the cache tells its consumer
-// so, and the line shows from the cycle after that. A store meets reads
-// all the time; only the read of the very word the store is writing is
-// suppressed, and the register behind the store port stands in for it.
+// the filled way's outputs are out of date, the cache stays busy for a
+// lookup that holds them, and the line shows from the cycle after that. A
+// store meets reads all the time; only the read of the very word the store
+// is writing is suppressed, and the register behind the store port stands
+// in for it.
 module penumbra3_l1_store #(
     parameter  int WAYS       = 2,
     parameter  int LINE_BYTES = 16,
@@ -254,8 +255,8 @@ module penumbra3_l1_store #(
     end
 
     // ── Assertions (sim-only; Verilator --assert) ─────────────────
-    // The cache freezes its pipe while a fill installs, so no lookup
-    // launches on a fill's edge.
+    // The cache is busy while a fill installs, and its client launches
+    // nothing while it is busy, so no lookup launches on a fill's edge.
     assert property (@(posedge i_clk) disable iff (i_rst)
         !(i_fill_we && i_launch))
         else $error("penumbra3_l1_store: lookup launched on a fill install");
