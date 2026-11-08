@@ -10,8 +10,7 @@ wrapper attaches devices to its bus and needs nothing else, so the
 one written for gen2 serves gen3 with the machine swapped.
 
 This document specifies how the parts compose: what each connects to,
-the sysreg devices and their read timing, the uncore when there is no
-L2, and the program-end pulse.
+the sysreg devices and their read timing, and the program-end pulse.
 
 ```mermaid
 graph LR
@@ -19,7 +18,7 @@ graph LR
     MMU["MMU<br/>I and D translate,<br/>fault registers"]
     L1I["L1-I"]
     L1D["L1-D"]
-    UC["uncore<br/>select, bus master"]
+    UC["uncore<br/>select, L2, bus master"]
     DEV["sysreg devices<br/>CPU, BUS, TIMER, MACH"]
     BUS["external bus"]
     CORE -->|"fetch launch"| L1I
@@ -33,6 +32,7 @@ graph LR
     UC --- BUS
     CORE ---|"RDSYS, WRSYS"| DEV
     CORE ---|"RDSYS, WRSYS"| MMU
+    CORE ---|"RDSYS, WRSYS"| UC
 ```
 
 ## The parts
@@ -58,7 +58,7 @@ graph LR
   fault ([fault precision](./memory-completion.md#fault-precision)).
 - **The uncore** serves both L1s on the
   [core-to-uncore port](./uncore-port.md) and drives the external bus
-  ([below](#the-uncore-with-no-l2)).
+  ([the uncore](./uncore.md)). The L2 inside it is a sysreg device.
 
 ## Sysreg devices
 
@@ -73,14 +73,14 @@ The core's sysreg side reaches every device by number
 | 4 | BUS: bus reset and autoconfig enable, which leave the machine for the wrapper's autoconfig chain | in the read's cycle |
 | 7 | TIMER | in the read's cycle |
 | 8 | MACH: the board's identity, constants the board top supplies | in the read's cycle |
-| 9 | L2: absent, every register reads 0 | — |
+| 9 | L2 | a cycle after the read |
 
 Any other device reads 0 and ignores writes. The CPU's name says
 "/3"; its ISA word is every generation's.
 
 **Read timing.** An `RDSYS` raises its read in MEM1, and MEM2 takes
-the data a cycle later. The MMU and the L1s latch the register their
-read names and answer from it in that later cycle. The other devices
+the data a cycle later. The MMU, the L1s and the L2 latch the register
+their read names and answer from it in that later cycle. The other devices
 answer in the read's cycle, so the machine registers their answer
 then. A register of which device was read picks between the two at
 the later cycle.
@@ -92,36 +92,6 @@ both: the write's register in the write's cycle, the read's otherwise.
 **Interrupts.** The core's timer interrupt is the timer device's
 interrupt or the machine's timer input; its external interrupt is the
 machine's interrupt input.
-
-## The uncore with no L2
-
-With no L2 the uncore turns each port transaction into bus accesses
-through a bus master that runs one transaction at a time. When both
-sides wait, the data side goes first, as the port's handshake
-requires.
-
-| Transaction | On the bus |
-|---|---|
-| Line read | four reads of whole words from the line's address, in address order |
-| Word read | one read, the access's address and byte lanes as they are; the bus's 32 bits come back in word 0 |
-| Word write | one write, the access's address and byte lanes as they are |
-| Cacheable write | one write, as a word write |
-
-The fetch side's accesses carry no byte lanes, so the uncore gives a
-fetch's word read all four.
-
-A transaction's `done` comes after the bus has answered its last
-access, from registers. A read or a word write carries the bus's fault
-with its `done`: any of a line read's four. A cacheable write's `done`
-carries no fault; when the bus faulted the write, a `store_fault` with
-the write's address comes in the same cycle.
-
-**Nothing is posted.** A cacheable write's `done` comes once the bus
-has taken the write, so every later read sees it, as the port's
-cacheable write promises. The port lets a write complete sooner, once
-it is accepted for later delivery, as an L2 or a store buffer does;
-the write's fault then comes on `store_fault` in whatever cycle the bus
-gives it ([faults](./uncore-port.md#faults)).
 
 ## Program end
 

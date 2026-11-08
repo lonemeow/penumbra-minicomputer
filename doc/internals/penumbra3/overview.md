@@ -461,9 +461,11 @@ the seed sweep, not into a higher clock.
      them: lookups, stores, and the accesses each L1 carries past it.
    - [`uncore-port.md`](./uncore-port.md) — the port between the L1s and
      the uncore: its four transactions, handshake and faults.
+   - [`uncore.md`](./uncore.md) — the uncore behind that port: the L2's
+     geometry and pipeline, the posted write, the bus transaction, and
+     the L2's cache device.
    - [`machine.md`](./machine.md) — how the core, MMU, L1s, uncore and
-     sysreg devices compose into the machine, the uncore with no L2, and
-     the program-end pulse.
+     sysreg devices compose into the machine, and the program-end pulse.
    - [`memory-performance.md`](./memory-performance.md) — measured
      memory-path costs, gen2.5 workload profiles, and the uncore levers
      they point to (store buffer, one uncore pipeline, whole-line SDRAM
