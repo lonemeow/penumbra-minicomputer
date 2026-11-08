@@ -60,7 +60,7 @@ varies by integration (board name, PLL frequency, board feature word).
 | reg   | Name          | R/W | Description                                          |
 |:-----:|---------------|:---:|------------------------------------------------------|
 | 0     | `MMUCR`       | R/W | Control register                                     |
-| 1     | `FAULT_ADDR`  | R   | Faulting virtual address (latched on fault)          |
+| 1     | `FAULT_ADDR`  | R   | Faulting virtual address, or physical if deferred    |
 | 2     | `FAULT_STATUS`| R   | Fault type and access info (latched on fault)        |
 | 3     | `TLB_VPN`     | R/W | Staged TLB upper word (VPN + ASID)                   |
 | 4     | `TLB_PTE`     | R/W | TLB lower word (PPN + flags); **write commits entry**|
@@ -100,9 +100,12 @@ WRSYS R1, #0, #0
 └────────┴───┴──┴──┴──┴─────┴─────────┘
 ```
 
-- **TYPE** (bits 3:0): `0001` = TLB miss, `0010` = protection violation.
+- **TYPE** (bits 3:0): `0001` = TLB miss, `0010` = protection
+  violation, `0011` = alignment, `0100` = bus fault, `0101` = deferred
+  bus fault ([Deferred Bus Faults](./architecture.md#deferred-bus-faults)).
 - **R/W/X** (bits 10:8): Which access faulted (one-hot).
-- **USR** (bit 11): 1 = fault was in user mode.
+- **USR** (bit 11): 1 = the faulting access ran in user mode. A
+  deferred bus fault does not report its write's mode and reads 0.
 
 ### TLB_INDEX (reg 5)
 

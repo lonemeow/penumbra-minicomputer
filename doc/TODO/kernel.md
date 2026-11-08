@@ -943,6 +943,20 @@ work the machine does itself, not at the network.
 
 Open: where the time goes. `dhcpcd -t` raises the limit.
 
+## Kernel: a deferred bus fault must panic
+
+A store through a cacheable mapping whose write the bus faults may
+trap at a later instruction, as a deferred bus fault
+(`doc/system/architecture.md`, "Deferred Bus Faults"):
+`FAULT_STATUS.TYPE` `0101`, `FAULT_ADDR` the write's physical address,
+`EPC` the next instruction. Only gen3 raises it. `trap()`'s
+`EXC_BUSFAULT` case (`netbsd/sys/arch/penumbra/penumbra/trap.c`) sends
+`SIGBUS` when the trap came from user mode, with `FAULT_ADDR` as a
+virtual `si_addr`, and panics otherwise. For type `0101` it has to
+panic whatever the mode, with the physical address in the message:
+nothing identifies the store, and the trap may have replaced state
+before a handler saved it.
+
 ## Ruled out
 
 - **Refill way pick: set bits mixed into the counter bit, or an empty

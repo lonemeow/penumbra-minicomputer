@@ -331,6 +331,9 @@ On any interrupt, exception, or trap the hardware:
   faulting instruction (handler can retry after fixing the cause).
 - **External interrupts:** saved PC is the next instruction
   (the interrupted one completed).
+- **Deferred bus faults:** saved PC is the next instruction; the
+  store whose write faulted completed earlier
+  ([Deferred Bus Faults](#deferred-bus-faults)).
 - **Software traps** (`SYSCALL`, `BREAK`): saved PC is the trapping
   instruction itself. The handler advances `EPC` by 4 before `ERET`
   to resume past the trap; leaving `EPC` untouched restarts the
@@ -355,7 +358,7 @@ needed for the vector page. `vector_addr = vector_number × 4`.
 
 | Vector | Addr | Name            | Source                              |
 |:------:|:----:|-----------------|-------------------------------------|
-| 0      | 0x00 | `VEC_BUS_FAULT` | Bus fault (no device at address)    |
+| 0      | 0x00 | `VEC_BUS_FAULT` | Bus fault, precise or deferred      |
 | 1      | 0x04 | `VEC_TIMER`     | Timer interrupt                     |
 | 2      | 0x08 | `VEC_TLB_MISS`  | TLB miss                            |
 | 3      | 0x0C | `VEC_TLB_PROT`  | TLB protection fault                |
@@ -384,6 +387,42 @@ The CPU has two asynchronous interrupt inputs, each with its own vector:
 
 Both are masked by `SR.I` and gated by `ei_shadow`. Timer has strict
 priority: if both are pending simultaneously, the timer is taken first.
+
+### Deferred Bus Faults
+
+A store to a cacheable page may complete once its write is accepted
+for later delivery: posted, buffered, or held in a write-back cache.
+When the bus then faults the write, because no device answers its
+address or the device refuses it, the store has already completed,
+and the fault is taken at a later instruction as a **deferred bus
+fault**:
+
+- **Vector 0** (`VEC_BUS_FAULT`), at the first instruction boundary
+  after the bus reports the fault, ahead of any interrupt pending
+  there.
+- **The saved PC is the next instruction to execute,** as for an
+  interrupt. Nothing identifies the store whose write faulted.
+- **`FAULT_STATUS`** reads `TYPE` = `0101` with `W` set, and
+  **`FAULT_ADDR`** holds the write's physical address
+  ([FAULT_STATUS](./mmu.md#fault_status-layout)).
+- **Not maskable.** Neither `SR.I` nor `ei_shadow` holds it off.
+- **One at a time.** The CPU holds one deferred fault until it takes
+  it; a fault the bus reports while one is held is not recorded.
+
+Every other bus fault is precise: loads, instruction fetches, and
+stores to uncacheable pages (device registers are mapped uncacheable)
+fault on their own instruction, with `TYPE` = `0100` and the access's
+virtual address. A CPU may also hold a cacheable store until its write
+completes and fault it precisely; software handles both.
+
+A deferred fault can arrive at any instruction, a handler's first ones
+included, before the handler has saved `EPC` and `ESR`. Taken there,
+it replaces them, and `FAULT_ADDR` and `FAULT_STATUS` with them, so
+the context that handler interrupted cannot be resumed. A synchronous
+fault never arrives there, because handlers are written not to fault
+before they save their state. Software therefore treats a deferred
+bus fault as fatal: a cacheable mapping has reached address space
+that does not take the write.
 
 ### Software Trap Instructions
 

@@ -165,7 +165,7 @@ fault precision:
 | Cacheable load miss | line read | value (sub-word extract) | precise |
 | Uncached load | single read | value | precise |
 | Uncached store | single write (+byte-en) | none | **precise** |
-| Cacheable store write-through | single write (+byte-en) | none | **async (sticky)** |
+| Cacheable store write-through | single write (+byte-en) | none | **deferred** |
 
 Each row is one transaction of the
 [core-to-uncore port](./uncore-port.md#the-four-transactions): the line
@@ -221,14 +221,13 @@ A memory fault is taken on the held, oldest-in-flight access. Whether it is
   construction. A load and an uncached store are not deferrable — the load's
   consumer waits on the value, and an uncached (device) store is ordered and
   unbuffered — so each is the oldest in flight when its transaction resolves.
-- **Asynchronous — recorded in a sticky status bit, never a per-store trap:**
-  a **cacheable store** bus fault. By contract a cacheable store's write-back
-  may be deferred arbitrarily (a write-back cache, a store/write buffer): the
-  storing instruction is permitted to retire before the write reaches memory,
-  so a bus fault on it cannot be tied to that instruction. Writing the
-  contract to the *weakest* guarantee the cache is allowed to make is what
-  keeps a write-back L2 a transparent throughput upgrade rather than an ABI
-  change.
+- **Deferred — a trap at a later instruction:** a **cacheable store** bus
+  fault. By contract a cacheable store's write may be deferred arbitrarily
+  (posted, buffered, held in a write-back cache): the storing instruction
+  is permitted to retire before the write reaches memory, so a bus fault on
+  it cannot be tied to that instruction. Writing the contract to the
+  *weakest* guarantee the cache is allowed to make is what keeps a
+  write-back L2 a transparent throughput upgrade rather than an ABI change.
 
 The whole carve-out is one qualifier, registered with the parked access:
 
@@ -239,28 +238,33 @@ fault_precise = ~(is_store & cacheable)
 The same qualifier says where the instruction retires: a cacheable store as
 its write parks, every other parked access with its completion.
 
-A precise fault reuses the existing data-fault vector and `FADDR`/`FSTAT`;
-the asynchronous path sets the sticky bit only. A cacheable store targets
-memory-backed storage, which answers, so the sticky bit records an otherwise
-unreachable error rather than dropping it silently — the surfacing of that
-bit (an asynchronous-exception vector) is a separate concern, not part of the
-synchronous completion contract here.
+Both kinds take the bus-fault vector and report through `FADDR`/`FSTAT`.
 
-The instruction has left the pipe by the time a bus fault arrives, so the
-parked access keeps what the fault reports: the PC for `EPC`, the virtual
-address for `FADDR`, and the mode and access type for `FSTAT`.
+A precise bus fault arrives with its access's completion. The instruction
+has left the pipe by then, so the parked access keeps what the fault
+reports: the PC for `EPC`, the virtual address for `FADDR`, and the mode
+and access type for `FSTAT`.
 The completion commits the fault in WB's place, with the same flush and
 save-state. Everything issued after the access is squashed with nothing left
 to clear its pending bit, so any fault commit clears the scoreboard: the
 faulting instruction is the oldest in flight, so every bit still set belongs
 to something squashed.
 
+A deferred bus fault plays no part in completion. The uncore reports it
+with a `store_fault` pulse and the write's physical address, in whatever
+cycle the bus faults the write, and the L1-D passes both to the core. The
+core holds one such fault and takes it at the next instruction boundary,
+where it takes an interrupt: ahead of any interrupt, whatever `SR.I` says,
+with `EPC` the instruction at that boundary, `FADDR` the write's physical
+address and `FSTAT` type `0101`
+([deferred bus faults](../../system/architecture.md#deferred-bus-faults)).
+
 Two invariants hold by construction and are asserted (Verilator `--assert`):
 
 - a completion that delivers a **precise** fault is the oldest in flight (the
   single-outstanding invariant), so the squash/redirect is precise;
-- `is_store & cacheable` is the **only** access class that completes
-  asynchronously — every other completion is precise.
+- `is_store & cacheable` is the **only** access class whose fault is
+  deferred — every other completion is precise.
 
 A faulting line fill installs nothing (the line stays invalid); the fault
 rides the completion, transient, not cached.
@@ -292,7 +296,7 @@ The policy is two orthogonal knobs, each defaulting to the cheap leg:
 
 Two invariants every policy must preserve — they are what keep the doors open:
 
-- **Cacheable-store bus faults stay asynchronous.** A deferring cache
+- **Cacheable-store bus faults stay deferred.** A deferring cache
   (write-back, or a store buffer) may push the write arbitrarily far past the
   instruction, so the contract is written to that weakest guarantee.
   Write-through *could* deliver these precisely, but does not — a stable

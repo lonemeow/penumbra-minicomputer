@@ -573,11 +573,12 @@ graph LR
   copy engine would therefore need an explicit drain before it starts.
   Every other drain is a side effect of an operation software already
   issues, and it blocks rather than requiring a poll.
-- **Faults.** A cacheable-store bus fault is already asynchronous (a
-  sticky bit) under the
+- **Faults.** A cacheable-store bus fault is already deferred, a trap
+  at a later instruction, under the
   [fault-precision contract](./memory-completion.md#fault-precision),
-  written with a deferring store path in mind. Uncached accesses stay
-  unbuffered and precise.
+  written with a deferring store path in mind. The buffer reports a
+  drain's fault with the drained write's physical address, as the
+  uncore does. Uncached accesses stay unbuffered and precise.
 - **Timing.** The core sees only registered signals: `full` joins the
   launch-side freeze, and the line compare and `empty` gate accesses at
   the uncore. No new combinational cone reaches issue or the MMU.

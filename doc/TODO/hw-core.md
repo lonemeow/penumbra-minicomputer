@@ -171,9 +171,11 @@ ranks first ("Levers ranked by measured benefit"):
    enable, the cache device's sysregs and counters, 8 KB 2-way on the
    ECP5. Each L1 is its side's requester on the uncore port, and its
    clients see only lookups, stores and accesses
-   (`doc/internals/penumbra3/l1-cache.md`). Still open: a register for
-   `store_fault`, which `doc/system` does not define, so the port's
-   pulse goes nowhere.
+   (`doc/internals/penumbra3/l1-cache.md`). Still open: the deferred
+   bus fault a cacheable write's `store_fault` raises
+   (`doc/system/architecture.md`, "Deferred Bus Faults"): the L1-D
+   passing the pulse and its address to the core, and the core holding
+   one and taking it at the next instruction boundary, unmasked.
 2. **The uncore pipeline:** L2 -- write-through and posted, a look-up
    every cycle, the line-wide transfer with fill-through -- with the
    I/D select and the fill folded in, driving `bus_master`.
@@ -1025,3 +1027,15 @@ Open:
   which `doc/internals/penumbra3/memory-completion.md` rules out.
   Analysis in `doc/internals/penumbra3/memory-performance.md` ("Hit
   under miss in the L2 — ruled out").
+- **Draining posted writes at every user/supervisor switch.**  Exception
+  entry from user mode and `ERET` to it would each wait until every
+  posted or buffered write has completed, which makes a user store's
+  deferred bus fault recoverable: it is always taken at a user-mode
+  instruction boundary, where no handler has state unsaved, while its
+  own process is current, so the kernel can send that process
+  `SIGBUS` and go on. No write would outlive its mode, so the fault
+  could report `USR` as well. A supervisor store's fault would stay
+  fatal. Declined for the cost: every system call and interrupt from
+  user mode would wait out the stores ahead of it, for a fault only a
+  cacheable mapping of address space that does not take the write can
+  raise (`doc/system/architecture.md`, "Deferred Bus Faults").

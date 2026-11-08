@@ -113,6 +113,7 @@ The response, all driven from flip-flops in the uncore:
 | `fault` | 1 | shared | the bus faulted the transaction; valid with either `done` |
 | `line` | 4 × 32 | shared | read data; valid with either `done` of a read that did not fault |
 | `store_fault` | 1 | data | the bus faulted a cacheable write; one cycle, in any cycle |
+| `store_fault_addr` | 32 | data | that write's `addr`; valid with `store_fault` |
 
 `fault` and `line` are one register each. The uncore never raises both
 sides' `done` in one cycle, so whichever side sees its `done` owns
@@ -177,9 +178,10 @@ reach the port.
   which the requester passes to its client; the data side delivers it
   [precisely](./memory-completion.md#fault-precision).
 - **A cacheable write** completes with `fault` low whatever the bus
-  said. Its bus fault is asynchronous by the same contract: the uncore
-  reports it with a `store_fault` pulse, in whatever cycle the bus
-  reported it.
+  said. Its bus fault comes apart from any `done`: a `store_fault`
+  pulse in whatever cycle the bus reported it, with the write's `addr`
+  on `store_fault_addr`. The core takes it as a
+  [deferred bus fault](../../system/architecture.md#deferred-bus-faults).
 
 ## Timing
 
@@ -189,9 +191,10 @@ Both directions of the port run from registers.
   straight from registers in the requester. A miss sets a flop and the
   flop raises `valid`; no hit, miss or translation verdict reaches the
   port in the cycle it forms.
-- **Responses leave flip-flops.** `done`, `fault`, `line` and
-  `store_fault` come straight from registers in the uncore, and no
-  path runs from a request field to a response within a cycle.
+- **Responses leave flip-flops.** `done`, `fault`, `line`,
+  `store_fault` and `store_fault_addr` come straight from registers in
+  the uncore, and no path runs from a request field to a response
+  within a cycle.
 - **What may sit between.** The uncore may select between the two
   sides' requests ahead of its first register. A requester may gate
   `done` with its own flops ahead of its registers and its arrays'

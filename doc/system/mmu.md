@@ -48,7 +48,7 @@ Accessed via `WRSYS`/`RDSYS` with device ID 0.
 | Reg | Name | R/W | Description |
 |-----|------|-----|-------------|
 | 0 | `MMUCR` | R/W | Control: M (enable), ASID (current address space) |
-| 1 | `FAULT_ADDR` | R | Faulting virtual address (latched on fault) |
+| 1 | `FAULT_ADDR` | R | Faulting virtual address (latched on fault); physical if deferred |
 | 2 | `FAULT_STATUS` | R | Fault reason and access info (latched on fault) |
 | 3 | `TLB_VPN` | R/W | TLB entry upper word: VPN + ASID (staged on write) |
 | 4 | `TLB_PTE` | R/W | TLB entry lower word: PPN + flags. **Write commits entry.** |
@@ -77,9 +77,12 @@ Accessed via `WRSYS`/`RDSYS` with device ID 0.
 └────────┴───┴──┴──┴──┴─────┴─────────┘
 ```
 
-- **TYPE** (bits 3:0): `0001` = TLB miss, `0010` = protection violation.
+- **TYPE** (bits 3:0): `0001` = TLB miss, `0010` = protection
+  violation, `0011` = alignment, `0100` = bus fault, `0101` = deferred
+  bus fault ([Deferred Bus Faults](./architecture.md#deferred-bus-faults)).
 - **R/W/X** (bits 8/9/10): Access type that faulted (one-hot).
-- **USR** (bit 11): 1 = fault occurred in user mode.
+- **USR** (bit 11): 1 = the faulting access ran in user mode. A
+  deferred bus fault does not report its write's mode and reads 0.
 
 ### MMU_CONFIG Layout
 

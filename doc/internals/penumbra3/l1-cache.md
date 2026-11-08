@@ -159,11 +159,17 @@ launched in the request's cycle can be.
   size, as it does from a word the L1 hit. A write returns none.
 - **`fault`** says the bus faulted the access: any of a line read's
   four words, or a word access's one. A faulted line read installs
-  nothing. A cacheable write's `done` never faults; the port reports
-  that write's bus fault apart from any `done`
-  ([faults](./uncore-port.md#faults)).
+  nothing. A cacheable write's `done` never faults; its bus fault
+  comes later, on `store_fault`.
+- **`store_fault`** says the bus faulted a cacheable write an earlier
+  `done` completed, and `store_fault_addr` holds that write's physical
+  byte address. The L1-D passes both from the port for one cycle, in
+  any cycle, a `done`'s included, and its client takes them as a
+  deferred bus fault
+  ([fault precision](./memory-completion.md#fault-precision)).
 
-`busy`, `done`, `word` and `fault` all come from registers.
+`busy`, `done`, `word`, `fault`, `store_fault` and `store_fault_addr`
+all come from registers.
 
 ## The fetch side
 
