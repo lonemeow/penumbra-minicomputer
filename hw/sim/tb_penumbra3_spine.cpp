@@ -83,6 +83,7 @@ static void clear_inputs(Vpenumbra3_spine_test* dut) {
     dut->i_drsp_done = 0; dut->i_rsp_fault = 0;
     for (int k = 0; k < 4; k++) dut->i_rsp_line[k] = 0;
     dut->i_irq_inject = 0; dut->i_irq_vec = 0;
+    dut->i_deferred_inject = 0; dut->i_deferred_addr = 0;
 }
 
 // Reset and stream a program, then its handler once a fault commits. Each

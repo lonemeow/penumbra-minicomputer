@@ -5,10 +5,10 @@
 // (ID->EX->MEM1->MEM2->WB + regfile + scoreboard + SPR/scratch files), plus
 // penumbra3_fetch_replay (a miss's replay) and the two exception-path units
 // -- penumbra3_vecfetch (vector-table read + handler redirect) and
-// penumbra3_irq (recognition + EX-frontier injection). Everything
-// memory-shaped lives outside, behind the port groups the machine
-// integration (machine_penumbra3) binds to the duplicated-BRAM MMU/TLB, the
-// split L1s, the uncore and the sysreg device complex:
+// penumbra3_irq (recognition + EX-frontier injection, and the deferred bus
+// fault). Everything memory-shaped lives outside, behind the port groups the
+// machine integration (machine_penumbra3) binds to the duplicated-BRAM
+// MMU/TLB, the split L1s, the uncore and the sysreg device complex:
 //
 //   - The fetch side: the launch (o_fetch_addr/o_fetch_en, the lookup the L1-I
 //     and the MMU I-port sample together), their verdicts a cycle later, and
@@ -19,7 +19,8 @@
 //   - The D-side memory ports the spine drives directly: the translation
 //     launch/verdict (MEM1 launch, MEM2 verdict), the L1-D's launch, resolve,
 //     store strobe and access (doc/internals/penumbra3/l1-cache.md), and the
-//     WB-qualified MMU fault-register commit.
+//     WB-qualified MMU fault-register commit. The L1-D's store fault goes to
+//     penumbra3_irq, which takes it as a deferred bus fault.
 //   - The sysreg sideband: the RDSYS read selectors + launch strobe with the
 //     response due at data-ready, and the WRSYS write port committed from EX.
 //
@@ -101,6 +102,8 @@ module penumbra3_core
     input  logic                  i_dcache_access_done,
     input  logic [31:0]           i_dcache_access_word,
     input  logic                  i_dcache_access_fault,
+    input  logic                  i_dcache_store_fault,      // an earlier write faulted
+    input  logic [31:0]           i_dcache_store_fault_addr, // its physical address
 
     // ── Sysreg sideband (RDSYS read; WRSYS write committed from EX) ─
     output logic                  o_sys_re,
@@ -180,9 +183,14 @@ module penumbra3_core
     logic [31:0] wrsys_resync_pc;
 
     logic        sr_s, sr_i, ei_commit, dc_commit, ex_valid, ex_stall;
-    logic        insn_committed;
+    logic        insn_committed, retire_valid;
     logic        irq_inject;
     logic [3:0]  irq_vec;
+    logic        deferred_inject;
+    logic [31:0] deferred_addr;
+
+    logic        mmu_fault_commit;
+    logic [31:0] mmu_fault_vaddr, mmu_fault_status;
 
     // ── Vector-fetch FSM wires ───────────────────────────────────
     logic        vecf_active;
@@ -196,9 +204,10 @@ module penumbra3_core
     // which flush younger instructions, so every in-flight instruction shares
     // this one committed value. The D-side privilege rides the spine's
     // o_user_mode directly; the fetch side is its complement here.
-    logic core_supervisor;
+    logic core_supervisor, fetch_user;
     assign core_supervisor = sr_s;
-    assign o_fetch_user    = ~core_supervisor;
+    assign fetch_user      = ~core_supervisor;
+    assign o_fetch_user    = fetch_user;
 
     // ══════════════════════════════════════════════════════════
     // Front-end redirect / flush composition
@@ -267,7 +276,7 @@ module penumbra3_core
         .i_way_hit(i_icache_way_hit), .i_way_word(i_icache_way_word),
         .i_hit(i_icache_hit),
         .i_cacheable(i_fetch_cacheable),
-        .i_user_mode(o_fetch_user),
+        .i_user_mode(fetch_user),
         .i_mmu_fault(i_fetch_mmu_fault),
         .i_mmu_fault_status(i_fetch_mmu_fault_status),
         .i_replayed(frep_replayed),
@@ -369,15 +378,16 @@ module penumbra3_core
         .o_eret_commit(eret_commit),
         .o_wrsys_resync(wrsys_resync), .o_wrsys_resync_pc(wrsys_resync_pc),
         // MMU fault-register commit -- WB's qualified strobe + payload.
-        .o_mmu_fault_commit(o_mmu_fault_commit), .o_mmu_fault_vaddr(o_mmu_fault_vaddr),
-        .o_mmu_fault_status(o_mmu_fault_status),
+        .o_mmu_fault_commit(mmu_fault_commit), .o_mmu_fault_vaddr(mmu_fault_vaddr),
+        .o_mmu_fault_status(mmu_fault_status),
         // Interrupt support -- observability out, IRQ save-state in.
         .o_sr_s(sr_s), .o_sr_i(sr_i), .o_ei_commit(ei_commit), .o_dc_commit(dc_commit),
         .o_ex_valid(ex_valid), .o_ex_stall(ex_stall),
         .i_irq_inject(irq_inject), .i_irq_vec(irq_vec),
+        .i_deferred_inject(deferred_inject), .i_deferred_addr(deferred_addr),
         // Observability.
         .o_insn_committed(insn_committed), .o_bcause(o_bcause),
-        .o_retire_valid(o_retire_valid), .o_retire_pc(o_retire_pc),
+        .o_retire_valid(retire_valid), .o_retire_pc(o_retire_pc),
         .o_commit_idx(o_commit_idx), .o_commit_data(o_commit_data), .o_commit_we(o_commit_we)
     );
 
@@ -388,6 +398,11 @@ module penumbra3_core
     // cycle, so the OR counts each retire exactly once.
     assign o_insn_retired   = insn_committed | dc_commit;
     assign o_insn_committed = insn_committed;
+    assign o_retire_valid   = retire_valid;
+
+    assign o_mmu_fault_commit = mmu_fault_commit;
+    assign o_mmu_fault_vaddr  = mmu_fault_vaddr;
+    assign o_mmu_fault_status = mmu_fault_status;
 
     // Trace observability: the same commit pulses the front end consumes.
     assign o_fault_commit  = fault_commit;
@@ -415,16 +430,27 @@ module penumbra3_core
     );
 
     // ══════════════════════════════════════════════════════════
-    // Interrupt unit -- recognition + EX-frontier injection
+    // Interrupt unit -- recognition + EX-frontier injection, and the
+    // deferred bus fault
     // ══════════════════════════════════════════════════════════
+    // The deferred fault is held until it commits: only it commits with its
+    // type, which the MMU's fault registers take.
+    logic deferred_commit;
+    assign deferred_commit = mmu_fault_commit
+                           & (mmu_fault_status[3:0] == FAULT_DEFERRED_BUS);
+
     penumbra3_irq u_irq (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_irq(i_irq), .i_timer_irq(i_timer_irq),
         .i_sr_i(sr_i), .i_ei_commit(ei_commit),
-        .i_retire_valid(o_retire_valid), .i_dc_commit(dc_commit),
+        .i_retire_valid(retire_valid), .i_dc_commit(dc_commit),
         .i_ex_valid(ex_valid), .i_ex_stall(ex_stall),
         .i_fault_commit(fault_commit), .i_vecf_active(vecf_active),
-        .o_irq_inject(irq_inject), .o_irq_vec(irq_vec)
+        .i_store_fault(i_dcache_store_fault),
+        .i_store_fault_addr(i_dcache_store_fault_addr),
+        .i_deferred_commit(deferred_commit),
+        .o_irq_inject(irq_inject), .o_irq_vec(irq_vec),
+        .o_deferred_inject(deferred_inject), .o_deferred_addr(deferred_addr)
     );
 
     // ── Assertions (sim-only; Verilator --assert) ─────────────────

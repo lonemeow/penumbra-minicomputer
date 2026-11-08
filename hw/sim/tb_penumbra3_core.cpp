@@ -20,6 +20,10 @@
 //     read, and the handler runs
 //   - a fault with a read in flight: the vector read waits for it
 //   - a fetch bus fault, on a word read and on a line read
+//   - a deferred bus fault from the L1-D's store fault: taken with SR.I
+//     clear, at the next boundary (EPC the first instruction not committed),
+//     with the write's physical address and its own type in the MMU's fault
+//     registers
 //   - each line read once; the L1's counters seeing one miss per read
 //   - a slot held for FIFO room, its L1 lookup standing
 //
@@ -37,11 +41,12 @@
 typedef Vpenumbra3_core_test Dut;
 
 // ── ISA constants (penumbra_pkg / penumbra3_pkg) ─────────────────
-enum { OP_R_ADD = 0, OP_R_RESERVED = 12, OP_R_MUL = 16, OP_R_EI = 28 };
+enum { OP_R_ADD = 0, OP_R_RESERVED = 12, OP_R_MUL = 16, OP_R_EI = 28, OP_R_RDSPR = 31 };
+enum { SPR_EPC = 1 };
 enum { OP_L_LLI = 0, OP_L_ADDI = 3 };
 enum { COND_AL = 0 };
 enum { VEC_BUS_FAULT = 0, VEC_ILLEGAL = 7, VEC_EXT_IRQ = 9 };
-enum { FAULT_BUS = 4, FSTAT_X = 1 << 10 };
+enum { FAULT_BUS = 4, FAULT_DEFERRED_BUS = 5, FSTAT_W = 1 << 9, FSTAT_X = 1 << 10 };
 // Cache device registers
 enum { CACHE_CTRL = 1, CACHE_READ_HITS = 10, CACHE_READ_MISSES = 11 };
 
@@ -92,6 +97,8 @@ struct Config {
     bool l1_on = false;
     int  latency = 3;         // cycles from a request rising to its done
     int  irq_cycle = -1;
+    int  store_fault_cycle = -1;   // the L1-D's store fault, for one cycle
+    uint32_t store_fault_addr = 0;
 };
 struct Req { uint32_t addr; int cacheable; };
 struct Commit { uint32_t idx, data; };
@@ -157,6 +164,7 @@ static void run(Dut* dut, const Config& cfg, int max_cycles, Trace& t) {
     dut->i_l1_sys_reg = 0; dut->i_l1_sys_wdata = 0;
     dut->i_l1_sys_we = 0; dut->i_l1_sys_re = 0;
     dut->i_irsp_done = 0; dut->i_rsp_fault = 0;
+    dut->i_store_fault = 0; dut->i_store_fault_addr = 0;
     dut->i_rst = 1; dut->i_core_rst = 1; tick(dut); tick(dut); dut->i_rst = 0;
     if (cfg.l1_on) l1_write(dut, CACHE_CTRL, 1);
     dut->i_core_rst = 0;
@@ -164,6 +172,8 @@ static void run(Dut* dut, const Config& cfg, int max_cycles, Trace& t) {
     bool irq_fired = false;
     for (int c = 0; c < max_cycles; c++) {
         if (cfg.irq_cycle >= 0 && c >= cfg.irq_cycle && !irq_fired) dut->i_irq = 1;
+        dut->i_store_fault      = c == cfg.store_fault_cycle;
+        dut->i_store_fault_addr = cfg.store_fault_addr;
         tick(dut);
         if (dut->o_commit_we)
             t.commits.push_back({dut->o_commit_idx, dut->o_commit_data});
@@ -401,6 +411,44 @@ int main(int argc, char** argv) {
         check(n, t.fault_status, FAULT_BUS | FSTAT_X);
         snprintf(n, sizeof(n), "%s_handler_ran", tag);
         check(n, committed(t, 5, 0xABC), 1);
+    }
+
+    // ── A deferred bus fault: taken at the next boundary, unmasked ──
+    {
+        g_rom.clear();
+        uint32_t base = RESET_PC;
+        const uint32_t n_insns = 40;
+        std::vector<uint32_t> prog;
+        for (uint32_t k = 1; k <= n_insns; k++) prog.push_back(enc_l(OP_L_LLI, 1, k));
+        load(base, prog);
+        load(base + 0x100, {
+            enc_r(OP_R_RDSPR, 6, 0, 0) | (SPR_EPC << 12),   // R6 = EPC
+            enc_l(OP_L_LLI, 5, 0xABC),
+        });
+        g_rom[VEC_BUS_FAULT << 2] = base + 0x100;
+
+        Config df = cached;                // SR.I stays clear from reset
+        df.store_fault_cycle = 40;
+        df.store_fault_addr  = 0x00ABC124;
+        Trace t;
+        run(dut, df, 300, t);
+        check("df_vec", t.fault_vecs.empty() ? 0xFF : t.fault_vecs[0], VEC_BUS_FAULT);
+        check("df_one_entry", t.fault_vecs.size(), 1);
+        check("df_one_latch", t.mmu_faults, 1);
+        check("df_faddr",     t.fault_vaddr, 0x00ABC124);
+        check("df_fstat",     t.fault_status, FAULT_DEFERRED_BUS | FSTAT_W);
+        check("df_handler_ran", committed(t, 5, 0xABC), 1);
+
+        // In order: the R1 writes that committed are the program's first ones,
+        // and EPC is the one after them.
+        uint32_t ran = 0, epc = 0;
+        bool saw_epc = false;
+        for (const Commit& c : t.commits) {
+            if (c.idx == 1 && !saw_epc) ran++;
+            if (c.idx == 6) { epc = c.data; saw_epc = true; }
+        }
+        check("df_mid_stream", ran > 0 && ran < n_insns, 1);
+        check("df_epc", epc, base + 4 * ran);
     }
 
     printf("%s: %d/%d checks passed\n",

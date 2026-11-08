@@ -1,4 +1,5 @@
-// penumbra3_irq -- Penumbra/3 interrupt recognition + EX-frontier injection.
+// penumbra3_irq -- Penumbra/3 interrupt recognition + EX-frontier injection,
+// and the deferred bus fault taken the same way.
 //
 // An interrupt is asynchronous -- nobody's fault, tied to no instruction -- and
 // need not be taken immediately, so it is taken at the cleanest boundary the
@@ -16,6 +17,13 @@
 // -- strictly older than the EX slot -- so an issued access is never squashed and
 // a not-yet-issued one is squashed before its side effect. The non-speculative
 // distinction is the EX/MEM boundary itself; injecting here respects it.
+//
+// The deferred bus fault. A cacheable store's write the bus faults after the
+// store completed is tied to no instruction either, and is taken at the same
+// frontier, ahead of any interrupt and whatever SR.I and ei_shadow say
+// (doc/system/architecture.md, "Deferred Bus Faults"). The unit holds one,
+// with the write's physical address, which the EX stage puts in the
+// synthetic fault's FAULT_ADDR.
 //
 // ei_shadow. EI enables interrupts with a one-instruction delay: the instruction
 // immediately after EI still runs masked. EI sets ei_shadow (and SR.I, in the
@@ -45,9 +53,16 @@ module penumbra3_irq
     input  logic        i_fault_commit,    // a fault committed this cycle (preempts the entry)
     input  logic        i_vecf_active,     // a vector fetch is already in progress
 
+    // ── Deferred bus fault ───────────────────────────────────────
+    input  logic        i_store_fault,      // an earlier cacheable write faulted
+    input  logic [31:0] i_store_fault_addr, // that write's physical address
+    input  logic        i_deferred_commit,  // the held fault committed
+
     // ── Outputs ──────────────────────────────────────────────────
     output logic        o_irq_inject,      // tag the EX instruction as an interrupt this cycle
-    output logic [3:0]  o_irq_vec          // VEC_TIMER / VEC_EXT_IRQ
+    output logic [3:0]  o_irq_vec,         // VEC_TIMER / VEC_EXT_IRQ
+    output logic        o_deferred_inject, // tag the EX instruction as the deferred fault
+    output logic [31:0] o_deferred_addr    // the held fault's physical address
 );
 
     // ── EI one-instruction shadow ────────────────────────────────
@@ -79,10 +94,29 @@ module penumbra3_irq
     assign eligible    = irq_pending & i_sr_i & ~ei_shadow;
     assign o_irq_vec   = i_timer_irq ? VEC_TIMER : VEC_EXT_IRQ;   // timer outranks external
 
+    // ── The deferred bus fault ───────────────────────────────────
+    // deferred_q: a deferred fault is held, from the store fault that raised
+    // it until it commits. deferred_addr_q: its write's physical address.
+    logic        deferred_q;
+    logic [31:0] deferred_addr_q;
+
+    // A held fault stays until it commits. A store fault is recorded when
+    // none stays: nothing is held, or the held one commits this cycle.
+    logic deferred_stays, deferred_d;
+    assign deferred_stays = deferred_q & ~i_deferred_commit;
+    assign deferred_d     = deferred_stays | i_store_fault;
+
+    always_ff @(posedge i_clk) begin
+        if (i_rst) deferred_q <= 1'b0;
+        else       deferred_q <= deferred_d;
+    end
+
+    always_ff @(posedge i_clk)
+        if (i_store_fault && !deferred_stays) deferred_addr_q <= i_store_fault_addr;
+
     // ── EX-frontier inject ───────────────────────────────────────
-    // Take the interrupt by tagging the EX instruction -- the EX stage turns this
-    // into a synthetic fault -- when it is eligible and the EX slot is a clean
-    // boundary to cut at:
+    // Take the event by tagging the EX instruction -- the EX stage turns this
+    // into a synthetic fault -- when the EX slot is a clean boundary to cut at:
     //   i_ex_valid      a real instruction to pin EPC to and squash;
     //   ~i_ex_stall     no older access still in flight, so older work commits
     //                   ahead and EPC / the saved SR land on a clean boundary;
@@ -90,12 +124,17 @@ module penumbra3_irq
     //                   SR.I / ei_shadow precise (a committing DI masks the IRQ);
     //   ~i_fault_commit a fault preempts -- it is flushing this slot;
     //   ~i_vecf_active  no entry already under way.
-    assign o_irq_inject = eligible
-                        & i_ex_valid
-                        & ~i_ex_stall
-                        & ~i_dc_commit
-                        & ~i_fault_commit
-                        & ~i_vecf_active;
+    // A held deferred fault goes first, and holds the interrupts off.
+    logic frontier;
+    assign frontier = i_ex_valid
+                    & ~i_ex_stall
+                    & ~i_dc_commit
+                    & ~i_fault_commit
+                    & ~i_vecf_active;
+
+    assign o_deferred_inject = deferred_q & frontier;
+    assign o_deferred_addr   = deferred_addr_q;
+    assign o_irq_inject      = eligible & ~deferred_q & frontier;
 
     // ══════════════════════════════════════════════════════════
     // Assertions -- sim-only (Verilator --assert); stripped at synth.
@@ -106,6 +145,13 @@ module penumbra3_irq
     always_comb begin
         assert (!o_irq_inject || (i_ex_valid && !i_ex_stall && !i_fault_commit))
             else $error("penumbra3_irq: inject fired on an unclean EX boundary");
+        assert (!(o_irq_inject && o_deferred_inject))
+            else $error("penumbra3_irq: two events injected at once");
     end
+
+    // Only a held deferred fault commits as one.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        !(i_deferred_commit && !deferred_q))
+        else $error("penumbra3_irq: a deferred fault committed with none held");
 
 endmodule

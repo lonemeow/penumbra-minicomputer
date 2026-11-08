@@ -4,7 +4,8 @@
 // every frame is the fetch's own, and i_cacheable is the page verdict for the
 // whole run. The L1-I's side of the core-to-uncore port is passed through
 // flat for the testbench to answer. The D-side verdicts are tied benign, so
-// the programs are ALU + branch only.
+// the programs are ALU + branch only; the L1-D's store fault is the
+// testbench's to drive.
 //
 // i_rst resets the L1 and the core, i_core_rst the core alone: holding the
 // core in reset a while longer lets the testbench enable the L1 ahead of the
@@ -33,6 +34,10 @@ module penumbra3_core_test
     input  logic                i_irsp_done,
     input  logic                i_rsp_fault,
     input  logic [UNCORE_LINE_WORDS-1:0][31:0] i_rsp_line,
+
+    // The L1-D's store fault: the bus faulted an earlier cacheable write
+    input  logic                i_store_fault,
+    input  logic [31:0]         i_store_fault_addr,
 
     // Observability
     output logic [SB_IDX_W-1:0] o_commit_idx,
@@ -88,6 +93,8 @@ module penumbra3_core_test
         .o_access_done      (access_done),
         .o_access_word      (access_word),
         .o_access_fault     (access_fault),
+        .o_store_fault      (),
+        .o_store_fault_addr (),
         .o_req_valid        (o_ireq_valid),
         .o_req_cacheable    (o_ireq_cacheable),
         .o_req_addr         (o_ireq_addr),
@@ -97,6 +104,8 @@ module penumbra3_core_test
         .i_rsp_done         (i_irsp_done),
         .i_rsp_fault        (i_rsp_fault),
         .i_rsp_line         (i_rsp_line),
+        .i_rsp_store_fault  (1'b0),
+        .i_rsp_store_fault_addr ('0),
         .i_sys_reg          (i_l1_sys_reg),
         .i_sys_wdata        (i_l1_sys_wdata),
         .i_sys_we           (i_l1_sys_we),
@@ -157,6 +166,8 @@ module penumbra3_core_test
         .i_dcache_access_done     (1'b0),
         .i_dcache_access_word     ('0),
         .i_dcache_access_fault    (1'b0),
+        .i_dcache_store_fault     (i_store_fault),
+        .i_dcache_store_fault_addr (i_store_fault_addr),
         .o_sys_re                 (),
         .o_sys_dev                (),
         .o_sys_reg                (),

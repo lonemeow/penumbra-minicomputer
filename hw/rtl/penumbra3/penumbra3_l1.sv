@@ -8,7 +8,7 @@
 // core-to-uncore port. Its client sees lookups, stores and accesses
 // (doc/internals/penumbra3/l1-cache.md); which way a line goes to, whether
 // it goes in at all, and the enable stay in here. One module serves both
-// sides; the I-side ties the store and the write fields off.
+// sides; the I-side ties the store, the write fields and the store fault off.
 //
 // Lookups. A lookup takes two cycles. In the first, i_launch reads the set
 // the page offset indexes, in every way. In the second the MMU's candidate
@@ -45,6 +45,11 @@
 //   r+1     o_access_done; o_access_word and o_access_fault hold the
 //           result until the next done. o_busy is low, unless a held
 //           lookup reads the set the install wrote: then it is low from r+2
+//
+// A cacheable write's done never faults. The bus faulting that write later
+// shows as the port's store fault, which passes to the client as it comes
+// (o_store_fault), in any cycle: the client takes it as a deferred bus fault
+// (doc/internals/penumbra3/memory-completion.md, "Fault precision").
 //
 // A held lookup is one the client launched and has neither discarded
 // (i_discard) nor requested an access from. The arrays give the way a fill
@@ -116,6 +121,8 @@ module penumbra3_l1
     output logic                         o_access_done,      // one cycle
     output logic [31:0]                  o_access_word,      // held to the next done
     output logic                         o_access_fault,     // the bus faulted the access
+    output logic                         o_store_fault,      // an earlier write faulted
+    output logic [31:0]                  o_store_fault_addr, // its physical address
 
     // ── Core-to-uncore port, this side ───────────────────────────
     output logic                         o_req_valid,
@@ -127,6 +134,8 @@ module penumbra3_l1
     input  logic                         i_rsp_done,   // one cycle, while o_req_valid
     input  logic                         i_rsp_fault,  // valid with i_rsp_done
     input  logic [LINE_WORDS-1:0][31:0]  i_rsp_line,
+    input  logic                         i_rsp_store_fault,      // one cycle, any cycle
+    input  logic [31:0]                  i_rsp_store_fault_addr, // valid with it
 
     // ── Sysreg interface (this cache's device) ───────────────────
     input  logic [3:0]                   i_sys_reg,
@@ -374,6 +383,10 @@ module penumbra3_l1
     end
     assign o_busy        = busy_q;
     assign o_access_done = done_q;
+
+    // A cacheable write's fault belongs to no access in flight.
+    assign o_store_fault      = i_rsp_store_fault;
+    assign o_store_fault_addr = i_rsp_store_fault_addr;
 
     // ── Counters ─────────────────────────────────────────────────
     // The events are registered, so the hit reaches four flops' D rather

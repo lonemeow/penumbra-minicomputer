@@ -19,10 +19,10 @@
 // exposed launch/verdict ports): the TLB is shared coherently with the
 // I-side copy, so it is not a spine-private module.
 //
-// A faulting load completion (o_complete_fault, e.g. a bus fault on a fill or
-// an erroring device probe) is asserted never to arrive, rather than taken
-// imprecisely: taking it precisely needs mem_completion to park the faulting
-// PC and descriptor (doc/TODO/hw-core.md).
+// A bus fault on a parked access commits from its completion, in WB's place.
+// A deferred bus fault, on a cacheable store's write, enters at EX instead,
+// injected as an interrupt is (doc/internals/penumbra3/memory-completion.md,
+// "Fault precision").
 
 (* keep_hierarchy = "yes" *)
 module penumbra3_spine
@@ -115,6 +115,8 @@ module penumbra3_spine
     output logic                  o_ex_stall,
     input  logic                  i_irq_inject,
     input  logic [3:0]            i_irq_vec,
+    input  logic                  i_deferred_inject,
+    input  logic [31:0]           i_deferred_addr,
 
     // ── Observability (perfctr / trace) ──
     output logic                  o_insn_committed,
@@ -478,6 +480,7 @@ module penumbra3_spine
                            & ~mem2wb_payload.fault_pending),
         .i_sr_committed(sr_committed),
         .i_irq_inject(i_irq_inject), .i_irq_vec(i_irq_vec),
+        .i_deferred_inject(i_deferred_inject), .i_deferred_addr(i_deferred_addr),
         .i_stall_in(ex_stall_in), .i_back_end_active(back_end_active),
         .i_bubble(younger_flush),
         .o_local_stall(ex_local_stall), .o_dc_commit(ex_dc_commit), .o_funit_stall(),

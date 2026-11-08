@@ -57,6 +57,8 @@ module penumbra3_ex_stage_test
 
     input  logic                  i_irq_inject,
     input  logic [3:0]            i_irq_vec,
+    input  logic                  i_deferred_inject,
+    input  logic [31:0]           i_deferred_addr,
 
     input  logic                  i_stall_in,
     input  logic                  i_back_end_active,
@@ -81,6 +83,7 @@ module penumbra3_ex_stage_test
     output logic                  o_mem1_valid,
     output logic                  o_mem1_fault_pending,
     output logic [3:0]            o_mem1_fault_vec,
+    output logic [31:0]           o_mem1_fault_vaddr,
     output logic [31:0]           o_mem1_fault_status
 );
 
@@ -137,6 +140,8 @@ module penumbra3_ex_stage_test
         .i_sr_committed         (i_sr_committed),
         .i_irq_inject           (i_irq_inject),
         .i_irq_vec              (i_irq_vec),
+        .i_deferred_inject      (i_deferred_inject),
+        .i_deferred_addr        (i_deferred_addr),
         .i_stall_in             (i_stall_in),
         .i_back_end_active      (i_back_end_active),
         .i_bubble               (i_bubble),
@@ -164,6 +169,7 @@ module penumbra3_ex_stage_test
     assign o_mem1_pc              = mem1_payload.pc;
     assign o_mem1_fault_pending   = mem1_payload.fault_pending;
     assign o_mem1_fault_vec       = mem1_payload.fault_vec;
+    assign o_mem1_fault_vaddr     = mem1_payload.fault_vaddr;
     assign o_mem1_fault_status    = mem1_payload.fault_status;
 
 endmodule

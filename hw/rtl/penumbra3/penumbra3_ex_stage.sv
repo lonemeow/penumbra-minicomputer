@@ -98,8 +98,12 @@ module penumbra3_ex_stage
     // An eligible interrupt is taken by tagging this instruction as a
     // synthetic fault here, so it rides the precise-fault path. Its own
     // exception outranks the interrupt, leaving the IRQ pending to retake.
+    // The deferred bus fault is taken the same way, but outranks the
+    // instruction's own exception: it belongs to the boundary before it.
     input  logic                  i_irq_inject,
     input  logic [3:0]            i_irq_vec,
+    input  logic                  i_deferred_inject,
+    input  logic [31:0]           i_deferred_addr,   // the faulted write's, physical
 
     // -- Pipeline handshake ---------------------------------------
     input  logic                  i_stall_in,        // MEM1 cannot accept this cycle
@@ -491,7 +495,27 @@ module penumbra3_ex_stage
     // and flags -- and a divmul only advances once its results are valid. EX
     // raises a DIV0 (VEC_ARITH) and a software trap (SYSCALL/BREAK), and is where
     // an eligible interrupt is injected as a synthetic fault; the slot's own
-    // exception outranks the interrupt.
+    // exception outranks the interrupt. A deferred bus fault outranks them
+    // all, and reports its write's physical address and its own type.
+    logic [3:0]  ex_fault_vec;
+    logic [31:0] ex_fault_vaddr, ex_fault_status;
+    always_comb begin
+        if      (i_deferred_inject)                  ex_fault_vec = VEC_BUS_FAULT;
+        else if (divmul_in_ex & dm_fault)            ex_fault_vec = VEC_ARITH;
+        else if (i_fault_pending | i_bundle.is_trap) ex_fault_vec = i_fault_vec;
+        else if (i_irq_inject)                       ex_fault_vec = i_irq_vec;
+        else                                         ex_fault_vec = i_fault_vec;
+
+        // EX-born faults report the PC; MEM overwrites for EA faults.
+        if (i_deferred_inject) begin
+            ex_fault_vaddr  = i_deferred_addr;
+            ex_fault_status = compose_fault_status(1'b0, ACC_WRITE, FAULT_DEFERRED_BUS);
+        end else begin
+            ex_fault_vaddr  = i_pc;
+            ex_fault_status = i_fault_status;
+        end
+    end
+
     dpath_payload_t mem1_payload_d;
     always_comb begin
         mem1_payload_d.value           = is_divmul ? dm_lo : result_value;
@@ -503,13 +527,11 @@ module penumbra3_ex_stage
         mem1_payload_d.phys_dst_aux_we = i_phys_dst_aux_we;
         mem1_payload_d.pc              = i_pc;
         mem1_payload_d.fault_pending   = i_fault_pending | (divmul_in_ex & dm_fault)
-                                       | i_bundle.is_trap | i_irq_inject;
-        mem1_payload_d.fault_vec       = (divmul_in_ex & dm_fault)               ? VEC_ARITH
-                                       : (i_fault_pending | i_bundle.is_trap) ? i_fault_vec
-                                       : i_irq_inject                         ? i_irq_vec
-                                       :                                        i_fault_vec;
-        mem1_payload_d.fault_vaddr     = i_pc;   // EX-born faults report the PC; MEM overwrites for EA faults
-        mem1_payload_d.fault_status    = i_fault_status;
+                                       | i_bundle.is_trap | i_irq_inject
+                                       | i_deferred_inject;
+        mem1_payload_d.fault_vec       = ex_fault_vec;
+        mem1_payload_d.fault_vaddr     = ex_fault_vaddr;
+        mem1_payload_d.fault_status    = ex_fault_status;
     end
 
     always_ff @(posedge i_clk) begin

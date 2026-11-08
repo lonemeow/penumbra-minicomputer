@@ -32,7 +32,9 @@
 // line read with the cache disabled and a write, each installing nothing;
 // the result held until the next done. Invalid-first then tree-PLRU
 // victims, read from where lines land; a disabled cache neither hits nor
-// absorbs a store nor counts; the four counters; INVAL_ALL.
+// absorbs a store nor counts; the four counters; INVAL_ALL. The store
+// fault reaches the client in its own cycle, idle or beside an access's
+// done.
 //
 // The module's assertions run under --assert throughout: one-hot hits and
 // frame select, nothing launched, requested or stored while busy, the fill
@@ -72,6 +74,7 @@ static void quiet() {
     d->i_launch = 0; d->i_discard = 0; d->i_store = 0;
     d->i_count_read = 0; d->i_count_write = 0;
     d->i_access_req = 0; d->i_rsp_done = 0; d->i_rsp_fault = 0;
+    d->i_rsp_store_fault = 0; d->i_rsp_store_fault_addr = 0;
     d->i_sys_we = 0; d->i_sys_re = 0;
     d->eval();
 }
@@ -593,6 +596,34 @@ static void test_replacement() {
     fill_ab(); settle();
 }
 
+// ── The store fault: a cacheable write's bus fault, apart from any done ─
+// The port's store fault reaches the client in the cycle it comes, whatever
+// the cache is doing.
+static void store_fault_now(uint32_t pa) {
+    d->i_rsp_store_fault = 1; d->i_rsp_store_fault_addr = pa;
+    d->eval();
+}
+
+static void test_store_fault() {
+    quiet();
+    check("sf_idle", d->o_store_fault, 0);
+    store_fault_now(0x00ABC124);
+    check("sf_pass", d->o_store_fault, 1);
+    check("sf_addr", d->o_store_fault_addr, 0x00ABC124);
+    tick(); quiet();
+    check("sf_one_cycle", d->o_store_fault, 0);
+
+    // Beside an uncacheable word read's done (no lookup): each is its own.
+    request_now(PA_C, false, false);
+    complete(BASE_C);                                // leaves r+1
+    store_fault_now(0x00DEF348);
+    check("sf_done",          d->o_access_done, 1);
+    check("sf_beside_done",   d->o_store_fault, 1);
+    check("sf_beside_addr",   d->o_store_fault_addr, 0x00DEF348);
+    check("sf_done_no_fault", d->o_access_fault, 0);
+    tick(); quiet();
+}
+
 static uint32_t counter(int reg) { return sys_read(reg); }
 
 static void test_counters_and_disable() {
@@ -654,6 +685,7 @@ int main(int argc, char** argv) {
     test_access();
     test_replacement();
     test_counters_and_disable();
+    test_store_fault();
 
     // ── INVAL_ALL drops every line ──
     sys_write(REG_INVAL_ALL, 0);

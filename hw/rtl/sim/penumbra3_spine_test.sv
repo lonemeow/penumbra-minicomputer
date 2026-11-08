@@ -94,6 +94,8 @@ module penumbra3_spine_test
     output logic        o_ex_stall,
     input  logic        i_irq_inject,
     input  logic [3:0]  i_irq_vec,
+    input  logic        i_deferred_inject,
+    input  logic [31:0] i_deferred_addr,
 
     // Observability
     output logic        o_insn_committed,
@@ -148,6 +150,8 @@ module penumbra3_spine_test
         .o_access_done      (dl1_done),
         .o_access_word      (dl1_access_word),
         .o_access_fault     (dl1_fault),
+        .o_store_fault      (),
+        .o_store_fault_addr (),
         .o_req_valid        (o_dreq_valid),
         .o_req_cacheable    (o_dreq_cacheable),
         .o_req_addr         (o_dreq_addr),
@@ -157,6 +161,8 @@ module penumbra3_spine_test
         .i_rsp_done         (i_drsp_done),
         .i_rsp_fault        (i_rsp_fault),
         .i_rsp_line         (i_rsp_line),
+        .i_rsp_store_fault  (1'b0),
+        .i_rsp_store_fault_addr ('0),
         .i_sys_reg          (4'b0),
         .i_sys_wdata        (32'b0),
         .i_sys_we           (1'b0),
@@ -201,6 +207,7 @@ module penumbra3_spine_test
         .o_sr_s(o_sr_s), .o_sr_i(o_sr_i), .o_ei_commit(o_ei_commit), .o_dc_commit(o_dc_commit),
         .o_ex_valid(o_ex_valid), .o_ex_stall(o_ex_stall),
         .i_irq_inject(i_irq_inject), .i_irq_vec(i_irq_vec),
+        .i_deferred_inject(i_deferred_inject), .i_deferred_addr(i_deferred_addr),
         .o_insn_committed(o_insn_committed), .o_bcause(bcause_out),
         .o_retire_valid(o_retire_valid), .o_retire_pc(o_retire_pc),
         .o_commit_idx(o_commit_idx), .o_commit_data(o_commit_data), .o_commit_we(o_commit_we)

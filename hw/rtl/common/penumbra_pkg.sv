@@ -422,6 +422,10 @@ package penumbra_pkg;
     localparam logic [3:0] FAULT_PROT     = 4'b0010;
     localparam logic [3:0] FAULT_ALIGN    = 4'b0011;
     localparam logic [3:0] FAULT_BUS      = 4'b0100;
+    // A cacheable store's write the bus faulted after the store completed,
+    // taken at a later instruction; FAULT_ADDR holds the write's physical
+    // address (doc/system/architecture.md, "Deferred Bus Faults").
+    localparam logic [3:0] FAULT_DEFERRED_BUS = 4'b0101;
     // FAULT_STATUS[7:4] = reserved (gap for future fault types)
     // FAULT_STATUS[11:8] = faulting access info
     localparam int FSTAT_R   = 8;   // Faulting access was read
@@ -458,7 +462,7 @@ package penumbra_pkg;
             FAULT_TLB_MISS: return VEC_TLB_MISS;
             FAULT_PROT:     return VEC_TLB_PROT;
             FAULT_ALIGN:    return VEC_ALIGN;
-            default:        return VEC_BUS_FAULT;  // FAULT_BUS (and out-of-domain)
+            default:        return VEC_BUS_FAULT;  // either bus fault (and out-of-domain)
         endcase
     endfunction
 

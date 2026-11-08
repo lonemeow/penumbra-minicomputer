@@ -27,7 +27,7 @@ enum { OP_R_ADD = 0, OP_R_MOV = 8, OP_R_MUL = 16 };
 enum { OP_L_JMP = 11 };
 enum { COND_EQ = 1 };
 enum { MEM_SZ_WORD = 2 };
-enum { VEC_ARITH = 10 };
+enum { VEC_BUS_FAULT = 0, VEC_ILLEGAL = 7, VEC_ARITH = 10 };
 
 static int errors = 0, tests = 0;
 
@@ -73,6 +73,7 @@ static void clear(Vpenumbra3_ex_stage_test* dut) {
     dut->i_sr_flags = 0; dut->i_mem2_flags = 0; dut->i_mem2_writes_flags = 0;
     dut->i_wb_flags = 0; dut->i_wb_writes_flags = 0; dut->i_sr_committed = 0;
     dut->i_irq_inject = 0; dut->i_irq_vec = 0;
+    dut->i_deferred_inject = 0; dut->i_deferred_addr = 0;
     dut->i_stall_in = 0; dut->i_back_end_active = 0; dut->i_bubble = 0;
 }
 
@@ -248,6 +249,43 @@ int main(int argc, char** argv) {
     dut->i_stall_in = 0; dut->i_bubble = 1; dut->eval();
     tick(dut); dut->eval();
     check("hs_flushed", dut->o_mem1_valid, 0);         // bubble clears it
+
+    // ── The deferred bus fault ───────────────────────────────────
+    // Injected into a clean slot: the bus-fault vector, the write's physical
+    // address, and its own type with W set (USR not reported).
+    clear(dut);
+    dut->i_ir = enc_r(OP_R_ADD, 1, 2, 0);
+    dut->i_phys_dst = 1; dut->i_phys_dst_we = 1;
+    dut->i_pc = 0x5000; dut->i_valid = 1;
+    dut->i_deferred_inject = 1; dut->i_deferred_addr = 0x00ABC120;
+    dut->eval();
+    tick(dut); dut->eval();
+    check("df_pending", dut->o_mem1_fault_pending, 1);
+    check("df_vec",     dut->o_mem1_fault_vec, VEC_BUS_FAULT);
+    check("df_vaddr",   dut->o_mem1_fault_vaddr, 0x00ABC120);
+    check("df_status",  dut->o_mem1_fault_status, (1u << 9) | 0x5);
+
+    // It outranks the slot's own fault: it belongs to the boundary before.
+    clear(dut);
+    dut->i_ir = enc_r(OP_R_ADD, 1, 2, 0);
+    dut->i_pc = 0x5004; dut->i_valid = 1;
+    dut->i_fault_pending = 1; dut->i_fault_vec = VEC_ILLEGAL;
+    dut->i_deferred_inject = 1; dut->i_deferred_addr = 0x00DEF340;
+    dut->eval();
+    tick(dut); dut->eval();
+    check("df_over_own_vec",    dut->o_mem1_fault_vec, VEC_BUS_FAULT);
+    check("df_over_own_vaddr",  dut->o_mem1_fault_vaddr, 0x00DEF340);
+    check("df_over_own_status", dut->o_mem1_fault_status, (1u << 9) | 0x5);
+
+    // Without it, the slot's own fault reports its PC.
+    clear(dut);
+    dut->i_ir = enc_r(OP_R_ADD, 1, 2, 0);
+    dut->i_pc = 0x5008; dut->i_valid = 1;
+    dut->i_fault_pending = 1; dut->i_fault_vec = VEC_ILLEGAL;
+    dut->eval();
+    tick(dut); dut->eval();
+    check("own_vec",   dut->o_mem1_fault_vec, VEC_ILLEGAL);
+    check("own_vaddr", dut->o_mem1_fault_vaddr, 0x5008);
 
     printf("%s: %d/%d checks passed\n",
            errors ? "FAIL" : "PASS", tests - errors, tests);
