@@ -62,6 +62,14 @@
 #define MMUCR_ASID_SHIFT	8
 #define MMUCR_ASID_MASK		0xFF00
 
+/* FAULT_STATUS[3:0]: fault type */
+#define FSTAT_TYPE_MASK		0x000F
+#define FSTAT_TYPE_TLB_MISS	0x1
+#define FSTAT_TYPE_PROT		0x2
+#define FSTAT_TYPE_ALIGN	0x3
+#define FSTAT_TYPE_BUS		0x4
+#define FSTAT_TYPE_BUS_DEFERRED	0x5	/* FAULT_ADDR is physical */
+
 /* FAULT_STATUS bit positions */
 #define FSTAT_R		8	/* Faulting access was read */
 #define FSTAT_W		9	/* Faulting access was write */

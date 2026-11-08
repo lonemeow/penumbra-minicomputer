@@ -299,8 +299,19 @@ trap(struct trapframe *tf)
 		break;
 	}
 
-	case EXC_BUSFAULT:
-		if (usermode) {
+	case EXC_BUSFAULT: {
+		/*
+		 * A deferred bus fault is a cacheable store's write faulting
+		 * after the store completed: nothing names the store, and
+		 * FAULT_ADDR is the write's physical address.  It stops the
+		 * kernel whatever the mode.  Taken on the vector page before
+		 * a handler saved its state, it stops in _trap_common's
+		 * double-fault guard instead.
+		 */
+		bool deferred = (tf->tf_fault_status & FSTAT_TYPE_MASK)
+		    == FSTAT_TYPE_BUS_DEFERRED;
+
+		if (usermode && !deferred) {
 			user_trap_signal(SIGBUS, BUS_ADRERR,
 			    tf->tf_badvaddr, type);
 			break;
@@ -309,9 +320,14 @@ trap(struct trapframe *tf)
 		if (db_recover != NULL)
 			longjmp(db_recover);
 #endif
-		panic("kernel bus fault at va=0x%08x, pc=0x%08x",
-		    tf->tf_badvaddr, tf->tf_epc);
+		if (deferred)
+			panic("deferred bus fault at pa=0x%08x, taken at "
+			    "pc=0x%08x", tf->tf_badvaddr, tf->tf_epc);
+		else
+			panic("kernel bus fault at va=0x%08x, pc=0x%08x",
+			    tf->tf_badvaddr, tf->tf_epc);
 		break;
+	}
 
 	case EXC_PRIV:
 		if (usermode) {

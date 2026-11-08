@@ -190,7 +190,10 @@ bootinfo — `boot sd:0,0` reaches single-user with no prompts.
 - **Signal delivery:** `sendsig_siginfo` builds signal frame on
   user stack.  `cpu_getmcontext`/`cpu_setmcontext` for
   trapframe <--> mcontext.  `trap.c` delivers SIGSEGV/SIGBUS/
-  SIGILL/SIGTRAP to user-mode processes.
+  SIGILL/SIGTRAP to user-mode processes.  A deferred bus fault
+  (a cacheable store's write faulting after the store completed,
+  `doc/system/architecture.md`) panics whatever the mode, with
+  the write's physical address.
 
 - **copyin/copyout (copy.S):** Assembly with `pcb_onfault` fault
   recovery.  copyinstr/copyoutstr, ufetch/ustore (8/16/32).
