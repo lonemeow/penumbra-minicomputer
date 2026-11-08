@@ -256,6 +256,28 @@ int main(int argc, char** argv) {
         check("alu_nofault", (uint32_t)flt.size(), 0);
     }
 
+    // ── Every RAW distance from one ALU producer ─────────────────
+    // At full rate the consumer d instructions behind reads R1 from EX/MEM1
+    // (d=1), MEM1/MEM2 (2), MEM2/WB (3), the regfile in the cycle the
+    // producer writes it (4: the write-first read, nothing left to forward
+    // once it reaches EX), and the regfile after the write (5).
+    {
+        std::vector<uint32_t> prog = {
+            enc_l(OP_L_LLI, 2, 0), enc_l(OP_L_LLI, 3, 0), enc_l(OP_L_LLI, 4, 0),
+            enc_l(OP_L_LLI, 5, 0), enc_l(OP_L_LLI, 6, 0),
+            enc_l(OP_L_LLI, 1, 0x1234),  // the producer
+            enc_r(OP_R_ADD, 2, 1, 0),    // d=1
+            enc_r(OP_R_ADD, 3, 1, 0),    // d=2
+            enc_r(OP_R_ADD, 4, 1, 0),    // d=3
+            enc_r(OP_R_ADD, 5, 1, 0),    // d=4
+            enc_r(OP_R_ADD, 6, 1, 0),    // d=5
+        };
+        std::vector<Commit> got; std::vector<FaultEvt> flt;
+        run(dut, prog, 64, got, flt);
+        check_commits("raw", got, {{2,0},{3,0},{4,0},{5,0},{6,0},{1,0x1234},
+                                   {2,0x1234},{3,0x1234},{4,0x1234},{5,0x1234},{6,0x1234}});
+    }
+
     // ── divmul dual-write (the wb_local_stall freeze) ────────────
     // MUL R1,R2 -> R1 (lo) and R3 (hi); both halves commit, in two cycles.
     {

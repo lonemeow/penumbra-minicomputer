@@ -19,10 +19,13 @@
 // selecting the live PC, and an R15 "write" is a branch, so R15 never reaches a
 // port here.
 //
-// Reads are combinational; writes are synchronous with no write-through (a read
-// in the cycle a register is written returns the old value, visible next
-// cycle). A divmul writes two destinations as two ordinary writes on
-// consecutive cycles -- from this file's view, nothing special.
+// Reads are combinational and write-first: a read in the cycle a register is
+// written returns the value being written. EX forwards a result from MEM1,
+// MEM2 and WB, so a consumer in ID while its producer writes back has nothing
+// to forward from once it reaches EX; it takes the value here
+// (penumbra3_ex_stage, "Forwarding boundaries"). A divmul writes two
+// destinations as two ordinary writes on consecutive cycles -- from this
+// file's view, nothing special.
 
 module penumbra3_regfile
     import penumbra_pkg::*;
@@ -58,7 +61,9 @@ module penumbra3_regfile
 
     // -- Read logic -----------------------------------------------
     // Each port reads its replicated array copy; override_read picks the final
-    // value by physical index (R0 -> 0, 14 -> USP, 15 -> SSP, else stored).
+    // value by physical index: R0 -> 0, then the write in this cycle to the
+    // same index, then 14 -> USP, 15 -> SSP, else stored. R0 goes first, so a
+    // write to its dead slot never reads back.
     //
     // Every value it can return is an argument. A continuous assignment is
     // re-evaluated only when an operand of its own expression changes, so an
@@ -68,18 +73,22 @@ module penumbra3_regfile
         input logic [SB_IDX_W-1:0] idx,
         input logic [31:0]         stored_value,
         input logic [31:0]         usp_value,
-        input logic [31:0]         ssp_value
+        input logic [31:0]         ssp_value,
+        input logic                wr_en,
+        input logic [SB_IDX_W-1:0] wr_idx,
+        input logic [31:0]         wr_data
     );
-        case (idx)
-            '0:      return 32'd0;
-            SB_USP:  return usp_value;
-            SB_SSP:  return ssp_value;
-            default: return stored_value;
-        endcase
+        if (idx == '0)                        return 32'd0;
+        else if (wr_en && idx == wr_idx)      return wr_data;
+        else if (idx == SB_USP)               return usp_value;
+        else if (idx == SB_SSP)               return ssp_value;
+        else                                  return stored_value;
     endfunction
 
-    assign o_rd_data_a = override_read(i_rd_idx_a, regs_a[i_rd_idx_a[3:0]], usp, ssp);
-    assign o_rd_data_b = override_read(i_rd_idx_b, regs_b[i_rd_idx_b[3:0]], usp, ssp);
+    assign o_rd_data_a = override_read(i_rd_idx_a, regs_a[i_rd_idx_a[3:0]], usp, ssp,
+                                       i_wr_en, i_wr_idx, i_wr_data);
+    assign o_rd_data_b = override_read(i_rd_idx_b, regs_b[i_rd_idx_b[3:0]], usp, ssp,
+                                       i_wr_en, i_wr_idx, i_wr_data);
 
     // -- Write logic ----------------------------------------------
     // Synchronous write to both array banks plus, for index 14/15, the selected

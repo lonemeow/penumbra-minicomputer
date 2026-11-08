@@ -8,9 +8,10 @@
 //   15     SSP flop
 //
 // Checks: entry 0 reads 0 regardless of writes; entries 1-13 read/write through
-// both ports independently; USP/SSP are independent flops; no write-through (a
-// read in the write cycle returns the old value); write-enable gating; reset
-// drives USP/SSP to 0.
+// both ports independently; USP/SSP are independent flops; reads are
+// write-first (a read in the write cycle returns the value being written, on
+// either port, USP and SSP included, never for entry 0); write-enable gating;
+// reset drives USP/SSP to 0.
 
 #include <cstdio>
 #include <cstdint>
@@ -80,13 +81,33 @@ int main() {
     check("ssp_readback", read_a(dut, SB_SSP), 0xBBBB0000);
     check("usp_preserved", read_a(dut, SB_USP), 0xAAAA0000);
 
-    // ── No write-through ─────────────────────────────────────────
-    uint32_t old_r3 = read_a(dut, 3);
+    // ── Write-first ──────────────────────────────────────────────
+    // A read in the cycle of a write to its index returns the value being
+    // written, on both ports; a read of any other index does not see it.
+    uint32_t old_r4 = read_a(dut, 4);
     dut->i_wr_idx = 3; dut->i_wr_data = 0x33330000; dut->i_wr_en = 1;
-    dut->i_rd_idx_a = 3; dut->eval();                  // same cycle as the write
-    check("no_write_through_old_value", dut->o_rd_data_a, old_r3);
+    dut->i_rd_idx_a = 3; dut->i_rd_idx_b = 3; dut->eval();   // same cycle as the write
+    check("write_first_port_a", dut->o_rd_data_a, 0x33330000);
+    check("write_first_port_b", dut->o_rd_data_b, 0x33330000);
+    dut->i_rd_idx_b = 4; dut->eval();
+    check("write_first_other_index", dut->o_rd_data_b, old_r4);
     tick(dut); dut->i_wr_en = 0;                       // clock the write in
     check("write_visible_next_cycle", read_a(dut, 3), 0x33330000);
+
+    dut->i_wr_idx = SB_SSP; dut->i_wr_data = 0x55550000; dut->i_wr_en = 1;
+    dut->i_rd_idx_a = SB_SSP; dut->i_rd_idx_b = SB_USP; dut->eval();
+    check("write_first_ssp",       dut->o_rd_data_a, 0x55550000);
+    check("write_first_usp_apart", dut->o_rd_data_b, 0xAAAA0000);
+    tick(dut); dut->i_wr_en = 0;
+
+    dut->i_wr_idx = 0; dut->i_wr_data = 0xDEADBEEF; dut->i_wr_en = 1;
+    dut->i_rd_idx_a = 0; dut->eval();
+    check("write_first_not_r0", dut->o_rd_data_a, 0);
+    tick(dut); dut->i_wr_en = 0;
+
+    dut->i_wr_idx = 3; dut->i_wr_data = 0x77770000; dut->i_wr_en = 0;
+    dut->i_rd_idx_a = 3; dut->eval();
+    check("write_first_needs_en", dut->o_rd_data_a, 0x33330000);
 
     // ── Write-enable gating ──────────────────────────────────────
     uint32_t old_r1 = read_a(dut, 1);
