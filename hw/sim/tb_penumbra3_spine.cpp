@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <vector>
+#include <set>
 #include "Vpenumbra3_spine_test.h"
 #include "verilated.h"
 
@@ -53,6 +54,7 @@ enum { OP_L_LLI = 0, OP_L_ADDI = 3, OP_R_ADD = 0, OP_R_MUL = 16, OP_R_RESERVED =
        OP_R_DI = 29 };
 enum { VEC_BUS_FAULT = 0, VEC_ILLEGAL = 7, VEC_ALIGN = 8 };
 enum { FAULT_BUS = 4, FSTAT_R = 1 << 8, FSTAT_W = 1 << 9 };
+enum { OPC_ALU = 0, OPC_LOAD = 1, OPC_STORE = 2, OPC_DI = 12 };   // op_class_e
 
 struct Commit { uint32_t idx, data; };
 struct FaultEvt { uint32_t vec; };
@@ -61,8 +63,9 @@ struct FaultEvt { uint32_t vec; };
 struct Trace {
     std::vector<Commit>   commits;
     std::vector<FaultEvt> faults;
-    std::vector<uint32_t> retire_pcs, retire_cycles;
-    std::vector<uint32_t> dc_cycles;
+    std::vector<uint32_t> retire_pcs, retire_cycles, retire_ops, retire_srs;
+    std::vector<uint32_t> dc_cycles, dc_pcs, dc_ops;
+    std::set<uint32_t>    ex_pcs, mem_pcs;   // every PC seen in EX, in MEM2
     std::vector<uint32_t> done_cycles;
     uint32_t mmu_faults = 0, fault_vaddr = 0, fault_status = 0, epc = 0;
     uint32_t requests = 0;
@@ -146,8 +149,16 @@ static void run_mem(Vpenumbra3_spine_test* dut, const std::vector<uint32_t>& pro
         if (dut->o_insn_committed) {
             t.retire_pcs.push_back(dut->o_retire_pc);
             t.retire_cycles.push_back(cyc);
+            t.retire_ops.push_back(dut->o_retire_op_class);
+            t.retire_srs.push_back(dut->o_retire_sr);
         }
-        if (dut->o_dc_commit) t.dc_cycles.push_back(cyc);
+        if (dut->o_dc_commit) {
+            t.dc_cycles.push_back(cyc);
+            t.dc_pcs.push_back(dut->o_dc_commit_pc);
+            t.dc_ops.push_back(dut->o_dc_commit_op_class);
+        }
+        if (dut->o_ex_valid)  t.ex_pcs.insert(dut->o_ex_pc);
+        if (dut->o_mem_valid) t.mem_pcs.insert(dut->o_mem_pc);
         if (dut->o_insn_committed && dut->o_dc_commit) t.retire_with_dc++;
         if (dut->o_mmu_fault_commit) {
             t.mmu_faults++;
@@ -198,6 +209,23 @@ static void check_retires(const char* tag, const Trace& t,
     for (size_t i = 0; i < exp.size() && i < t.retire_pcs.size(); i++) {
         snprintf(n, sizeof(n), "%s_retire_%zu_pc", tag, i);
         check(n, t.retire_pcs[i], exp[i]);
+    }
+}
+
+// The trace outputs: each retirement's op class, and every retired PC seen
+// in EX and in MEM2 on its way.
+static void check_trace(const char* tag, const Trace& t,
+                        const std::vector<uint32_t>& ops) {
+    char n[48];
+    for (size_t i = 0; i < ops.size() && i < t.retire_ops.size(); i++) {
+        snprintf(n, sizeof(n), "%s_retire_%zu_op", tag, i);
+        check(n, t.retire_ops[i], ops[i]);
+    }
+    for (size_t i = 0; i < t.retire_pcs.size(); i++) {
+        snprintf(n, sizeof(n), "%s_retire_%zu_in_ex", tag, i);
+        check(n, t.ex_pcs.count(t.retire_pcs[i]), 1);
+        snprintf(n, sizeof(n), "%s_retire_%zu_in_mem", tag, i);
+        check(n, t.mem_pcs.count(t.retire_pcs[i]), 1);
     }
 }
 
@@ -263,6 +291,8 @@ int main(int argc, char** argv) {
         run_mem(dut, {enc_l(OP_L_LLI, 1, 0x11), enc_r(OP_R_DI, 0, 0, 0)}, {}, 30, t);
         check_retires("dc_alu", t, {0});
         check("dc_alu_commits", (uint32_t)t.dc_cycles.size(), 1);
+        check("dc_alu_dc_pc", t.dc_pcs.empty() ? 0xFF : t.dc_pcs[0], 4);
+        check("dc_alu_dc_op", t.dc_ops.empty() ? 0xFF : t.dc_ops[0], OPC_DI);
         if (!t.dc_cycles.empty() && !t.retire_cycles.empty())
             check("dc_alu_after_retire", t.dc_cycles[0] > t.retire_cycles[0], 1);
     }
@@ -294,6 +324,8 @@ int main(int argc, char** argv) {
         uint32_t w = mem_word(0x1008);
         check_commits("parked_load", t.commits, {{5, 0x1000}, {6, w}, {6, w + 1}});
         check_retires("parked_load", t, {0, 4, 8});
+        check_trace("parked_load", t, {OPC_ALU, OPC_LOAD, OPC_ALU});
+        check("parked_load_sr_s", t.retire_srs.empty() ? 0 : t.retire_srs[0] >> 31, 1);
         check("parked_load_requests", t.requests, 1);
         if (t.retire_cycles.size() > 1 && !t.done_cycles.empty())
             check("parked_load_retires_after_done",
@@ -307,6 +339,7 @@ int main(int argc, char** argv) {
                 {}, 40, t);
         check_commits("c_store", t.commits, {{5, 0x1000}, {7, 7}});
         check_retires("c_store", t, {0, 4, 8});
+        check_trace("c_store", t, {OPC_ALU, OPC_STORE, OPC_ALU});
         check("c_store_requests", t.requests, 1);
         if (t.retire_cycles.size() > 1 && !t.done_cycles.empty())
             check("c_store_retires_before_done",
@@ -320,6 +353,7 @@ int main(int argc, char** argv) {
                 {}, 40, t);
         check_commits("uc_store", t.commits, {{5, 0x4000}, {7, 7}});
         check_retires("uc_store", t, {0, 4, 8});
+        check_trace("uc_store", t, {OPC_ALU, OPC_STORE, OPC_ALU});
         check("uc_store_requests", t.requests, 1);
         if (t.retire_cycles.size() > 1 && !t.done_cycles.empty())
             check("uc_store_retires_after_done",

@@ -123,9 +123,19 @@ module penumbra3_spine
     output bcause_e               o_bcause,
     output logic                  o_retire_valid,
     output logic [31:0]           o_retire_pc,
+    output op_class_e             o_retire_op_class,
+    output logic [31:0]           o_retire_sr,        // the committed SR as it retires
     output logic [SB_IDX_W-1:0]   o_commit_idx,       // regfile write port (commit / load completion)
     output logic [31:0]           o_commit_data,
-    output logic                  o_commit_we
+    output logic                  o_commit_we,
+    // A drain-commit retires from EX; a branch resolves there.
+    output logic [31:0]           o_dc_commit_pc,
+    output op_class_e             o_dc_commit_op_class,
+    output logic [31:0]           o_branch_pc,
+    // The slots in EX and MEM2, for a trace of the pipeline's occupancy.
+    output logic [31:0]           o_ex_pc,
+    output logic [31:0]           o_mem_pc,
+    output logic                  o_mem_valid
 );
 
     // Several sub-module outputs are deliberately unconsumed here (the ID
@@ -589,9 +599,23 @@ module penumbra3_spine
     assign o_insn_committed = wb_insn_committed | mc_complete_retires;
     assign o_retire_valid   = mem2wb_valid | mc_complete_retires;
     assign o_retire_pc      = mc_complete_retires ? mc_complete_pc : mem2wb_payload.pc;
+    assign o_retire_sr      = sr_committed;
     assign o_commit_idx     = rf_wr_idx;
     assign o_commit_data    = rf_wr_data;
     assign o_commit_we      = rf_wr_en;
+
+    // A completion that retires is a load's or an uncached store's.
+    always_comb begin
+        if (mc_complete_retires) o_retire_op_class = mc_complete_we ? OPC_LOAD : OPC_STORE;
+        else                     o_retire_op_class = mem2wb_bundle.op_class;
+    end
+
+    assign o_dc_commit_pc       = idex_pc;
+    assign o_dc_commit_op_class = idex_bundle.op_class;
+    assign o_branch_pc          = idex_pc;
+    assign o_ex_pc              = idex_pc;
+    assign o_mem_pc             = mem1mem2_payload.pc;
+    assign o_mem_valid          = mem1mem2_valid;
 
     // ════════════════════════════════════════════════════════════
     // Assertions -- sim-only (Verilator --assert); stripped at synth.

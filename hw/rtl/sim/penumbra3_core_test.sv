@@ -47,8 +47,29 @@ module penumbra3_core_test
     output logic [3:0]          o_fault_vec,
     output logic                o_mmu_fault_commit,
     output logic [31:0]         o_mmu_fault_vaddr,
-    output logic [31:0]         o_mmu_fault_status
+    output logic [31:0]         o_mmu_fault_status,
+
+    // Trace: the retiring instruction, drain-commits, taken branches, and
+    // the slots in EX and MEM2
+    output logic                o_retire_valid,
+    output logic [31:0]         o_retire_pc,
+    output logic [3:0]          o_retire_op_class,
+    output logic [31:0]         o_retire_sr,
+    output logic                o_dc_commit,
+    output logic [31:0]         o_dc_commit_pc,
+    output logic [3:0]          o_dc_commit_op_class,
+    output logic                o_branch_taken,
+    output logic [31:0]         o_branch_target,
+    output logic [31:0]         o_branch_pc,
+    output logic [31:0]         o_ex_pc,
+    output logic                o_ex_valid,
+    output logic [31:0]         o_mem_pc,
+    output logic                o_mem_valid
 );
+
+    op_class_e retire_op_class, dc_commit_op_class;
+    assign o_retire_op_class    = retire_op_class;
+    assign o_dc_commit_op_class = dc_commit_op_class;
 
     localparam int WAYS   = 2;
     localparam int FRAMES = 3;
@@ -184,15 +205,24 @@ module penumbra3_core_test
         .o_commit_we              (o_commit_we),
         .o_insn_committed         (),
         .o_insn_retired           (),
-        .o_retire_valid           (),
-        .o_retire_pc              (),
+        .o_retire_valid           (o_retire_valid),
+        .o_retire_pc              (o_retire_pc),
+        .o_retire_op_class        (retire_op_class),
+        .o_retire_sr              (o_retire_sr),
         .o_bcause                 (),
         .o_fault_commit           (o_fault_commit),
         .o_fault_vec              (o_fault_vec),
         .o_eret_commit            (),
-        .o_dc_commit              (),
-        .o_branch_taken           (),
-        .o_branch_target          ()
+        .o_dc_commit              (o_dc_commit),
+        .o_dc_commit_pc           (o_dc_commit_pc),
+        .o_dc_commit_op_class     (dc_commit_op_class),
+        .o_branch_taken           (o_branch_taken),
+        .o_branch_target          (o_branch_target),
+        .o_branch_pc              (o_branch_pc),
+        .o_ex_pc                  (o_ex_pc),
+        .o_ex_valid               (o_ex_valid),
+        .o_mem_pc                 (o_mem_pc),
+        .o_mem_valid              (o_mem_valid)
     );
     /* verilator lint_on PINCONNECTEMPTY */
 

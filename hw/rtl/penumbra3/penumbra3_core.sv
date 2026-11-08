@@ -130,6 +130,8 @@ module penumbra3_core
     output logic                  o_insn_retired,    // retire pulse incl. drain-commit (perfctr)
     output logic                  o_retire_valid,    // the slot leaving WB
     output logic [31:0]           o_retire_pc,
+    output op_class_e             o_retire_op_class,
+    output logic [31:0]           o_retire_sr,       // the committed SR as it retires
     output bcause_e               o_bcause,          // stall-attribution for a non-retiring cycle
 
     // ── Exception / branch observability (trace markers) ─────────
@@ -137,8 +139,17 @@ module penumbra3_core
     output logic [3:0]            o_fault_vec,
     output logic                  o_eret_commit,
     output logic                  o_dc_commit,
+    output logic [31:0]           o_dc_commit_pc,
+    output op_class_e             o_dc_commit_op_class,
     output logic                  o_branch_taken,
-    output logic [31:0]           o_branch_target
+    output logic [31:0]           o_branch_target,
+    output logic [31:0]           o_branch_pc,
+
+    // ── Pipeline occupancy (trace): the slots in EX and MEM2 ─────
+    output logic [31:0]           o_ex_pc,
+    output logic                  o_ex_valid,
+    output logic [31:0]           o_mem_pc,
+    output logic                  o_mem_valid
 );
 
     // ── Front-end wires ──────────────────────────────────────────
@@ -388,7 +399,11 @@ module penumbra3_core
         // Observability.
         .o_insn_committed(insn_committed), .o_bcause(o_bcause),
         .o_retire_valid(retire_valid), .o_retire_pc(o_retire_pc),
-        .o_commit_idx(o_commit_idx), .o_commit_data(o_commit_data), .o_commit_we(o_commit_we)
+        .o_retire_op_class(o_retire_op_class), .o_retire_sr(o_retire_sr),
+        .o_commit_idx(o_commit_idx), .o_commit_data(o_commit_data), .o_commit_we(o_commit_we),
+        .o_dc_commit_pc(o_dc_commit_pc), .o_dc_commit_op_class(o_dc_commit_op_class),
+        .o_branch_pc(o_branch_pc),
+        .o_ex_pc(o_ex_pc), .o_mem_pc(o_mem_pc), .o_mem_valid(o_mem_valid)
     );
 
     // Instructions retired: a distinct instruction commit, at WB or with a
@@ -399,6 +414,7 @@ module penumbra3_core
     assign o_insn_retired   = insn_committed | dc_commit;
     assign o_insn_committed = insn_committed;
     assign o_retire_valid   = retire_valid;
+    assign o_ex_valid       = ex_valid;
 
     assign o_mmu_fault_commit = mmu_fault_commit;
     assign o_mmu_fault_vaddr  = mmu_fault_vaddr;

@@ -43,6 +43,7 @@ typedef Vpenumbra3_core_test Dut;
 // ── ISA constants (penumbra_pkg / penumbra3_pkg) ─────────────────
 enum { OP_R_ADD = 0, OP_R_RESERVED = 12, OP_R_MUL = 16, OP_R_EI = 28, OP_R_RDSPR = 31 };
 enum { SPR_EPC = 1 };
+enum { OPC_ALU = 0, OPC_EI = 11 };   // op_class_e
 enum { OP_L_LLI = 0, OP_L_ADDI = 3 };
 enum { COND_AL = 0 };
 enum { VEC_BUS_FAULT = 0, VEC_ILLEGAL = 7, VEC_EXT_IRQ = 9 };
@@ -102,10 +103,14 @@ struct Config {
 };
 struct Req { uint32_t addr; int cacheable; };
 struct Commit { uint32_t idx, data; };
+struct Branch { uint32_t pc, target; };
 struct Trace {
     std::vector<Commit>   commits;
     std::vector<uint32_t> fault_vecs;
     std::vector<Req>      reqs;
+    std::vector<Branch>   branches;                  // each taken branch
+    std::vector<uint32_t> retire_ops, retire_srs;    // each retirement's
+    std::vector<uint32_t> dc_pcs, dc_ops;            // each drain-commit's
     uint32_t mmu_faults = 0, fault_vaddr = 0, fault_status = 0;
 };
 
@@ -177,6 +182,16 @@ static void run(Dut* dut, const Config& cfg, int max_cycles, Trace& t) {
         tick(dut);
         if (dut->o_commit_we)
             t.commits.push_back({dut->o_commit_idx, dut->o_commit_data});
+        if (dut->o_branch_taken)
+            t.branches.push_back({dut->o_branch_pc, dut->o_branch_target});
+        if (dut->o_retire_valid) {
+            t.retire_ops.push_back(dut->o_retire_op_class);
+            t.retire_srs.push_back(dut->o_retire_sr);
+        }
+        if (dut->o_dc_commit) {
+            t.dc_pcs.push_back(dut->o_dc_commit_pc);
+            t.dc_ops.push_back(dut->o_dc_commit_op_class);
+        }
         if (dut->o_fault_commit) {
             t.fault_vecs.push_back(dut->o_fault_vec);
             if (dut->o_fault_vec == VEC_EXT_IRQ) { dut->i_irq = 0; irq_fired = true; }
@@ -309,6 +324,11 @@ int main(int argc, char** argv) {
         check("uc_branch_nofault", (uint32_t)t.fault_vecs.size(), 0);
         check("uc_branch_wrong_path_read",
               t.reqs.size() > 2 && t.reqs[2].addr == b + 0x08, 1);
+        check("uc_branch_pc",     t.branches.empty() ? 0 : t.branches[0].pc, b + 0x04);
+        check("uc_branch_target", t.branches.empty() ? 0 : t.branches[0].target, b + 0x20);
+        check("uc_branch_retire_op", t.retire_ops.empty() ? 0xFF : t.retire_ops[0], OPC_ALU);
+        check("uc_branch_retire_sr_s",
+              t.retire_srs.empty() ? 0 : t.retire_srs[0] >> 31, 1);
     }
     {
         g_rom.clear();
@@ -335,6 +355,11 @@ int main(int argc, char** argv) {
         check_commits("c_branch", t.commits,
                       {{1,0x10},{2,0x11},{3,0x12},{2,0x22},{4,0x44}});
         check("c_branch_line_kept", reqs_of_line(t, b + 0x10), 1);
+        bool two = t.branches.size() >= 2;
+        check("c_branch_pc0",     two ? t.branches[0].pc : 0,     b + 0x0C);
+        check("c_branch_target0", two ? t.branches[0].target : 0, b + 0x20);
+        check("c_branch_pc1",     two ? t.branches[1].pc : 0,     b + 0x24);
+        check("c_branch_target1", two ? t.branches[1].target : 0, b + 0x14);
     }
 
     // ── Interrupt entry via the vector fetch ─────────────────────
@@ -360,6 +385,8 @@ int main(int argc, char** argv) {
         bool saw_irq_fault = false;
         for (uint32_t v : t.fault_vecs) if (v == VEC_EXT_IRQ) saw_irq_fault = true;
         check("irq_fault", saw_irq_fault ? 1 : 0, 1);
+        check("irq_ei_dc_pc", t.dc_pcs.empty() ? 0 : t.dc_pcs[0], base);
+        check("irq_ei_dc_op", t.dc_ops.empty() ? 0xFF : t.dc_ops[0], OPC_EI);
         check("irq_handler_ran", committed(t, 5, 0xABC), 1);
 
         bool vec_word_read = false;

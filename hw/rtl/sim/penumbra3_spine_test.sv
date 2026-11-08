@@ -102,16 +102,27 @@ module penumbra3_spine_test
     output logic [2:0]  o_bcause,
     output logic        o_retire_valid,
     output logic [31:0] o_retire_pc,
+    output logic [3:0]  o_retire_op_class,
+    output logic [31:0] o_retire_sr,
     output logic [SB_IDX_W-1:0] o_commit_idx,
     output logic [31:0] o_commit_data,
-    output logic        o_commit_we
+    output logic        o_commit_we,
+    output logic [31:0] o_dc_commit_pc,
+    output logic [3:0]  o_dc_commit_op_class,
+    output logic [31:0] o_branch_pc,
+    output logic [31:0] o_ex_pc,
+    output logic [31:0] o_mem_pc,
+    output logic        o_mem_valid
 );
 
     ctrl_bundle_t bundle;
     penumbra3_decode u_decode (.i_ir (i_ir), .o_bundle (bundle));
 
-    bcause_e bcause_out;
-    assign o_bcause = bcause_out;
+    bcause_e   bcause_out;
+    op_class_e retire_op_class, dc_commit_op_class;
+    assign o_bcause             = bcause_out;
+    assign o_retire_op_class    = retire_op_class;
+    assign o_dc_commit_op_class = dc_commit_op_class;
 
     // -- L1-D -----------------------------------------------------
     logic        dl1_hit, dl1_busy, dl1_done, dl1_fault;
@@ -210,7 +221,11 @@ module penumbra3_spine_test
         .i_deferred_inject(i_deferred_inject), .i_deferred_addr(i_deferred_addr),
         .o_insn_committed(o_insn_committed), .o_bcause(bcause_out),
         .o_retire_valid(o_retire_valid), .o_retire_pc(o_retire_pc),
-        .o_commit_idx(o_commit_idx), .o_commit_data(o_commit_data), .o_commit_we(o_commit_we)
+        .o_retire_op_class(retire_op_class), .o_retire_sr(o_retire_sr),
+        .o_commit_idx(o_commit_idx), .o_commit_data(o_commit_data), .o_commit_we(o_commit_we),
+        .o_dc_commit_pc(o_dc_commit_pc), .o_dc_commit_op_class(dc_commit_op_class),
+        .o_branch_pc(o_branch_pc),
+        .o_ex_pc(o_ex_pc), .o_mem_pc(o_mem_pc), .o_mem_valid(o_mem_valid)
     );
 
 endmodule
