@@ -167,7 +167,7 @@ Open work lives in `doc/TODO/`, one file per area; the table in
 - `make test-iss-options` — the ISS's own options (`+core=`, …)
   against programs with known answers (`sw/sim/tests/`); expected
   values are written from the hardware's parameters.
-- `make test [CORE=penumbra1|penumbra2]` — `isa/` + the core's
+- `make test [CORE=penumbra1|penumbra2|penumbra3]` — `isa/` + the core's
   microarch suite (`hw/sim/programs/<core>/`) on RTL sim via Docker.
   `CORE` also takes a microarch sub-variant (`penumbra<n>_<sub>`, e.g.
   `penumbra2_5`): the base generation built with one core parameter set,
@@ -499,7 +499,9 @@ Hex files are gitignored; the Makefile builds them from sources.
   `doc/internals/build-system.md`.
 - **Runners:** gen1 `hw/sim/tb_cpu_prog.cpp` (runs until BREAK halts,
   500000 cycle limit); gen2 `hw/sim/tb_penumbra2_prog.cpp` (stops on a
-  retiring BREAK — gen2 traps rather than halts). Both check R1.
+  retiring BREAK — gen2 traps rather than halts); gen3
+  `hw/sim/tb_penumbra3_prog.cpp` (stops as a BREAK's trap commits).
+  Each checks R1.
   A `; RUNNER: tb_<name>` header tag selects a bespoke testbench.
 - **Convention:** R1 = 1 means PASS, R1 = 0 means FAIL. Tests
   self-check and set R1. Programs end with `BREAK`.

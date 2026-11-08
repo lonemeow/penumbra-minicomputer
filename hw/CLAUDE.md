@@ -41,7 +41,7 @@ hw/
 │   │              #   usb/ (SIE cells + MAC + host controller), video/,
 │   │              #   eth/ (the Ethernet adapter's cells),
 │   │              #   ps2/ (the PS/2 port)
-│   ├── sim/       # machine_sim + machine_penumbra2_sim, sim devices, memory models
+│   ├── sim/       # machine_sim + machine_penumbra{2,3}_sim, sim devices, memory models
 │   └── fpga/      # FPGA helpers (ECP5 PLL package, lint stubs); board tops under <board>/,
 │                  #   Xilinx 7-series helpers under xc7/ (MMCM package, lint stubs)
 ├── microcode/   # microcode.uasm (single source — assemble via uasm.py)
@@ -141,6 +141,11 @@ exposed external bus.
   commit/retire, and the program-end pulse (a retiring BREAK).
   `machine_penumbra1` (extraction from `machine_sim` /
   `ulx3s_penumbra1_top`) is still to come.
+- `machine_penumbra3.sv` — gen3 core + penumbra3_mmu + 2× penumbra3_l1 +
+  penumbra3_uncore (no L2: the I/D select onto the bus master) + the
+  sysreg devices (MMU, both L1s, CPU identity and perfctr, BUS, TIMER,
+  MACH), behind machine_penumbra2's port list; the program-end pulse is a
+  BREAK's trap commit (`doc/internals/penumbra3/machine.md`).
 
 ### Penumbra/1 core (`rtl/penumbra1/`)
 - `cpu_core.sv` — full CPU integration: datapath + sequencer + ROM
@@ -339,6 +344,8 @@ exposed external bus.
 ### Simulation glue (`rtl/sim/`)
 - `machine_penumbra2_sim.sv` — `machine_penumbra2` + `unified_bus_mem`:
   the gen2 program-runner wrapper (`make test CORE=penumbra2`).
+- `machine_penumbra3_sim.sv` — fork of the gen2 wrapper with
+  `machine_penumbra3` in its place (`make test CORE=penumbra3`).
 - `unified_bus_mem.sv` — bus-shaped unified ROM/RAM device (region-
   compressed map, simple bus device, `+rom_hex=`).
 - `unified_mem.sv` — dual-port flat stand-in for core-level bring-up

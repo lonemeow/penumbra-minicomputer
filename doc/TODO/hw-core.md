@@ -168,18 +168,23 @@ them tied off today, so a load/divmul-use waits for the registered clear).
   uncore port, its clients seeing only lookups, stores and accesses, and
   the L1-D passing a cacheable write's bus fault to the core
   (`doc/internals/penumbra3/l1-cache.md`; `48d95c2`, `bcb189f`, `34e9e95`)
+- `machine_penumbra3` -- the core, the MMU, the L1s, the uncore with no
+  L2, the CPU performance counters and the sysreg devices behind the gen2
+  machine's port list (`doc/internals/penumbra3/machine.md`), with a sim
+  wrapper and program runner forked from gen2's: `isa/` passes on
+  `make test CORE=penumbra3` (`9ee414b`, `2085276`, `4659225`)
 
 **Next, in order** -- the shapes `doc/internals/penumbra3/overview.md`
 ranks first ("Levers ranked by measured benefit"):
 
-1. **`machine_penumbra3`, its uncore with no L2**
-   (`doc/internals/penumbra3/machine.md`): the I/D select over the bus
-   master, the CPU performance counters, the trace outputs the
-   machine's port list carries, a sim wrapper, and `isa/` conformance
-   on the gen3 runner.
-2. **The uncore pipeline:** L2 -- write-through and posted, a look-up
+1. **The uncore pipeline:** L2 -- write-through and posted, a look-up
    every cycle, the line-wide transfer with fill-through -- between the
-   I/D select and `bus_master`, with the fill folded in.
+   I/D select and `bus_master`, with the fill folded in. With it the
+   gen3 runner provides `l2`, and gen3 gets its row in the ISS's
+   `sw/sim/penumbra_cores.h`, whose L2 geometry the L2 fixes.
+2. **`make simulate-rtl CORE=penumbra3`:** a console shim for the gen3
+   sim wrapper, so the boot ROM reaches its monitor in simulation before
+   the board top runs it.
 3. **`ulx3s_penumbra3_top`.**
 
 **Before the TLB store's geometry is fixed:** the proposed 256x2 needs
