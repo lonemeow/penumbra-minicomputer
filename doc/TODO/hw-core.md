@@ -162,24 +162,25 @@ them tied off today, so a load/divmul-use waits for the registered clear).
   coherent write stream + dual-port `tlb_pinned`, per-port bypass>pinned>main
   verdict, the device-0 sysreg interface (MMUCR / FADDR / FSTAT / TLB
   install+read-back), commit-time fault registers (`02f57e3`)
+- `penumbra3_l1` -- storage, the hit verdict, the store-hit write with its
+  forwarding, tree-PLRU, the enable, the cache device's sysregs and
+  counters, 8 KB 2-way on the ECP5; each L1 its side's requester on the
+  uncore port, its clients seeing only lookups, stores and accesses, and
+  the L1-D passing a cacheable write's bus fault to the core
+  (`doc/internals/penumbra3/l1-cache.md`; `48d95c2`, `bcb189f`, `34e9e95`)
 
 **Next, in order** -- the shapes `doc/internals/penumbra3/overview.md`
 ranks first ("Levers ranked by measured benefit"):
 
-1. **The L1 caches:** `penumbra3_l1` is built -- storage, the hit
-   verdict, the store-hit write with its forwarding, tree-PLRU, the
-   enable, the cache device's sysregs and counters, 8 KB 2-way on the
-   ECP5. Each L1 is its side's requester on the uncore port, and its
-   clients see only lookups, stores and accesses
-   (`doc/internals/penumbra3/l1-cache.md`). Still open: the deferred
-   bus fault a cacheable write's `store_fault` raises
-   (`doc/system/architecture.md`, "Deferred Bus Faults"): the L1-D
-   passing the pulse and its address to the core, and the core holding
-   one and taking it at the next instruction boundary, unmasked.
+1. **`machine_penumbra3`, its uncore with no L2**
+   (`doc/internals/penumbra3/machine.md`): the I/D select over the bus
+   master, the CPU performance counters, the trace outputs the
+   machine's port list carries, a sim wrapper, and `isa/` conformance
+   on the gen3 runner.
 2. **The uncore pipeline:** L2 -- write-through and posted, a look-up
-   every cycle, the line-wide transfer with fill-through -- with the
-   I/D select and the fill folded in, driving `bus_master`.
-3. **`machine_penumbra3` and `ulx3s_penumbra3_top`.**
+   every cycle, the line-wide transfer with fill-through -- between the
+   I/D select and `bus_master`, with the fill folded in.
+3. **`ulx3s_penumbra3_top`.**
 
 **Before the TLB store's geometry is fixed:** the proposed 256x2 needs
 `MMU_CONFIG` version 2 and a wider `TLB_INDEX` in `doc/system/mmu.md`
