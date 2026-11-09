@@ -254,14 +254,15 @@ module nexysvideo_penumbra3_top (
     logic        busctl_bus_rst;
     logic        busctl_cfg_en;
 
-    // The caches as the ULX3S has them — 8 KB L1s of two ways, a page a
-    // way, and a 64 KB L2 of four — so a run here exercises the machine
-    // that board does, at a faster clock. This board's block RAM would
-    // take more.
+    // The caches and TLB as the ULX3S has them — 8 KB L1s of two ways, a
+    // page a way, a 64 KB L2 of four and a 256-set TLB — so a run here
+    // exercises the machine that board does, at a faster clock. This
+    // board's block RAM would take larger caches.
     machine_penumbra3 #(
         .L1_WAYS    (2),
         .L2_SETS    (1024),
         .L2_WAYS    (4),
+        .TLB_SETS   (256),
         .MACH_NAME0 (32'h7978654E),   // "Nexy"
         .MACH_NAME1 (32'h69562073),   // "s Vi"
         .MACH_NAME2 (32'h006F6564),   // "deo\0"

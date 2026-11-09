@@ -197,6 +197,7 @@ module penumbra3_core_test
         .o_sys_wr_dev             (),
         .o_sys_wr_reg             (),
         .o_sys_wdata              (),
+        .i_sys_busy               (1'b0),
         .o_mmu_fault_commit       (o_mmu_fault_commit),
         .o_mmu_fault_vaddr        (o_mmu_fault_vaddr),
         .o_mmu_fault_status       (o_mmu_fault_status),

@@ -1035,20 +1035,20 @@ refill count within 3 %.
 **In gen3 the sets are free.** A BRAM TLB copy is 512 entries deep at
 its narrowest and 32 sets use a sliver of it, so 256×2 costs no EBRs and
 no compare width — one more index bit per doubling — and removes 92–98 %
-of refills. The software interface is ready for a new geometry:
-`MMU_CONFIG` reports it and the kernel copies the refill handler built
-for it at boot, stopping on one it does not know. Version 1 of
-`MMU_CONFIG` names at most 32 sets and 2 ways, and a set field wider
-than 5 bits collides with `TLB_INDEX`'s way bit (5) and pinned-select
-bit (6), so a larger geometry needs version 2 with a wider `TLB_INDEX`
-— a change to [`mmu.md`](../../system/mmu.md) first.
+of refills. `MMU_CONFIG` reports the geometry and the kernel installs
+the refill handler built for it at boot, stopping on one it does not
+know. Version 1 of `MMU_CONFIG` names at most 32 sets and 2 ways, and a
+set field wider than 5 bits collides with `TLB_INDEX`'s way bit (5) and
+pinned-select bit (6), so a larger geometry takes version 2's wider
+`TLB_INDEX` ([`mmu.md`](../../system/mmu.md)), which gen3 builds
+([mem-stage](./mem-stage.md#software-interface)).
 
 **Invalidation grows with it.** The kernel invalidates by searching
 slots through `RDSYS`, and sweeps every slot for a torn-down address
 space on each exit and on each exec that reuses one: ~1 k cycles a
 sweep at 32×2, ~5–8 k at 256×2 (estimated from the per-op costs above,
-not measured). Version 2 should carry invalidate-by-address and flush
-ops done in the MMU; how they stay off the lookup path is in the
+not measured). Version 2's invalidation registers do the search in
+the MMU instead; how they stay off the lookup path is in the
 [timing outline](./timing-outline.md#5-mmu--tlb).
 
 **Cheaper refills**, independent of layout:

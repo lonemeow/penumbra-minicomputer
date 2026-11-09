@@ -27,11 +27,21 @@
 // an RDSYS to TLB_VPN/TLB_PTE the read index is steered to the addressed set
 // (the D-side is idle -- an RDSYS is not a memory access), and the registered
 // output lands one cycle later, on the RDSYS response cycle.
+//
+// The sysreg interface is MMU_CONFIG version 2 (doc/system/mmu.md): TLB_INDEX
+// numbers a main slot way * SETS + set and selects the pinned TLB with bit 31,
+// a slot past either TLB's end selecting nothing; the three invalidation
+// registers start penumbra3_tlb_inval's sweep. While it runs o_sys_busy
+// holds fetch, so the WRSYS that started it blocks until the next
+// instruction's fetch sees the result, and the sweep has the D-copy's read
+// port to itself. Out of reset the TLB holds whatever its block RAM came up
+// with: the architecture leaves it undefined, and software invalidates it
+// before it sets M.
 
 module penumbra3_mmu
     import penumbra_pkg::*;
 #(
-    parameter int SETS           = 32,
+    parameter int SETS           = 256,
     parameter int WAYS           = 2,
     parameter int PINNED_ENTRIES = 8
 ) (
@@ -74,7 +84,8 @@ module penumbra3_mmu
     input  logic [31:0] i_sys_wdata,
     input  logic        i_sys_we,
     input  logic        i_sys_re,
-    output logic [31:0] o_sys_rdata
+    output logic [31:0] o_sys_rdata,
+    output logic        o_sys_busy          // registered; fetch waits on it
 );
 
     // Several leaf outputs are deliberately unconsumed (the D-side fault status
@@ -83,13 +94,59 @@ module penumbra3_mmu
     /* verilator lint_off PINCONNECTEMPTY */
 
     localparam int SET_BITS = $clog2(SETS);
+    localparam int WAY_BITS = $clog2(WAYS);
+
+    // The geometry MMU_CONFIG version 2 can report, in the shape this MMU
+    // decodes: power-of-two ways, so a main slot's way is a bit field.
+    build_check #(
+        .COND (SETS >= 2 && SETS <= (1 << 20) && (SETS & (SETS - 1)) == 0),
+        .MSG  ("penumbra3_mmu: SETS must be a power of two from 2 to 2^20")
+    ) u_check_sets ();
+    build_check #(
+        .COND (WAYS >= 2 && WAYS <= 16 && (WAYS & (WAYS - 1)) == 0),
+        .MSG  ("penumbra3_mmu: WAYS must be a power of two from 2 to 16")
+    ) u_check_ways ();
+    build_check #(
+        .COND (PINNED_ENTRIES >= 1 && PINNED_ENTRIES <= 63),
+        .MSG  ("penumbra3_mmu: PINNED_ENTRIES must be 1 to 63")
+    ) u_check_pinned ();
+
+    // MMU_CONFIG: version 2, this geometry, 4 KB pages, 8-bit ASIDs.
+    localparam int ASID_BITS = 8;
+    localparam int PAGE_LOG2 = 12;
+    typedef logic [3:0] cfg_ver_t;
+    typedef logic [5:0] cfg_pinned_t;
+    typedef logic [4:0] cfg_field_t;
+    localparam logic [31:0] MMU_CONFIG_VALUE = {2'b00,
+                                                cfg_field_t'(ASID_BITS),
+                                                cfg_field_t'(PAGE_LOG2),
+                                                cfg_field_t'(WAYS),
+                                                cfg_field_t'(SET_BITS),
+                                                cfg_pinned_t'(PINNED_ENTRIES),
+                                                cfg_ver_t'(2)};
 
     // ── Control / fault / staging registers ──────────────────────
     logic [31:0] mmucr_q;        // [0]=M (enable), [15:8]=ASID
     logic [31:0] faddr_q, fstat_q;
     logic [31:0] vpn_stage_q;    // TLB_VPN holding register (committed on TLB_PTE write)
-    logic [6:0]  idx_q;          // TLB_INDEX: [6]=pinned, [5]=way, [4:0]=set / [2:0]=pinned slot
+    logic [31:0] idx_q;          // TLB_INDEX
     logic [3:0]  rd_reg_q;       // held read selector (RDSYS response is one cycle late)
+
+    // TLB_INDEX: bit 31 selects the pinned TLB, bits 30:0 number a slot.
+    typedef logic [WAY_BITS-1:0] way_t;
+    typedef logic [30:0]         slot_t;
+    localparam slot_t PINNED_SLOTS = slot_t'(PINNED_ENTRIES);
+    logic                idx_pinned;
+    logic [30:0]         idx_slot;
+    logic                idx_main_exists, idx_pinned_exists;
+    logic [SET_BITS-1:0] idx_set;
+    way_t                idx_way;
+    assign idx_pinned        = idx_q[31];
+    assign idx_slot          = idx_q[30:0];
+    assign idx_main_exists   = (idx_slot >> (SET_BITS + WAY_BITS)) == '0;
+    assign idx_pinned_exists = idx_slot < PINNED_SLOTS;
+    assign idx_set           = idx_q[SET_BITS-1:0];
+    assign idx_way           = idx_q[SET_BITS +: WAY_BITS];
 
     logic        mmu_m;
     logic [7:0]  mmu_asid;
@@ -97,22 +154,29 @@ module penumbra3_mmu
     assign mmu_asid = mmucr_q[15:8];
 
     // ── Sysreg writes ────────────────────────────────────────────
+    // A TLB_PTE write to a slot that does not exist changes nothing.
     logic tlb_commit, commit_main, commit_pinned;
-    assign tlb_commit   = i_sys_we & (i_sys_reg == SYSREG_MMU_TLB_PTE);
-    assign commit_pinned = tlb_commit &  idx_q[6];
-    assign commit_main   = tlb_commit & ~idx_q[6];
+    assign tlb_commit    = i_sys_we & (i_sys_reg == SYSREG_MMU_TLB_PTE);
+    assign commit_pinned = tlb_commit &  idx_pinned & idx_pinned_exists;
+    assign commit_main   = tlb_commit & ~idx_pinned & idx_main_exists;
+
+    logic inval_va, inval_asid, inval_all;
+    assign inval_va   = i_sys_we & (i_sys_reg == SYSREG_MMU_TLB_INVAL_VA);
+    assign inval_asid = i_sys_we & (i_sys_reg == SYSREG_MMU_TLB_INVAL_ASID);
+    assign inval_all  = i_sys_we & (i_sys_reg == SYSREG_MMU_TLB_INVAL_ALL);
 
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             mmucr_q     <= 32'b0;       // M=0: flat/bypass at reset
             vpn_stage_q <= 32'b0;
-            idx_q       <= 7'b0;
+            idx_q       <= 32'b0;
         end else if (i_sys_we) begin
             case (i_sys_reg)
                 SYSREG_MMU_CR:      mmucr_q     <= i_sys_wdata;
                 SYSREG_MMU_TLB_VPN: vpn_stage_q <= i_sys_wdata;
-                SYSREG_MMU_TLB_IDX: idx_q       <= i_sys_wdata[6:0];
-                default: ;             // TLB_PTE write is the commit, handled below
+                SYSREG_MMU_TLB_IDX: idx_q       <= i_sys_wdata;
+                // TLB_PTE commits below; the invalidations start the sweep
+                default: ;
             endcase
         end
     end
@@ -135,30 +199,78 @@ module penumbra3_mmu
         else if (i_sys_re)  rd_reg_q <= i_sys_reg;
     end
 
-    // ── Shared install / refill write fan-out (both main-TLB copies) ─
-    logic                wr_en;
-    logic [SET_BITS-1:0] wr_set;
-    logic [$clog2(WAYS)-1:0] wr_way;
-    logic                wr_valid;
-    logic [31:0]         wr_vpn_word, wr_pte_word;
-    assign wr_en       = commit_main;
-    assign wr_set      = idx_q[SET_BITS-1:0];
-    assign wr_way      = idx_q[5];
-    assign wr_valid    = i_sys_wdata[TLB_V];
-    assign wr_vpn_word = vpn_stage_q;
-    assign wr_pte_word = i_sys_wdata;
+    // ── The invalidation sweep ───────────────────────────────────
+    logic                  sweep_busy, sweep_rd_en;
+    logic [SET_BITS-1:0]   sweep_rd_set, sweep_wr_set;
+    logic [WAYS-1:0]       sweep_wr_pte_en;
+    logic [WAYS-1:0][31:0] sweep_wr_pte_word;
+    logic [WAYS-1:0][31:0] d_rb_vpn, d_rb_pte;
 
-    // ── Main-TLB read-back: steer the D-copy read index during RDSYS ─
+    penumbra3_tlb_inval #(
+        .SETS (SETS),
+        .WAYS (WAYS)
+    ) u_inval (
+        .i_clk         (i_clk),
+        .i_rst         (i_rst),
+        .i_inval_va    (inval_va),
+        .i_inval_asid  (inval_asid),
+        .i_inval_all   (inval_all),
+        .i_target      (i_sys_wdata[27:0]),
+        .o_busy        (sweep_busy),
+        .o_rd_en       (sweep_rd_en),
+        .o_rd_set      (sweep_rd_set),
+        .i_rd_vpn_word (d_rb_vpn),
+        .i_rd_pte_word (d_rb_pte),
+        .o_wr_set      (sweep_wr_set),
+        .o_wr_pte_en   (sweep_wr_pte_en),
+        .o_wr_pte_word (sweep_wr_pte_word)
+    );
+    assign o_sys_busy = sweep_busy;
+
+    // ── Shared write fan-out (both main-TLB copies) ──────────────
+    // The sweep's writes, or an install into the selected slot's way.
+    logic [SET_BITS-1:0]   wr_set;
+    logic [WAYS-1:0]       wr_vpn_en, wr_pte_en;
+    logic [31:0]           wr_vpn_word;
+    logic [WAYS-1:0][31:0] wr_pte_word;
+    always_comb begin
+        if (sweep_busy) begin
+            wr_set      = sweep_wr_set;
+            wr_vpn_en   = '0;
+            wr_vpn_word = vpn_stage_q;
+            wr_pte_en   = sweep_wr_pte_en;
+            wr_pte_word = sweep_wr_pte_word;
+        end else begin
+            wr_set      = idx_set;
+            wr_vpn_word = vpn_stage_q;
+            for (int w = 0; w < WAYS; w++) begin
+                wr_vpn_en[w]   = commit_main && (idx_way == way_t'(w));
+                wr_pte_en[w]   = commit_main && (idx_way == way_t'(w));
+                wr_pte_word[w] = i_sys_wdata;
+            end
+        end
+    end
+
+    // ── D-copy read steer: the sweep, or a main-TLB read-back ────
+    // Either places its set where penumbra3_translate's index derivation
+    // reads it. The D-side is idle for both -- an RDSYS is not a memory
+    // access, and a sweep holds fetch over a drained back end -- so neither
+    // collides with a live data translation. The sweep also lifts the
+    // copy's read hold, so its read is never frozen.
     logic        readback_main;
+    logic [31:0] steer_vaddr;
     logic [31:0] d_vaddr_eff;
+    logic        d_hold_eff;
     assign readback_main = i_sys_re
                          & ((i_sys_reg == SYSREG_MMU_TLB_VPN) | (i_sys_reg == SYSREG_MMU_TLB_PTE))
-                         & ~idx_q[6];
-    // Place the addressed set in vaddr[16:12] so penumbra3_translate's index
-    // derivation reads it; the D-side is idle during an RDSYS so this never
-    // collides with a live data translation.
-    assign d_vaddr_eff = readback_main ? {{(32-12-SET_BITS){1'b0}}, idx_q[SET_BITS-1:0], 12'b0}
-                                       : i_d_vaddr;
+                         & ~idx_pinned & idx_main_exists;
+    always_comb begin
+        steer_vaddr = 32'b0;
+        if (sweep_rd_en) steer_vaddr[12 +: SET_BITS] = sweep_rd_set;
+        else             steer_vaddr[12 +: SET_BITS] = idx_set;
+    end
+    assign d_vaddr_eff = (sweep_rd_en || readback_main) ? steer_vaddr : i_d_vaddr;
+    assign d_hold_eff  = i_d_hold && !sweep_rd_en;
 
     // ════════════════════════════════════════════════════════════
     // Pinned TLB (shared, dual lookup port) -- live at launch
@@ -194,7 +306,8 @@ module penumbra3_mmu
         .o_b_hit         (pin_i_hit),
         .o_b_fault       (pin_i_fault),
         .o_b_fault_status(),
-        // Indexed sysreg access
+        // Indexed sysreg access: the slot bits alone, since commit_pinned is
+        // gated on idx_pinned_exists
         .i_idx           (idx_q[$clog2(PINNED_ENTRIES)-1:0]),
         .i_write_vpn     (vpn_stage_q),
         .i_write_pte     (i_sys_wdata),
@@ -209,7 +322,6 @@ module penumbra3_mmu
     logic [31:0]         d_main_paddr, i_main_paddr;
     logic                d_main_cacheable, d_main_hit, d_main_prot;
     logic                i_main_cacheable, i_main_hit, i_main_prot;
-    logic [WAYS-1:0][31:0] d_rb_vpn, d_rb_pte;
     logic [WAYS-1:0][19:0] d_way_frame, i_way_frame;
     logic [WAYS-1:0]       d_way_sel, i_way_sel;
 
@@ -221,7 +333,7 @@ module penumbra3_mmu
         .i_access_type     (i_d_access_type),
         .i_user_mode       (i_d_user_mode),
         .i_asid            (mmu_asid),
-        .i_hold            (i_d_hold),
+        .i_hold            (d_hold_eff),
         .i_pinned_hit      (1'b0),              // pinned override done in this wrapper
         .i_pinned_pte_word (32'b0),
         .o_paddr           (d_main_paddr),
@@ -233,11 +345,10 @@ module penumbra3_mmu
         .o_way_sel         (d_way_sel),
         .o_rd_vpn_word     (d_rb_vpn),
         .o_rd_pte_word     (d_rb_pte),
-        .i_wr_en           (wr_en),
         .i_wr_set          (wr_set),
-        .i_wr_way          (wr_way),
-        .i_wr_valid        (wr_valid),
+        .i_wr_vpn_en       (wr_vpn_en),
         .i_wr_vpn_word     (wr_vpn_word),
+        .i_wr_pte_en       (wr_pte_en),
         .i_wr_pte_word     (wr_pte_word)
     );
 
@@ -261,11 +372,10 @@ module penumbra3_mmu
         .o_way_sel         (i_way_sel),
         .o_rd_vpn_word     (/* read-back uses the D-copy */),
         .o_rd_pte_word     (),
-        .i_wr_en           (wr_en),            // shared fan-out: same install to both copies
-        .i_wr_set          (wr_set),
-        .i_wr_way          (wr_way),
-        .i_wr_valid        (wr_valid),
+        .i_wr_set          (wr_set),           // the same write to both copies
+        .i_wr_vpn_en       (wr_vpn_en),
         .i_wr_vpn_word     (wr_vpn_word),
+        .i_wr_pte_en       (wr_pte_en),
         .i_wr_pte_word     (wr_pte_word)
     );
 
@@ -359,9 +469,20 @@ module penumbra3_mmu
         end
 
     // ── Sysreg read response (one cycle after the RDSYS launch) ──
+    // A slot that does not exist reads zero.
     logic [31:0] tlb_rb_vpn, tlb_rb_pte;
-    assign tlb_rb_vpn = idx_q[6] ? pin_read_vpn : d_rb_vpn[idx_q[5]];
-    assign tlb_rb_pte = idx_q[6] ? pin_read_pte : d_rb_pte[idx_q[5]];
+    always_comb begin
+        if (idx_pinned && idx_pinned_exists) begin
+            tlb_rb_vpn = pin_read_vpn;
+            tlb_rb_pte = pin_read_pte;
+        end else if (!idx_pinned && idx_main_exists) begin
+            tlb_rb_vpn = d_rb_vpn[idx_way];
+            tlb_rb_pte = d_rb_pte[idx_way];
+        end else begin
+            tlb_rb_vpn = 32'b0;
+            tlb_rb_pte = 32'b0;
+        end
+    end
     always_comb begin
         case (rd_reg_q)
             SYSREG_MMU_CR:      o_sys_rdata = mmucr_q;
@@ -369,8 +490,9 @@ module penumbra3_mmu
             SYSREG_MMU_FSTAT:   o_sys_rdata = fstat_q;
             SYSREG_MMU_TLB_VPN: o_sys_rdata = tlb_rb_vpn;
             SYSREG_MMU_TLB_PTE: o_sys_rdata = tlb_rb_pte;
-            SYSREG_MMU_TLB_IDX: o_sys_rdata = {25'b0, idx_q};
-            default:            o_sys_rdata = 32'b0;
+            SYSREG_MMU_TLB_IDX: o_sys_rdata = idx_q;
+            SYSREG_MMU_CONFIG:  o_sys_rdata = MMU_CONFIG_VALUE;
+            default:            o_sys_rdata = 32'b0;   // the invalidations read zero
         endcase
     end
 
@@ -380,6 +502,12 @@ module penumbra3_mmu
     always_comb
         assert (!o_d_prot_fault || (!d_bypass_q && d_lookup_q))
             else $error("penumbra3_mmu: D protection fault under bypass / no lookup");
+
+    // A sweep holds fetch over a drained back end: no install, no read-back
+    // and no lookup can arrive while it runs.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        !(sweep_busy && (tlb_commit || i_sys_re || i_d_lookup_en || i_i_lookup_en)))
+        else $error("penumbra3_mmu: TLB access during a sweep");
 
     // A miss and a prot fault are mutually exclusive on the same port.
     always_comb

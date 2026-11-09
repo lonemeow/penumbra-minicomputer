@@ -52,13 +52,12 @@ module penumbra3_translate
     output logic [WAYS-1:0][31:0]   o_rd_vpn_word,
     output logic [WAYS-1:0][31:0]   o_rd_pte_word,
 
-    // Install / refill / invalidate (to the copy's store)
-    input  logic                    i_wr_en,
+    // Install / invalidate / clear one set (to the copy's store)
     input  logic [$clog2(SETS)-1:0] i_wr_set,
-    input  logic [$clog2(WAYS)-1:0] i_wr_way,
-    input  logic                    i_wr_valid,
+    input  logic [WAYS-1:0]         i_wr_vpn_en,
     input  logic [31:0]             i_wr_vpn_word,
-    input  logic [31:0]             i_wr_pte_word
+    input  logic [WAYS-1:0]         i_wr_pte_en,
+    input  logic [WAYS-1:0][31:0]   i_wr_pte_word
 );
 
     localparam int SET_BITS = $clog2(SETS);
@@ -103,19 +102,21 @@ module penumbra3_translate
         .WAYS (WAYS)
     ) u_store (
         .i_clk         (i_clk),
-        .i_rst         (i_rst),
         .i_rd_set      (rd_set),
         .i_hold        (i_hold),
-        .o_rd_valid    (rd_valid),
         .o_rd_vpn_word (rd_vpn_word),
         .o_rd_pte_word (rd_pte_word),
-        .i_wr_en       (i_wr_en),
         .i_wr_set      (i_wr_set),
-        .i_wr_way      (i_wr_way),
-        .i_wr_valid    (i_wr_valid),
+        .i_wr_vpn_en   (i_wr_vpn_en),
         .i_wr_vpn_word (i_wr_vpn_word),
+        .i_wr_pte_en   (i_wr_pte_en),
         .i_wr_pte_word (i_wr_pte_word)
     );
+
+    // An entry is valid by its PTE word's V.
+    always_comb
+        for (int w = 0; w < WAYS; w++)
+            rd_valid[w] = rd_pte_word[w][TLB_V];
 
     // ── MEM2 verdict cone ────────────────────────────────────────
     penumbra3_tlb_verdict #(

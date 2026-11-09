@@ -220,7 +220,6 @@ static void tlb_install(Dut* d, uint32_t vaddr, uint32_t ppn, uint32_t flags) {
     d->i_tlb_wr_en = 1;
     d->i_tlb_wr_set = (vaddr >> 12) & 0x1F;
     d->i_tlb_wr_way = 0;
-    d->i_tlb_wr_valid = 1;
     d->i_tlb_wr_vpn_word = (vaddr >> 12) << 8;          // VPN<<8 | ASID(0)
     d->i_tlb_wr_pte_word = (ppn << 12) | flags;
     tick(d);

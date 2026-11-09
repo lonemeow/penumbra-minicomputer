@@ -29,10 +29,11 @@
 //     next-fetch PC, one past the held fetch, so a dropped held instruction
 //     would be lost).
 //
-// i_stall_in holds the fetch for three reasons, each read from a flop: IF2's
-// slot waits for FIFO room, the L1-I is busy with an access, or the vector
-// fetch is under way. A hit or a miss never reaches it: a miss steers PC back
-// through i_redirect a cycle later instead.
+// i_stall_in holds the fetch for four reasons, each read from a flop: IF2's
+// slot waits for FIFO room, the L1-I is busy with an access, the vector
+// fetch is under way, or a sysreg device is finishing a WRSYS's side
+// effect. A hit or a miss never reaches it: a miss steers PC back through
+// i_redirect a cycle later instead.
 
 // keep_hierarchy: hold this stage boundary through synth_ecp5 so the backward
 // stall path places compactly instead of smearing across the die, and reads

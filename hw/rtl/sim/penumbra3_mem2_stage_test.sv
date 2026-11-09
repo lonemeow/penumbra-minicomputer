@@ -37,11 +37,11 @@ module penumbra3_mem2_stage_test
     input  logic        i_l1_sys_re,
     output logic [31:0] o_l1_sys_rdata,
 
-    // TLB install (D-copy, via dtranslate's write port)
+    // TLB install (D-copy, via dtranslate's write port); the PTE word's V
+    // is the entry's valid bit
     input  logic        i_tlb_wr_en,
     input  logic [4:0]  i_tlb_wr_set,
     input  logic        i_tlb_wr_way,
-    input  logic        i_tlb_wr_valid,
     input  logic [31:0] i_tlb_wr_vpn_word,
     input  logic [31:0] i_tlb_wr_pte_word,
 
@@ -159,10 +159,20 @@ module penumbra3_mem2_stage_test
     );
 
     // -- Address translation (MEM1 launch / MEM2 verdict) ---------
+    // The TLB is undefined after reset and nothing here invalidates it: it
+    // starts empty because simulation starts block RAM at zero.
     logic [31:0] tr_paddr;
     logic        tr_cacheable, tr_hit, tr_miss_fault, tr_prot_fault;
     logic [TLB_WAYS-1:0][19:0] tr_way_frame;
     logic [TLB_WAYS-1:0]       tr_way_sel;
+    typedef logic tlb_way_t;
+    logic [TLB_WAYS-1:0]       tlb_wr_way_en;
+    logic [TLB_WAYS-1:0][31:0] tlb_wr_pte_word;
+    always_comb
+        for (int w = 0; w < TLB_WAYS; w++) begin
+            tlb_wr_way_en[w]   = i_tlb_wr_en && (i_tlb_wr_way == tlb_way_t'(w));
+            tlb_wr_pte_word[w] = i_tlb_wr_pte_word;
+        end
     /* verilator lint_off PINCONNECTEMPTY */
     penumbra3_translate u_dtranslate (
         .i_clk             (i_clk),
@@ -184,12 +194,11 @@ module penumbra3_mem2_stage_test
         .o_way_sel         (tr_way_sel),
         .o_rd_vpn_word     (),               // read-back tap, unused here
         .o_rd_pte_word     (),
-        .i_wr_en           (i_tlb_wr_en),
         .i_wr_set          (i_tlb_wr_set),
-        .i_wr_way          (i_tlb_wr_way),
-        .i_wr_valid        (i_tlb_wr_valid),
+        .i_wr_vpn_en       (tlb_wr_way_en),
         .i_wr_vpn_word     (i_tlb_wr_vpn_word),
-        .i_wr_pte_word     (i_tlb_wr_pte_word)
+        .i_wr_pte_en       (tlb_wr_way_en),
+        .i_wr_pte_word     (tlb_wr_pte_word)
     );
     /* verilator lint_on PINCONNECTEMPTY */
 

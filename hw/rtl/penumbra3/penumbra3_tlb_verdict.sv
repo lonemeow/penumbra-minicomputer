@@ -9,7 +9,7 @@
 // Entry layout (sysreg TLB interface):
 //   vpn_word = {4'b0, VPN[19:0], ASID[7:0]}
 //   pte_word = {PPN[19:0], SW[7:0], flags}, flags = G U X W R C - V
-// The valid bit is supplied separately (i_valid) -- see penumbra3_tlb_store.
+// The valid bit arrives as i_valid, each way's PTE V split out by the caller.
 module penumbra3_tlb_verdict
     import penumbra_pkg::*;
 #(

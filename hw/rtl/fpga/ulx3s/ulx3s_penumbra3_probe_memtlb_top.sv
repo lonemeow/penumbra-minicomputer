@@ -28,7 +28,7 @@ module ulx3s_penumbra3_probe_memtlb_top (
 );
     import penumbra_pkg::*;
 
-    localparam int SETS = 32;
+    localparam int SETS = 256;
     localparam int WAYS = 2;
     localparam int SET_BITS = $clog2(SETS);
     localparam int WAY_BITS = $clog2(WAYS);
@@ -81,19 +81,24 @@ module ulx3s_penumbra3_probe_memtlb_top (
         pinned_pte_q <= {lfsr_q[15:0], lfsr_q[31:16]};
     end
 
-    // Shared install/refill/invalidate stream (fans to both copies).
-    logic                wr_en;
-    logic [SET_BITS-1:0] wr_set;
-    logic [WAY_BITS-1:0] wr_way;
-    logic                wr_valid;
-    logic [31:0]         wr_vpn_word;
-    logic [31:0]         wr_pte_word;
+    // Shared install stream (fans to both copies): one way of one set per
+    // write, as a TLB_PTE commit makes.
+    typedef logic [WAY_BITS-1:0] way_t;
+    logic                  wr_en;
+    logic [SET_BITS-1:0]   wr_set;
+    way_t                  wr_way;
+    logic [WAYS-1:0]       wr_way_en;
+    logic [31:0]           wr_vpn_word;
+    logic [WAYS-1:0][31:0] wr_pte_word;
     assign wr_en       = lfsr_q[3] & lfsr_q[4];
     assign wr_set      = lfsr_q[SET_BITS-1:0];
     assign wr_way      = lfsr_q[8];
-    assign wr_valid    = lfsr_q[11];
     assign wr_vpn_word = lfsr_q;
-    assign wr_pte_word = {lfsr_q[7:0], lfsr_q[31:8]};
+    always_comb
+        for (int w = 0; w < WAYS; w++) begin
+            wr_way_en[w]   = wr_en && (wr_way == way_t'(w));
+            wr_pte_word[w] = {lfsr_q[7:0], lfsr_q[31:8]};
+        end
 
     // ── DUT: the gen3 data-side translate cone (D-copy inside) ───
     logic [31:0] paddr;
@@ -122,17 +127,15 @@ module ulx3s_penumbra3_probe_memtlb_top (
         .o_way_sel         (),
         .o_rd_vpn_word     (),
         .o_rd_pte_word     (),
-        .i_wr_en           (wr_en),
         .i_wr_set          (wr_set),
-        .i_wr_way          (wr_way),
-        .i_wr_valid        (wr_valid),
+        .i_wr_vpn_en       (wr_way_en),
         .i_wr_vpn_word     (wr_vpn_word),
+        .i_wr_pte_en       (wr_way_en),
         .i_wr_pte_word     (wr_pte_word)
     );
     /* verilator lint_on PINCONNECTEMPTY */
 
     // ── I-copy stand-in: real BRAM usage + shared write fan-out ──
-    logic [WAYS-1:0]       icopy_valid;
     logic [WAYS-1:0][31:0] icopy_vpn_word;
     logic [WAYS-1:0][31:0] icopy_pte_word;
     penumbra3_tlb_store #(
@@ -140,17 +143,14 @@ module ulx3s_penumbra3_probe_memtlb_top (
         .WAYS (WAYS)
     ) u_icopy (
         .i_clk         (clk_25mhz),
-        .i_rst         (rst),
         .i_rd_set      (lfsr_q[SET_BITS+3:4]),
         .i_hold        (1'b0),
-        .o_rd_valid    (icopy_valid),
         .o_rd_vpn_word (icopy_vpn_word),
         .o_rd_pte_word (icopy_pte_word),
-        .i_wr_en       (wr_en),
         .i_wr_set      (wr_set),
-        .i_wr_way      (wr_way),
-        .i_wr_valid    (wr_valid),
+        .i_wr_vpn_en   (wr_way_en),
         .i_wr_vpn_word (wr_vpn_word),
+        .i_wr_pte_en   (wr_way_en),
         .i_wr_pte_word (wr_pte_word)
     );
 
@@ -178,7 +178,6 @@ module ulx3s_penumbra3_probe_memtlb_top (
         led_q <= {7'b0,
                   (^paddr_q)
                   ^ cacheable_q ^ hit_q ^ miss_fault_q ^ prot_fault_q
-                  ^ (|icopy_valid)
                   ^ (^icopy_vpn_word[0]) ^ (^icopy_pte_word[0])
                   ^ (^icopy_vpn_word[1]) ^ (^icopy_pte_word[1])};
     end

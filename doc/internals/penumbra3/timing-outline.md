@@ -198,9 +198,10 @@ cycles, never critical-path logic.**
   - At commit: write new state **registered** (SR/supervisor, PT-base, ASID, cache-en),
     then assert a **registered flush of younger + redirect** (ERET→EPC, WRSYS→next_pc)
     — reuse the mispredict redirect path verbatim.
-  - **Multi-cycle side effects** (cache/TLB flush) hold via a **registered post-commit
-    busy** (`o_post_commit_wait`) until the side-effect FSM signals done — a registered
-    gate, not a combinational drain cone.
+  - **Multi-cycle side effects** (cache/TLB flush) hold via a **registered busy** from
+    the device, which IF1 takes as a stall until the side-effect FSM is done — a
+    registered gate, not a combinational drain cone. The resync redirect still fires
+    the cycle after the commit; only the fetch from the new PC waits.
   - **Do NOT classify WRSYS by register identity in the core** — a layering smell
     (WRSYS is an opaque uncore write; the core shouldn't know which sys_reg matters).
     **Default: serialize *every* WRSYS** — zero classification, trivially correct, and
@@ -338,7 +339,7 @@ cycles, never critical-path logic.**
   - **flush all / flush by ASID** — the same FSM stepping through the sets, about one
     cycle per set to flush all, two (read, then write) to flush by ASID.
 
-  Both are multi-cycle side effects behind the registered post-commit busy
+  Both are multi-cycle side effects behind the device's registered busy
   ([multi-cycle and serializing
   instructions](#multi-cycle-and-serializing-instructions-divmul-wrsys-eret)): the
   `WRSYS` completes when the FSM is done — no poll, no new handshake. The

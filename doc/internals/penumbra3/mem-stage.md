@@ -92,6 +92,15 @@ BRAM — a single DP16KD per copy. Associativity stays modest (2-way); the
 duplication plus the sync read are what make 2-way fit cleanly without a
 multi-read structure.
 
+An entry's valid bit is its PTE word's `V`, stored in the same BRAM. A
+flop array beside the words would put a set-wide read mux and write
+decode on each copy, where the word read is paid for already. BRAM comes
+out of reset holding anything, which the architecture allows: the TLB is
+undefined after reset, and software invalidates it before it sets `M`
+([`mmu.md`](../../system/mmu.md#boot-sequence)). The write port takes a
+per-way enable for the VPN and the PTE word and a PTE word per way, so
+one write can clear `V` in several ways of a set.
+
 ### The pinned TLB
 
 The generation-neutral [`tlb_pinned`](../../../hw/rtl/common/tlb_pinned.sv)
@@ -102,13 +111,29 @@ registered vaddr, in parallel with the main-TLB verdict. A pinned hit
 overrides the main-TLB result. It is part of the MEM2 cone and so is
 included in the P0.3 fanout.
 
-### Software interface unchanged
+### Software interface
 
 Duplication and the MEM1/MEM2 split are microarchitecture only. A sysreg
 TLB write (the kernel's miss handler installing a PTE via `WRSYS`) targets
 the one architectural entry and the hardware mirrors it into both copies.
-The kernel sees the same TLB it always has; this re-pipelining is
-kernel-invisible.
+
+The interface is `MMU_CONFIG` version 2 ([`mmu.md`](../../system/mmu.md)):
+`TLB_INDEX` numbers a main slot `way × SETS + set` and selects the pinned
+TLB with bit 31, and a slot past either TLB's end ignores the write and
+reads zero. The three invalidation registers start the MMU's sweep
+(`penumbra3_tlb_inval`), which reads a set through the D-copy's port —
+the read-back path an `RDSYS` already steers — and writes the ways that
+match back to both copies with `V` cleared: two cycles a set, as a write
+suppresses its copy's read. `TLB_INVAL_VA` visits one set, the other two
+every set.
+
+While the sweep runs, a registered busy from the MMU holds IF1's fetch.
+The `WRSYS` that started it has committed into a drained back end and its
+resync throws away whatever was fetched behind it, so nothing launches a
+lookup on either copy until the sweep is done: the next instruction, and
+its fetch, see the TLB without the matched entries, which is the blocking
+the version-2 contract asks for. The translation read and the hit compare
+never see the sweep.
 
 ## The MEM2 verdict cone
 
@@ -195,15 +220,13 @@ repair ([timing outline](./timing-outline.md#4-caches)).
 
 Settled when the RTL lands, not load-bearing for the contract above:
 
-- **Entry count** per copy. Measured, the miss rate argues for sets: at
-  2 ways, 64 sets remove 54–81 % of refills against gen2's 32, 128 sets
-  72–94 %, 256 sets 92–98 %, on Doom and the kernel paths where refills
-  are the largest single cost
+- **Entry count** per copy: the set count is the machine's `TLB_SETS`,
+  the board's to give, and both boards give 256. Measured, the miss rate
+  argues for sets: at 2 ways, 64 sets remove 54–81 % of refills against
+  gen2's 32, 128 sets 72–94 %, 256 sets 92–98 %, on Doom and the kernel
+  paths where refills are the largest single cost
   ([memory-performance](./memory-performance.md#tlb-sets-and-a-cheaper-refill)).
   A copy's BRAM is 512 entries deep at its narrowest, so 256 sets cost no
-  EBRs and leave the 2-way compare unchanged: 256×2 is the proposed
-  geometry. It needs `MMU_CONFIG` version 2 and a wider `TLB_INDEX`
-  ([`mmu.md`](../../system/mmu.md)), the architectural change that comes
-  first.
+  EBRs and leave the 2-way compare unchanged.
 - **Index function** (which vaddr bits select the set) — chosen with the
   cache index so the two BRAM reads launch from the same MEM1 address path.

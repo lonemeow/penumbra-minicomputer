@@ -90,14 +90,14 @@ static const CoreGeneration CORE_GENERATIONS[] = {
 
     // machine_penumbra3 at its default geometry: two penumbra3_l1 instances
     // of 2 ways, a page a way, and penumbra3_uncore's L2 at 1024 sets of 4
-    // ways; penumbra3_mmu's 32 sets of 2 ways, behind MMU interface version
-    // 1.  "Penumbra/3".  Its EX stage builds divmul at four multiplier bits
-    // a step.
+    // ways; penumbra3_mmu at 256 sets of 2 ways, behind MMU interface
+    // version 2.  "Penumbra/3".  Its EX stage builds divmul at four
+    // multiplier bits a step.
     { "penumbra3", 0x0000332F,
       { 256, 2, 16, CACHE_ADDRESSING_VIPT },
       { 256, 2, 16, CACHE_ADDRESSING_VIPT },
       { 1024, 4, 16, CACHE_ADDRESSING_PIPT },
-      { 32, 2 }, 1,
+      { 256, 2 }, 2,
       4 },
 };
 

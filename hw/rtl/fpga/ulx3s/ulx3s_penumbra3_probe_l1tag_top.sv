@@ -167,7 +167,8 @@ module ulx3s_penumbra3_probe_l1tag_top (
         .i_sys_wdata      (sys_wdata_q),
         .i_sys_we         (sys_we_q),
         .i_sys_re         (sys_re_q),
-        .o_sys_rdata      (sys_rdata)
+        .o_sys_rdata      (sys_rdata),
+        .o_sys_busy       (/* the probe's fetch never holds */)
     );
 
     // ══════════════════════════════════════════════════════════

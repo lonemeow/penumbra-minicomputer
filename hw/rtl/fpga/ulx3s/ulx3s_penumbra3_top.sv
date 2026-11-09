@@ -389,11 +389,13 @@ module ulx3s_penumbra3_top (
     // The machine: core + MMU + L1s + the uncore and its L2 + sysregs
     // ══════════════════════════════════════════════════════════
     // The caches as this board's block RAM affords them: 8 KB L1s of two
-    // ways, a page a way, and a 64 KB L2 of four.
+    // ways, a page a way, and a 64 KB L2 of four; and a 256-set TLB, which
+    // takes no more block RAM than a smaller one.
     machine_penumbra3 #(
         .L1_WAYS    (2),
         .L2_SETS    (1024),
         .L2_WAYS    (4),
+        .TLB_SETS   (256),
         .MACH_NAME0 (32'h33584C55),   // "ULX3"
         .MACH_NAME1 (32'h00000053),   // "S\0\0\0"
         .CPU_FREQ   (CLK_FREQ)

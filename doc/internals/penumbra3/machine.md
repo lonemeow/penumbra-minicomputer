@@ -88,6 +88,11 @@ the later cycle.
 **Writes.** A `WRSYS` commits from EX into an empty pipe, so no read
 is in flight with it, and each device's one register selector serves
 both: the write's register in the write's cycle, the read's otherwise.
+A device whose write starts work that outlasts the cycle — the MMU's
+invalidation sweep — raises a registered busy the core adds to IF1's
+stall. The `WRSYS`'s resync still redirects the cycle after it commits;
+the fetch from the redirected PC waits for the busy to fall, so the
+instruction after the write sees its effect.
 
 **Interrupts.** The core's timer interrupt is the timer device's
 interrupt or the machine's timer input; its external interrupt is the

@@ -14,6 +14,11 @@ module machine_penumbra3
     parameter int          L2_SETS         = 1024,
     parameter int          L2_WAYS         = 4,
 
+    // Main-TLB sets: the board's; software reads them from MMU_CONFIG.
+    // A copy of the TLB is a block RAM per way and word whatever the set
+    // count up to its depth, so the count costs no block RAM there.
+    parameter int          TLB_SETS        = 256,
+
     // Machine identity (SYSDEV_MACH): the board's, which the wrapper or
     // board top supplies. The defaults describe an unnamed machine at an
     // unknown clock.
@@ -121,6 +126,7 @@ module machine_penumbra3
     logic                            sys_re, sys_we;
     logic [3:0]                      sys_dev, sys_reg, sys_wr_dev, sys_wr_reg;
     logic [31:0]                     sys_wdata, sys_rdata;
+    logic                            mmu_sys_busy;      // an invalidation holds fetch
     logic [3:0]                      sys_reg_sel;
 
     // ── Perfctr and timer feeds, program end ─────────────────────
@@ -197,6 +203,7 @@ module machine_penumbra3
         .o_sys_wr_dev              (sys_wr_dev),
         .o_sys_wr_reg              (sys_wr_reg),
         .o_sys_wdata               (sys_wdata),
+        .i_sys_busy                (mmu_sys_busy),
         .o_mmu_fault_commit        (mmu_fault_commit),
         .o_mmu_fault_vaddr         (mmu_fault_vaddr),
         .o_mmu_fault_status        (mmu_fault_status),
@@ -239,6 +246,7 @@ module machine_penumbra3
     logic [31:0] mmu_sys_rdata;
 
     penumbra3_mmu #(
+        .SETS (TLB_SETS),
         .WAYS (TLB_WAYS)
     ) u_mmu (
         .i_clk            (i_clk),
@@ -272,7 +280,8 @@ module machine_penumbra3
         .i_sys_wdata      (sys_wdata),
         .i_sys_we         (mmu_sys_we),
         .i_sys_re         (mmu_sys_re),
-        .o_sys_rdata      (mmu_sys_rdata)
+        .o_sys_rdata      (mmu_sys_rdata),
+        .o_sys_busy       (mmu_sys_busy)
     );
 
     // ══════════════════════════════════════════════════════════

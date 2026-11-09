@@ -114,6 +114,9 @@ module penumbra3_core
     output logic [3:0]            o_sys_wr_dev,
     output logic [3:0]            o_sys_wr_reg,
     output logic [31:0]           o_sys_wdata,
+    // A device finishing a write's side effect, registered: fetch holds
+    // until it falls, so the instruction after the WRSYS sees the effect.
+    input  logic                  i_sys_busy,
 
     // ── MMU fault-register commit (WB's qualified strobe + payload) ──
     output logic                  o_mmu_fault_commit,
@@ -266,7 +269,7 @@ module penumbra3_core
     // ══════════════════════════════════════════════════════════
     penumbra3_if1_stage #(.RESET_PC(RESET_PC)) u_if1 (
         .i_clk(i_clk), .i_rst(i_rst),
-        .i_stall_in(if2_hold | i_icache_busy | vecf_active),
+        .i_stall_in(if2_hold | i_icache_busy | vecf_active | i_sys_busy),
         .i_redirect(if_redirect | frep_replay), .i_redirect_pc(if1_redirect_pc),
         .i_flush(fault_commit),                 // bubble the wrong-path fetch at the fault
         .i_fetch_stop(1'b0),                    // unused: the interrupt drains at the EX frontier

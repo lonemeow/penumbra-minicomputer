@@ -802,6 +802,8 @@ CASES = [
          regs={2: mmu_config(1, 32, 2), 3: 1}),
     Case("+mmu=2 keeps the core's TLB", "mmu_inval_reserved.s", ["+mmu=2"],
          regs={2: mmu_config(2, 32, 2), 3: 0}),
+    Case("+core=penumbra3 presents its MMU", "mmu_inval_reserved.s", ["+core=penumbra3"],
+         regs={2: mmu_config(2, 256, 2), 3: 0}),
     Case("MMU version 1 past its bounds", "mmu_inval_reserved.s", ["+mmu=1:64x2"],
          error=r"MMU version 1 cannot report a 64x2 main TLB"),
     Case("MMU sets not a power of two", "mmu_inval_reserved.s", ["+mmu=2:96x2"],
