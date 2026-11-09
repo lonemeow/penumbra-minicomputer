@@ -5,28 +5,42 @@
  *
  * The routines reach the TLB only through the MMU sysregs, so they
  * depend on nothing else in the kernel and can be assembled and tested
- * on their own (make test-kernel).
+ * on their own (make test-kernel).  Each asks MMU_CONFIG which
+ * interface it drives: version 2 invalidates through the MMU's own
+ * registers, version 1 searches slot by slot over its one geometry the
+ * kernel boots on, 32 sets of 2 ways.  A read of zero is version 1.
  */
 
 #include <machine/sysreg.h>
 #include <machine/pmap.h>
 
+/* Branch to `v2` when the MMU's interface is version 2; clobbers `r`. */
+#define	IF_MMU_V2(r, v2)					\
+	rdsys	r, #SYSDEV_MMU, #MMU_CONFIG;			\
+	and	r, #MMUCFG_VER_MASK;				\
+	cmp	r, #2;						\
+	beq	v2
+
 	.text
 
 /*
- * tlb_invalidate_all: invalidate all 64 main TLB slots.
+ * tlb_invalidate_all: invalidate every main TLB slot.
  * Does NOT touch pinned TLB entries.
  */
 	.globl	tlb_invalidate_all
 	.type	tlb_invalidate_all, @function
 tlb_invalidate_all:
+	IF_MMU_V2(r1, .Ltia_v2)
 	mov	r1, r0			/* index = 0 */
 .Ltia_loop:
 	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_INDEX
 	wrsys	r0, #SYSDEV_MMU, #MMU_TLB_PTE	/* V=0 → invalid */
 	add	r1, #1
-	cmp	r1, #TLB_NSLOTS
+	cmp	r1, #TLB_V1_NSLOTS
 	blo	.Ltia_loop
+	ret
+.Ltia_v2:
+	wrsys	r0, #SYSDEV_MMU, #MMU_TLB_INVAL_ALL
 	ret
 
 /*
@@ -37,6 +51,7 @@ tlb_invalidate_all:
 	.type	tlb_invalidate_asid, @function
 tlb_invalidate_asid:
 	/* R1 = asid */
+	IF_MMU_V2(r2, .Ltias_v2)
 	stw	r5, [sp + #-4]
 	stw	r6, [sp + #-8]
 	sub	sp, #8
@@ -59,11 +74,14 @@ tlb_invalidate_asid:
 	wrsys	r0, #SYSDEV_MMU, #MMU_TLB_PTE	/* invalidate */
 .Ltias_next:
 	add	r2, #1
-	cmp	r2, #TLB_NSLOTS
+	cmp	r2, #TLB_V1_NSLOTS
 	blo	.Ltias_loop
 	add	sp, #8
 	ldw	r5, [sp + #-4]
 	ldw	r6, [sp + #-8]
+	ret
+.Ltias_v2:
+	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_INVAL_ASID
 	ret
 
 /*
@@ -73,6 +91,7 @@ tlb_invalidate_asid:
  * Works correctly for G=1 entries because the TLB miss handler
  * always installs G=1 entries with ASID=0, and kernel code
  * always calls tlb_invalidate_addr(va, 0) for kernel VAs.
+ * Version 2's TLB_INVAL_VA matches a global entry under any ASID.
  *
  * A way-0 match counts only if the slot is valid.  Invalidating a
  * slot commits whatever TLB_VPN was last staged, so a dead slot can
@@ -88,6 +107,7 @@ tlb_invalidate_addr:
 	shr	r3, #12
 	shl	r3, #8
 	or	r3, r2			/* R3 = expected TLB_VPN */
+	IF_MMU_V2(r4, .Ltia_addr_v2)
 
 	/* Compute set = VPN[4:0] */
 	mov	r4, r1
@@ -115,4 +135,8 @@ tlb_invalidate_addr:
 	bne	.Ltia_done
 	wrsys	r0, #SYSDEV_MMU, #MMU_TLB_PTE	/* invalidate way 1 */
 .Ltia_done:
+	ret
+
+.Ltia_addr_v2:
+	wrsys	r3, #SYSDEV_MMU, #MMU_TLB_INVAL_VA
 	ret

@@ -37,7 +37,9 @@ bootinfo — `boot sd:0,0` reaches single-user with no prompts.
 
 - **Early boot (locore.S):** PIC bias, BSS zero, bootinfo copy
   in physical mode.  Kernel page table (L1+L2 in BSS), real
-  TLB miss handler pinned before MMU enable.  Two-phase startup:
+  TLB miss handler pinned before MMU enable.  Drives `MMU_CONFIG`
+  version 1 (32x2) and version 2 (256x2), and stops at boot on any
+  other value.  Two-phase startup:
   `penumbra_init()` on 4 KB boot stack returns new SP, locore
   switches to lwp0's 16 KB USPACE before `main()`.
 

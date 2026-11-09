@@ -190,10 +190,14 @@ extern struct pmap kernel_pmap_store;
 /* UVM calls pmap_steal_memory() for early page allocation */
 #define PMAP_STEAL_MEMORY
 
-/* Load a pinned TLB slot with a mapping. */
+/* TLB_INDEX's pinned select for this machine's MMU, set by locore.S. */
+extern uint32_t tlb_pinned_select;
+
+/* Load pinned TLB slot `slot` (a PTLB_SLOT_*) with a mapping. */
 static __inline void
-pmap_pin_slot(uint32_t idx, vaddr_t va, pt_entry_t pte)
+pmap_pin_slot(uint32_t slot, vaddr_t va, pt_entry_t pte)
 {
+	uint32_t idx = tlb_pinned_select | slot;
 	uint32_t vpn = (va >> PAGE_SHIFT) << TLB_VPN_SHIFT;
 
 	__asm__ volatile("WRSYS %0, %1, %2" : : "r"(idx),
@@ -220,7 +224,7 @@ static __inline void *
 pmap_scratch_map(u_int win, paddr_t pa, pt_entry_t flags)
 {
 	vaddr_t va = (win == PMAP_SCRATCH0) ? SCRATCH_VA : SCRATCH2_VA;
-	uint32_t slot = (win == PMAP_SCRATCH0) ? PTLB_SCRATCH : PTLB_SCRATCH2;
+	uint32_t slot = (win == PMAP_SCRATCH0) ? PTLB_SLOT_SCRATCH : PTLB_SLOT_SCRATCH2;
 
 	pmap_pin_slot(slot, va, (pa & PTE_PPN_MASK) | flags);
 	return (void *)va;

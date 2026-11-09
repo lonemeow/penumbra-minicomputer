@@ -46,6 +46,12 @@ extern char _end[];
 struct pmap kernel_pmap_store;
 struct pmap *const kernel_pmap_ptr = &kernel_pmap_store;
 
+/*
+ * TLB_INDEX's pinned select, the one MMU_CONFIG's version gives it.
+ * locore.S stores it before any C runs; it never changes after.
+ */
+uint32_t tlb_pinned_select;
+
 /* Virtual address range available for kernel VM allocation */
 static vaddr_t virtual_avail;
 static vaddr_t virtual_end;
@@ -151,7 +157,7 @@ pmap_tlb_invalidate(struct pmap *pm, vaddr_t va)
  * IMPORTANT: the windows are shared resources.  All code using them,
  * pmap_l2_map() included, must hold splhigh() so an interrupt handler
  * cannot re-enter pmap and clobber a mapping.  The TLB miss handler is
- * safe — it has its own L2 window in PTLB_L2WIN.  Early boot code,
+ * safe — it has its own L2 window in PTLB_SLOT_L2WIN.  Early boot code,
  * before interrupts are possible, is exempt.
  */
 
@@ -384,7 +390,7 @@ pmap_bootstrap(void)
 	{
 		vaddr_t ci_va = trunc_page((vaddr_t)&cpu_info_store);
 
-		pmap_pin_slot(PTLB_CPU_INFO, ci_va,
+		pmap_pin_slot(PTLB_SLOT_CPU_INFO, ci_va,
 		    ((ci_va + phys_bias) & PTE_PPN_MASK) | PTE_KERNEL);
 	}
 
@@ -601,7 +607,7 @@ pmap_init(void)
  *
  * Allocates a pmap struct and an L1 page table.  The L1 is left
  * zero-filled — the SH-4-style split walker reads kernel L1
- * entries from PTLB_KERN_L1 directly, so user pmaps hold *only*
+ * entries from PTLB_SLOT_KERN_L1 directly, so user pmaps hold *only*
  * user-VA entries.  No kernel-half mirroring is needed.
  */
 pmap_t
@@ -1013,7 +1019,7 @@ pmap_copy(pmap_t dst, pmap_t src, vaddr_t dstaddr, vsize_t len, vaddr_t srcaddr)
 /*
  * Pin an L1 page table in the user-L1 pinned slot
  * (PT_USER_L1_VA → l1_pa).  The fast TLB miss handler uses this
- * slot when walking *user* VAs.  Kernel VAs go through PTLB_KERN_L1
+ * slot when walking *user* VAs.  Kernel VAs go through PTLB_SLOT_KERN_L1
  * (slot 1), which is pinned once at boot and never reprogrammed.
  *
  * When the current LWP belongs to the kernel pmap, we pin the
@@ -1026,15 +1032,15 @@ static inline void
 pmap_pin_user_l1(paddr_t l1_pa)
 {
 
-	pmap_pin_slot(PTLB_USER_L1, PT_USER_L1_VA,
+	pmap_pin_slot(PTLB_SLOT_USER_L1, PT_USER_L1_VA,
 	    (l1_pa & PTE_PPN_MASK) | PTE_KERNEL);
 }
 
 /*
  * pmap_activate / pmap_deactivate: switch active pmap.
  *
- * Re-pins the user L1 slot (PTLB_USER_L1) and sets MMUCR.ASID.
- * The kernel L1 slot (PTLB_KERN_L1) is permanent — pinned at boot,
+ * Re-pins the user L1 slot (PTLB_SLOT_USER_L1) and sets MMUCR.ASID.
+ * The kernel L1 slot (PTLB_SLOT_KERN_L1) is permanent — pinned at boot,
  * never reprogrammed — so kernel-VA TLB misses always fast-resolve
  * via the kernel L1 regardless of which user pmap is current
  * (SH-4-style split walker).

@@ -15,7 +15,8 @@ Penumbra-specific -- no `<mips/*.h>` includes.
 - ILP32, little-endian, 4 KB pages
 - 16 registers: R0=zero, R12=TP, R13=LR, R14=SP, R15=PC
 - 2G/2G user/kernel VA split (kernel text at `0x8001_0000`)
-- Software-managed TLB: 64-entry 2-way SA + 8-entry FA pinned
+- Software-managed TLB: 2-way SA main TLB of 32 or 256 sets
+  (`MMU_CONFIG` version 1 or 2) + 8-entry FA pinned
 - Split I/D PIPT caches, write-through D-cache
 - No FPU -- all floating-point via soft-float
 
@@ -49,7 +50,7 @@ everything exception entry needs to be guaranteed reachable: the
 hardware vector table, all trap trampolines, the TLB miss handler,
 `_trap_common` body, and the scratch cells those handlers use.
 It is mapped at `VECTOR_VA = 0xFFFFB000` and pinned in TLB slot 0
-(`PTLB_VECTOR`) at the very end of `locore.S`, before the MMU is
+(`PTLB_SLOT_VECTOR`) at the very end of `locore.S`, before the MMU is
 enabled.  Pinning means it never TLB-misses, which breaks what
 would otherwise be an infinite "miss handler taking a miss" loop.
 
@@ -153,16 +154,18 @@ directly: `pmap_enter`, `pmap_create`/`pmap_destroy`,
 
 ## TLB Locality
 
-The TLB reaches 64 entries times 4 KB, so a kernel that touches more
-than 256 KB of pages refills constantly.  On a shell and filesystem
+The 32x2 TLB reaches 64 entries times 4 KB, so a kernel that touches
+more than 256 KB of pages refills constantly.  The measurements in this
+section are on that TLB.  On a shell and filesystem
 workload the refill handler is 39% of every instruction executed --
 72.9M refills at 53 instructions each -- which makes where code and
 data *land* a first-order concern rather than a tuning detail.
 
 ### The layout lottery
 
-A page's TLB set is bits 16:12 of its address, so a function's set is
-decided by where the linker put it.  Two hot functions 128 KB apart
+A page's TLB set is the low bits of its page number -- bits 16:12 of
+its address on 32 sets -- so a function's set is decided by where the
+linker put it.  Two hot functions 128 KB apart
 share a set; with two ways, a third one evicts the others on every
 visit.  Nothing in the build controls this, so an unrelated change
 that shifts code re-rolls it.
@@ -186,17 +189,31 @@ extra instructions per refill that is 3.7% of all instructions
 executed, an order of magnitude more than lowering every avoidable
 call in the kernel would save.
 
-So each supported geometry gets its own hand-written trap page image,
-and boot copies the one that matches.  `locore.S` reads `MMU_CONFIG`
-before installing the handler, selects the image, and refuses anything
-it has no image for -- printing to the console UART, which is directly
-addressable because the MMU is not yet enabled, and spinning rather
-than executing `BREAK`, because the exception vectors are not
+So each supported MMU gets its own refill handler.  `tlb_refill.S` is
+the one source: `locore.S` includes it once per `MMU_CONFIG` value the
+kernel drives, the geometry is decoded from that value into immediates
+at build time, and a value the handler cannot serve -- a way count that
+is not a power of two, for one -- fails the build.  The way comes from
+the cycle counter's bits just above the set field, which in a slot
+number (way times the set count, plus the set) are the way as they
+stand: one `AND` for any power-of-two geometry.
+
+Each copy enters a table of `MMU_CONFIG` values, and boot copies the one
+that matches into a fixed space at the head of the trap page.  Every
+copy pads itself to that space -- the assembler refuses one that does
+not fit -- so the entry stubs and `_trap_common` behind it are shared by
+all and stay where they were linked; the fault path reaches them by a
+branch relative to the handler's own start, which holds wherever the
+copy runs.
+`locore.S` reads `MMU_CONFIG` before installing the handler and refuses
+anything it has none for -- printing to the console UART, which is
+directly addressable because the MMU is not yet enabled, and spinning
+rather than executing `BREAK`, because the exception vectors are not
 installed at that point.
 
-The images are linked after all live text.  They are never executed
-where they are linked, so their size must not decide where live code
-lands.
+The trap page and the spare handlers are linked after all live text.
+They are never executed where they are linked, so their size must not
+decide where live code lands.
 
 ### Structural pinned slots
 

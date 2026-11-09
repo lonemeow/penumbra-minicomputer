@@ -494,9 +494,9 @@ The six, in handler order:
 | Read | Its reader | What hides the wait |
 |---|---|---|
 | `rdsys r1, MMU_FAULT_ADDR`, at entry | `mov r2, r1` | reading once `r1` is saved, ahead of the other two saves |
-| `ldw r3, [r3]`, the L1 entry | `test r3, #PTE_V` | `lli r2, #PTLB_L2WIN` moved between them |
+| `ldw r3, [r3]`, the L1 entry | `test r3, #PTE_V` | the L2 window's `TLB_INDEX` load moved between them |
 | `ldw r3, [r3]`, the PTE | `test r3, #PTE_V` | the `CPU_CYCLES` read moved between them |
-| `rdsys r2, CPU_CYCLES` | `and r2, #0x20` | the same move |
+| `rdsys r2, CPU_CYCLES` | the way pick's `and r2` | the same move |
 | `rdsys r1, MMU_FAULT_ADDR`, the second | `shr r1, #12` | reading into `r2` ahead of the `MMU_TLB_INDEX` write, with `r1` and `r2` trading roles after it |
 | `rdsys r2, MMU_MMUCR`, non-global pages only | `shr r2, #MMUCR_ASID_SHIFT` | nothing free |
 
@@ -943,32 +943,10 @@ work the machine does itself, not at the network.
 
 Open: where the time goes. `dhcpcd -t` raises the limit.
 
-## Kernel: drive `MMU_CONFIG` version 2
-
-A version-2 MMU (`doc/system/mmu.md`, "Interface Versions") reports a
-geometry the kernel has no trap page for, and `locore.S` stops at boot
-there, as it does for any version or geometry it does not know. gen3's
-256x2 TLB is the first such machine (`doc/TODO/hw-core.md`, the gen3
-build status). One kernel binary drives both versions once:
-
-- `locore.S` selects a trap page for each version-2 geometry a machine
-  builds, beside the version-1 one. The refill handler carries the set
-  count in its immediates, and takes its way from bit 5 of
-  `CPU_CYCLES`, which covers two ways and no more.
-- The pinned select comes from the version: every `PTLB_*` constant is
-  `TLB_INDEX_PINNED | slot`, with bit 6 built in.
-- `tlb_invalidate_all`, `_asid` and `_addr` use the invalidation
-  registers in version 2 and keep their slot loops for version 1,
-  chosen once at boot. The loops build in `TLB_NSLOTS` (64) and way 1
-  at `+0x20`.
-- `make test-kernel`'s `tlb-test` runs both versions.
-
-Open: all of it, before any machine or the ISS reports version 2.
-
 ## Ruled out
 
 - **Refill way pick: set bits mixed into the counter bit, or an empty
-  way first.**  The refill handler takes its way from bit 5 of
+  way first.**  The refill handler takes its way from a bit of
   `CPU_CYCLES`.  XOR-ing set bits into it, to spread adjacent sets'
   misses across both ways, only relabels each set's two ways, so no
   hit or miss can change; shadow TLBs on the ISS matched the plain

@@ -37,6 +37,13 @@
 #define BOOTINFO_MAGIC	0x50454E49	/* "PENI" — must match bootinfo.h */
 #define BOOTINFO_MAXSIZE 4096
 
+/*
+ * Bytes reserved for a refill handler at the head of the trap page.
+ * Every handler pads itself to this, and tlb_refill.S fails the build
+ * of one that does not fit.
+ */
+#define	RMH_SPACE	256
+
 	.text
 	.globl	_start
 	.type	_start, @function
@@ -76,14 +83,8 @@ _start_bias:
 	la	sp, _boot_stack_top
 	add	sp, r6
 
-	/* Flush the entire TLB — invalidate all slots */
-	mov	r1, r0
-.Lflush_tlb:
-	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_INDEX
-	wrsys	r0, #SYSDEV_MMU, #MMU_TLB_PTE
-	add	r1, #1
-	cmp	r1, #TLB_NSLOTS
-	blo	.Lflush_tlb
+	/* The main TLB is flushed in step 6b, once the MMU's interface is
+	 * known; nothing translates before step 11. */
 
 	/* Invalidate I-cache — stale bootloader code may be cached */
 	wrsys	r0, #SYSDEV_L1_ICACHE, #CACHE_INVAL_ALL
@@ -289,12 +290,18 @@ _start_bias:
 .Lpte_done:
 
 /* ═══════════════════════════════════════════════════════════════
- * Step 6b: Select the trap page for this MMU
+ * Step 6b: Recognise the MMU
  *
- * Each supported geometry has its own trap page image; R8/R9 name the
- * one to install.  An unrecognised MMU has no image here, and a
- * handler built for another geometry would fault forever or address
- * half the TLB, so boot stops instead.
+ * The kernel drives the MMUs it has a refill handler for, each built
+ * for one MMU_CONFIG value and entered in .Lrefill_handlers.  This step
+ * finds the handler, flushes the main TLB through the version's
+ * interface, and leaves
+ *   R8/R9  link-time bounds of the refill handler for this MMU,
+ *          RMH_SPACE bytes
+ *   R10    the pinned select of TLB_INDEX
+ *   R11    the main TLB's set mask
+ * An MMU with no handler stops boot: one built for another geometry
+ * would fault forever or address part of the TLB.
  *
  * Still in bypass mode: the console UART is reachable at its
  * architectural address with no mapping.
@@ -302,21 +309,64 @@ _start_bias:
 
 	rdsys	r1, #SYSDEV_MMU, #MMU_CONFIG
 	cmp	r1, r0
-	beq	.Lmmucfg_v1_8p_32x2	/* zero reports the baseline */
-	li	r2, #MMUCFG_V1_8P_32X2
-	cmp	r1, r2
-	beq	.Lmmucfg_v1_8p_32x2
-	b	.Lmmucfg_unsupported
+	bne	.Lmmucfg_find_start
+	li	r1, #MMUCFG_V1_8P_32X2	/* zero reports the baseline */
+.Lmmucfg_find_start:
+	la	r2, .Lrefill_handlers
+	add	r2, r6
+	la	r3, .Lrefill_handlers_end
+	add	r3, r6
+.Lmmucfg_find:
+	cmp	r2, r3
+	bhs	.Lmmucfg_unsupported
+	ldw	r4, [r2]
+	add	r2, #8			/* {MMU_CONFIG, start} */
+	cmp	r4, r1
+	bne	.Lmmucfg_find
+	ldw	r8, [r2 + #-4]
+	mov	r9, r8
+	add	r9, #RMH_SPACE
 
-.Lmmucfg_v1_8p_32x2:
-	la	r8, _real_miss_handler
-	la	r9, _real_handlers_end
+	/* R11 = (1 << SETS_L2) - 1 */
+	mov	r2, r1
+	shr	r2, #MMUCFG_SETS_LOG2_SHIFT
+	and	r2, #0x1F
+	lli	r11, #1
+	shl	r11, r2
+	sub	r11, #1
+
+	mov	r2, r1
+	and	r2, #MMUCFG_VER_MASK
+	cmp	r2, #2
+	beq	.Lmmucfg_v2
+	lli	r10, #TLB_INDEX_PINNED_V1
+	/* Version 1 has no invalidation register: clear slot by slot */
+	mov	r1, r0
+.Lflush_tlb_v1:
+	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_INDEX
+	wrsys	r0, #SYSDEV_MMU, #MMU_TLB_PTE
+	add	r1, #1
+	cmp	r1, #TLB_V1_NSLOTS
+	blo	.Lflush_tlb_v1
+	b	.Lmmucfg_known
+
+.Lmmucfg_v2:
+	li	r10, #TLB_INDEX_PINNED_V2
+	wrsys	r0, #SYSDEV_MMU, #MMU_TLB_INVAL_ALL
+
+.Lmmucfg_known:
+	/* pmap_pin_slot() builds its TLB_INDEX values from this */
+	la	r1, tlb_pinned_select
+	add	r1, r6
+	stw	r10, [r1]
 
 /* ═══════════════════════════════════════════════════════════════
- * Step 7: Copy real TLB miss handler to vector page
+ * Step 7: Copy the trap handlers to the vector page
  *
- * The real handler walks L1 → L2 via pinned TLB slots.
- * Copy to vector page offset 0x80 (same location as before).
+ * The refill handler for this MMU fills the RMH_SPACE bytes at offset
+ * 0x80; the rest of the handlers follow it as linked behind that space
+ * at _real_miss_handler, so the entry stubs land at the offsets step 8
+ * and trap_return's VA assume.
  *
  * Vector page layout (PA 0x0, mapped at VECTOR_VA):
  *   0x00-0x1F   Exception vectors (8 × 4-byte addresses)
@@ -332,6 +382,18 @@ _start_bias:
 					 * line size (16) to preserve the
 					 * handler's .balign 16 at runtime */
 	mov	r3, r9
+	add	r3, r6			/* physical end of the refill handler */
+.Lcopy_refill:
+	ldw	r4, [r1]
+	stw	r4, [r2]
+	add	r1, #4
+	add	r2, #4
+	cmp	r1, r3
+	blo	.Lcopy_refill
+
+	la	r1, .Lreal_miss_handler_end
+	add	r1, r6
+	la	r3, _real_handlers_end
 	add	r3, r6			/* physical end of handler code */
 .Lcopy_handler:
 	ldw	r4, [r1]
@@ -372,9 +434,9 @@ _start_bias:
 	/* Helper: R3 = base = VECTOR_VA + 0x80 */
 	lli	r3, #0xB080
 	lui	r3, #0xFFFF
-	/* R5 = link-time base of the installed image; the stub labels
-	 * below are offsets within it, so a second image brings its own. */
-	mov	r5, r8
+	/* R5 = link-time base of the handlers; the stub labels below are
+	 * offsets from it. */
+	la	r5, _real_miss_handler
 
 	/* Macro-like pattern: compute VA of each stub and store.
 	 * VA = R3 + (stub_label - _real_miss_handler)
@@ -450,13 +512,16 @@ _start_bias:
  * Slot 1: Kernel L1    — PT_KERN_L1_VA (0xFFFFE000) → PA of _boot_l1
  * Slot 4: User L1      — PT_USER_L1_VA (0xFFFFA000) → PA of _boot_l1
  *                        (default; pmap_activate reprograms per LWP)
+ *
+ * Slot numbers are pinned ones; R10 adds the select.
  * ═══════════════════════════════════════════════════════════════ */
 
 	/* Pin vector page (slot 0): VECTOR_VA (0xFFFFB000) → PA 0
 	 * VPN = 0xFFFFB → TLB_VPN = 0x0FFFFB00
 	 * PTE = PA 0 | V|C|R|W|X|G (0xBD — handler needs R+X, scratch needs R+W)
 	 */
-	lli	r1, #PTLB_VECTOR
+	lli	r1, #PTLB_SLOT_VECTOR
+	or	r1, r10			/* R10 = pinned select */
 	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_INDEX
 
 	lli	r1, #0xFB00
@@ -473,7 +538,8 @@ _start_bias:
 	 * VPN = 0xFFFFE → TLB_VPN = 0x0FFFFE00
 	 * PTE = l1_pa | V|C|R|W|G (0x9D)
 	 */
-	lli	r1, #PTLB_KERN_L1
+	lli	r1, #PTLB_SLOT_KERN_L1
+	or	r1, r10			/* R10 = pinned select */
 	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_INDEX
 
 	lli	r1, #0xFE00
@@ -491,7 +557,8 @@ _start_bias:
 	 * instead of recursing on an unmapped PT_USER_L1_VA.
 	 * VPN = 0xFFFFA → TLB_VPN = 0x0FFFFA00.
 	 */
-	lli	r1, #PTLB_USER_L1
+	lli	r1, #PTLB_SLOT_USER_L1
+	or	r1, r10			/* R10 = pinned select */
 	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_INDEX
 
 	lli	r1, #0xFA00
@@ -516,9 +583,9 @@ _start_bias:
 	add	r1, r6			/* R1 = physical address */
 	shr	r1, #12			/* R1 = physical page number */
 
-	/* TLB_INDEX: set = PPN[4:0], way 0 */
+	/* TLB_INDEX: way 0 of the PPN's set, the slot numbered by the set */
 	mov	r2, r1
-	and	r2, #0x1F
+	and	r2, r11			/* R11 = set mask */
 	wrsys	r2, #SYSDEV_MMU, #MMU_TLB_INDEX
 
 	/* TLB_VPN: identity (VPN = PPN), ASID=0 */
@@ -664,29 +731,33 @@ _start_bias:
 
 
 /* ═══════════════════════════════════════════════════════════════
- * Real TLB miss handler — page table walking (SH-4-style split).
+ * Trap handlers: the TLB refill handler (tlb_refill.S), the per-vector
+ * entry stubs and _trap_common.
  *
- * Walks a 2-level page table (L1 → L2) using pinned TLB slots:
- *   Slot 0: Vector page at VECTOR_VA  (handler code + scratch)
- *   Slot 1: Kernel L1   at PT_KERN_L1_VA (0xFFFFE000, permanent)
- *   Slot 2: L2 window   at PT_L2WIN_VA   (0xFFFFD000, remapped per miss)
- *   Slot 4: User L1     at PT_USER_L1_VA (0xFFFFA000, re-pinned by
- *                                          pmap_activate per LWP)
+ * Step 7 copies them to vector page offset 0x80 during early boot
+ * (physical mode); they run from there once the MMU is on.  VA 0x0 is
+ * NOT mapped, so they reach their scratch area, which lives after the
+ * code, PC-relative; every branch is PC-relative too, so the code works
+ * wherever it is mapped.
  *
- * The handler branches on the faulting VA's MSB: kernel VAs
- * (signed-negative) walk the kernel L1 via slot 1; user VAs walk
- * the current user L1 via slot 4.  No kernel-half mirroring in
- * user pmaps is needed — kernel and user L1s are completely
- * disjoint structures.
- *
- * This code is copied to vector page offset 0x80 by locore.S
- * during early boot (physical mode).  Active from MMU enable.
- * VA 0x0 is NOT mapped — the handler uses PC-relative addressing
- * for its scratch area, which lives after the handler code.
- *
- * All branches and scratch accesses are PC-relative — works
- * correctly regardless of where the code is mapped.
+ * The page opens with RMH_SPACE bytes for a refill handler, the stubs
+ * and _trap_common linked behind them.  The 32x2 handler at
+ * _real_miss_handler fills the space as linked; the handlers for the
+ * kernel's other MMUs follow the page's end, and step 7 copies the one
+ * in use into the space.  Each has a row in the table step 6b searches.
  * ═══════════════════════════════════════════════════════════════ */
+
+/* Enter the handler at `start', built for RMH_MMUCFG, in step 6b's table. */
+#define	REFILL_ENTRY(start)						\
+	.pushsection .rodata.refill_handlers, "a";			\
+	.long	RMH_MMUCFG, start;					\
+	.popsection
+
+	.pushsection .rodata.refill_handlers, "a"
+	.balign	4
+.Lrefill_handlers:
+	.popsection
+
 	/*
 	 * Page-align the trap-handler region so its kernel-text PTE
 	 * can be marked R-only independently of the rest of .text.
@@ -716,139 +787,11 @@ _real_handlers_page_start:
 	.globl	_real_miss_handler
 	.globl	_real_handlers_end
 _real_miss_handler:
-	/* Park R1/R2/R3 in the CPU-internal scratch SPRs (SCR0..2).
-	 * These are 32-bit storage cells exposed via WRSPR/RDSPR;
-	 * no memory access, no cache or TLB involvement.  See
-	 * doc/system/architecture.md "Scratch SPRs (SCR0–SCR3)".
-	 *
-	 * MMU_FAULT_ADDR is latched, so the faulting VA can be re-read
-	 * from the sysreg later if needed — that re-read replaces what
-	 * would otherwise be a fourth scratch register.
-	 */
-	wrspr	scr0, r1
-	wrspr	scr1, r2
-	wrspr	scr2, r3
-
-	/* Read faulting virtual address */
-	rdsys	r1, #SYSDEV_MMU, #MMU_FAULT_ADDR
-
-	/* ── L1 lookup (SH-4-style split walker) ────
-	 * R1 = faulting VA
-	 * Branch on VA MSB: kernel VAs (>= 0x80000000, signed < 0)
-	 * walk PT_KERN_L1_VA (slot 1); user VAs walk PT_USER_L1_VA
-	 * (slot 4).  Sign-test via cmp/blt: kernel VAs are signed
-	 * negative, user VAs signed non-negative.
-	 * L1 index = VA[31:22], each entry is 4 bytes.
-	 */
-	mov	r2, r1
-	shr	r2, #PT_L1_SHIFT		/* R2 = L1 index (bits 31:22) */
-	shl	r2, #2			/* R2 = byte offset into L1 */
-
-	cmp	r1, r0			/* signed compare VA to 0 */
-	blt	.Lrmh_kern_l1		/* VA < 0 (MSB set) → kernel L1 */
-	lli	r3, #0xA000		/* user VA → PT_USER_L1_VA */
-	b	.Lrmh_l1_hi
-.Lrmh_kern_l1:
-	lli	r3, #0xE000		/* kernel VA → PT_KERN_L1_VA */
-.Lrmh_l1_hi:
-	lui	r3, #0xFFFF		/* R3 = 0xFFFF_X000 selected above */
-	add	r3, r2			/* R3 = &L1[index] */
-	ldw	r3, [r3]		/* R3 = L1E (L2 PA | flags) */
-
-	/* Check L1 entry valid bit */
-	test	r3, #PTE_V
-	beq	.Lrmh_fault		/* L1E invalid → page fault */
-
-	/* ── Map L2 table into pinned window (slot 2) ──
-	 * Extract L2 table PA from L1E (clear flag bits),
-	 * then remap pinned slot 2 to point there.
-	 *
-	 * Window VA = 0xFFFFD000.  TLB entry:
-	 *   TLB_INDEX = 0x42 (pinned bit | slot 2)
-	 *   TLB_VPN  = (0xFFFFD >> 0) << 8 = 0x0FFFFD00
-	 *   TLB_PTE  = L2_PA | V|C|R|G (0x8D)
-	 */
-	shr	r3, #PTE_PPN_SHIFT
-	shl	r3, #PTE_PPN_SHIFT	/* R3 = L2 table PA (aligned) */
-
-	lli	r2, #PTLB_L2WIN
-	wrsys	r2, #SYSDEV_MMU, #MMU_TLB_INDEX
-
-	lli	r2, #0xFD00
-	lui	r2, #0x0FFF		/* R4 = 0x0FFFFD00 (TLB_VPN) */
-	wrsys	r2, #SYSDEV_MMU, #MMU_TLB_VPN
-
-	lli	r2, #0x8D		/* V|C|R|G = 0x01|0x04|0x08|0x80 */
-	or	r2, r3			/* R4 = L2_PA | flags */
-	wrsys	r2, #SYSDEV_MMU, #MMU_TLB_PTE
-
-	/* ── L2 table lookup ─────────────────────────
-	 * L2 index = VA[21:12], each entry is 4 bytes.
-	 * L2 table is now accessible at VA 0xFFFFD000.
-	 */
-	mov	r2, r1
-	shr	r2, #PT_L2_SHIFT
-	and	r2, #0x3FF		/* R2 = L2 index (bits 21:12) */
-	shl	r2, #2			/* R2 = byte offset into L2 */
-
-	lli	r3, #0xD000
-	lui	r3, #0xFFFF		/* R3 = 0xFFFFD000 (PT_L2WIN_VA) */
-	add	r3, r2			/* R3 = &L2[index] */
-	ldw	r3, [r3]		/* R3 = PTE value */
-
-	/* Check PTE valid bit (TEST = AND with F=1, no writeback) */
-	test	r3, #PTE_V
-	beq	.Lrmh_fault		/* PTE invalid → page fault */
-
-	/* ── Load PTE into main TLB ──────────────────
-	 *
-	 * Live state at this point:
-	 *   R1 = faulting VA
-	 *   R3 = PTE value (must be preserved for the final wrsys)
-	 *   R2 = scratch (free)
-	 */
-
-	shr	r1, #12
-	and	r1, #0x1F		/* R1 = set (bits 16:12 of VA) */
-
-	/* Pick the way from bit 5 of the free-running cycle counter,
-	 * a cheap stand-in for a random choice.  TLB hits never trap,
-	 * so software has no record of use to replace by. */
-	rdsys	r2, #SYSDEV_CPU, #CPU_CYCLES
-	and	r2, #0x20		/* isolate the way bit */
-	or	r1, r2			/* R1 = {way, set} */
-	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_INDEX
-
-	rdsys	r1, #SYSDEV_MMU, #MMU_FAULT_ADDR
-	shr	r1, #12
-	shl	r1, #8
-	test	r3, #PTE_G
-	bne	.Lrmh_asid_done		/* G=1 → ASID=0, already in R1 */
-	rdsys	r2, #SYSDEV_MMU, #MMU_MMUCR
-	shr	r2, #MMUCR_ASID_SHIFT
-	and	r2, #0xFF
-	or	r1, r2
-.Lrmh_asid_done:
-	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_VPN
-	wrsys	r3, #SYSDEV_MMU, #MMU_TLB_PTE
-
-	/* Restore scratch registers and return */
-	rdspr	r1, scr0
-	rdspr	r2, scr1
-	rdspr	r3, scr2
-	eret
-
-.Lrmh_fault:
-	/*
-	 * TLB miss handler failed to find a mapping.
-	 * R1-R3 were parked in SCR0..2 on handler entry.
-	 * Restore them and enter the common trap path with cause=2
-	 * (EXC_TLB_MISS).
-	 */
-	rdspr	r1, scr0
-	rdspr	r2, scr1
-	rdspr	r3, scr2
-	/* Fall through to _trap_entry_tlbmiss */
+#define	RMH_MMUCFG	MMUCFG_V1_8P_32X2
+#include "tlb_refill.S"
+.Lreal_miss_handler_end:
+	REFILL_ENTRY(_real_miss_handler)
+#undef	RMH_MMUCFG
 
 /* ── Per-vector trap entry stubs ─────────────────────────────
  *
@@ -864,7 +807,7 @@ _real_miss_handler:
  *   4=privilege, 5=SYSCALL, 6=BREAK, 7=illegal, 8=alignment
  */
 
-_trap_entry_tlbmiss:	/* vector 2 — reached from .Lrmh_fault above */
+_trap_entry_tlbmiss:	/* vector 2 — and the refill handler's fault path */
 	stw	r1, [pc + _trap_save_r1 - .]
 	lli	r1, #2
 	b	_trap_common
@@ -1232,9 +1175,16 @@ _trap_save_hw_cause:
 	.balign	4
 	.globl	_dfault_print
 _dfault_print:
-	/* Re-pin scratch slot → UART physical page, uncached.  WRSYS
-	 * only; no memory access, so it cannot fault. */
-	li	r1, #PTLB_SCRATCH
+	/* Re-pin scratch slot → UART physical page, uncached.  Sysregs
+	 * only; no memory access, so it cannot fault.  The pinned select
+	 * comes from MMU_CONFIG, not tlb_pinned_select in memory. */
+	li	r1, #(TLB_INDEX_PINNED_V1 | PTLB_SLOT_SCRATCH)
+	rdsys	r2, #SYSDEV_MMU, #MMU_CONFIG
+	and	r2, #MMUCFG_VER_MASK
+	cmp	r2, #2
+	bne	.Ldf_pin
+	li	r1, #(TLB_INDEX_PINNED_V2 | PTLB_SLOT_SCRATCH)
+.Ldf_pin:
 	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_INDEX
 	li	r1, #0x0FFFFC00			/* VPN of SCRATCH_VA (0xFFFFC000), ASID 0 */
 	wrsys	r1, #SYSDEV_MMU, #MMU_TLB_VPN
@@ -1412,6 +1362,19 @@ _df_puthex:
 
 	.balign	4
 _real_handlers_end:
+
+	/* The other MMUs' refill handlers.  Step 7 copies the one in use
+	 * into the space _real_miss_handler fills as linked; none runs
+	 * here. */
+.Lrmh_v2_8p_256x2:
+#define	RMH_MMUCFG	MMUCFG_V2_8P_256X2
+#include "tlb_refill.S"
+	REFILL_ENTRY(.Lrmh_v2_8p_256x2)
+#undef	RMH_MMUCFG
+
+	.pushsection .rodata.refill_handlers, "a"
+.Lrefill_handlers_end:
+	.popsection
 
 	/* End of the R-only handler page — see _real_handlers_page_start. */
 	.balign	4096

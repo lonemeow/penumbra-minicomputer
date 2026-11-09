@@ -206,14 +206,14 @@ read against this one.
 `TLB_INDEX`'s pinned select at bit 31, and invalidation in the MMU through
 three registers (evidence for the geometry:
 `doc/internals/penumbra3/memory-performance.md`, "TLB: sets, and a cheaper
-refill"). Open: version 2 in the gen3 MMU, with the main TLB's set count a
-machine parameter as the caches' geometry is, and in the ISS's MMU and core
-table. A version-2 MMU stops every program that knows only version 1, so
-the software that sets TLB entries learns version 2 first: the kernel
-(`doc/TODO/kernel.md`, "Kernel: drive `MMU_CONFIG` version 2"), and the
-bare-metal programs -- the `isa/` tests, the benchmark harness's startup
-and `tlbrange.c`, `membench` and `fbtest` -- reading the version and the
-geometry instead of assuming slot 16 and bit 6.
+refill"). The kernel drives both versions, and the ISS presents version 2
+on request (`+mmu=2:256x2`). Open: version 2 in the gen3 MMU, with the main
+TLB's set count a machine parameter as the caches' geometry is, and then
+the gen3 row of the ISS's core table. A version-2 MMU stops every program
+that knows only version 1, so the bare-metal programs learn it first --
+the `isa/` tests, the benchmark harness's startup and `tlbrange.c`,
+`membench` and `fbtest` -- reading the version and the geometry instead of
+assuming slot 16 and bit 6.
 
 **Locked hazard-model decisions** (context for resuming):
 

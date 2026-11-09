@@ -3,10 +3,12 @@
  * netbsd/sys/arch/penumbra/penumbra/tlb_subr.S.
  *
  * The runner assembles tlb_subr.S as the kernel build does and runs this
- * program on the ISS in hosted mode: supervisor, MMU off.  WRSYS and RDSYS
- * reach the TLB arrays without translating anything, so each case clears
- * every slot, seeds the ones it needs, calls the real routine and reads the
- * slots back.  The checks are the contracts pmap.c relies on.
+ * program on the ISS in hosted mode: supervisor, MMU off, once under each
+ * MMU the kernel drives.  WRSYS and RDSYS reach the TLB arrays without
+ * translating anything, so each case clears every slot, seeds the ones it
+ * needs, calls the real routine and reads the slots back.  The checks are
+ * the contracts pmap.c relies on.  Slots are found from MMU_CONFIG, as the
+ * routines find them.
  */
 
 #include <machine/sysreg.h>
@@ -19,20 +21,38 @@ void tlb_invalidate_asid(int asid);
 void tlb_invalidate_addr(unsigned long va, int asid);
 void hosted_write(int fd, const char *buf, int len);
 
-/* TLB_INDEX of a main-TLB slot: the way sits above the set bits. */
-#define MAIN_SLOT(set, way)	((way) * TLB_NSETS + (set))
+/* The MMU's geometry, from MMU_CONFIG: main slots and the pinned select. */
+static u32 n_sets, n_slots, pinned_select;
+
+/* TLB_INDEX of a main-TLB slot: way * sets + set. */
+#define MAIN_SLOT(set, way)	((way) * n_sets + (set))
 
 #define USER_FLAGS	(PTE_V | PTE_R | PTE_W | PTE_U)
 
 /* Two user pages that share set 5, a user page in set 6, and a kernel
- * page in set 5. */
+ * page in set 5, under every geometry here: their VPNs differ by
+ * multiples of 256 sets. */
 #define VA_A		0x00105000u
-#define VA_B		0x00125000u
+#define VA_B		0x00205000u
 #define VA_OTHER	0x00106000u
-#define KVA		0x80345000u
+#define KVA		0x80305000u
 #define SET_AB		5
 
 static int failures;
+
+static void read_geometry(void)
+{
+	u32 cfg;
+
+	__asm__ volatile("RDSYS %0, %1, %2" : "=r"(cfg) :
+	    "n"(SYSDEV_MMU), "n"(MMU_CONFIG));
+	if (cfg == 0)
+		cfg = MMUCFG_V1_8P_32X2;
+	n_sets = 1u << ((cfg >> MMUCFG_SETS_LOG2_SHIFT) & 0x1F);
+	n_slots = n_sets * ((cfg >> MMUCFG_WAYS_SHIFT) & 0x1F);
+	pinned_select = (cfg & MMUCFG_VER_MASK) >= 2 ?
+	    TLB_INDEX_PINNED_V2 : TLB_INDEX_PINNED_V1;
+}
 
 static void put(const char *s)
 {
@@ -86,16 +106,16 @@ static u32 vpn_word(u32 va, u32 asid)
  * would: global entries under ASID 0. */
 static void install(u32 way, u32 va, u32 asid, u32 flags)
 {
-	write_slot(MAIN_SLOT((va >> 12) % TLB_NSETS, way), vpn_word(va, asid),
+	write_slot(MAIN_SLOT((va >> 12) % n_sets, way), vpn_word(va, asid),
 	    (va & PTE_PPN_MASK) | flags);
 }
 
 static void clear_all(void)
 {
-	for (u32 i = 0; i < TLB_NSLOTS; i++)
+	for (u32 i = 0; i < n_slots; i++)
 		write_slot(i, 0, 0);
 	for (u32 i = 0; i < PTLB_NSLOTS; i++)
-		write_slot(TLB_INDEX_PINNED | i, 0, 0);
+		write_slot(pinned_select | i, 0, 0);
 }
 
 static void test_addr(void)
@@ -187,18 +207,20 @@ static void test_all(void)
 	int left = 0;
 
 	clear_all();
-	for (u32 i = 0; i < TLB_NSLOTS; i++)
+	for (u32 i = 0; i < n_slots; i++)
 		write_slot(i, vpn_word((0x100 + i) << 12, 3), ((0x100 + i) << 12) | USER_FLAGS);
-	write_slot(PTLB_SCRATCH, vpn_word(SCRATCH_VA, 0), 0x2000 | PTE_KERNEL_NC);
+	write_slot(pinned_select | PTLB_SLOT_SCRATCH, vpn_word(SCRATCH_VA, 0),
+	    0x2000 | PTE_KERNEL_NC);
 	tlb_invalidate_all();
-	for (u32 i = 0; i < TLB_NSLOTS; i++)
+	for (u32 i = 0; i < n_slots; i++)
 		left += slot_valid(i) != 0;
 	check(left == 0, "all: every main slot is dropped");
-	check(slot_valid(PTLB_SCRATCH), "all: pinned slots stay");
+	check(slot_valid(pinned_select | PTLB_SLOT_SCRATCH), "all: pinned slots stay");
 }
 
 int main(void)
 {
+	read_geometry();
 	test_addr();
 	test_dead_slot();
 	test_asid();

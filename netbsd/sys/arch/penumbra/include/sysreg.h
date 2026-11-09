@@ -38,10 +38,13 @@
 #define MMU_FAULT_STATUS	2	/* Fault type + access info (read-only) */
 #define MMU_TLB_VPN		3	/* Staged TLB upper word (VPN + ASID) */
 #define MMU_TLB_PTE		4	/* TLB lower word; write commits entry */
-#define MMU_TLB_INDEX		5	/* Selects TLB slot; bit 6 = pinned */
-#define MMU_CONFIG		15	/* Version and translation geometry */
+#define MMU_TLB_INDEX		5	/* Selects TLB slot, pinned or main */
+#define MMU_TLB_INVAL_VA	6	/* v2: invalidate what a TLB_VPN word hits */
+#define MMU_TLB_INVAL_ASID	7	/* v2: invalidate an ASID's non-global entries */
+#define MMU_TLB_INVAL_ALL	8	/* v2: invalidate the main TLB */
+#define MMU_CONFIG		15	/* Interface version and translation geometry */
 
-/* MMU_CONFIG fields (version 1) */
+/* MMU_CONFIG fields */
 #define MMUCFG_VER_MASK		0x0000000F
 #define MMUCFG_PINNED_SHIFT	4
 #define MMUCFG_SETS_LOG2_SHIFT	10
@@ -49,13 +52,22 @@
 #define MMUCFG_PAGE_LOG2_SHIFT	20
 #define MMUCFG_ASID_BITS_SHIFT	25
 
+#define MMUCFG_VER(c)		((c) & MMUCFG_VER_MASK)
+#define MMUCFG_PINNED(c)	(((c) >> MMUCFG_PINNED_SHIFT) & 0x3F)
+#define MMUCFG_SETS_LOG2(c)	(((c) >> MMUCFG_SETS_LOG2_SHIFT) & 0x1F)
+#define MMUCFG_WAYS(c)		(((c) >> MMUCFG_WAYS_SHIFT) & 0x1F)
+#define MMUCFG_PAGE_LOG2(c)	(((c) >> MMUCFG_PAGE_LOG2_SHIFT) & 0x1F)
+#define MMUCFG_ASID_BITS(c)	(((c) >> MMUCFG_ASID_BITS_SHIFT) & 0x1F)
+
 /*
- * Geometries with a hand-written trap page.  The miss handler carries
- * the set count, way count and page size as instruction immediates, so
- * each one needs its own image; a machine reporting anything else has
- * no handler here.  A read of zero reports MMUCFG_V1_8P_32X2.
+ * The MMUs the kernel drives, each the MMU_CONFIG value that reports
+ * it.  The miss handler carries the geometry as instruction immediates,
+ * so locore.S builds tlb_refill.S once for each; a machine reporting
+ * anything else stops at boot.  A read of zero reports
+ * MMUCFG_V1_8P_32X2.
  */
-#define MMUCFG_V1_8P_32X2	0x10C11481 /* 8 pinned, 32x2, 4 KB, 8-bit ASID */
+#define MMUCFG_V1_8P_32X2	0x10C11481 /* v1: 8 pinned, 32x2, 4 KB, 8-bit ASID */
+#define MMUCFG_V2_8P_256X2	0x10C12082 /* v2: 8 pinned, 256x2, 4 KB, 8-bit ASID */
 
 /* MMUCR fields */
 #define MMUCR_M			0x0001	/* MMU enable */
@@ -78,26 +90,33 @@
 
 /* ── TLB geometry ───────────────────────────────────────────────────── */
 
-#define TLB_NSLOTS	64	/* Total main TLB slots */
-#define TLB_NSETS	32	/* Sets (indexed by VPN[4:0]) */
-#define TLB_NWAYS	2	/* Ways per set */
+/*
+ * TLB_INDEX selects main slot way * sets + set as that number, and
+ * pinned slot n as the version's pinned select | n (doc/system/mmu.md,
+ * "TLB_INDEX").  The kernel keeps its MMU's select in
+ * tlb_pinned_select.
+ */
+#define TLB_INDEX_PINNED_V1	0x40
+#define TLB_INDEX_PINNED_V2	0x80000000
+
+#define TLB_V1_NSLOTS	64	/* version 1's 32 sets of 2 ways, slot by slot */
 #define PTLB_NSLOTS	8	/* Pinned TLB slots (fully associative) */
-#define TLB_INDEX_PINNED 0x40	/* Set bit 6 in TLB_INDEX to target pinned TLB */
 
 /*
- * Pinned TLB slot assignments (TLB_INDEX = TLB_INDEX_PINNED | slot).
+ * Pinned TLB slot assignments, as slot numbers; the TLB_INDEX of slot
+ * n is tlb_pinned_select | n.
  *
  * The TLB miss walker (in the pinned vector page) branches on the
  * faulting VA's MSB and uses either KERN_L1 or USER_L1 — SH-4-style
  * split walker.  KERN_L1 is pinned once at boot and never moves;
  * USER_L1 is reprogrammed by pmap_activate on every context switch.
  */
-#define PTLB_VECTOR	(TLB_INDEX_PINNED | 0)	/* vector page (VECTOR_VA) */
-#define PTLB_KERN_L1	(TLB_INDEX_PINNED | 1)	/* kernel L1 (permanent) */
-#define PTLB_L2WIN	(TLB_INDEX_PINNED | 2)	/* L2 window (TLB handler) */
-#define PTLB_SCRATCH	(TLB_INDEX_PINNED | 3)	/* scratch window (C code) */
-#define PTLB_USER_L1	(TLB_INDEX_PINNED | 4)	/* current user L1 (or V=0) */
-#define PTLB_SCRATCH2	(TLB_INDEX_PINNED | 5)	/* second scratch window */
+#define PTLB_SLOT_VECTOR	0	/* vector page (VECTOR_VA) */
+#define PTLB_SLOT_KERN_L1	1	/* kernel L1 (permanent) */
+#define PTLB_SLOT_L2WIN		2	/* L2 window (TLB handler) */
+#define PTLB_SLOT_SCRATCH	3	/* scratch window (C code) */
+#define PTLB_SLOT_USER_L1	4	/* current user L1 (or V=0) */
+#define PTLB_SLOT_SCRATCH2	5	/* second scratch window */
 
 /*
  * Slots below this are structural: translation, or an operation the
@@ -108,7 +127,7 @@
 #define PTLB_NSTRUCTURAL 6
 
 /* The page holding cpu_info_store, which every trap reads and writes. */
-#define PTLB_CPU_INFO	(TLB_INDEX_PINNED | 6)
+#define PTLB_SLOT_CPU_INFO	6
 
 /* TLB_VPN word: (VPN << 8) | ASID */
 #define TLB_VPN_SHIFT	8

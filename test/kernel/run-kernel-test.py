@@ -7,8 +7,8 @@ such a routine from netbsd/sys/arch/penumbra/ exactly as the kernel
 build does (-D_KERNEL -D_LOCORE, <machine/...> from the port's include
 directory), links it with a C driver on the compiler-test harness (crt0
 and linker script, no libc), and runs the result on the ISS in hosted
-mode, where it starts in supervisor mode with the MMU off.  Exit status
-0 means every check passed.
+mode, where it starts in supervisor mode with the MMU off, once under
+each MMU the kernel drives.  Exit status 0 means every check passed.
 """
 
 import argparse
@@ -20,6 +20,13 @@ import sys
 # test name -> the port's sources it exercises, relative to --port-dir
 TESTS = {
     "tlb": ["penumbra/tlb_subr.S"],
+}
+
+# The MMUs the kernel drives (MMUCFG_* in <machine/sysreg.h>), as ISS
+# options: the generation's own, version 1 at 32x2, and version 2 at 256x2.
+MMUS = {
+    "MMU v1 32x2": [],
+    "MMU v2 256x2": ["+mmu=2:256x2"],
 }
 
 
@@ -78,12 +85,14 @@ def main():
         run(shlex.split(args.objcopy) + ["-O", "binary", elf, binary])
         run([sys.executable, args.bin2hex, binary, "-o", hexfile])
 
-        result = subprocess.run([args.iss, hexfile, "+hosted", "+quiet", "+max-insn=100000000"],
-                                capture_output=True, text=True)
-        sys.stdout.write(result.stdout)
-        if result.returncode != 0:
-            sys.stderr.write(result.stderr[-2000:])
-            failed += 1
+        for mmu, options in MMUS.items():
+            result = subprocess.run([args.iss, hexfile, "+hosted", "+quiet",
+                                     "+max-insn=100000000"] + options,
+                                    capture_output=True, text=True)
+            sys.stdout.write("%s: %s" % (mmu, result.stdout))
+            if result.returncode != 0:
+                sys.stderr.write(result.stderr[-2000:])
+                failed += 1
     sys.exit(1 if failed else 0)
 
 

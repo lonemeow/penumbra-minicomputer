@@ -113,9 +113,12 @@ accessed via the scratch window (pinned slot 3).
 
 Naming: `PT_L1_*` for first level, `PT_L2_*` for second level — keeps
 page-table levels visually distinct from L1/L2 caches. Pinned slot
-names (in `sysreg.h`): `PTLB_VECTOR`, `PTLB_KERN_L1`, `PTLB_L2WIN`,
-`PTLB_SCRATCH`, `PTLB_USER_L1`, `PTLB_SCRATCH2`, and `PTLB_CPU_INFO`
-for the page holding `cpu_info_store`.  The fast TLB miss handler branches
+numbers (in `sysreg.h`): `PTLB_SLOT_VECTOR`, `_KERN_L1`, `_L2WIN`,
+`_SCRATCH`, `_USER_L1`, `_SCRATCH2`, and `_CPU_INFO` for the page
+holding `cpu_info_store`.  A slot's `TLB_INDEX` value adds the pinned
+select, which differs between `MMU_CONFIG` versions: `locore.S` stores
+it in `tlb_pinned_select` before any C runs, and `pmap_pin_slot()`
+applies it.  The fast TLB miss handler branches
 on the faulting VA's MSB and walks either kernel L1 (slot 1, never
 reprogrammed after boot) or current user L1 (slot 4, re-pinned per
 `pmap_activate`) — SH-4-style split walker.  User pmaps therefore
@@ -155,7 +158,7 @@ Three categories of headers:
 
 | File | Purpose |
 |------|---------|
-| `locore.S` | Entry, BSS zero, bootinfo copy, kernel page-table build, real TLB miss handler, per-vector trap entry stubs + `_trap_common` (with double-fault detection), MMU enable, I/D cache enable, scratch window, `cpu_switchto`, `lwp_trampoline`, `softint_fast_dispatch`, setjmp/longjmp |
+| `locore.S` | Entry, BSS zero, bootinfo copy, kernel page-table build, MMU recognition and the trap page (a refill handler built from `tlb_refill.S` for each supported `MMU_CONFIG` value), per-vector trap entry stubs + `_trap_common` (with double-fault detection), MMU enable, I/D cache enable, scratch window, `cpu_switchto`, `lwp_trampoline`, `softint_fast_dispatch`, setjmp/longjmp |
 | `startup.c` | Early boot: `penumbra_init()` (phase 1 on boot stack — returns new SP), `penumbra_main()` (phase 2 on lwp0 stack — calls main()), bootinfo parsing, early UART console via scratch window, `consinit`, `penumbra_physmem_init`, UART remap via `pmap_map_device` |
 | `machdep.c` | Runtime: `cpu_startup`, `cpu_reboot`, `cpu_lwp_fork`, `setregs`, remaining LWP/process/signal stubs, `kcopy`, `cpu_idle` (spl0 for timer), timer/delay |
 | `mulsi3.c` | `__mulsi3` software 32-bit multiply (LLVM libcall) |
@@ -177,7 +180,8 @@ Three categories of headers:
 | `syscall.c` | Syscall dispatch: `syscall_intern` + `syscall()`. R11=nr (scratch, set by SYSTRAP), R1–R4=args, stack overflow via copyin. Carry-flag error convention (C=0 success, C=1 error). Indirect syscalls rejected with ENOSYS |
 | `pmap.c` | Software TLB: `pmap_bootstrap`, `pmap_steal_memory`/`_page`, `pmap_kenter_pa`/`_kremove`, `pmap_enter` (demand paging), `pmap_create`/`_destroy` (user pmaps), `pmap_activate` (L1 re-pin + MMUCR ASID), generational ASID allocator, `pmap_remove_all`, `pmap_extract`, `pmap_map_device`, scratch-window helpers |
 | `copy.S` | Assembly copyin/copyout/copyinstr/copyoutstr with `pcb_onfault` fault recovery, ufetch/ustore (8/16/32), user-address validation |
-| `tlb_subr.S` | Main-TLB invalidation (`tlb_invalidate_all`/`_asid`/`_addr`), sysregs only — assembled and tested on its own by `make test-kernel` |
+| `tlb_refill.S` | The TLB refill handler, included by `locore.S` once per `MMU_CONFIG` value it drives with `RMH_MMUCFG` defined; never assembled alone. Decodes the geometry into immediates, `#error`s on one it cannot serve, and pads itself to `RMH_SPACE`, the space `locore.S` reserves for it |
+| `tlb_subr.S` | Main-TLB invalidation (`tlb_invalidate_all`/`_asid`/`_addr`), sysregs only — through the invalidation registers on `MMU_CONFIG` version 2, slot by slot on version 1; assembled and tested on its own by `make test-kernel` under both |
 | `db_machdep.c` | DDB MD glue — `Debugger`/`cpu_Debugger`, `db_read_bytes`/`db_write_bytes`, `db_regs[]`, `db_active` |
 | `db_trace.c` | Prologue-scanning stack unwinder — recognizes `SUB r14,#imm` and `STW rN,[r14,#off]` for callee-saved. Termination markers stop the walk at asm boundaries (`cpu_switchto`, `lwp_trampoline`, `_trap_common`, pinned vector page) |
 | `db_disasm.c` | Stub DDB disassembler — `x/i` prints raw 32-bit words, no instruction decode (minimal-useful DDB scope) |
