@@ -17,6 +17,7 @@
 ; Main setup (supervisor mode)
 ; ═══════════════════════════════════════════════════════════════
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0               ; assume fail
 
     ; ── Install vector table in RAM ──────────────────────────
@@ -36,14 +37,17 @@ sv_syscall:
 
     ; ── Test 2: SYSCALL from user mode ────────────────────────
     ; Map VPN 0 → PPN 0 (user-accessible) for user_code
-    LLI  R2, #0
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
+    LI   R2, #0x0
     WRSYS R2, #MMU, #TLB_VPN
     LLI  R3, #USER_RWX
     WRSYS R3, #MMU, #TLB_PTE
 
     ; Map ROM page (VPN 0xFFFF0 → PPN 0xFFFF0)
-    LLI  R2, #16
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R3, #0x0FFFF000
     WRSYS R3, #MMU, #TLB_VPN
@@ -100,3 +104,5 @@ exit_syscall:
     ADD   R8, #4
     WRSPR EPC, R8
     ERET
+
+.include "mmu.inc"

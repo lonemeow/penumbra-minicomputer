@@ -1,5 +1,5 @@
 ; test_subword_multipage.s — sub-word loads across multiple pre-mapped pages
-; REQUIRES: mmu cache l2
+; REQUIRES: mmu cache l2 wrspr
 ;
 ; Same shape as test_subword_halfword_loop but spans 4 pages (16 KiB)
 ; instead of staying in page 0.  No TLB miss handler — all 4 data pages
@@ -13,46 +13,53 @@
 .equ DATA_END,   0x5000          ; through page 4
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0
 
     ; ── MMU: identity-map pages 0,1,2,3,4 cacheable + ROM ───────
-    ; Slot computed from VPN[4:0]:  page N → slot N (way 0)
-    LLI  R2, #0
+    ; Each page in way 0 of its set
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R3, #0
     WRSYS R3, #MMU, #TLB_VPN          ; VPN 0 << 8 = 0
     LLI  R3, #KERN_RWX_C
     WRSYS R3, #MMU, #TLB_PTE          ; PPN 0 << 12 | flags
 
-    LLI  R2, #1
+    LI   R2, #0x100         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R3, #0x0100                  ; VPN 1 << 8 = 0x100
     WRSYS R3, #MMU, #TLB_VPN
     LI   R3, #0x000010BD              ; PPN 1 << 12 | flags
     WRSYS R3, #MMU, #TLB_PTE
 
-    LLI  R2, #2
+    LI   R2, #0x200         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R3, #0x0200
     WRSYS R3, #MMU, #TLB_VPN
     LI   R3, #0x000020BD
     WRSYS R3, #MMU, #TLB_PTE
 
-    LLI  R2, #3
+    LI   R2, #0x300         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R3, #0x0300
     WRSYS R3, #MMU, #TLB_VPN
     LI   R3, #0x000030BD
     WRSYS R3, #MMU, #TLB_PTE
 
-    LLI  R2, #4
+    LI   R2, #0x400         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R3, #0x0400
     WRSYS R3, #MMU, #TLB_VPN
     LI   R3, #0x000040BD
     WRSYS R3, #MMU, #TLB_PTE
 
-    LLI  R2, #16
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R2, #0x0FFFF000
     WRSYS R2, #MMU, #TLB_VPN
@@ -94,3 +101,5 @@ walk:
     LLI  R1, #1
 fail:
     BREAK
+
+.include "mmu.inc"

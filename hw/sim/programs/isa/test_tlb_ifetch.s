@@ -1,5 +1,5 @@
 ; test_tlb_ifetch.s — Instruction fetch TLB miss: verify fault on unmapped code
-; REQUIRES: mmu-d mmu-i
+; REQUIRES: mmu-d mmu-i wrspr
 ;
 ; Tests:
 ;   1. Copy target code from ROM to RAM at page 2 (0x2000)
@@ -25,6 +25,7 @@
 .equ TARGET_ADDR, 0x2000   ; page 2 — intentionally unmapped
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0              ; assume fail
 
     ; ── Install TLB miss handler ────────────────────────────
@@ -45,14 +46,17 @@ copy:
     BNE  copy
 
     ; ── Map page 0 → page 0 (vectors + data) ────────────────
-    LLI  R2, #0
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
+    LI   R2, #0x0
     WRSYS R2, #MMU, #TLB_VPN
     LLI  R3, #KERN_RWX
     WRSYS R3, #MMU, #TLB_PTE
 
     ; ── Map ROM page (VPN 0xFFFF0 → PPN 0xFFFF0) ────────────
-    LLI  R2, #16
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R3, #0x0FFFF000
     WRSYS R3, #MMU, #TLB_VPN
@@ -89,7 +93,8 @@ ifetch_miss_handler:
     BNE   fail
 
     ; Map VPN 2 → PPN 2 with KERN_RWX
-    LLI   R9, #2
+    RDSPR R9, SCR2           ; way 0's slot for VPN 2 (mmu.inc)
+    AND   R9, #2
     WRSYS R9, #MMU, #TLB_INDEX
     LLI   R9, #0x0200        ; VPN = 2, ASID = 0
     WRSYS R9, #MMU, #TLB_VPN
@@ -106,3 +111,5 @@ target_code:
     LLI  R1, #1
     BREAK
 target_code_end:
+
+.include "mmu.inc"

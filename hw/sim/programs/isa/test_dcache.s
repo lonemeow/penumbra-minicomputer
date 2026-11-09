@@ -1,5 +1,5 @@
 ; test_dcache.s — D-cache integration test
-; REQUIRES: mmu cache
+; REQUIRES: mmu cache wrspr
 ;
 ; Tests:
 ;   1. Read D-cache INFO sysreg, verify non-zero (geometry valid)
@@ -24,6 +24,7 @@
 .equ TEST_VAL2,  0xBEEF
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0               ; assume fail
 
     ; ── 1. Read D-cache INFO sysreg ───────────────────────────
@@ -32,15 +33,18 @@ _start:
     BEQ  fail                  ; INFO should be non-zero
 
     ; ── 2. Map page 0 as cacheable, ROM page uncacheable ──────
-    ; Slot 0: VPN 0 → PPN 0, cacheable
-    LLI  R2, #0
+    ; VPN 0 → PPN 0, cacheable
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
+    LI   R2, #0x0
     WRSYS R2, #MMU, #TLB_VPN       ; VPN=0, ASID=0
     LLI  R3, #KERN_RWX_C
     WRSYS R3, #MMU, #TLB_PTE       ; PPN=0, cacheable
 
-    ; Slot 16: ROM page (VPN 0xFFFF0 → PPN 0xFFFF0), uncacheable
-    LLI  R2, #16
+    ; ROM page (VPN 0xFFFF0 → PPN 0xFFFF0), uncacheable
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R2, #0x0FFFF000
     WRSYS R2, #MMU, #TLB_VPN
@@ -96,3 +100,5 @@ _start:
     LLI  R1, #1                    ; PASS
 fail:
     BREAK
+
+.include "mmu.inc"

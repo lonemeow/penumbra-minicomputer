@@ -1,5 +1,5 @@
 ; test_cache_memcpy.s — sustained cached LDW/STW memcpy through MMU
-; REQUIRES: mmu cache
+; REQUIRES: mmu cache wrspr
 ;
 ; Mimics the kernel-side bus traffic of pmap_copy_page: sequential
 ; reads from one cacheable page interleaved with sequential writes
@@ -35,6 +35,7 @@
 .equ KERN_RWX_C, 0xBD         ; V|C|R|W|X|G — cacheable RWX
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     ; ── Phase 1: plant pattern at physical SRC_PA (MMU off) ──
     LLI  R5, #SRC_PA
     LLI  R6, #0                ; i
@@ -48,32 +49,36 @@ plant_loop:
     BNE  plant_loop
 
     ; ── Phase 2: set up TLB ──────────────────────────────────
-    ; Slot 0: VPN 0 → PPN 0 (kernel data scratch, cacheable RWX)
-    LLI  R2, #0
+    ; VPN 0 → PPN 0 (kernel data scratch, cacheable RWX)
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R2, #0
     WRSYS R2, #MMU, #TLB_VPN
     LLI  R3, #KERN_RWX_C
     WRSYS R3, #MMU, #TLB_PTE
 
-    ; Slot 1: VPN 1 → PPN 1 cacheable RWX (source)
-    LLI  R2, #1
+    ; VPN 1 → PPN 1 cacheable RWX (source)
+    LI   R2, #0x100         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R3, #0x0100           ; VPN=1, ASID=0
     WRSYS R3, #MMU, #TLB_VPN
     LLI  R3, #0x10BD           ; PPN=1, V|C|R|W|X|G
     WRSYS R3, #MMU, #TLB_PTE
 
-    ; Slot 2: VPN 2 → PPN 2 cacheable RWX (destination)
-    LLI  R2, #2
+    ; VPN 2 → PPN 2 cacheable RWX (destination)
+    LI   R2, #0x200         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R3, #0x0200           ; VPN=2, ASID=0
     WRSYS R3, #MMU, #TLB_VPN
     LLI  R3, #0x20BD           ; PPN=2, V|C|R|W|X|G
     WRSYS R3, #MMU, #TLB_PTE
 
-    ; Slot 16: ROM page (so fetch keeps working with MMU on)
-    LLI  R2, #16
+    ; ROM page (so fetch keeps working with MMU on)
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R3, #0x0FFFF000
     WRSYS R3, #MMU, #TLB_VPN
@@ -118,3 +123,5 @@ verify_loop:
 fail:
     LLI  R1, #0
     BREAK
+
+.include "mmu.inc"

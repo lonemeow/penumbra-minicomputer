@@ -22,6 +22,7 @@
 .equ PROBE_VA,  0x5000       ; Virtual address to probe (VPN 5)
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0               ; assume fail
 
     ; ── Install bus fault handler at vector 0 ───────────────
@@ -29,14 +30,17 @@ _start:
     STW  R2, [R0 + #0]        ; vector[0] = bus fault handler
 
     ; ── Map page 0 → PPN 0 (vector table, data, stack) ─────
-    LLI  R2, #0
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
+    LI   R2, #0x0
     WRSYS R2, #MMU, #TLB_VPN
     LLI  R3, #KERN_RWX
     WRSYS R3, #MMU, #TLB_PTE
 
     ; ── Map ROM page (VPN 0xFFFF0 → PPN 0xFFFF0) ───────────
-    LLI  R2, #16
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R2, #0x0FFFF000
     WRSYS R2, #MMU, #TLB_VPN
@@ -45,8 +49,9 @@ _start:
 
     ; ── Map VPN 5 → PPN 0xF0000 (phys 0xF0000000, unmapped) ──
     ; TLB translates successfully, but physical address hits no device.
-    LLI  R2, #5
-    WRSYS R2, #MMU, #TLB_INDEX  ; set 5, way 0
+    LI   R2, #0x500         ; TLB_VPN word, way 0
+    BL   tlb_slot
+    WRSYS R2, #MMU, #TLB_INDEX
     LLI  R2, #0x0500            ; {4'b0, VPN=0x00005, ASID=0x00} → 0x0000_0500
     WRSYS R2, #MMU, #TLB_VPN
     LI   R2, #0xF0000099        ; {PPN=0xF0000, SW=0x00, flags=KERN_RW}
@@ -112,3 +117,5 @@ handler_fail:
     ADD   R2, #4
     WRSPR EPC, R2
     ERET
+
+.include "mmu.inc"

@@ -1,5 +1,5 @@
 ; test_l2_ifetch.s — exercise I-fetch through L2
-; REQUIRES: mmu cache l2
+; REQUIRES: mmu cache l2 wrspr
 ;
 ; The minimal L2 test (test_l2_minimal.s) only enables D-cache and
 ; routes data through L2.  It passes with HAS_L2=1, but the
@@ -27,6 +27,7 @@
 .equ DATA_BASE,  0x0400   ; where we plant the inputs
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0                ; assume fail
 
     ; ── Plant data: 32 words = i+1 at DATA_BASE (MMU off) ─────
@@ -40,13 +41,16 @@ plant:
     BNE  plant
 
     ; ── TLB: VPN 0 cacheable, ROM page cacheable ──────────────
-    LLI  R2, #0
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
+    LI   R2, #0x0
     WRSYS R2, #MMU, #TLB_VPN
     LLI  R3, #KERN_RWX_C
     WRSYS R3, #MMU, #TLB_PTE
 
-    LLI  R2, #16
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R2, #0x0FFFF000
     WRSYS R2, #MMU, #TLB_VPN
@@ -84,3 +88,5 @@ loop:
     LLI  R1, #1
 fail:
     BREAK
+
+.include "mmu.inc"

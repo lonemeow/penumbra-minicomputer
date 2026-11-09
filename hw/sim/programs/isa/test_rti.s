@@ -1,5 +1,5 @@
 ; test_rti.s — TLB miss → handler fills TLB → ERET → faulting load completes
-; REQUIRES: mmu
+; REQUIRES: mmu wrspr
 ;
 ; This is the core demand-paging loop: an unmapped access faults, the
 ; handler installs the mapping, and ERET restarts the faulting instruction
@@ -20,31 +20,35 @@
 ; Main test
 ; ═══════════════════════════════════════════════════════════════
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0                ; assume fail
 
     ; ── Install vector table in RAM ──────────────────────────
     LA   R2, #tlb_miss_handler
     STW  R2, [R0 + #8]        ; vector[2] = TLB miss handler (VEC_TLB_MISS)
 
-    ; ── Plant sentinel at physical 0x1000 (MMU off = bypass) ──
-    LLI  R2, #0xFACE
-    LLI  R3, #0x1000
-    STW  R2, [R3]              ; mem[0x1000] = 0xFACE
-
     ; ── Map VPN 0 → PPN 0 (code page, identity) ──────────────
+    LI   R2, #0x0              ; TLB_VPN word, way 0
+    BL   tlb_slot
+    WRSYS R2, #MMU, #TLB_INDEX
     LLI  R4, #0
-    WRSYS R4, #MMU, #TLB_INDEX
     WRSYS R4, #MMU, #TLB_VPN
     LLI  R5, #KERN_RWX
     WRSYS R5, #MMU, #TLB_PTE
 
     ; ── Map ROM page (VPN 0xFFFF0 → PPN 0xFFFF0) ───────────
-    LLI  R4, #16
-    WRSYS R4, #MMU, #TLB_INDEX
+    LI   R2, #0x0FFFF000       ; TLB_VPN word, way 0
+    BL   tlb_slot
+    WRSYS R2, #MMU, #TLB_INDEX
     LI   R5, #0x0FFFF000
     WRSYS R5, #MMU, #TLB_VPN
     LI   R5, #0xFFFF00B9
     WRSYS R5, #MMU, #TLB_PTE
+
+    ; ── Plant sentinel at physical 0x1000 (MMU off = bypass) ──
+    LLI  R2, #0xFACE
+    LLI  R3, #0x1000
+    STW  R2, [R3]              ; mem[0x1000] = 0xFACE
 
     ; ── Enable MMU (page 1 intentionally NOT mapped) ─────────
     LLI  R6, #1
@@ -70,9 +74,10 @@ fail:
 ; TLB miss handler — maps VPN 1 → PPN 1, then returns
 ; ═══════════════════════════════════════════════════════════════
 tlb_miss_handler:
-    ; Install mapping: VPN 1 → PPN 1 in TLB slot 1
-    LLI  R10, #1
-    WRSYS R10, #MMU, #TLB_INDEX   ; slot 1 (set=1, way=0)
+    ; Install mapping: VPN 1 → PPN 1 in way 0
+    RDSPR R10, SCR2               ; way 0's slot for VPN 1 (mmu.inc)
+    AND  R10, #1
+    WRSYS R10, #MMU, #TLB_INDEX
     LLI  R11, #0x0100             ; VPN word: VPN=1 (bits[27:8]), ASID=0
     WRSYS R11, #MMU, #TLB_VPN
     LLI  R11, #0x10B9             ; PTE: PPN=1 (bits[31:12]=0x00001), flags=KERN_RWX
@@ -80,3 +85,5 @@ tlb_miss_handler:
 
     ; Return to faulting instruction (LDW at 0x1000 will now hit)
     ERET
+
+.include "mmu.inc"

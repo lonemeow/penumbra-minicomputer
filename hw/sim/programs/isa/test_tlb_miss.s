@@ -1,5 +1,5 @@
 ; test_tlb_miss.s — TLB miss trap: verify fault handler runs on unmapped access
-; REQUIRES: mmu-d
+; REQUIRES: mmu-d wrspr
 ;
 ; Tests:
 ;   1. Install TLB miss handler in vector table
@@ -15,6 +15,7 @@
 .equ KERN_RWX, 0xB9          ; V|R|W|X|G — kernel code+data page
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0               ; assume fail
 
     ; ── Install vector table in RAM ─────────────────────────
@@ -22,15 +23,17 @@ _start:
     STW  R2, [R0 + #8]        ; vector[2] = TLB miss handler
 
     ; ── Map VPN 0 → PPN 0 (identity, for vector table + data) ──
-    LLI  R2, #0
-    WRSYS R2, #MMU, #TLB_INDEX  ; select slot 0
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
+    WRSYS R2, #MMU, #TLB_INDEX
+    LI   R2, #0x0
     WRSYS R2, #MMU, #TLB_VPN    ; VPN=0, ASID=0
     LLI  R3, #KERN_RWX
     WRSYS R3, #MMU, #TLB_PTE    ; PPN=0, flags=V|R|W|X|G
 
     ; ── Map ROM page (VPN 0xFFFF0 → PPN 0xFFFF0) ───────────
-    ; Set index = VPN[4:0] = 0x1E = 30, way 0 → TLB_INDEX = 30
-    LLI  R2, #16
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R3, #0x0FFFF000        ; VPN = 0xFFFF0
     WRSYS R3, #MMU, #TLB_VPN
@@ -70,3 +73,5 @@ tlb_miss_handler:
     ; PASS — fault handler ran with correct fault address
     LLI   R1, #1
     BREAK
+
+.include "mmu.inc"

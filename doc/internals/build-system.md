@@ -112,7 +112,11 @@ hw/sim/programs/
   ISA-complete exactly when `isa/` passes on it unchanged. Programs
   here exercise architectural behavior (instructions, exceptions,
   traps, interrupts, MMU semantics) and never depend on
-  implementation timing, cache geometry, or counter values.
+  implementation timing, cache or TLB geometry, or counter values.
+  A program that touches the TLB includes `mmu.inc` and calls its
+  `tlb_init` first: the TLB is undefined after reset, and the
+  helpers there name slots from `MMU_CONFIG`, so one program serves
+  every MMU version and any TLB of 32 sets or more.
 - **`penumbra<N>/`** holds programs pinned to one implementation:
   pipeline-shaped hazard regressions, cache/arbiter timing, perfctr
   counts. These run only on their generation.

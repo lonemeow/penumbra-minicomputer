@@ -1,5 +1,5 @@
 ; test_vector_phys.s — Verify vector table is read from physical addresses
-; REQUIRES: mmu-d mmu-i
+; REQUIRES: mmu-d mmu-i wrspr
 ;
 ; Proves the vector table read bypasses the MMU by:
 ;   1. Writing a TLB miss handler address to vector[2] in RAM
@@ -19,6 +19,7 @@
 .equ KERN_RWX, 0xB9
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0
 
     ; ── Install TLB miss handler in vector table ─────────────
@@ -26,14 +27,17 @@ _start:
     STW  R2, [R0 + #8]        ; vector[2] = TLB miss handler
 
     ; ── Map page 0 (VPN 0 → PPN 0) for vector table access ──
-    LLI  R2, #0
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
+    LI   R2, #0x0
     WRSYS R2, #MMU, #TLB_VPN
     LLI  R3, #KERN_RWX
     WRSYS R3, #MMU, #TLB_PTE
 
     ; ── Map ROM page (VPN 0xFFFF0 → PPN 0xFFFF0) ────────────
-    LLI  R2, #16
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R3, #0x0FFFF000
     WRSYS R3, #MMU, #TLB_VPN
@@ -47,8 +51,10 @@ _start:
     ; ── Invalidate page 0 (unmap the vector table page) ──────
     ; After this, virtual address 0x00 is unmapped. But the
     ; PHYSICAL vector table at 0x00 is still in RAM.
-    LLI  R2, #0
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
+    LI   R2, #0x0
     WRSYS R2, #MMU, #TLB_VPN
     WRSYS R2, #MMU, #TLB_PTE    ; PTE=0 → V=0 → invalid
 
@@ -83,3 +89,5 @@ miss_handler:
     ; PASS — physical vector table read bypass confirmed
     LLI  R1, #1
     BREAK
+
+.include "mmu.inc"

@@ -1,5 +1,5 @@
 ; test_uncached_memcpy_irq.s — memcpy through UNCACHEABLE pages with timer IRQs
-; REQUIRES: mmu timer irq
+; REQUIRES: mmu timer irq wrspr
 ;
 ; The device-access companion to test_cache_memcpy.s / test_cache_memcpy_irq.s.
 ; Same access pattern (LDW/STW through MMU-translated VAs with timer IRQs firing
@@ -34,6 +34,7 @@
 .equ TIMER_RELOAD, 50
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0                ; assume FAIL until everything passes
     LLI  R11, #0               ; IRQ counter
 
@@ -54,28 +55,32 @@ plant_loop:
     BNE  plant_loop
 
     ; ── Phase 2: set up TLB — page 0 cacheable, SRC/DST uncacheable ──
-    LLI  R2, #0
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R2, #0
     WRSYS R2, #MMU, #TLB_VPN
     LLI  R3, #KERN_RWX_C
     WRSYS R3, #MMU, #TLB_PTE
 
-    LLI  R2, #1
+    LI   R2, #0x100         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R3, #0x0100                  ; VPN 1 (SRC page)
     WRSYS R3, #MMU, #TLB_VPN
     LLI  R3, #0x10B9                  ; PPN 1 << 12 | uncacheable (C=0) flags
     WRSYS R3, #MMU, #TLB_PTE
 
-    LLI  R2, #2
+    LI   R2, #0x200         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R3, #0x0200                  ; VPN 2 (DST page)
     WRSYS R3, #MMU, #TLB_VPN
     LLI  R3, #0x20B9                  ; PPN 2 << 12 | uncacheable (C=0) flags
     WRSYS R3, #MMU, #TLB_PTE
 
-    LLI  R2, #16
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R3, #0x0FFFF000
     WRSYS R3, #MMU, #TLB_VPN
@@ -150,3 +155,5 @@ irq_handler:
     WRSYS R10, #TIMER, #TM_STATUS   ; write-1-to-clear underflow
     ADD   R11, #1                    ; bump IRQ counter
     ERET
+
+.include "mmu.inc"

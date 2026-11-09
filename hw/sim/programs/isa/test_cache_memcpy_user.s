@@ -28,6 +28,7 @@
 .equ USER_SP,    0x0FFC             ; top of VPN 0, well-aligned
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0
 
     ; ── Install SYSCALL handler ─────────────────────────────
@@ -47,33 +48,37 @@ plant_loop:
     BNE  plant_loop
 
     ; ── Phase 2: set up TLB ─────────────────────────────────
-    ; Slot 0: VPN 0 kernel scratch (cacheable RWX, kernel only)
-    LLI  R2, #0
+    ; VPN 0 kernel scratch (cacheable RWX, kernel only)
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R2, #0
     WRSYS R2, #MMU, #TLB_VPN
     LLI  R3, #KERN_RWX_C
     WRSYS R3, #MMU, #TLB_PTE
 
-    ; Slot 1: VPN 1 (SRC) user accessible cacheable RWX
-    LLI  R2, #1
+    ; VPN 1 (SRC) user accessible cacheable RWX
+    LI   R2, #0x100         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R3, #0x0100                 ; VPN=1, ASID=0
     WRSYS R3, #MMU, #TLB_VPN
     LLI  R3, #0x107D                 ; PPN=1, V|C|R|W|X|U
     WRSYS R3, #MMU, #TLB_PTE
 
-    ; Slot 2: VPN 2 (DST) user accessible cacheable RWX
-    LLI  R2, #2
+    ; VPN 2 (DST) user accessible cacheable RWX
+    LI   R2, #0x200         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R3, #0x0200                 ; VPN=2, ASID=0
     WRSYS R3, #MMU, #TLB_VPN
     LLI  R3, #0x207D
     WRSYS R3, #MMU, #TLB_PTE
 
-    ; Slot 16: ROM page user-accessible (U bit set so user can
+    ; ROM page user-accessible (U bit set so user can
     ; fetch from it).  Both kernel and user run from here.
-    LLI  R2, #16
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R3, #0x0FFFF000
     WRSYS R3, #MMU, #TLB_VPN
@@ -158,3 +163,5 @@ syscall_handler:
     ; R1 in user mode is preserved across SYSCALL (no banking),
     ; so we can just BREAK with it.
     BREAK
+
+.include "mmu.inc"

@@ -1,5 +1,5 @@
 ; test_sysreg.s — Test WRSYS/RDSYS with MMU control registers
-; REQUIRES: mmu
+; REQUIRES: mmu wrspr
 ;
 ; Tests:
 ;   1. Write a value to MMUCR, read it back → verify round-trip
@@ -13,6 +13,7 @@
 ;   3 = TLB_VPN, 4 = TLB_PTE, 5 = TLB_INDEX
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LA   LR, #fail           ; set return address
     LLI  R1, #0              ; R1 = result accumulator (0 = fail)
 
@@ -68,3 +69,5 @@ _start:
     LLI  R1, #1               ; R1 = 1 (success)
 fail:
     BREAK
+
+.include "mmu.inc"

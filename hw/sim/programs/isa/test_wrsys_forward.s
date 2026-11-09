@@ -1,6 +1,6 @@
 ; test_wrsys_forward.s — WRSYS writes the value its register holds, however
 ; closely the instruction producing that value precedes it
-; REQUIRES: mmu-d mmu-i cache
+; REQUIRES: mmu-d mmu-i cache wrspr
 ;
 ; Run from cached code, where fetch keeps up with issue, each WRSYS issues
 ; one, two or three instructions behind the instruction producing its
@@ -25,6 +25,7 @@
 .equ BODY_PA,  0x1000           ; page 1
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0                 ; assume fail
 
     ; Copy the body to page 1
@@ -40,16 +41,17 @@ copy:
     BNE  copy
 
     ; Pinned slot 0: page 1 identity, cacheable (V|C|R|W|X|G)
-    LLI  R2, #0x40
+    RDSPR R2, SCR3          ; pinned slot 0 (mmu.inc)
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R2, #0x0100            ; VPN = 1, ASID = 0
     WRSYS R2, #MMU, #TLB_VPN
     LLI  R2, #0x10BD            ; PPN = 1
     WRSYS R2, #MMU, #TLB_PTE
 
-    ; Main TLB slot 16: the ROM page identity, uncacheable as in the other
+    ; Main TLB: the ROM page identity, uncacheable as in the other
     ; MMU tests
-    LLI  R2, #16
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R3, #0x0FFFF000
     WRSYS R3, #MMU, #TLB_VPN
@@ -109,3 +111,5 @@ b_fail:
     LLI   R1, #0
     BREAK
 body_end:
+
+.include "mmu.inc"

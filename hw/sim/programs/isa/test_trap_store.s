@@ -1,5 +1,5 @@
 ; test_trap_store.s — a cached memory store inside a fault handler
-; REQUIRES: mmu cache l2
+; REQUIRES: mmu cache l2 wrspr
 ;
 ; The boot ROM's unhandled_trap stores to its (cached) trap stack on
 ; entry; gen2 Dhrystone wedges on that very store with I/D/L2 caches
@@ -19,6 +19,7 @@
 .equ KERN_RWX_C, 0xBD          ; V|C|R|W|X|G — cached kernel page
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0                  ; assume fail
     LLI  R11, #0                 ; handler-fired flag
 
@@ -26,8 +27,9 @@ _start:
     LA   R2, #tlb_miss_handler
     STW  R2, [R0 + #8]
 
-    ; ── TLB slot 0: page 0 (cached vectors + scratch) ──────
-    LLI  R2, #0
+    ; ── Page 0 (cached vectors + scratch) ──────────────────
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R2, #0
     WRSYS R2, #MMU, #TLB_VPN
@@ -37,15 +39,17 @@ _start:
     ; ── TLB slot for high page 0x00FFF000 (cached) ─────────
     ; Main TLB is set-associative: index = (VPN & 0x1F) | way<<5.
     ; VPN 0xFFF → set 0x1F, way 0.
-    LLI  R2, #0x1F
+    LI   R2, #0xFFF00         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R3, #0x000FFF00          ; VPN = HI_VA >> 4
     WRSYS R3, #MMU, #TLB_VPN
     LI   R3, #0x00FFF0BD          ; PA HI_VA | cached
     WRSYS R3, #MMU, #TLB_PTE
 
-    ; ── TLB slot 16: ROM page (handler + main keep fetching) ─
-    LLI  R2, #16
+    ; ── ROM page (handler + main keep fetching) ──────────────
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R3, #0x0FFFF000
     WRSYS R3, #MMU, #TLB_VPN
@@ -90,7 +94,8 @@ tlb_miss_handler:
     LLI   R11, #1                 ; mark fired
 
     ; install TRIG_VA (VPN 2 → PA 0x2000) so the faulting LDW resumes
-    LLI   R12, #2
+    RDSPR R12, SCR2           ; way 0's slot for VPN 2 (mmu.inc)
+    AND   R12, #2
     WRSYS R12, #MMU, #TLB_INDEX
     LLI   R12, #0x0200            ; VPN 2, ASID 0
     WRSYS R12, #MMU, #TLB_VPN
@@ -103,3 +108,5 @@ tlb_miss_handler:
     STW   R12, [R10]              ; <-- Dhrystone wedges on the analogous store
 
     ERET
+
+.include "mmu.inc"

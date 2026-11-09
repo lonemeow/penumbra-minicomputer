@@ -1,5 +1,5 @@
 ; test_subword_tlb_miss.s — sub-word loads interleaved with TLB misses
-; REQUIRES: mmu cache l2
+; REQUIRES: mmu cache l2 wrspr
 ;
 ; Userland sub-word access patterns are interrupted by TLB miss traps
 ; that hand off to the software miss handler, which itself does loads
@@ -25,6 +25,7 @@
 .equ MISS_COUNT_ADDR, 0x0040     ; in page 0, counts handler invocations
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0
 
     ; ── Install TLB miss handler (vector 2 → physical 0x08) ──────
@@ -36,13 +37,16 @@ _start:
 
     ; ── MMU: only page 0 (vector + handler + counter) and ROM ────
     ; Pages 1..4 (data region) are NOT mapped → first access faults.
-    LLI  R2, #0
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
+    LI   R2, #0x0
     WRSYS R2, #MMU, #TLB_VPN
     LLI  R3, #KERN_RWX_C
     WRSYS R3, #MMU, #TLB_PTE
 
-    LLI  R2, #16
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R2, #0x0FFFF000
     WRSYS R2, #MMU, #TLB_VPN
@@ -93,10 +97,8 @@ fail:
     BREAK
 
 ; ═══════════════════════════════════════════════════════════════
-; TLB miss handler — identity-maps the faulting VPN into the TLB
-; using slot 1 (round-robin via a static counter would be nicer, but
-; the test only needs 4 mappings + their evictions; the 2-way 64-entry
-; main TLB has plenty of room).
+; TLB miss handler — identity-maps the faulting VPN into way 0 of its
+; set; the test only needs 4 mappings and their evictions.
 ;
 ; Increments a counter at MISS_COUNT_ADDR so the test can verify
 ; it actually fired.
@@ -111,16 +113,15 @@ tlb_miss_handler:
     RDSYS R8, #MMU, #FAULT_ADDR
     SHR  R8, #12                 ; R8 = VPN
 
-    ; TLB_INDEX format: {way[5], set[4:0]}.  Lookup uses VPN[4:0] as
-    ; set, so the install must target that exact set or the lookup
-    ; misses and we re-fault forever.  Use way 0 always; subsequent
-    ; misses to the same set just overwrite.
-    MOV  R9, R8                  ; save VPN
-    AND  R9, #0x1F               ; R9 = set = VPN[4:0], way = 0
+    ; The lookup reads set VPN mod SETS, so the install must target that
+    ; set or the lookup misses and the handler re-faults forever. Way 0
+    ; always; a later miss to the same set overwrites it.
+    RDSPR R9, SCR2               ; SETS - 1 (mmu.inc)
+    AND  R9, R8                  ; R9 = way 0's slot for the VPN
     WRSYS R9, #MMU, #TLB_INDEX
 
     ; TLB_VPN format: VPN[19:0] << 8 | ASID[7:0]
-    MOV  R9, R8                  ; restore VPN
+    MOV  R9, R8
     SHL  R9, #8
     WRSYS R9, #MMU, #TLB_VPN
 
@@ -132,3 +133,5 @@ tlb_miss_handler:
     WRSYS R8, #MMU, #TLB_PTE
 
     ERET                          ; retry faulting instruction
+
+.include "mmu.inc"

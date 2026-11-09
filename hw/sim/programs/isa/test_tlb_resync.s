@@ -1,5 +1,5 @@
 ; test_tlb_resync.s — WRSYS context-sync re-derives the fetch under new state
-; REQUIRES: mmu-d mmu-i
+; REQUIRES: mmu-d mmu-i wrspr
 ;
 ; The positive WRSYS-resynchronization test: a WRSYS that *unmaps the page
 ; holding its own successor* must cause that successor's fetch to take a
@@ -31,6 +31,7 @@
 .equ KERN_RWX, 0xB9          ; V|R|W|X|G
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0                ; assume fail
     LLI  R8, #0                ; came-through flag
 
@@ -52,14 +53,18 @@ copy_loop:
     STW  R2, [R0 + #8]         ; vector[2] = RAM handler
 
     ; ── Map page 0 (identity RWX: vectors, handler, data) ────
-    LLI  R2, #0
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
+    LI   R2, #0x0
     WRSYS R2, #MMU, #TLB_VPN
     LLI  R3, #KERN_RWX
     WRSYS R3, #MMU, #TLB_PTE
 
     ; ── Map the ROM code page; keep its words for the remap ──
-    LLI  R12, #16
+    LI   R2, #0x0FFFF000       ; TLB_VPN word, way 0
+    BL   tlb_slot
+    MOV  R12, R2
     WRSYS R12, #MMU, #TLB_INDEX
     LI   R5, #0x0FFFF000       ; VPN word: VPN=0xFFFF0, ASID=0
     WRSYS R5, #MMU, #TLB_VPN
@@ -109,3 +114,5 @@ handler_bad:
     LLI  R1, #0
     BREAK
 miss_handler_end:
+
+.include "mmu.inc"

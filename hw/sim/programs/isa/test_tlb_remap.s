@@ -1,5 +1,5 @@
 ; test_tlb_remap.s — TLB non-identity mapping: prove address translation
-; REQUIRES: mmu
+; REQUIRES: mmu wrspr
 ;
 ; Proves the TLB actually remaps addresses by reading through a virtual
 ; address that maps to a DIFFERENT physical page than identity would.
@@ -29,6 +29,7 @@
 ;   0=MMUCR  3=TLB_VPN  4=TLB_PTE  5=TLB_INDEX
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0               ; assume fail
 
     ; ── Plant sentinel values (MMU off = bypass mode) ───────
@@ -43,25 +44,27 @@ _start:
     STW  R11, [R3]             ; mem[0x2000] = 0xBEEF
 
     ; ── Map VPN 0 → PPN 0 for code execution (identity) ────
-    ; TLB set 0, way 0
+    LI   R2, #0x0              ; TLB_VPN word, way 0
+    BL   tlb_slot
+    WRSYS R2, #0, #5           ; TLB_INDEX
     LLI  R4, #0
-    WRSYS R4, #0, #5           ; TLB_INDEX = 0
     WRSYS R4, #0, #3           ; TLB_VPN = 0 (VPN=0, ASID=0)
     LLI  R5, #0x00A9           ; PTE: PPN=0, flags = V|R|X|G = 0xA9
     WRSYS R5, #0, #4           ; commits code page entry
 
     ; ── Map VPN 2 → PPN 1 (remap: VA 0x2000 → PA 0x1000) ──
-    ; TLB set 2 (VPN[4:0]=2), way 0
-    LLI  R4, #2
-    WRSYS R4, #0, #5           ; TLB_INDEX = 2
+    LI   R2, #0x0200           ; TLB_VPN word, way 0
+    BL   tlb_slot
+    WRSYS R2, #0, #5           ; TLB_INDEX
     LLI  R4, #0x0200           ; VPN word: VPN=2, ASID=0
     WRSYS R4, #0, #3           ; TLB_VPN (staged)
     LLI  R4, #0x1089           ; PTE: PPN=1 (bits[31:12]=0x00001), flags=V|R|G=0x89
     WRSYS R4, #0, #4           ; TLB_PTE (commits entry)
 
     ; ── Map ROM page (VPN 0xFFFF0 → PPN 0xFFFF0) ──────────
-    LLI  R4, #16
-    WRSYS R4, #0, #5           ; TLB_INDEX = 30
+    LI   R2, #0x0FFFF000       ; TLB_VPN word, way 0
+    BL   tlb_slot
+    WRSYS R2, #0, #5           ; TLB_INDEX
     LI   R4, #0x0FFFF000       ; VPN=0xFFFF0, ASID=0
     WRSYS R4, #0, #3
     LI   R4, #0xFFFF00B9       ; PPN=0xFFFF0, flags=V|R|W|X|G
@@ -87,3 +90,5 @@ _start:
     LLI  R1, #1                ; PASS
 fail:
     BREAK
+
+.include "mmu.inc"

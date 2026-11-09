@@ -1,6 +1,6 @@
 ; test_tlb_refill_cached.s — A TLB refill by a miss handler that runs from
 ; the caches takes effect
-; REQUIRES: mmu-d mmu-i cache l2
+; REQUIRES: mmu-d mmu-i cache l2 wrspr
 ;
 ; The shape a loaded program has once it has brought the MMU and the caches
 ; up: the miss handler runs from a cacheable RAM page through a pinned
@@ -33,6 +33,7 @@
 .equ TARGET_VA,   0x80001000    ; VPN 0x80001: set 1, unmapped at the jump
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0                 ; assume fail
     STW  R0, [R0 + #COUNT]
 
@@ -65,7 +66,7 @@ copy_target:
     BNE  copy_target
 
     ; Pinned slot 0: page 1 identity, cacheable
-    LLI  R2, #0x40
+    RDSPR R2, SCR3          ; pinned slot 0 (mmu.inc)
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R2, #0x0100            ; VPN = 1, ASID = 0
     WRSYS R2, #MMU, #TLB_VPN
@@ -73,16 +74,18 @@ copy_target:
     WRSYS R2, #MMU, #TLB_PTE
 
     ; Pinned slot 1: page 0 identity, cacheable
-    LLI  R2, #0x41
+    RDSPR R2, SCR3          ; pinned slot 1 (mmu.inc)
+    ADD  R2, #1
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R2, #0
     WRSYS R2, #MMU, #TLB_VPN
     LLI  R2, #KERN_RWXC
     WRSYS R2, #MMU, #TLB_PTE
 
-    ; Main TLB slot 16: the ROM page identity, uncacheable as in the other
+    ; Main TLB: the ROM page identity, uncacheable as in the other
     ; MMU tests
-    LLI  R2, #16
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R3, #0x0FFFF000
     WRSYS R3, #MMU, #TLB_VPN
@@ -118,8 +121,10 @@ handler_start:
     CMP   R8, R9
     BNE   h_fail
 
-    ; Main slot 1 (set 1, way 0): TARGET_VA → page 2, cacheable
-    LLI   R9, #1
+    ; Way 0's slot for TARGET_VA (mmu.inc): TARGET_VA → page 2, cacheable
+    SHR   R8, #12
+    RDSPR R9, SCR2
+    AND   R9, R8
     WRSYS R9, #MMU, #TLB_INDEX
     LI    R9, #0x08000100       ; VPN = 0x80001, ASID = 0
     WRSYS R9, #MMU, #TLB_VPN
@@ -136,3 +141,5 @@ target_code:
     LLI  R1, #1
     BREAK
 target_code_end:
+
+.include "mmu.inc"

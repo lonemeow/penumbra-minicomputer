@@ -1,5 +1,5 @@
 ; test_tlb_prot.s — TLB protection fault: multiple permission scenarios
-; REQUIRES: mmu-d
+; REQUIRES: mmu-d wrspr
 ;
 ; Tests (all in supervisor mode, MMU enabled):
 ;   1. Write to read-only page → prot fault, handler remaps with W, ERET retries
@@ -28,6 +28,7 @@
 ; Entry point — set up vectors at runtime, then run tests
 ; ═══════════════════════════════════════════════════════════════
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     ; Install TLB protection fault handler (VEC_TLB_PROT = 3, offset 0x0C)
     LA   R2, #prot_handler
     STW  R2, [R0 + #0x0C]
@@ -64,7 +65,8 @@ prot_handler:
     BNE   fail
 
     ; Remap page 1 with corrected permissions
-    LLI   R8, #1
+    RDSPR R8, SCR2           ; way 0's slot for VPN 1 (mmu.inc)
+    AND   R8, #1
     WRSYS R8, #MMU, #TLB_INDEX
     LLI   R9, #0x0100           ; VPN=1, ASID=0
     WRSYS R9, #MMU, #TLB_VPN
@@ -80,8 +82,10 @@ start:
     LLI  R1, #0
 
     ; ── Map VPN 0 → PPN 0 (code page, full access) ───────────
-    LLI  R2, #0
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
+    LI   R2, #0x0
     WRSYS R2, #MMU, #TLB_VPN
     LLI  R3, #KERN_RWX
     WRSYS R3, #MMU, #TLB_PTE
@@ -96,7 +100,8 @@ start:
     ; ══════════════════════════════════════════════════════════
 
     ; Map VPN 1 → PPN 1, read-only (R+X, no W)
-    LLI  R2, #1
+    LI   R2, #0x100         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R3, #0x0100
     WRSYS R3, #MMU, #TLB_VPN
@@ -104,7 +109,8 @@ start:
     WRSYS R3, #MMU, #TLB_PTE
 
     ; Map ROM page (VPN 0xFFFF0 → PPN 0xFFFF0)
-    LLI  R2, #16
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R3, #0x0FFFF000
     WRSYS R3, #MMU, #TLB_VPN
@@ -141,7 +147,8 @@ start:
     ; ══════════════════════════════════════════════════════════
 
     ; Remap VPN 1 → PPN 1, write-only (W+X, no R)
-    LLI  R2, #1
+    LI   R2, #0x100         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R3, #0x0100
     WRSYS R3, #MMU, #TLB_VPN
@@ -170,3 +177,5 @@ start:
     LLI  R1, #1
 fail:
     BREAK
+
+.include "mmu.inc"

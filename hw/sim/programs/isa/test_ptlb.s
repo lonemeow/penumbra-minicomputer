@@ -1,11 +1,12 @@
 ; test_ptlb.s — Pinned TLB: write, readback, lookup, priority, ASID, G bit, faults
 ; REQUIRES: mmu wrspr
 ;
-; The pinned TLB is accessed via TLB_INDEX with bit 6 set.
+; The pinned TLB is accessed via TLB_INDEX with its pinned select set
+; (bit 6 in MMU_CONFIG version 1, bit 31 in version 2; mmu.inc).
 ; Same TLB_VPN/TLB_PTE sysregs, same 3-write protocol.
 ;
 ; Tests:
-;   1. Write a pinned entry via TLB_INDEX[6]=1, read it back
+;   1. Write a pinned entry, read it back
 ;   2. Enable MMU with only pinned entries — verify data access works
 ;   3. Pinned entry takes priority over conflicting main TLB entry
 ;   4. Invalidated pinned entry no longer hits
@@ -34,6 +35,7 @@
 .equ FSTAT_W,    0x200
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     ; Install exception handlers before anything else
     LA   R2, #prot_handler
     STW  R2, [R0 + #0x0C]     ; vector[3] = TLB protection fault
@@ -62,7 +64,8 @@ prot_handler:
     BNE   fail
 
     ; Remap: update pinned slot 2 with corrected permissions
-    LLI   R8, #0x42
+    RDSPR R8, SCR3          ; pinned slot 2 (mmu.inc)
+    ADD  R8, #2
     WRSYS R8, #MMU, #TLB_INDEX  ; pinned slot 2
     LLI   R9, #0x0200           ; VPN=2, ASID=0
     WRSYS R9, #MMU, #TLB_VPN
@@ -93,7 +96,7 @@ start:
     ; Test 1: Write pinned entry, read back via sysregs
     ; ══════════════════════════════════════════════════════
 
-    LLI  R2, #0x40
+    RDSPR R2, SCR3          ; pinned slot 0 (mmu.inc)
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R2, #0
     WRSYS R2, #MMU, #TLB_VPN
@@ -112,7 +115,8 @@ start:
     ; ══════════════════════════════════════════════════════
 
     ; Pin ROM page in slot 1
-    LLI  R2, #0x41
+    RDSPR R2, SCR3          ; pinned slot 1 (mmu.inc)
+    ADD  R2, #1
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R2, #0x0FFFF000
     WRSYS R2, #MMU, #TLB_VPN
@@ -136,7 +140,8 @@ start:
     ; ══════════════════════════════════════════════════════
 
     ; Install conflicting main TLB: VPN 0 → PPN 1
-    LLI   R2, #1
+    LI    R2, #0x0              ; TLB_VPN word, way 0
+    BL    tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI    R2, #0x00000000
     WRSYS R2, #MMU, #TLB_VPN
@@ -172,7 +177,7 @@ start:
     ; Test 4: Invalidate pinned entry — should no longer hit
     ; ══════════════════════════════════════════════════════
 
-    LLI  R2, #0x40
+    RDSPR R2, SCR3          ; pinned slot 0 (mmu.inc)
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R2, #0
     WRSYS R2, #MMU, #TLB_PTE
@@ -186,7 +191,7 @@ start:
     ; ══════════════════════════════════════════════════════
 
     ; Re-pin page 0 with G=1 (for code fetch) in slot 0
-    LLI  R2, #0x40
+    RDSPR R2, SCR3          ; pinned slot 0 (mmu.inc)
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R2, #0
     WRSYS R2, #MMU, #TLB_VPN
@@ -194,7 +199,8 @@ start:
     WRSYS R3, #MMU, #TLB_PTE
 
     ; Pin slot 2: VPN=2, ASID=5, no G bit → only matches ASID 5
-    LLI  R2, #0x42
+    RDSPR R2, SCR3          ; pinned slot 2 (mmu.inc)
+    ADD  R2, #2
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R2, #0x0205              ; VPN=2, ASID=5
     WRSYS R2, #MMU, #TLB_VPN
@@ -222,7 +228,8 @@ start:
     ; ══════════════════════════════════════════════════════
 
     ; Update pinned slot 2: same mapping but add G bit
-    LLI  R2, #0x42
+    RDSPR R2, SCR3          ; pinned slot 2 (mmu.inc)
+    ADD  R2, #2
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R2, #0x0205              ; VPN=2, ASID=5
     WRSYS R2, #MMU, #TLB_VPN
@@ -239,7 +246,8 @@ start:
     ; ══════════════════════════════════════════════════════
 
     ; Update pinned slot 2: VPN=2, read-only (no W), global
-    LLI  R2, #0x42
+    RDSPR R2, SCR3          ; pinned slot 2 (mmu.inc)
+    ADD  R2, #2
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R2, #0x0200              ; VPN=2, ASID=0
     WRSYS R2, #MMU, #TLB_VPN
@@ -266,3 +274,5 @@ start:
     LLI  R1, #1
 fail:
     BREAK
+
+.include "mmu.inc"

@@ -15,6 +15,7 @@
 ; Main setup (supervisor mode)
 ; ═══════════════════════════════════════════════════════════════
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0
 
     ; ── Install vector table in RAM ───────────────────────────
@@ -41,15 +42,18 @@ _start:
     WRSPR USP, R2
 
     ; Map VPN 0 for user code
+    LI   R2, #0x0              ; TLB_VPN word, way 0
+    BL   tlb_slot
+    WRSYS R2, #MMU, #TLB_INDEX
     LLI  R4, #0
-    WRSYS R4, #MMU, #TLB_INDEX
     WRSYS R4, #MMU, #TLB_VPN
     LLI  R5, #USER_RWX
     WRSYS R5, #MMU, #TLB_PTE
 
     ; Map ROM page (VPN 0xFFFF0 → PPN 0xFFFF0)
-    LLI  R4, #16
-    WRSYS R4, #MMU, #TLB_INDEX
+    LI   R2, #0x0FFFF000       ; TLB_VPN word, way 0
+    BL   tlb_slot
+    WRSYS R2, #MMU, #TLB_INDEX
     LI   R5, #0x0FFFF000
     WRSYS R5, #MMU, #TLB_VPN
     LI   R5, #0xFFFF00F9        ; PPN=0xFFFF0, USER_RWX (user code runs from ROM)
@@ -90,3 +94,5 @@ syscall_handler:
     BNE   fail
     LLI   R1, #1
     BREAK
+
+.include "mmu.inc"

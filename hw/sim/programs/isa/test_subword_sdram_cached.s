@@ -1,5 +1,5 @@
 ; test_subword_sdram_cached.s — sub-word loads/stores through full cache stack
-; REQUIRES: mmu cache l2
+; REQUIRES: mmu cache l2 wrspr
 ;
 ; Existing test_subword_load.s / test_subword_store.s run with MMU off
 ; and caches at reset state (disabled), so they exercise only the raw
@@ -14,16 +14,20 @@
 .equ DATA_BASE,  0x0100            ; well past vector table
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0                    ; assume fail until proven otherwise
 
     ; ── MMU: identity-map page 0 cacheable, ROM page uncacheable ─
-    LLI  R2, #0
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
+    LI   R2, #0x0
     WRSYS R2, #MMU, #TLB_VPN
     LLI  R3, #KERN_RWX_C
     WRSYS R3, #MMU, #TLB_PTE
 
-    LLI  R2, #16
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R2, #0x0FFFF000
     WRSYS R2, #MMU, #TLB_VPN
@@ -141,3 +145,5 @@ _start:
     LLI  R1, #1
 fail:
     BREAK
+
+.include "mmu.inc"

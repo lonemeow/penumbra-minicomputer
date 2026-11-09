@@ -1,5 +1,5 @@
 ; test_cache_memcpy_irq.s — sustained cached memcpy with timer IRQs
-; REQUIRES: mmu cache timer irq
+; REQUIRES: mmu cache timer irq wrspr
 ;                          firing during the loop.
 ;
 ; Same access pattern as test_cache_memcpy.s (LDW/STW through cached
@@ -32,6 +32,7 @@
 .equ TIMER_RELOAD, 100
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0                ; assume FAIL until everything passes
     LLI  R11, #0               ; IRQ counter
 
@@ -52,28 +53,32 @@ plant_loop:
     BNE  plant_loop
 
     ; ── Phase 2: set up TLB ──────────────────────────────────
-    LLI  R2, #0
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R2, #0
     WRSYS R2, #MMU, #TLB_VPN
     LLI  R3, #KERN_RWX_C
     WRSYS R3, #MMU, #TLB_PTE
 
-    LLI  R2, #1
+    LI   R2, #0x100         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R3, #0x0100
     WRSYS R3, #MMU, #TLB_VPN
     LLI  R3, #0x10BD
     WRSYS R3, #MMU, #TLB_PTE
 
-    LLI  R2, #2
+    LI   R2, #0x200         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R3, #0x0200
     WRSYS R3, #MMU, #TLB_VPN
     LLI  R3, #0x20BD
     WRSYS R3, #MMU, #TLB_PTE
 
-    LLI  R2, #16
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R3, #0x0FFFF000
     WRSYS R3, #MMU, #TLB_VPN
@@ -154,3 +159,5 @@ irq_handler:
     WRSYS R10, #TIMER, #TM_STATUS   ; write-1-to-clear underflow
     ADD   R11, #1                    ; bump IRQ counter
     ERET
+
+.include "mmu.inc"

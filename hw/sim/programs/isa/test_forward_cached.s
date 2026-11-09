@@ -16,15 +16,17 @@
 ;     enough to forward — the function-return shape memcpy never exercises.
 ;
 ; Result: R1=1 PASS, R1=0 FAIL; run via tb_penumbra2_prog.
-; REQUIRES: mmu cache
+; REQUIRES: mmu cache wrspr
 
 .equ ROM_PTE_C, 0xFFFF00BD     ; identity-map the ROM page, cacheable (V|C|R|W|X|G)
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0                 ; assume FAIL
 
     ; ── Map the ROM code page cacheable, enable MMU + I-cache ──
-    LLI  R2, #16                ; conventional ROM-page TLB slot
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R2, #0x0FFFF000
     WRSYS R2, #MMU, #TLB_VPN
@@ -62,3 +64,5 @@ fail:
 ; close behind in the hot stream, so the return target rides the forward path.
 subr:
     JMP  R13
+
+.include "mmu.inc"

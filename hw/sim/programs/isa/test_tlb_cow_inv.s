@@ -1,5 +1,5 @@
 ; test_tlb_cow_inv.s — Copy-on-write with explicit D-cache invalidate
-; REQUIRES: mmu cache
+; REQUIRES: mmu cache wrspr
 ;
 ; Why a second variant?
 ; ─────────────────────
@@ -41,6 +41,7 @@
 .equ NEW_VAL,    0xBEEF
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LA   R2, #prot_handler
     STW  R2, [R0 + #0x0C]
     B    start
@@ -81,7 +82,8 @@ prot_handler:
     STW R13, [R8 + #12]
 
     ; Remap VPN 1 → PPN 2 with W set
-    LLI   R8, #1
+    RDSPR R8, SCR2           ; way 0's slot for VPN 1 (mmu.inc)
+    AND   R8, #1
     WRSYS R8, #MMU, #TLB_INDEX
     LLI   R8, #0x0100
     WRSYS R8, #MMU, #TLB_VPN
@@ -113,31 +115,36 @@ start:
     LI   R2, #SENT_W3
     STW  R2, [R3 + #12]
 
-    ; Slot 0: VPN 0 → PPN 0 RWX cacheable (kernel/handler)
-    LLI  R2, #0
+    ; VPN 0 → PPN 0 RWX cacheable (kernel/handler)
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
+    LI   R2, #0x0
     WRSYS R2, #MMU, #TLB_VPN
     LLI  R3, #KERN_RWX_C
     WRSYS R3, #MMU, #TLB_PTE
 
-    ; Slot 1: VPN 1 → PPN 1 R-only cacheable (the COW page)
-    LLI  R2, #1
+    ; VPN 1 → PPN 1 R-only cacheable (the COW page)
+    LI   R2, #0x100         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R3, #0x0100
     WRSYS R3, #MMU, #TLB_VPN
     LLI  R3, #0x10AD             ; PPN=1, V|C|R|X|G  (NO W)
     WRSYS R3, #MMU, #TLB_PTE
 
-    ; Slot 2: VPN 2 → PPN 2 RWX cacheable (COW destination)
-    LLI  R2, #2
+    ; VPN 2 → PPN 2 RWX cacheable (COW destination)
+    LI   R2, #0x200         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R3, #0x0200
     WRSYS R3, #MMU, #TLB_VPN
     LLI  R3, #0x20BD
     WRSYS R3, #MMU, #TLB_PTE
 
-    ; Slot 16: ROM page
-    LLI  R2, #16
+    ; ROM page
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R3, #0x0FFFF000
     WRSYS R3, #MMU, #TLB_VPN
@@ -207,3 +214,5 @@ start:
     LLI  R1, #1
 fail:
     BREAK
+
+.include "mmu.inc"

@@ -1,5 +1,5 @@
 ; test_subword_mixed_widths.s — interleaved word/half/byte sequence
-; REQUIRES: mmu cache l2
+; REQUIRES: mmu cache l2 wrspr
 ;
 ; Userland code (parsers, string ops, protocol decoders, hash bucket
 ; walks) commonly mixes load widths on the same memory region — a word
@@ -27,16 +27,20 @@
 .equ DATA_END,   0x0140            ; 64 bytes = 4 lines of 16
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0
 
     ; ── MMU setup ────────────────────────────────────────────────
-    LLI  R2, #0
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
+    LI   R2, #0x0
     WRSYS R2, #MMU, #TLB_VPN
     LLI  R3, #KERN_RWX_C
     WRSYS R3, #MMU, #TLB_PTE
 
-    LLI  R2, #16
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R2, #0x0FFFF000
     WRSYS R2, #MMU, #TLB_VPN
@@ -137,3 +141,5 @@ walk:
     LLI  R1, #1
 fail:
     BREAK
+
+.include "mmu.inc"

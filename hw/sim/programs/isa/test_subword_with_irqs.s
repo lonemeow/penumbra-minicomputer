@@ -1,5 +1,5 @@
 ; test_subword_with_irqs.s — halfword loop with timer IRQs firing during it
-; REQUIRES: mmu cache l2 timer irq
+; REQUIRES: mmu cache l2 timer irq wrspr
 ;
 ; Userland code under -O2 runs with hardware timer IRQs enabled and
 ; firing regularly.  A trap entry mid-loop saves+restores the CPU
@@ -25,6 +25,7 @@
                                    ; (vector table 0x00..0x28; counter at 0x40)
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0
 
     ; ── Install timer handler (vector 1 → physical 0x04) ─────────
@@ -35,13 +36,16 @@ _start:
     STW  R0, [R0 + #COUNTER_ADDR]
 
     ; ── MMU setup ────────────────────────────────────────────────
-    LLI  R2, #0
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
+    LI   R2, #0x0
     WRSYS R2, #MMU, #TLB_VPN
     LLI  R3, #KERN_RWX_C
     WRSYS R3, #MMU, #TLB_PTE
 
-    LLI  R2, #16
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R2, #0x0FFFF000
     WRSYS R2, #MMU, #TLB_VPN
@@ -116,3 +120,5 @@ timer_handler:
     WRSYS R10, #TIMER, #TM_STATUS
 
     ERET
+
+.include "mmu.inc"

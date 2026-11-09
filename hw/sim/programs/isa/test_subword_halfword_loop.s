@@ -1,5 +1,5 @@
 ; test_subword_halfword_loop.s — tight halfword-pointer-increment loop
-; REQUIRES: mmu cache l2
+; REQUIRES: mmu cache l2 wrspr
 ;
 ; Mirrors the hot inner loop of NetBSD libc's __hash_get / hash_access:
 ;   bp = (uint16_t *)page; for (...) { ... bp[1] ... bp += 2; }
@@ -24,16 +24,20 @@
 .equ DATA_END,   0x0500            ; 1 KiB region = 512 halfwords
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0
 
     ; ── MMU: identity-map page 0 cacheable, ROM uncacheable ──────
-    LLI  R2, #0
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
+    LI   R2, #0x0
     WRSYS R2, #MMU, #TLB_VPN
     LLI  R3, #KERN_RWX_C
     WRSYS R3, #MMU, #TLB_PTE
 
-    LLI  R2, #16
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R2, #0x0FFFF000
     WRSYS R2, #MMU, #TLB_VPN
@@ -112,3 +116,5 @@ cold_loop:
     LLI  R1, #1
 fail:
     BREAK
+
+.include "mmu.inc"

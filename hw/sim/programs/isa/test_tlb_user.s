@@ -25,6 +25,7 @@
 ; Main setup (supervisor mode)
 ; ═══════════════════════════════════════════════════════════════
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0               ; assume fail
 
     ; ── Install vector table in RAM ───────────────────────────
@@ -37,14 +38,17 @@ _start:
     STW  R2, [R3]
 
     ; ── Map VPN 0 → PPN 0 (user-accessible code page) ────────
-    LLI  R2, #0
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
+    LI   R2, #0x0
     WRSYS R2, #MMU, #TLB_VPN
     LLI  R3, #USER_RWX         ; V|R|W|X|U|G
     WRSYS R3, #MMU, #TLB_PTE
 
     ; ── Map VPN 1 → PPN 1 (kernel-only, no U) ────────────────
-    LLI  R2, #1
+    LI   R2, #0x100         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R3, #0x0100           ; VPN=1, ASID=0
     WRSYS R3, #MMU, #TLB_VPN
@@ -52,7 +56,8 @@ _start:
     WRSYS R3, #MMU, #TLB_PTE
 
     ; ── Map ROM page (VPN 0xFFFF0 → PPN 0xFFFF0) ───────────
-    LLI  R2, #16
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R3, #0x0FFFF000
     WRSYS R3, #MMU, #TLB_VPN
@@ -113,7 +118,8 @@ prot_handler:
     BNE   fail
 
     ; Remap page 1 with U bit so user retry succeeds
-    LLI   R8, #1
+    RDSPR R8, SCR2           ; way 0's slot for VPN 1 (mmu.inc)
+    AND   R8, #1
     WRSYS R8, #MMU, #TLB_INDEX
     LLI   R9, #0x0100           ; VPN=1, ASID=0
     WRSYS R9, #MMU, #TLB_VPN
@@ -144,3 +150,5 @@ user_code:
 
 fail:
     BREAK
+
+.include "mmu.inc"

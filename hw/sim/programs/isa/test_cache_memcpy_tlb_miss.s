@@ -1,5 +1,5 @@
 ; test_cache_memcpy_tlb_miss.s — cached memcpy with kernel TLB-miss
-; REQUIRES: mmu cache
+; REQUIRES: mmu cache wrspr
 ;                                 handler invocation during the burst.
 ;
 ; NetBSD's demand paging works by leaving user pages without TLB
@@ -25,6 +25,7 @@
 .equ KERN_RWX_C, 0xBD
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0
     LLI  R11, #0                 ; TLB-miss handler invocation counter
 
@@ -45,24 +46,27 @@ plant_loop:
     BNE  plant_loop
 
     ; ── Phase 2: set up TLB *without* a destination entry ───
-    ; Slot 0: VPN 0 (kernel data scratch)
-    LLI  R2, #0
+    ; VPN 0 (kernel data scratch)
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R2, #0
     WRSYS R2, #MMU, #TLB_VPN
     LLI  R3, #KERN_RWX_C
     WRSYS R3, #MMU, #TLB_PTE
 
-    ; Slot 1: VPN 1 (source) — installed.
-    LLI  R2, #1
+    ; VPN 1 (source) — installed.
+    LI   R2, #0x100         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R3, #0x0100
     WRSYS R3, #MMU, #TLB_VPN
     LLI  R3, #0x10BD
     WRSYS R3, #MMU, #TLB_PTE
 
-    ; Slot 16: ROM page (so handler+main fetch keep working).
-    LLI  R2, #16
+    ; ROM page (so handler+main fetch keep working).
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R3, #0x0FFFF000
     WRSYS R3, #MMU, #TLB_VPN
@@ -114,7 +118,7 @@ fail:
     BREAK
 
 ; ═══════════════════════════════════════════════════════════════
-; TLB miss handler — install VPN 2 → PPN 2 in TLB slot 2, ERET.
+; TLB miss handler — install VPN 2 → PPN 2 in way 0, ERET.
 ;
 ; Touches R10..R12 (TLB sysreg ops) and R11 (counter); all unused
 ; by the memcpy loop, so loop state survives the trap intact.
@@ -125,10 +129,13 @@ fail:
 ; ═══════════════════════════════════════════════════════════════
 tlb_miss_handler:
     ADD   R11, #1
-    LLI   R12, #2
+    RDSPR R12, SCR2           ; way 0's slot for VPN 2 (mmu.inc)
+    AND   R12, #2
     WRSYS R12, #MMU, #TLB_INDEX
     LLI   R12, #0x0200            ; VPN 2, ASID 0
     WRSYS R12, #MMU, #TLB_VPN
     LLI   R12, #0x20BD            ; PPN 2, V|C|R|W|X|G
     WRSYS R12, #MMU, #TLB_PTE
     ERET
+
+.include "mmu.inc"

@@ -1,5 +1,5 @@
 ; test_subword_store_then_load.s — sub-word write/read coherency
-; REQUIRES: mmu cache l2
+; REQUIRES: mmu cache l2 wrspr
 ;
 ; With write-through L1 D-cache and write-through write-no-allocate
 ; L2, a sub-word store must propagate correctly through both cache
@@ -26,16 +26,20 @@
 .equ DATA_END,   0x0500            ; 1 KiB
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0
 
     ; ── MMU setup ────────────────────────────────────────────────
-    LLI  R2, #0
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
+    LI   R2, #0x0
     WRSYS R2, #MMU, #TLB_VPN
     LLI  R3, #KERN_RWX_C
     WRSYS R3, #MMU, #TLB_PTE
 
-    LLI  R2, #16
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R2, #0x0FFFF000
     WRSYS R2, #MMU, #TLB_VPN
@@ -121,3 +125,5 @@ stb_loop:
     LLI  R1, #1
 fail:
     BREAK
+
+.include "mmu.inc"

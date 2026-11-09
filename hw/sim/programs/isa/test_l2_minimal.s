@@ -1,5 +1,5 @@
 ; test_l2_minimal.s — smallest possible L2-on-the-data-path test
-; REQUIRES: mmu cache l2
+; REQUIRES: mmu cache l2 wrspr
 ;
 ; Goals:
 ;   1. L2 sysreg INFO is non-zero (i.e. HAS_L2=1 build, L2 present).
@@ -22,17 +22,21 @@
 .equ TEST_VAL,   0xCAFE
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0                ; assume fail
 
     ; ── Identity-map page 0 cacheable ─────────────────────────
-    LLI  R2, #0
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
+    LI   R2, #0x0
     WRSYS R2, #MMU, #TLB_VPN       ; VPN=0, ASID=0
     LLI  R3, #KERN_RWX_C
     WRSYS R3, #MMU, #TLB_PTE       ; PPN=0, cacheable
 
     ; ROM page uncacheable, so I-fetch never goes through caches
-    LLI  R2, #16
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R2, #0x0FFFF000
     WRSYS R2, #MMU, #TLB_VPN
@@ -74,3 +78,5 @@ no_l2:
     LLI  R1, #1
 fail:
     BREAK
+
+.include "mmu.inc"

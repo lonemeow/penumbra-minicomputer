@@ -1,5 +1,5 @@
 ; test_l2_dfetch_only.s — same body as test_l2_ifetch, but with the
-; REQUIRES: mmu cache l2
+; REQUIRES: mmu cache l2 wrspr
 ; ROM page UNCACHEABLE so the I-fetch stream bypasses L1-I + L2 and
 ; only D-cache traffic goes through the L2.  Use this to bisect
 ; whether the L2 integration bug needs I-fetch interleave to fire
@@ -10,6 +10,7 @@
 .equ DATA_BASE,  0x0400
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0
 
     ; Plant data 1..32
@@ -23,14 +24,17 @@ plant:
     BNE  plant
 
     ; TLB: VPN 0 cacheable
-    LLI  R2, #0
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
+    LI   R2, #0x0
     WRSYS R2, #MMU, #TLB_VPN
     LLI  R3, #KERN_RWX_C
     WRSYS R3, #MMU, #TLB_PTE
 
     ; ROM page UNCACHEABLE  (only difference from test_l2_ifetch.s)
-    LLI  R2, #16
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R2, #0x0FFFF000
     WRSYS R2, #MMU, #TLB_VPN
@@ -66,3 +70,5 @@ loop:
     LLI  R1, #1
 fail:
     BREAK
+
+.include "mmu.inc"

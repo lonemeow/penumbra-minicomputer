@@ -1,5 +1,5 @@
 ; test_tlb_prot_ifetch.s — Fetch protection fault on a CACHEABLE page
-; REQUIRES: mmu cache
+; REQUIRES: mmu cache wrspr
 ;
 ; Why this test exists
 ; ────────────────────
@@ -31,6 +31,7 @@
 .equ FSTAT_X,     0x400    ; bit [10] = execute access
 
 _start:
+    BL   tlb_init                  ; the TLB is undefined after reset
     LLI  R1, #0              ; assume fail
 
     ; Install protection fault handler at vector slot 3 (offset 0x0C)
@@ -49,23 +50,27 @@ copy:
     CMP  R2, R4
     BNE  copy
 
-    ; Slot 0: VPN 0 → PPN 0 (vectors + handler scratch), uncached RWX
-    LLI  R2, #0
+    ; VPN 0 → PPN 0 (vectors + handler scratch), uncached RWX
+    LI   R2, #0x0         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
+    LI   R2, #0x0
     WRSYS R2, #MMU, #TLB_VPN
     LLI  R3, #KERN_RWX
     WRSYS R3, #MMU, #TLB_PTE
 
-    ; Slot 2: VPN 2 → PPN 2, R+W only, CACHEABLE — the trap page
-    LLI  R2, #2
+    ; VPN 2 → PPN 2, R+W only, CACHEABLE — the trap page
+    LI   R2, #0x200         ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LLI  R3, #0x0200          ; VPN=2, ASID=0
     WRSYS R3, #MMU, #TLB_VPN
     LLI  R3, #PTE_RW_C_P2      ; PPN=2, V|C|R|W|G  (NO X)
     WRSYS R3, #MMU, #TLB_PTE
 
-    ; Slot 16: ROM page (so we keep fetching while MMU is on)
-    LLI  R2, #16
+    ; ROM page (so we keep fetching while MMU is on)
+    LI   R2, #0x0FFFF000        ; TLB_VPN word, way 0
+    BL   tlb_slot
     WRSYS R2, #MMU, #TLB_INDEX
     LI   R3, #0x0FFFF000
     WRSYS R3, #MMU, #TLB_VPN
@@ -112,7 +117,8 @@ ifetch_prot_handler:
     BNE   fail
 
     ; Remap VPN 2 → PPN 2 with X enabled (full RWX cacheable)
-    LLI   R8, #2
+    RDSPR R8, SCR2           ; way 0's slot for VPN 2 (mmu.inc)
+    AND   R8, #2
     WRSYS R8, #MMU, #TLB_INDEX
     LLI   R8, #0x0200
     WRSYS R8, #MMU, #TLB_VPN
@@ -129,3 +135,5 @@ target_code:
     LLI  R1, #1
     BREAK
 target_code_end:
+
+.include "mmu.inc"
