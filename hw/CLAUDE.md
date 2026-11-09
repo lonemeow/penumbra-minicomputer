@@ -592,8 +592,8 @@ instruction trace), `tb_penumbra2_interactive.cpp`
 the commit/retire ports) and `tb_penumbra3_interactive.cpp`, its fork
 over `Vmachine_penumbra3_sim`. Each is built by
 `make simulate-rtl [CORE=…]`, which refuses a generation with no shim. Plusargs: `+sdcard=disk.img` (SDCARD),
-`+trace=file.log` (TRACE), `+trace_window=N`, `+halt_on=str`,
-`+stdin_file=path`.
+`+trace=file.log` (TRACE), `+trace_window=N`, `+halt_on=str` (with
+`+halt_delay=N`, the cycles to run on past the match), `+stdin_file=path`.
 
 ## Implementation gotchas
 

@@ -57,6 +57,7 @@ ConsoleOpts parse_console_opts(int argc, char** argv) {
         else if (strncmp(argv[i], "+trace=", 7) == 0)         o.trace_path   = argv[i] + 7;
         else if (strncmp(argv[i], "+trace_window=", 14) == 0) o.trace_ring   = strtoul(argv[i] + 14, nullptr, 10);
         else if (strncmp(argv[i], "+halt_on=", 9) == 0)       o.halt_pattern = argv[i] + 9;
+        else if (strncmp(argv[i], "+halt_delay=", 12) == 0)   o.halt_delay   = strtoull(argv[i] + 12, nullptr, 0);
         else if (strncmp(argv[i], "+stdin_file=", 12) == 0)   o.stdin_file   = argv[i] + 12;
     }
     if (!o.sd_path) o.sd_path = getenv("SDCARD_IMG");   // env fallback
@@ -119,9 +120,12 @@ int run_console(SimCore& core, const ConsoleOpts& opts) {
     uint8_t  sd_resp = 0xFF;
     bool     sd_resp_valid = false;
     size_t   halt_match_pos = 0;
+    uint64_t halt_at = 0;   // the cycle a matched +halt_on= stops the run
     std::vector<std::string> trace_lines;
 
     while (running) {
+        if (halt_at && cycles >= halt_at) break;
+
         // ── One CPU cycle ──────────────────────────────────────────────────
         core.uart_rx(rx_pending, rx_byte);
         core.tick();
@@ -139,12 +143,12 @@ int run_console(SimCore& core, const ConsoleOpts& opts) {
         if (core.uart_tx(tx)) {
             putchar((char)tx);
             fflush(stdout);
-            if (opts.halt_pattern) {
+            if (opts.halt_pattern && !halt_at) {
                 if ((char)tx == opts.halt_pattern[halt_match_pos]) {
                     if (opts.halt_pattern[++halt_match_pos] == '\0') {
                         fprintf(stderr, "\n[HALT_ON matched '%s' after %lu cycles]\n",
                                 opts.halt_pattern, (unsigned long)cycles);
-                        running = 0;
+                        halt_at = cycles + opts.halt_delay;
                     }
                 } else {
                     halt_match_pos = ((char)tx == opts.halt_pattern[0]) ? 1 : 0;

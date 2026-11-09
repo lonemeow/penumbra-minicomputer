@@ -50,6 +50,7 @@ struct ConsoleOpts {
     const char* trace_path   = nullptr;  // +trace=<file>
     size_t      trace_ring   = 0;        // +trace_window=<N> (0 = stream)
     const char* halt_pattern = nullptr;  // +halt_on=<string>
+    uint64_t    halt_delay   = 0;        // +halt_delay=<cycles> run on after the match
     const char* stdin_file   = nullptr;  // +stdin_file=<file>
 };
 
