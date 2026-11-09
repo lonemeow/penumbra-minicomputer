@@ -576,6 +576,9 @@ After reset:
 - `SR = { S=1, I=0, flags=0 }` — supervisor mode, interrupts disabled.
 - `MMUCR = { M=0, ASID=0 }` — flat/bypass mode.
 - `PC = 0xFFFF_0000` (boot ROM).
+- The TLB's contents, main and pinned, are undefined. With `M=0`
+  nothing consults them, so software initializes the TLB before it
+  sets `M=1`.
 
 Recommended flow:
 
@@ -590,10 +593,15 @@ Recommended flow:
 5. Build initial page tables in RAM.
 6. Allocate a pinned vector page containing the TLB miss handler code,
    scratch save area, and PD pointer slot. Populate the PD pointer.
-7. Install pinned TLB entries: vector page (slot 0), PGD (slot 1).
-8. Set `M=1` via `WRSYS` to enable translation — the miss handler
+7. Initialize the TLB: invalidate every main slot (`TLB_INVAL_ALL` in
+   version 2, a [slot loop](#invalidating-entries) in version 1) and
+   write `TLB_PTE = 0` to every pinned slot. A pinned hit wins over
+   everything, so an entry left in an unused pinned slot — from reset,
+   or from whatever ran before — would capture its addresses.
+8. Install pinned TLB entries: vector page (slot 0), PGD (slot 1).
+9. Set `M=1` via `WRSYS` to enable translation — the miss handler
    resolves the first translated fetch.
-9. Jump to the kernel virtual entry point.
+10. Jump to the kernel virtual entry point.
 
 ### Enabling the MMU Safely
 
@@ -615,7 +623,8 @@ Two safe patterns:
   installed first.
 
 ```asm
-; Boot code running at physical address (M=0).
+; Boot code running at physical address (M=0), the TLB initialized
+; (Boot Sequence, step 7).
 ; Port-defined constants:
 ;   PIN_SEL    — TLB_INDEX's pinned select for the MMU's version
 ;                (0x40 in version 1, 0x8000_0000 in version 2)
@@ -653,6 +662,9 @@ JMP   R11
    reachable from the handler's pinned page).
 3. For Pattern A, the `WRSYS` and the next instruction must be on the
    same identity-mapped page.
+4. The TLB must be initialized first: every main slot invalidated and
+   every pinned slot written, `V=0` in the ones not in use. Its
+   contents are undefined after reset.
 
 ### Disabling the MMU
 

@@ -67,6 +67,9 @@ monitor boots) can rely on at its entry point:
 
 - Supervisor mode, MMU off, interrupts off, every cache disabled.
   R1 holds the physical address of the boot data; R2 is undefined.
+- Nothing about the TLB: its contents, main and pinned, are
+  undefined, so a program that turns translation on initializes it
+  first ([mmu.md: Boot Sequence](./mmu.md#boot-sequence)).
 - Its PT_LOAD segments where the ROM placed them, `.bss` zeroed. The
   load address is the ROM's choice, so the program finds it at run
   time.
