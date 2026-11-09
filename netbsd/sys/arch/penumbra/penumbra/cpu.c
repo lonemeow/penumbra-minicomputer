@@ -170,6 +170,33 @@ print_one_cache(device_t self, const char *label, uint32_t info)
 	    wa ? "WA" : "WnA");
 }
 
+/*
+ * Describe the MMU from MMU_CONFIG: its interface version and the
+ * translation geometry.  An MMU that predates the register reads zero,
+ * which reports version 1's baseline, as locore.S takes it.
+ */
+static void
+print_mmu(device_t self)
+{
+	uint32_t cfg;
+
+	__asm __volatile("RDSYS %0, %1, %2"
+	    : "=r"(cfg) : "i"(SYSDEV_MMU), "i"(MMU_CONFIG));
+	if (cfg == 0)
+		cfg = MMUCFG_V1_8P_32X2;
+
+	uint32_t ver       = MMUCFG_VER(cfg);
+	uint32_t pinned    = MMUCFG_PINNED(cfg);
+	uint32_t sets      = 1u << MMUCFG_SETS_LOG2(cfg);
+	uint32_t ways      = MMUCFG_WAYS(cfg);
+	uint32_t asid_bits = MMUCFG_ASID_BITS(cfg);
+	uint32_t asids     = 1u << asid_bits;
+
+	aprint_normal_dev(self,
+	    "MMU v%u (%u sets x %u ways + %u pinned, %u ASIDs)\n",
+	    ver, sets, ways, pinned, asids);
+}
+
 static void
 cpu_attach(device_t parent, device_t self, void *aux)
 {
@@ -213,6 +240,7 @@ cpu_attach(device_t parent, device_t self, void *aux)
 	print_one_cache(self, "L1 dcache", dc_info);
 	if (l2_info != 0)
 		print_one_cache(self, "L2 cache ", l2_info);
+	print_mmu(self);
 
 	cpu_info_store.ci_dev = self;
 	cpu_info_store.ci_cpuid = 0;
