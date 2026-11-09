@@ -1,6 +1,6 @@
 # Penumbra/3 — Memory stage & address translation (MEM1/MEM2)
 
-> **Applies to:** Penumbra/3 · pipelined core (in design).
+> **Applies to:** Penumbra/3 · pipelined core.
 
 The gen3 data-memory access is split across two pipeline stages, MEM1 and
 MEM2, and address translation rides that split: the TLB read launches in

@@ -775,6 +775,20 @@ Open:
 - Take the memtest window from the `MEMORY` entry holding the image,
   not the first one.
 
+## Demos: skrolli2026's runtime drives only a version-1 MMU
+
+`sw/demoscene/skrolli2026/runtime/crt0.S` pins its slots with
+`TLB_INDEX`'s pinned select at bit 6, assumes a main TLB of 32 sets of
+2 ways, and turns translation on without initializing the TLB. A
+version-2 MMU, which gen3 builds, takes the select at bit 31, may have
+any geometry, and leaves the TLB's contents undefined after reset
+(`doc/system/mmu.md`, "Interface Versions" and "Boot Sequence"), so the
+demo does not run on one. The bare-metal benchmarks meet the same
+requirements in `benchmark/common/mmu.S`.
+
+Open: read `MMU_CONFIG` for the version and the geometry, and
+initialize the TLB before translation goes on.
+
 ## Boot: multiuser startup is too slow for daily use
 
 The working SD image boots single-user, because multiuser takes too

@@ -1,6 +1,6 @@
 # Penumbra/3 — Memory access completion & back-end stall
 
-> **Applies to:** Penumbra/3 · pipelined core (in design).
+> **Applies to:** Penumbra/3 · pipelined core.
 
 This specifies how every data-memory access *completes* — the back-end
 stall that gates issue on a **registered** completion bit instead of the

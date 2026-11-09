@@ -1,6 +1,6 @@
 # Penumbra/3 — The L1 caches and their clients
 
-> **Applies to:** Penumbra/3 · pipelined core (in design).
+> **Applies to:** Penumbra/3 · pipelined core.
 
 Each side of the core has one L1: the L1-I serves the fetch stages and
 the L1-D the memory stages. An L1 is the only way its side reaches

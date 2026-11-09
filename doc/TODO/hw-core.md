@@ -93,204 +93,101 @@ Open:
   `tb_sdram_test` a stream of writes to the open row that asserts the
   commands follow back to back.
 
-## Hardware: gen3 (Penumbra/3) Phase-1 build status
+## Hardware: gen3 (Penumbra/3) features still to build
 
-Phase 0 (the four structural probes) passed; see
-`doc/internals/penumbra3/phase0-probes.md`. Phase 1 builds the 7-stage
-skeleton stage-by-stage: each module is forked or written, given a
-`MODULE_TESTS` unit test, and committed to `main`. Run one test with
-`make sim MOD=<name>_test TB=tb_<name> PROG=` (a packed-struct port needs a
-`_test.sv` unpacking wrapper; flat-port modules use the bare name).
+The gen3 machine passes `isa/` and boots NetBSD, so phases 0, 1 and 3
+of its build plan are done (`doc/internals/penumbra3/overview.md`,
+"Build plan"); the machine landed in `0d7e47c`, its board tops in
+`94682ef` and `09e8433`. What remains is feature work, in the order
+the overview ranks it ("Levers ranked by measured benefit"): branch
+prediction (phase 2), then the store buffer (phase 4), then the staged
+levers. The prediction leaves, `penumbra3_direction_table`,
+`penumbra3_predecode` and `penumbra3_return_stack`, were written and
+unit-tested for the P0.5 probe; nothing in the core instantiates them
+yet.
 
-**Done** (front end through memory access, all unit-tested):
+Each lever is read against a full-top seed sweep. The current one, the
+ULX3S top with the line SDRAM stack and no floorplan, the placement
+choices taken over from gen2: all 10 seeds close at 37.5 MHz, the CPU
+clock the worst domain on each. Its critical path is MEM2's on 6 of
+them -- the D-TLB's word through the TLB match, the L1-D's tag compare
+and way select and the byte extract into MEM2's writeback payload --
+and IF2's on the other 4 -- the L1-I data word or the I-TLB's VPN word
+through the way select and decode-on-enqueue into the fetch buffer's
+write -- with 60-64% of it routing; IF1's hold is the worst path on
+none. Branch prediction puts its pre-decode and redirect in IF2's cone,
+so its full-top sweep is the one to read against this one.
 
-- `penumbra3_pkg` control bundle + enums (`7a964ee`); `dpath_payload_t`
-  pipeline-register payload (`d8c2d5d`)
-- `penumbra3_decode` -- word->bundle, parallel-then-select, mode-independent (`4e60d01`)
-- `penumbra3_fetch_buffer` -- IF2->ID elastic FIFO (`00051be`)
-- `penumbra3_if1_stage` (`67eeb41`), `penumbra3_if2_stage` decode-on-enqueue (`27166b0`)
-- `penumbra3_id_stage` -- regmap + scoreboard + issue + priv/fault finalize (`10e088b`)
-- `penumbra3_ex_stage` -- operand forwarding + ALU + flags + branch + divmul +
-  drain-commit, with `penumbra3_alu` / `penumbra3_flag_bypass` leaves (`25d7b28`)
-- `penumbra3_mem1_stage` / `penumbra3_mem2_stage` -- split launch/resolve: TLB
-  verdict + cache hit, sub-word extract, fault merge, the `mem_completion`
-  hold buffer; `mem_completion` parks the full descriptor and
-  `dtranslate`/`tlb_store` gained an `i_hold` read clock-enable for the
-  freeze; composed mem1->dtranslate->mem2 test (`96da15b`)
-- `penumbra3_wb_stage` -- the commit point: physical-index write routing
-  (regfile vs SPR-file/scratch, USP-to-regfile), the NZCV flag strobe, divmul
-  dual-write sequencing through the single regfile port, and precise
-  fault-commit gating; flat-driven unit test (`79ef076`)
-- `penumbra3_regfile` / `penumbra3_spr_file` / `penumbra3_scratch_file` -- the
-  storage tier WB commits into: GPRs + banked USP/SSP (R0 forced 0), SR/EPC/ESR
-  (SR moves only via entry/ERET/EI/DI + flag commit -- no WRSPR SR leg), and
-  SCR0..3; each flat-port unit-tested (`3e40ce4`)
-- `penumbra3_spine` -- ID/EX/MEM1/MEM2/WB integration around the
-  regfile/SPR/scratch files: bundle+payload handoffs, operand/flag forward
-  sources into EX, the late-writer list for ID's scoreboard, the regfile
-  write-port mux (commit vs load completion), drain-commit (ERET/EI/DI,
-  WRSYS) + fault commit/flush, and the freeze distribution (registered
-  `mem_pending` freezes the launch side + issue; the MEM2/WB register is held
-  only by WB back-pressure -- the carve-out).
-  Fetch-stream unit test: ALU forwarding, divmul dual-write, precise fault
-  (`297b12d`)
-- `penumbra3_vecfetch` -- exception vector-fetch FSM: borrows the fetch port on
-  a fault commit, reads `vector_table[vec<<2]` (MMU-bypassed), redirects IF1 to
-  the handler from a register (`19cb214`)
-- `penumbra3_irq` -- interrupt recognition + EX-frontier injection (synthetic
-  fault on the precise path; EI one-instruction shadow) (`e19a10a`). The spine
-  gained `o_ex_valid`/`o_ex_stall` -- the clean-boundary frontier the unit gates
-  on (`94d0b9a`)
-- `penumbra3_core` -- the front end (IF1/IF2 + fetch buffer) onto the spine plus
-  `vecfetch` + `irq`: the fetch-port mux (IF1 vs vecfetch), the redirect/flush
-  composition (branch / vector-fetch / ERET / WRSYS-resync steer; a fault
-  flushes but steers later), and the I-fetch + D-side port groups exposed for the
-  machine layer. Integration unit test (sync-read fetch ROM): streaming +
-  in-order commit, branch redirect, interrupt entry via the vector fetch
-  (`c281f88`)
+## Hardware: a gen3 load's reader waits for its regfile write
 
-**Spine follow-ons** (do not block the memory-hierarchy fork): the
-*forwarding-release* increment
-(the `i_fwd` broadcasts -- correctness-first leaves them tied off today, so a
-reader of a late writer waits until the writer has written the regfile). A
-divmul's low half need not be a late writer at all: EX's MEM1 leg already
-forwards it, and gen2.5 takes it at no cost (`MUL` 11/11, `DIV` 35/35 in
-`doc/system/instruction-timing.md`) where gen3 holds a reader directly
-behind it 3 cycles longer than an independent op (spine testbench).
+ID holds a reader of a late writer (a load, a sysreg read, a divmul)
+until the writer leaves MEM2, and then reads the value from the
+regfile in the cycle WB writes it. EX could take it a cycle sooner: it
+forwards loads and sysreg reads from the MEM2/WB register, so a reader
+issued with the writer still in MEM2 would find the value there. ID
+already matches the broadcasts that would release such a reader
+(`i_fwd0`, `i_fwd1`); the spine ties them off. A reader directly
+behind a load therefore waits 3 cycles where the design's load-use
+wait is 2 (`doc/internals/penumbra3/memory-completion.md`, "Load hit
+— a registered load-use hazard").
 
-**Memory hierarchy** (the fork in progress):
+A divmul's low half need not be a late writer at all: EX's MEM1 leg
+already forwards it, and gen2.5 takes it at no cost (`MUL` 11/11, `DIV`
+35/35 in `doc/system/instruction-timing.md`) where gen3 holds a reader
+directly behind it 3 cycles longer than an independent op (spine
+testbench).
 
-- `penumbra3_translate` -- the side-neutral translate path (renamed from
-  `dtranslate`; the MMU uses it twice), now exposing its registered set for
-  sysreg read-back (`9fd2928`, `460f6d4`)
-- `penumbra3_mmu` -- I+D translation unify: `translate` x2 over a shared
-  coherent write stream + dual-port `tlb_pinned`, per-port bypass>pinned>main
-  verdict, the device-0 sysreg interface (MMUCR / FADDR / FSTAT / TLB
-  install+read-back), commit-time fault registers (`02f57e3`)
-- `penumbra3_l1` -- storage, the hit verdict, the store-hit write with its
-  forwarding, tree-PLRU, the enable, the cache device's sysregs and
-  counters, 8 KB 2-way on the ECP5; each L1 its side's requester on the
-  uncore port, its clients seeing only lookups, stores and accesses, and
-  the L1-D passing a cacheable write's bus fault to the core
-  (`doc/internals/penumbra3/l1-cache.md`; `48d95c2`, `bcb189f`, `34e9e95`)
-- `machine_penumbra3` -- the core, the MMU, the L1s, the uncore, the CPU
-  performance counters and the sysreg devices behind the gen2 machine's
-  port list (`doc/internals/penumbra3/machine.md`), with a sim wrapper
-  and program runner forked from gen2's: `isa/` passes on
-  `make test CORE=penumbra3` (`9ee414b`, `2085276`, `4659225`, `0d7e47c`)
-- the uncore pipeline -- the I/D select, the write-through L2 with a
-  look-up every cycle and the line-wide transfer with fill-through, the
-  posted write, and `bus_master`
-  (`doc/internals/penumbra3/uncore.md`; `4bb3ab5`, `9801486`)
-- `make simulate-rtl CORE=penumbra3` -- the console shim, a fork of gen2's
-  over the gen3 sim wrapper (`2d46035`)
-- `ulx3s_penumbra3_top` -- the gen2 board top around `machine_penumbra3`,
-  the ULX3S's cache geometry as its parameters
-- `nexysvideo_penumbra3_top` -- the gen2 Nexys top around
-  `machine_penumbra3`, with the ULX3S's cache geometry; its boot testbench
-  is the gen2 top's, shared (`hw/sim/nexysvideo_top_tb.h`)
+The ISS's load-use model puts the 2-cycle wait at 131–147 cycles per
+1000 instructions on `pbench kernel` and Doom `demo3`
+(`doc/internals/penumbra4/load-use.md`); the third cycle has not been
+counted.
 
-**Next:** feature work, in the order `doc/internals/penumbra3/overview.md`
-ranks ("Levers ranked by measured benefit"). The full-top timing read
-passes with the line SDRAM stack and no floorplan, the placement choices
-taken over from gen2: all 10 seeds close at 37.5 MHz, the CPU clock the
-worst domain on each. Its critical path is MEM2's on 6 of them -- the
-D-TLB's word through the TLB match, the L1-D's tag compare and way select
-and the byte extract into MEM2's writeback payload -- and IF2's on the
-other 4 -- the L1-I data word or the I-TLB's VPN word through the way
-select and decode-on-enqueue into the fetch buffer's write -- with 60-64%
-of it routing; IF1's hold is the worst path on none. Branch prediction
-puts its pre-decode and redirect in IF2's cone, so its full-top sweep is
-the one to read against this one.
+Open:
 
-**The 256x2 TLB:** its interface is `MMU_CONFIG` version 2
-(`doc/system/mmu.md`, "Interface Versions"): the geometry bounds lifted,
-`TLB_INDEX`'s pinned select at bit 31, and invalidation in the MMU
-through three registers (evidence for the geometry:
-`doc/internals/penumbra3/memory-performance.md`, "TLB: sets, and a
-cheaper refill"). The kernel, the `isa/` tests and the benchmark harness
-(`benchmark/common/mmu.S`) drive both versions, the gen3 MMU builds
-version 2 with its set count a machine parameter, and the ISS presents
-it as gen3 does or on request (`+mmu=2:256x2`). Open: a version-2 MMU
-stops every program that knows only version 1, and the demo runtime
-(`sw/demoscene/skrolli2026/runtime/crt0.S`) still does. It has to read
-the version and the geometry instead of assuming 32 sets of 2 ways and
-the pinned select at bit 6, and initialize the TLB before it turns
-translation on, since its contents are undefined after reset
-(`doc/system/mmu.md`, "Boot Sequence").
+- The spine drives `i_fwd*` to release a pending load or sysreg read
+  at the cycle its value reaches MEM2/WB, gated on the registered
+  `mem_pending`, never on a live verdict.
+- The divmul's low half leaves the late-writer list.
+- What the third cycle costs: `+loadusemodel=ex+wait:3` beside `ex`.
 
-**Locked hazard-model decisions** (context for resuming):
+## Hardware: a gen3 divmul's second write stalls the whole back end
 
-- Decode runs on the FIFO *enqueue* path and is a pure function of the
-  instruction word -- everything mode-dependent (regmap, the privilege fault,
-  the fault vector's `VEC_PRIV` arm) stays in ID against live `SR.S`.
-- The bundle carries a single positive-sense `dst_we` (routed GPR/SPR by
-  `dst_is_spr`): a forwarding machine's destination-valid bit must mean
-  "actually writes", so a CMP must advertise no destination.
-- The scoreboard holds back only the readers of late writers (LOAD / DIVMUL
-  / RDSYS), found each cycle among the destinations in flight rather than
-  kept in bits; ALU results are never late writers -- EX forwards them. The
-  issue gate blocks a source only on `used & pending & ~forwardable`.
-- Forward broadcasts to ID are producer *stages* (not source lanes), so every
-  source matches every broadcast slot.
-- The fetch FIFO *is* the IF2/ID register (decode folds into enqueue, no extra
-  stage); a slot with no FIFO room holds IF1 and stays in IF2, its lookup read
-  again every cycle, so IF2 needs no skid.
-- The resolved datapath rides a packed `dpath_payload_t` (value, dest routing,
-  flags, PC, fault verdict) carried as a unit across the EX->MEM->WB registers
-  alongside `ctrl_bundle_t`; `store_data` rides its own EX->MEM1 wire (consumed
-  in MEM2, never reaches WB).
-- The back-end stall is spine-distributed: the L1-D's registered busy reaches
-  the spine through MEM2 as `mem_pending`, and the spine fans it back to
-  freeze the *launch side* -- MEM1, the MEM1/MEM2 register,
-  `dtranslate`/`tlb_store`/cache, and issue -- so the missing load and
-  everything younger hold. It must NOT freeze the MEM2/WB output register:
-  that drains older work to commit (the held load retires via the completion
-  path, not MEM2/WB), and folding `mem_pending` into its freeze re-presents an
-  already-committed multi-cycle writeback (the divmul dual-register retire)
-  and retires it twice. The MEM2/WB register's only back-pressure is the WB
-  dual-write hold. Contract:
-  [load-completion freeze scope](../internals/penumbra3/memory-completion.md#what-the-pipe-gate-freezes).
-  A frozen MEM2 slot keeps its own verdict, and no combinational cache/TLB
-  verdict ever reaches issue. Candidate spine assertion: `mem_pending` never
-  gates the MEM2/WB register.
+The divmul's two-cycle WB writeback makes WB occupy two cycles, and
+that hold (`wb_local_stall`) ripples up the pure-stall chain
+WB->MEM2->MEM1->EX->ID. It is 1-bit and flop-shallow -- no cache/TLB
+verdict in it, so it is correct and within the "1-bit ready crosses
+backward" allowance -- but it is the longest-*reach* combinational
+stall and may bind at 50 MHz on routing distance alone. Floorplanning
+is NOT the remedy (placement cannot be the fix for a structural reach).
 
-**Deferred (resolve at the named task):**
+The structural fix is localized and does not touch the core shape:
+retire the divmul writeback through the **load-completion path**
+rather than the WB stage. divmul holds in EX until it is the oldest
+in-flight -- `drained` = `~mem1_valid & ~mem2_valid & ~memwb_valid &
+~mem_pending` (the drain-commit condition extended with `mem_pending`)
+-- then writes Rd/Rdh over two cycles through the completion
+write-port mux. The port is free **by the in-order single-outstanding
+invariant** (oldest => no older writer; younger blocked behind the held
+divmul), NOT by any cycle count -- so a slow uncached MMIO access ahead
+of the divmul simply makes it wait in EX, never write early or out of
+order. WB then never sees a divmul: the dual-write FSM and
+`wb_local_stall` both delete, and back-pressure reduces to the
+`mem_pending` fan-out plus the one-hop EX->ID stall.
 
-- *Issue-release broadcasts* -- the operand-value forward network is settled
-  (EX sources EX/MEM1, MEM1/MEM2, MEM2/WB; youngest-wins; write-first regfile
-  for the four-deep distance; the MEM1 and MEM1/MEM2 legs exclude loads and
-  sysreg reads, which forward from MEM2/WB). What remains is a pure spine
-  task: drive ID's `i_fwd*` to release a scoreboard-pending load / sysreg read
-  at the cycle its value reaches MEM2/WB -- gated on the registered
-  `mem_pending`, never a live verdict. ID owns only the match today.
-- *divmul writeback back-pressure reach* (`wb_local_stall`: the WB dual-write
-  ripple WB->MEM2->MEM1->EX->ID). The divmul's two-cycle WB writeback makes WB
-  occupy two cycles, and that hold ripples up the pure-stall chain. It is 1-bit
-  and flop-shallow -- no cache/TLB verdict in it, so it is correct and within
-  the "1-bit ready crosses backward" allowance -- but it is the longest-*reach*
-  combinational stall and may bind at 50 MHz on routing distance alone.
-  Floorplanning is NOT the remedy (placement cannot be the fix for a structural
-  reach). Structural fix, deferrable because it is localized and does not touch
-  the core shape: retire the divmul writeback through the **load-completion
-  path** rather than the WB stage. divmul holds in EX until it is the oldest
-  in-flight -- `drained` = `~mem1_valid & ~mem2_valid & ~memwb_valid &
-  ~mem_pending` (the drain-commit condition extended with `mem_pending`) --
-  then writes Rd/Rdh over two cycles through the completion write-port mux. The
-  port is free **by the in-order single-outstanding invariant** (oldest => no
-  older writer; younger blocked behind the held divmul), NOT by any cycle count
-  -- so a slow uncached MMIO access ahead of the divmul simply makes it wait in
-  EX, never write early or out of order. WB then never sees a divmul: the
-  dual-write FSM and `wb_local_stall` both delete, and back-pressure reduces to
-  the `mem_pending` fan-out plus the one-hop EX->ID stall. Land as its own
-  increment if HW timing shows the reach binds; until then the WB dual-write is
-  correct (WB is the oldest by pipeline position, so it is already drain-gated
-  -- only the reach is suboptimal).
-- *Vector-fetch cacheability* -- `penumbra3_vecfetch` will keep the vector
-  read uncached for now. It is the CPU's only fetch-by-PA (not VA), so
-  threading a PA index into the VIPT caches is awkward; MMU-bypass is required,
-  cache-bypass is not, so making it L2-cacheable is a worthwhile later win
-  (kills a full-SDRAM round-trip per trap). Revisit after the skeleton boots.
+Open: land it as its own increment if a full-top sweep shows the reach
+binding. Until then the WB dual-write is correct (WB is the oldest by
+pipeline position, so it is already drain-gated -- only the reach is
+suboptimal).
+
+## Hardware: a gen3 exception's vector read always goes to memory
+
+`penumbra3_vecfetch` reads the vector table uncached. It is the CPU's
+only fetch by physical address, so threading a PA index into the VIPT
+caches is awkward; the read has to bypass the MMU but not the caches.
+Making it L2-cacheable saves a full SDRAM round-trip per trap.
+
+Open: the L2-cacheable vector read, and what it saves per trap on a
+running system.
 
 ## Hardware: FPU
 
@@ -883,8 +780,9 @@ ERET, WRSYS, EI and DI commit from EX, so EX holds one until nothing
 older is unfinished. That test is an OR over EX/MEM1, MEM2, WB, a
 pending access and its completion. It feeds `ex_local_stall` and so
 ID's stall, which every instruction's issue reads, though only these
-four need it. No measurement says what it costs: gen3 has no full top
-to read, and a path's place on a probe attributes nothing.
+four need it. No measurement says what it costs: no full-top sweep has
+been read without the gate, and a path's place in a sweep attributes
+nothing.
 
 Two other shapes avoid the gate. Neither is built.
 

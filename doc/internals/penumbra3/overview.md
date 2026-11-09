@@ -1,6 +1,6 @@
 # Penumbra/3 — Overview & Build Plan
 
-> **Applies to:** Penumbra/3 · pipelined in-order core (in design).
+> **Applies to:** Penumbra/3 · pipelined in-order core.
 
 Penumbra/3 is a **fresh redo of the gen2 in-order pipeline**,
 re-architected to clear the timing floor that capped gen2. It is **not**
@@ -344,8 +344,7 @@ What that means for the ECP5:
 
 ## Performance targets
 
-Targets, not measurements — actuals get recorded in `benchmark/` once gen3
-runs on hardware.
+Targets, not measurements.
 
 | Metric | gen3 target | Reference |
 |---|---|---|

@@ -1,6 +1,6 @@
 # Penumbra/3 — The machine
 
-> **Applies to:** Penumbra/3 · pipelined core (in design).
+> **Applies to:** Penumbra/3 · pipelined core.
 
 The machine is the board-independent gen3 computer, the
 [machine layer](../build-system.md#the-machine-layer) of the build: the

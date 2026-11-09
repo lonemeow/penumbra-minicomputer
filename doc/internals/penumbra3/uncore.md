@@ -1,6 +1,6 @@
 # Penumbra/3 — The uncore
 
-> **Applies to:** Penumbra/3 · pipelined core (in design).
+> **Applies to:** Penumbra/3 · pipelined core.
 
 The uncore serves both L1s on the
 [core-to-uncore port](./uncore-port.md) and drives the external bus.

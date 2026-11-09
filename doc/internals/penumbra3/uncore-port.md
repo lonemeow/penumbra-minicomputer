@@ -1,6 +1,6 @@
 # Penumbra/3 — The core-to-uncore port
 
-> **Applies to:** Penumbra/3 · pipelined core (in design).
+> **Applies to:** Penumbra/3 · pipelined core.
 
 Every memory access the core cannot finish in its own L1 goes to the
 uncore: a load or fetch that missed, any access to an uncacheable
