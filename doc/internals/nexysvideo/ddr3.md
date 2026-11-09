@@ -195,7 +195,7 @@ so the crossing keeps one request in flight.
 |---|---|
 | `tb_ddr3_stack_test` (`make test-modules`) | the stack on `wb_line_mem` (random stalls, ack latencies with long tails), unrelated clocks: every byte, halfword and word lane, random traffic, resets that leave a read or a write in the memory, answered during the reset or after it |
 | `make test SIM_MEM=ddr3` | the program suites on the gen2 sim machine with `ddr3_sim`: the stack on a 512 MiB model that calibrates after reset, the machine held until it has |
-| `make sim MOD=nexysvideo_penumbra2_top` | the board top through its pins, the controller replaced by `hw/rtl/sim/nexysvideo/nexysvideo_ddr3.sv` (the wrapper's ports on `wb_line_mem`); `make fpga-lint` sees the same stand-in, since UberDDR3 does not elaborate under Verilator at this configuration |
+| `make sim MOD=nexysvideo_<core>_top` | a machine top through its pins, the controller replaced by `hw/rtl/sim/nexysvideo/nexysvideo_ddr3.sv` (the wrapper's ports on `wb_line_mem`); `make fpga-lint` sees the same stand-in, since UberDDR3 does not elaborate under Verilator at this configuration |
 | `nexysvideo_ddr3_test_top` | the real controller and chip on the board: calibration and the whole-chip self-test, repeated |
 
 Only the board runs the real controller behind the stack, so two

@@ -49,7 +49,8 @@ hw/
 ├── sim/         # tb_cpu_prog (program runner), sim_console + per-core shims, per-module tbs,
 │                #   uart_host.h (a serial host for tbs driving a board top's pins),
 │                #   i2c_slave.h (a slave for tbs holding an I2C bus),
-│                #   ps2_device.h (a device for tbs holding a PS/2 link)
+│                #   ps2_device.h (a device for tbs holding a PS/2 link),
+│                #   nexysvideo_top_tb.h (the Nexys machine tops' boot tb)
 ├── third_party/ # vendored files under their own licenses (Digilent board XDCs, UberDDR3)
 └── tools/       # uasm.py (microcode), oss-cad-suite wrappers
 ```
@@ -490,9 +491,9 @@ the shared module.
   The controller resets only with its clocks' lock; the machine is held
   in reset until it has calibrated and the PHY has left its own reset,
   and LEDs show calibration and the RAM's longest wait
-  (`bus_wait_meter`). Its boot testbench
-  (`make -C hw/rom && make font8x16.hex && make sim
-  MOD=nexysvideo_penumbra2_top`) runs the ROM to the monitor through
+  (`bus_wait_meter`). Its boot testbench, `hw/sim/nexysvideo_top_tb.h`
+  behind a file per machine top (`make -C hw/rom && make font8x16.hex &&
+  make sim MOD=nexysvideo_<core>_top`), runs the ROM to the monitor through
   the board pins, with the controller's and display clocks' simulation
   stand-ins and a simulated card on the SD pins, reads a frame of
   DVI off the HDMI pins, plays frames pushed from the monitor into a
@@ -500,6 +501,12 @@ the shared module.
   the RGMII transmit pins and back in at the receive pins, with an
   EEPROM model on the I2C pins and a PHY model on the management pins,
   and exchanges bytes with a keyboard model on the PS/2 pins.
+- `nexysvideo/nexysvideo_penumbra3_top.sv` — gen3 machine on the Nexys
+  Video (`BOARD=nexysvideo CORE=penumbra3`): a fork of the gen2 top with
+  `machine_penumbra3` in its place, the board around it the same, and
+  the ULX3S's cache geometry as the machine's parameters (two-way L1s, a
+  1024-set four-way L2). The board system both tops share is
+  `SRC_SYSTEM_nexysvideo` in the Makefile.
 - `nexysvideo/nexysvideo_uart_test_top.sv` — console bring-up top
   (`make fpga TOP=nexysvideo_uart_test_top`): banner and echo on the
   UART port, LEDs for lock, reset, a 1 Hz heartbeat, RX activity and

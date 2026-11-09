@@ -1,16 +1,16 @@
 # Nexys Video
 
 > **Applies to:** the Digilent Nexys Video board (XC7A200T-1SBG484C) ·
-> its machine top and bring-up tops.
+> its machine tops and bring-up tops.
 
 The Nexys Video is the machine's second board: an Artix-7 200T, a
 100 MHz oscillator, 512 MiB of DDR3, a microSD slot, a USB UART, an
 HDMI output, an audio codec, Gigabit Ethernet and a USB HID socket
 for a keyboard, plus an HDMI input, an OLED and Pmod headers the
 machine does not use yet (`doc/TODO/hw-nexysvideo.md`). It runs the
-gen2 machine from the same boot ROM and NetBSD as the ULX3S. The CPU
-behaves functionally the same on both boards, and what differs,
-software discovers: the machine's name and clock from `SYSDEV_MACH`,
+gen2 and gen3 machines from the same boot ROM and NetBSD as the ULX3S.
+The CPU behaves functionally the same on both boards, and what
+differs, software discovers: the machine's name and clock from `SYSDEV_MACH`,
 the RAM by probing to a bus fault, and the devices through
 autoconfig.
 
@@ -32,11 +32,14 @@ The board's larger subsystems have documents of their own:
 
 | Top | Build | What it is |
 |-----|-------|------------|
-| `nexysvideo_penumbra2_top` | `make fpga BOARD=nexysvideo CORE=penumbra2_5` (or `penumbra2`) | the machine |
+| `nexysvideo_penumbra2_top` | `make fpga BOARD=nexysvideo CORE=penumbra2_5` (or `penumbra2`) | the gen2 machine |
+| `nexysvideo_penumbra3_top` | `make fpga BOARD=nexysvideo CORE=penumbra3` | the gen3 machine, its caches the ULX3S's |
 | `nexysvideo_uart_test_top` | `make fpga TOP=nexysvideo_uart_test_top` | the console alone: a banner, an echo, and LEDs for lock, reset, a heartbeat, RX activity and framing errors |
 | `nexysvideo_ddr3_test_top` | `make fpga TOP=nexysvideo_ddr3_test_top` | the DDR3 controller and its whole-chip self-test, no CPU |
 
-The machine top carries a 64 KiB boot ROM, the UART and system RAM in
+The two machine tops differ only in the machine; the board around it,
+which the rest of this document and the subsystem documents describe,
+is the same. Each carries a 64 KiB boot ROM, the UART and system RAM in
 DDR3, and names itself "Nexys Video". Behind autoconfig it carries
 the microSD slot over SPI, the display adapter on the HDMI output, the
 audio device in front of the codec ([audio.md](audio.md)), the
@@ -50,7 +53,7 @@ response fabric with its 256-cycle watchdog.
 The CPU clock comes from the 100 MHz oscillator through an MMCM
 (`nexysvideo_clk_rst`, shared by every top). `xc7_mmcm_pkg` derives
 the dividers from `CPU_HZ`, so the clock is a one-number edit, and the
-build stops when no exact divider set reaches it. The machine top runs
+build stops when no exact divider set reaches it. The machine tops run
 at 60 MHz. The DDR3 controller has clocks of its own, from a PLL
 ([ddr3.md](ddr3.md), "Clocks, the crossing and reset").
 
@@ -60,7 +63,7 @@ and for at least 10 ms after both clear, the bus's reset minimum
 lock restarts the hold, so a bouncing button does too. The MMCM's own
 reset is tied off, so its lock reports the MMCM alone. CPU RESET
 (`cpu_resetn`) is active-low and sits in the DDR3 bank at 1.5 V. The
-machine top also holds the machine in reset until the DDR3 has
+machine tops also hold the machine in reset until the DDR3 has
 calibrated and the Ethernet PHY is past its own reset
 ([ethernet.md](ethernet.md), "Reset").
 
@@ -94,7 +97,7 @@ tile of any clock region.
 
 ## LEDs
 
-The machine top's LEDs report what the machine cannot print:
+A machine top's LEDs report what the machine cannot print:
 
 | LED | Lit when |
 |-----|----------|

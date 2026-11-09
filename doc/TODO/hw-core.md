@@ -186,6 +186,9 @@ behind it 3 cycles longer than an independent op (spine testbench).
   over the gen3 sim wrapper (`2d46035`)
 - `ulx3s_penumbra3_top` -- the gen2 board top around `machine_penumbra3`,
   the ULX3S's cache geometry as its parameters
+- `nexysvideo_penumbra3_top` -- the gen2 Nexys top around
+  `machine_penumbra3`, with the ULX3S's cache geometry; its boot testbench
+  is the gen2 top's, shared (`hw/sim/nexysvideo_top_tb.h`)
 
 **Next:** Phase-1's gating checkpoint, the **full-top composition timing
 read** (`make fpga BOARD=ulx3s CORE=penumbra3` across a seed sweep; bare

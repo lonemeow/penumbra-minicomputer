@@ -104,17 +104,19 @@ OBJCOPY   = $(LLVM_PREFIX)/bin/llvm-objcopy
 BIN2HEX   = python3 sw/tools/bin2hex.py
 
 # A module sim that needs sources off the module path names their
-# directories here, searched ahead of it: the Nexys machine top's DDR3
+# directories here, searched ahead of it: the Nexys machine tops' DDR3
 # memory system, its controller's and display clocks' simulation
 # stand-ins (shadowing their wrappers), its stack, and the line adapter
 # the stack takes (shadowing the word adapter).
 SIM_DIRS_nexysvideo_penumbra2_top = hw/rtl/sim/nexysvideo hw/rtl/io/ddr3 hw/rtl/io/sdram_line
+SIM_DIRS_nexysvideo_penumbra3_top = $(SIM_DIRS_nexysvideo_penumbra2_top)
 
-# A module sim's own Verilator flags. The Nexys machine top's I2C pads
+# A module sim's own Verilator flags. The Nexys machine tops' I2C pads
 # are open drain, driven low or let go: without the enables at the top
 # level Verilator resolves such a pin inside the model and never reads
 # it back, so the testbench could not hold the bus for it.
 SIM_FLAGS_nexysvideo_penumbra2_top = --pins-inout-enables
+SIM_FLAGS_nexysvideo_penumbra3_top = $(SIM_FLAGS_nexysvideo_penumbra2_top)
 
 .PHONY: sim
 sim:
@@ -1326,6 +1328,14 @@ SRC_MACHINE_penumbra2 = hw/rtl/machine/machine_penumbra2.sv \
                         hw/rtl/soc/l2_cache.sv \
                         hw/rtl/soc/cache_perfctr.sv
 
+# The gen3 machine's closure beyond penumbra3/: the integration module and
+# the sysreg devices it binds from soc/. Its L2 is the uncore's, in
+# penumbra3/.
+SRC_MACHINE_penumbra3 = hw/rtl/machine/machine_penumbra3.sv \
+                        hw/rtl/soc/cpuid.sv hw/rtl/soc/machid.sv \
+                        hw/rtl/soc/timer.sv hw/rtl/soc/busctl.sv \
+                        hw/rtl/soc/cache_perfctr.sv
+
 # Board-common helpers only — each registry entry names its own top
 # file, so sibling tops never leak into each other's builds. The PLL
 # config package comes first (both ULX3S tops import it to derive the
@@ -1377,7 +1387,8 @@ FPGA_TOPS = ulx3s_penumbra1_top ulx3s_penumbra2_probe_top ulx3s_penumbra2_top \
             ulx3s_penumbra2_5_top ulx3s_penumbra3_probe_memtlb_top \
             ulx3s_penumbra3_probe_issue_top ulx3s_penumbra3_probe_decode_top \
             ulx3s_penumbra3_probe_l1tag_top ulx3s_penumbra3_top \
-            nexysvideo_penumbra2_top nexysvideo_penumbra2_5_top
+            nexysvideo_penumbra2_top nexysvideo_penumbra2_5_top \
+            nexysvideo_penumbra3_top
 
 FPGA_SRC_ulx3s_penumbra1_top = $(SRC_COMMON) $(SRC_CORE_penumbra1) \
                                $(SRC_FABRIC) $(SRC_BOARD_ulx3s) \
@@ -1495,53 +1506,67 @@ FPGA_SRC_nexysvideo_ddr3_test_top = hw/rtl/common/build_check.sv \
                                     $(SRC_UBERDDR3)
 XDC_nexysvideo_ddr3_test_top = hw/constraints/nexysvideo_ddr3_test_top.xdc $(XDC_DDR3_nexysvideo)
 
+# A Nexys Video machine top's board system, the machine and the top's
+# own file aside. Its devices are named rather than taken from
+# SRC_FABRIC, whose wildcards bring the ECP5 PHYs; the display's set has
+# none, since its output cells are the top's. Its RAM is the DDR3 behind
+# the line stack's adapter and crossing, with UberDDR3 after the top's
+# file (see SRC_UBERDDR3).
+SRC_SYSTEM_nexysvideo = hw/rtl/soc/bus_devsel.sv \
+                        hw/rtl/soc/bus_device_simple.sv \
+                        hw/rtl/soc/bus_response_fabric.sv \
+                        hw/rtl/soc/bus_wait_meter.sv \
+                        hw/rtl/soc/boot_rom.sv \
+                        hw/rtl/soc/autoconfig_dev.sv \
+                        hw/rtl/io/spi_fifo.sv \
+                        hw/rtl/io/uart.sv \
+                        hw/rtl/io/spi.sv \
+                        hw/rtl/io/sdram/sdram_cdc.sv \
+                        hw/rtl/io/sdram_line/sdram_bus_adapter.sv \
+                        hw/rtl/io/ddr3/ddr3_stack.sv \
+                        $(SRC_VIDEO) \
+                        $(SRC_AUDIO) \
+                        hw/rtl/io/audio/audio_i2s_out.sv \
+                        hw/rtl/io/i2c/i2c_master.sv \
+                        hw/rtl/io/i2c/i2c_shared_master.sv \
+                        $(SRC_ETH) \
+                        hw/rtl/io/eth/eth_phy_rgmii_xc7.sv \
+                        hw/rtl/io/eth/eth_phy_reset.sv \
+                        hw/rtl/io/eth/eth_addr_eeprom.sv \
+                        hw/rtl/io/ps2/ps2.sv \
+                        hw/rtl/io/ps2/ps2_link.sv \
+                        hw/rtl/io/ps2/ps2_line_filter.sv \
+                        $(SRC_BOARD_nexysvideo) \
+                        $(SRC_DDR3_nexysvideo) \
+                        $(FPGA_RTL)/nexysvideo/nexysvideo_video_clk.sv \
+                        $(FPGA_RTL)/nexysvideo/nexysvideo_codec_mclk.sv \
+                        $(FPGA_RTL)/nexysvideo/nexysvideo_codec_setup.sv \
+                        $(FPGA_RTL)/nexysvideo/nexysvideo_eth.sv
+
 # The gen2 machine on the Nexys Video, growing one device per bring-up
-# step. Its devices are named rather than taken from SRC_FABRIC, whose
-# wildcards bring the ECP5 PHYs; the display's set has none, since
-# its output cells are the top's. Its RAM is the DDR3 behind the line
-# stack's adapter and crossing, with UberDDR3 last (see SRC_UBERDDR3).
+# step.
 FPGA_SRC_nexysvideo_penumbra2_top = $(SRC_COMMON) $(SRC_CORE) \
                                     $(SRC_MACHINE_penumbra2) \
-                                    hw/rtl/soc/bus_devsel.sv \
-                                    hw/rtl/soc/bus_device_simple.sv \
-                                    hw/rtl/soc/bus_response_fabric.sv \
-                                    hw/rtl/soc/bus_wait_meter.sv \
-                                    hw/rtl/soc/boot_rom.sv \
-                                    hw/rtl/soc/autoconfig_dev.sv \
-                                    hw/rtl/io/spi_fifo.sv \
-                                    hw/rtl/io/uart.sv \
-                                    hw/rtl/io/spi.sv \
-                                    hw/rtl/io/sdram/sdram_cdc.sv \
-                                    hw/rtl/io/sdram_line/sdram_bus_adapter.sv \
-                                    hw/rtl/io/ddr3/ddr3_stack.sv \
-                                    $(SRC_VIDEO) \
-                                    $(SRC_AUDIO) \
-                                    hw/rtl/io/audio/audio_i2s_out.sv \
-                                    hw/rtl/io/i2c/i2c_master.sv \
-                                    hw/rtl/io/i2c/i2c_shared_master.sv \
-                                    $(SRC_ETH) \
-                                    hw/rtl/io/eth/eth_phy_rgmii_xc7.sv \
-                                    hw/rtl/io/eth/eth_phy_reset.sv \
-                                    hw/rtl/io/eth/eth_addr_eeprom.sv \
-                                    hw/rtl/io/ps2/ps2.sv \
-                                    hw/rtl/io/ps2/ps2_link.sv \
-                                    hw/rtl/io/ps2/ps2_line_filter.sv \
-                                    $(SRC_BOARD_nexysvideo) \
-                                    $(SRC_DDR3_nexysvideo) \
-                                    $(FPGA_RTL)/nexysvideo/nexysvideo_video_clk.sv \
-                                    $(FPGA_RTL)/nexysvideo/nexysvideo_codec_mclk.sv \
-                                    $(FPGA_RTL)/nexysvideo/nexysvideo_codec_setup.sv \
-                                    $(FPGA_RTL)/nexysvideo/nexysvideo_eth.sv \
+                                    $(SRC_SYSTEM_nexysvideo) \
                                     $(FPGA_RTL)/nexysvideo/nexysvideo_penumbra2_top.sv \
                                     $(SRC_UBERDDR3)
 XDC_nexysvideo_penumbra2_top = $(XDC_MACHINE_nexysvideo)
+
+# The gen3 machine in its place, on the same board system.
+FPGA_SRC_nexysvideo_penumbra3_top = $(SRC_COMMON) $(SRC_CORE_penumbra3) \
+                                    $(SRC_MACHINE_penumbra3) \
+                                    $(SRC_SYSTEM_nexysvideo) \
+                                    $(FPGA_RTL)/nexysvideo/nexysvideo_penumbra3_top.sv \
+                                    $(SRC_UBERDDR3)
+XDC_nexysvideo_penumbra3_top = $(XDC_MACHINE_nexysvideo)
 
 # Tops that embed the boot ROM and/or microcode: their hex images are
 # generated before synthesis and inlined by inline_hex.py.
 # gen2 embeds the boot ROM (no microcode — the gen2 core is hardwired).
 FPGA_ROM_TOPS   = ulx3s_penumbra1_top ulx3s_penumbra2_top ulx3s_penumbra2_5_top \
                   ulx3s_penumbra3_top \
-                  nexysvideo_penumbra2_top nexysvideo_penumbra2_5_top
+                  nexysvideo_penumbra2_top nexysvideo_penumbra2_5_top \
+                  nexysvideo_penumbra3_top
 FPGA_UCODE_TOPS = ulx3s_penumbra1_top
 # Tops that embed the display font image: it must exist at the repo
 # root before yosys resolves its $readmemh.  Every top carrying a
@@ -1551,7 +1576,8 @@ FPGA_UCODE_TOPS = ulx3s_penumbra1_top
 FPGA_VIDEO_TOPS = ulx3s_video_test_top ulx3s_penumbra1_top \
                   ulx3s_penumbra2_top ulx3s_penumbra2_5_top \
                   ulx3s_penumbra3_top \
-                  nexysvideo_penumbra2_top nexysvideo_penumbra2_5_top
+                  nexysvideo_penumbra2_top nexysvideo_penumbra2_5_top \
+                  nexysvideo_penumbra3_top
 # Tops that also embed a preloaded cell image — the CPU-free bring-up
 # probe only. A machine draws its own screen from software.
 FPGA_SPLASH_TOPS = ulx3s_video_test_top
@@ -1691,7 +1717,7 @@ audio-sweep:
 # primitive stubs.
 fpga-lint: $(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_SRC_ulx3s_penumbra2_probe_top) $(FPGA_SRC_ulx3s_penumbra2_top) $(FPGA_SRC_ulx3s_penumbra3_top) $(FPGA_SRC_ulx3s_video_test_top) $(FPGA_SRC_ulx3s_audio_test_top) $(FPGA_LINT_STUBS) \
            $(FPGA_SRC_nexysvideo_uart_test_top) $(FPGA_SRC_nexysvideo_penumbra2_top) \
-           $(FPGA_LINT_STUBS_xc7)
+           $(FPGA_SRC_nexysvideo_penumbra3_top) $(FPGA_LINT_STUBS_xc7)
 	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall -Wno-fatal \
 		-Wno-PINMISSING -Wno-PINCONNECTEMPTY \
 		$(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_LINT_STUBS) --top ulx3s_penumbra1_top
@@ -1717,6 +1743,10 @@ fpga-lint: $(FPGA_SRC_ulx3s_penumbra1_top) $(FPGA_SRC_ulx3s_penumbra2_probe_top)
 		-Wno-PINMISSING -Wno-PINCONNECTEMPTY \
 		$(call fpga_lint_src_nexysvideo,$(FPGA_SRC_nexysvideo_penumbra2_top)) \
 		$(FPGA_LINT_STUBS_xc7) --top nexysvideo_penumbra2_top
+	$(DOCKER_RUN) $(DOCKER_IMAGE) --lint-only -Wall -Wno-fatal \
+		-Wno-PINMISSING -Wno-PINCONNECTEMPTY \
+		$(call fpga_lint_src_nexysvideo,$(FPGA_SRC_nexysvideo_penumbra3_top)) \
+		$(FPGA_LINT_STUBS_xc7) --top nexysvideo_penumbra3_top
 
 fpga: $(BUILD_DIR)/$(TOP).bit
 	@echo "Bitstream: $(BUILD_DIR)/$(TOP).bit$(if $(filter ecp5,$(FPGA_FAMILY)), (PHASE_DEG=$(PHASE_DEG)))"
