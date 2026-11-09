@@ -64,14 +64,18 @@ varies by integration (board name, PLL frequency, board feature word).
 | 2     | `FAULT_STATUS`| R   | Fault type and access info (latched on fault)        |
 | 3     | `TLB_VPN`     | R/W | Staged TLB upper word (VPN + ASID)                   |
 | 4     | `TLB_PTE`     | R/W | TLB lower word (PPN + flags); **write commits entry**|
-| 5     | `TLB_INDEX`   | R/W | Selects TLB slot; **bit 6 = pinned TLB**             |
-| 6–14  | —             | —   | Reserved (reads as 0)                                |
-| 15    | `MMU_CONFIG`  | R   | Version and translation geometry                     |
+| 5     | `TLB_INDEX`   | R/W | Selects TLB slot; **pinned select: bit 6 (version 1), bit 31 (version 2)** |
+| 6     | `TLB_INVAL_VA`  | W | Version 2: invalidate the main-TLB entries an address hits |
+| 7     | `TLB_INVAL_ASID`| W | Version 2: invalidate an ASID's non-global main-TLB entries |
+| 8     | `TLB_INVAL_ALL` | W | Version 2: invalidate the whole main TLB              |
+| 9–14  | —             | —   | Reserved (reads as 0)                                |
+| 15    | `MMU_CONFIG`  | R   | Interface version and translation geometry           |
 
 See [mmu.md](./mmu.md) for the programming model (load/invalidate
 protocols, boot sequence, Enable MMU safely), and
-[MMU_CONFIG Layout](./mmu.md#mmu_config-layout) for the geometry
-fields and the configuration a read of zero reports.
+[MMU_CONFIG Layout](./mmu.md#mmu_config-layout) for the interface
+versions, the geometry fields and the configuration a read of zero
+reports. In version 1, registers 6–8 are reserved too.
 
 ### MMUCR (reg 0)
 
@@ -109,33 +113,37 @@ WRSYS R1, #0, #0
 
 ### TLB_INDEX (reg 5)
 
-```
- 31                       6   5    4       0
-┌─────────────────────────┬───┬─────┬──────┐
-│        (zero)           │PIN│ way │ set  │
-└─────────────────────────┴───┴─────┴──────┘
-```
-
-| Bits | Name | Description                                          |
-|:----:|------|------------------------------------------------------|
-| 4:0  | set  | Set index (0–31) for main TLB                        |
-| 5    | way  | Way (0 or 1) within set for main TLB                 |
-| 6    | PIN  | 0 = main TLB (way/set); 1 = pinned TLB (slot in bits 2:0) |
-
-The hardware requires main TLB entries for VA to live in `set = VA[16:12]`.
-Software chooses the way for replacement.
-
-### Pinned TLB (TLB_INDEX bit 6)
-
-The pinned TLB is an 8-entry fully-associative structure checked in
-parallel with the main TLB. A pinned hit takes priority. Use for
-entries that must never cause TLB misses (miss handler code page,
-PGD, kernel UAREA pages). No set constraint applies.
+Selects the slot `TLB_VPN` and `TLB_PTE` read and write: a main-TLB
+slot, or a pinned one with P set. Where P sits is the interface
+version's:
 
 ```
- TLB_INDEX bit 6 = 0:  main TLB     {way=bit5, set=bits4:0}
- TLB_INDEX bit 6 = 1:  pinned TLB   {slot=bits2:0}
+Version 1:
+ 31                         7   6   5            0
+┌──────────────────────────┬───┬───────────────┐
+│          (zero)          │ P │     slot      │
+└──────────────────────────┴───┴───────────────┘
+
+Version 2:
+ 31 30                                          0
+┌───┬─────────────────────────────────────────────┐
+│ P │                    slot                     │
+└───┴─────────────────────────────────────────────┘
 ```
+
+A main slot is numbered `way × SETS + set`, where `set` is the VPN's
+low `SETS_L2` bits; with the baseline's 32 sets, the set is in bits
+4:0 and the way in bit 5. A pinned slot is numbered from 0 to
+`PINNED − 1`. Software chooses the way for replacement. Slot numbering
+in full: [TLB_INDEX](./mmu.md#tlb_index) in mmu.md.
+
+### Pinned TLB
+
+The pinned TLB is a fully associative structure of `PINNED` slots (8
+in the baseline), checked in parallel with the main TLB. A pinned hit
+takes priority. Use for entries that must never cause TLB misses (miss
+handler code page, PGD, kernel UAREA pages). No set constraint
+applies.
 
 ### TLB_VPN (reg 3) and TLB_PTE (reg 4)
 

@@ -445,7 +445,9 @@ that does not take the write.
 - Memory protection (R/W/X per page, user/supervisor).
 - Per-page cacheability control (`C` bit in TLB entry) — essential for
   memory-mapped I/O.
-- Software-managed TLB (64-entry 2-way SA + 8-entry FA pinned).
+- Software-managed TLB: a set-associative main TLB beside a fully
+  associative pinned one, their geometry reported by `MMU_CONFIG`
+  ([mmu.md](./mmu.md#mmu_config-layout)).
 
 ### Byte Ordering
 

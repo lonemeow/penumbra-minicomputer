@@ -19,8 +19,8 @@ This means:
 - The in-memory page table format is an **OS convention**, not a
   hardware requirement.
 
-TLB hardware structure (2-way SA main + fully-associative pinned) and
-74xx feasibility live in
+TLB hardware structure (a set-associative main TLB beside a fully
+associative pinned one) and 74xx feasibility live in
 [internals/mmu-internals.md](../internals/mmu-internals.md).
 
 ### Quick Reference
@@ -28,16 +28,18 @@ TLB hardware structure (2-way SA main + fully-associative pinned) and
 | Property | Value |
 |----------|-------|
 | Page size | 4 KB (12-bit offset) |
-| Main TLB | 64 slots (0–63), 2-way set-associative; each VPN maps to exactly 2 candidate slots |
-| Pinned TLB | 8 slots, fully associative; pinned hit wins over main TLB hit |
+| Main TLB | Set-associative; each VPN maps to one candidate slot in each way. Baseline: 32 sets × 2 ways, 64 slots |
+| Pinned TLB | Fully associative; pinned hit wins over main TLB hit. Baseline: 8 slots |
 | TLB entry width | Two 32-bit sysreg words: `TLB_VPN` and `TLB_PTE` |
 | Exception vectors | `VEC_TLB_MISS` = 2 (0x08), `VEC_TLB_PROT` = 3 (0x0C) |
 | Sysreg device ID | 0 |
+| Interface version | 1 or 2 ([Interface Versions](#interface-versions)) |
 | Flat/bypass mode | `M=0` (reset default): identity map, uncached, no checks |
 
-The page size and the two TLB geometries above are what
-[`MMU_CONFIG`](#mmu_config-layout) reports; software reads them from
-there rather than assuming them.
+The interface version, the page size and the two TLB geometries are
+what [`MMU_CONFIG`](#mmu_config-layout) reports; software reads them
+from there rather than assuming them. The baseline is what an MMU
+that reports nothing describes.
 
 ---
 
@@ -52,9 +54,12 @@ Accessed via `WRSYS`/`RDSYS` with device ID 0.
 | 2 | `FAULT_STATUS` | R | Fault reason and access info (latched on fault) |
 | 3 | `TLB_VPN` | R/W | TLB entry upper word: VPN + ASID (staged on write) |
 | 4 | `TLB_PTE` | R/W | TLB entry lower word: PPN + flags. **Write commits entry.** |
-| 5 | `TLB_INDEX` | R/W | TLB slot selector; **bit 6 selects pinned TLB** |
-| 6–14 | — | — | Reserved |
-| 15 | `MMU_CONFIG` | R | Version and translation geometry |
+| 5 | `TLB_INDEX` | R/W | TLB slot selector; **bit 6 (version 1) or bit 31 (version 2) selects the pinned TLB** |
+| 6 | `TLB_INVAL_VA` | W | Version 2: invalidate the main-TLB entries an address hits |
+| 7 | `TLB_INVAL_ASID` | W | Version 2: invalidate an ASID's non-global main-TLB entries |
+| 8 | `TLB_INVAL_ALL` | W | Version 2: invalidate the whole main TLB |
+| 9–14 | — | — | Reserved |
+| 15 | `MMU_CONFIG` | R | Interface version and translation geometry |
 
 ### MMUCR Layout
 
@@ -86,10 +91,11 @@ Accessed via `WRSYS`/`RDSYS` with device ID 0.
 
 ### MMU_CONFIG Layout
 
-Reports the translation geometry software would otherwise have to
-assume: how many pinned slots it may spend, how many main-TLB slots it
-must walk to enumerate resident entries, the page size its page tables
-describe, and the width of the ASID it allocates.
+Reports the interface version and the translation geometry software
+would otherwise have to assume: how many pinned slots it may spend,
+how many main-TLB slots it must walk to enumerate resident entries,
+the page size its page tables describe, and the width of the ASID it
+allocates.
 
 ```
  31 30 29    25 24      20 19    15 14    10 9       4 3    0
@@ -98,35 +104,60 @@ describe, and the width of the ASID it allocates.
 └─────┴────────┴──────────┴────────┴────────┴─────────┴──────┘
 ```
 
-- **VER** (bits 3:0): Geometry version. Numbering starts at 1, so an
-  implemented register never reads as zero.
+- **VER** (bits 3:0): Interface version, 1 or 2
+  ([Interface Versions](#interface-versions)). Numbering starts at 1,
+  so an implemented register never reads as zero.
 - **PINNED** (bits 9:4): Number of pinned TLB slots. A count, not an
   exponent — the pinned TLB is fully associative and need not be a
   power of two.
 - **SETS_L2** (bits 14:10): Base-2 logarithm of the main TLB's set
   count. The set index is taken from the VPN, so the count is always a
   power of two.
-- **WAYS** (bits 19:15): Main TLB associativity, as a count.
+- **WAYS** (bits 19:15): Main TLB associativity, as a count; not
+  necessarily a power of two.
 - **PAGE_LOG2** (bits 24:20): Base-2 logarithm of the page size in
   bytes.
 - **ASID** (bits 29:25): Width in bits of the ASID field in `MMUCR`
   and `TLB_VPN`.
 
-`VER` scopes the whole translation interface, not just the fields
-above it. `TLB_INDEX` and `TLB_VPN` are read under the same version,
-so a geometry a version cannot name is a geometry it cannot report:
-in version 1 `TLB_INDEX` reaches 32 sets, 2 ways and 8 pinned slots,
-and `TLB_VPN` carries a 20-bit VPN and an 8-bit ASID, which bounds
-every field to those values. Describing a larger machine takes a
-version that widens those registers as well — `TLB_INDEX` has bits
-31:7 spare and `TLB_VPN` bits 31:28. The fields are sized ahead of
-that headroom so the same encoding survives it.
+#### Interface Versions
 
-**A read of zero reports the configuration below.** Reserved MMU
-registers read as zero, so an implementation that omits this register
-describes itself correctly by doing nothing, and software needs no
-separate presence test — it substitutes these values whenever the
-register reads zero.
+`VER` scopes the whole translation interface, not just the fields
+beside it: it says how `TLB_INDEX` selects a slot and which registers
+the MMU implements, and so which geometries the MMU can report.
+`MMUCR`, `TLB_VPN` and `TLB_PTE` are the same in both versions, and
+so are the 4 KB page and an ASID of at most 8 bits.
+
+| | Version 1 | Version 2 |
+|---|---|---|
+| `TLB_INDEX` pinned select | bit 6 | bit 31 |
+| `TLB_INDEX` slot number | bits 5:0 | bits 30:0 |
+| Registers 6–8 | reserved | the [invalidation registers](#invalidation-registers-version-2) |
+| `PINNED` | at most 8 | at most 63 |
+| `SETS_L2` | at most 5 | at most 20 |
+| `WAYS` | at most 2 | at most 31 |
+| `PAGE_LOG2` | 12 | 12 |
+| `ASID` | at most 8 | at most 8 |
+
+A version reaches every geometry within its bounds. Version 1's are
+what its `TLB_INDEX` can address: 32 sets of 2 ways and 8 pinned
+slots. In version 2 the pinned count and the ways are bounded only by
+their `MMU_CONFIG` fields and the set count by the 20-bit VPN its
+index is taken from, and the largest main slot number,
+`SETS × WAYS − 1`, stays within `TLB_INDEX`'s 31 bits. A geometry past
+version 1's bounds is therefore only ever reported under version 2,
+and a version-2 MMU may report any geometry within its bounds,
+including one version 1 could also describe.
+
+Software that does not know the version it reads cannot form a
+`TLB_INDEX` value or tell which registers exist, and must not drive
+the MMU.
+
+**A read of zero reports version 1 with the configuration below.**
+Reserved MMU registers read as zero, so an implementation that omits
+this register describes itself correctly by doing nothing, and
+software needs no separate presence test — it substitutes these
+values whenever the register reads zero.
 
 | Field | Value | Meaning |
 |-------|------:|---------|
@@ -139,7 +170,8 @@ register reads zero.
 
 An implementation whose geometry matches that table may report either
 zero or the equivalent packed value `0x10C11481`; software treats them
-as the same.
+as the same. A version-2 MMU reports its value in full: 256 sets of 2
+ways with the table's other fields, for example, read `0x10C12082`.
 
 Five pinned slots are the floor for a two-level walk that keeps the
 handler, both page-table roots and a scratch window resident — see
@@ -201,45 +233,70 @@ If any check fails: protection fault (vector 3, `FAULT_STATUS.TYPE = 0010`).
 
 ## TLB Operations
 
-### TLB_INDEX (Main TLB)
+### TLB_INDEX
+
+Selects the slot `TLB_VPN` and `TLB_PTE` read and write. A main-TLB
+slot is numbered `way × SETS + set`, where `set` is the VPN's low
+`SETS_L2` bits and `way` runs from 0 to `WAYS − 1`, so the slot
+numbers run from 0 to `SETS × WAYS − 1`. A virtual page can live in
+exactly `WAYS` slots, one in each way:
 
 ```
- 31                       6   5    4       0
-┌─────────────────────────┬─────┬──────────┐
-│        (zero)           │ way │   set    │
-└─────────────────────────┴─────┴──────────┘
+slot(way) = way × SETS + (VPN mod SETS)
 ```
 
-**Set constraint:** `set = vaddr[16:12]` (the low 5 bits of the VPN).
-Any virtual page can live in exactly two slots:
+The OS chooses which of them to use for replacement.
+
+The pinned TLB's slots are numbered from 0 to `PINNED − 1`. One bit of
+`TLB_INDEX`, P, selects the pinned TLB, at the position the
+[interface version](#interface-versions) gives it:
+
+Version 1:
 
 ```
-slot_a = VPN & 0x1F         (way 0)
-slot_b = (VPN & 0x1F) | 0x20 (way 1)
+ 31                         7   6   5            0
+┌──────────────────────────┬───┬───────────────┐
+│          (zero)          │ P │     slot      │
+└──────────────────────────┴───┴───────────────┘
 ```
 
-The OS chooses which of the two to use for replacement.
+Version 2:
 
-### Pinned TLB (bit 6 of TLB_INDEX)
+```
+ 31 30                                          0
+┌───┬─────────────────────────────────────────────┐
+│ P │                    slot                     │
+└───┴─────────────────────────────────────────────┘
+```
 
-An 8-entry fully-associative structure checked in parallel with the main
-TLB. A pinned hit takes priority. No set constraint — any VPN can go in
-any pinned slot.
+| Selects | Version 1 | Version 2 |
+|---------|-----------|-----------|
+| Main slot `n` | `n` (`0x00`–`0x3F`) | `n` |
+| Pinned slot `n` | `0x40 + n` (`0x40`–`0x47`) | `0x8000_0000 + n` |
+
+With the baseline's 32 sets, a main slot number carries the set in
+bits 4:0 and the way in bit 5, so version 1's two ways of set `S` are
+slots `S` and `S | 0x20`.
+
+In version 2, a slot number at or past its TLB's slot count selects no
+entry: a `TLB_PTE` write to it changes nothing, and `TLB_VPN` and
+`TLB_PTE` read zero there.
+
+### Pinned TLB
+
+A fully associative structure of `PINNED` slots, checked in parallel
+with the main TLB. A pinned hit takes priority. No set constraint —
+any VPN can go in any pinned slot.
 
 Use for entries that must **never** cause TLB misses: the miss-handler
 code page, the page directory base, and optionally the kernel stack.
-
-| `TLB_INDEX` | Selects |
-|-------------|---------|
-| `0x00`–`0x3F` | Main TLB slot 0–63 (bit 6 = 0) |
-| `0x40`–`0x47` | Pinned slot 0–7 (bit 6 = 1, bits 2:0 select slot) |
 
 ### Loading an Entry
 
 Three `WRSYS` instructions, executed **in order**:
 
 ```asm
-; R1 = TLB_INDEX value (main slot, or pinned with bit 6 set)
+; R1 = TLB_INDEX value (a main slot, or a pinned one with P set)
 ; R2 = TLB_VPN value  ({VPN[19:0], ASID[7:0]})
 ; R3 = TLB_PTE value  ({PPN[19:0], SW[3:0], flags[7:0]})
 
@@ -254,17 +311,16 @@ written. Always write `TLB_INDEX` before `TLB_VPN`/`TLB_PTE`.
 
 ### Reading an Entry
 
-For replacement decisions, read both ways of a set:
+For replacement decisions, read each way of the set:
 
 ```asm
-; Read way 0 of set S
-LLI   R1, S             ; set index (bits 4:0), way=0 (bit 5 clear)
+; Read set S, way by way: way w is slot w * SETS + S
+LLI   R1, S             ; way 0
 WRSYS R1, #0, #5
 RDSYS R2, #0, #3        ; R2 = TLB_VPN
 RDSYS R3, #0, #4        ; R3 = TLB_PTE
 
-; Read way 1 of set S
-LLI   R1, (S | 0x20)
+ADD   R1, R6            ; way 1 (R6 = SETS)
 WRSYS R1, #0, #5
 RDSYS R4, #0, #3
 RDSYS R5, #0, #4
@@ -275,7 +331,7 @@ Use `SW` bits for replacement policy state (LRU, age, etc.).
 
 ### Invalidating Entries
 
-**Single entry** (by slot):
+Every version invalidates a slot by writing `TLB_PTE = 0` to it:
 
 ```asm
 WRSYS  R_idx, #0, #5    ; select slot
@@ -283,11 +339,17 @@ WRSYS  R0,    #0, #3    ; clear VPN (optional)
 WRSYS  R0,    #0, #4    ; TLB_PTE = 0 → V=0, entry invalidated
 ```
 
-**Full flush** (all 64 main-TLB slots):
+The write commits whatever `TLB_VPN` was last staged, so a slot
+invalidated this way can keep any VPN word, that of a live entry in
+another way of its set included. A search by VPN therefore checks `V`
+before it trusts a match.
+
+**Version 1** offers only that. A full flush writes `TLB_PTE = 0` to
+every main slot:
 
 ```asm
 LLI   R1, #0
-LLI   R2, #64
+LLI   R2, #(SETS * WAYS)
 .flush_loop:
 WRSYS R1, #0, #5        ; select slot
 WRSYS R0, #0, #4        ; V=0
@@ -296,8 +358,42 @@ CMP   R1, R2
 BNE   .flush_loop
 ```
 
-**By virtual address** (e.g., on `munmap`): compute `set = vaddr[16:12]`,
-read both ways, compare the VPN field, invalidate the matching slot.
+Invalidating by virtual address (e.g., on `munmap`) reads the VPN's
+slots, one in each way, and invalidates the valid one whose `TLB_VPN`
+matches; invalidating an address space reads every slot.
+
+**Version 2** does the search in the MMU, through its
+[invalidation registers](#invalidation-registers-version-2).
+
+#### Invalidation Registers (version 2)
+
+Three write-only registers invalidate main-TLB entries by what they
+map:
+
+| Reg | Name | Value written | Invalidates |
+|-----|------|---------------|-------------|
+| 6 | `TLB_INVAL_VA` | a `TLB_VPN` word, `(VPN << 8) \| ASID` | every valid entry a translation of the VPN would hit with that ASID in `MMUCR`: the VPN equal, and the ASID equal or `G=1` |
+| 7 | `TLB_INVAL_ASID` | an ASID, in bits 7:0 | every valid entry with `G=0` and that ASID |
+| 8 | `TLB_INVAL_ALL` | ignored | every entry |
+
+- **The main TLB only.** The pinned TLB is managed by slot and never
+  matched.
+- **Valid entries only,** so a stale VPN word left in an invalidated
+  slot never matches.
+- **No other state changes:** `TLB_INDEX` and the staged `TLB_VPN`
+  keep their values.
+- **The write blocks.** It completes when the invalidation has, so the
+  instruction after it, and the fetch of that instruction, see the
+  TLB without the matched entries. There is no status to poll. An
+  interrupt waits for the write as it would for any instruction.
+- **The cost depends on the reach.** `TLB_INVAL_VA` examines one set
+  and is cheap. `TLB_INVAL_ASID` and `TLB_INVAL_ALL` examine every
+  set, so their cost grows with `SETS`, and on a large TLB they are
+  expensive. A kernel retiring an address space can skip the sweep
+  instead: if no new address space gets that ASID before the flush
+  taken when ASIDs run out, its entries are never hit again.
+
+Reads return zero. In version 1, registers 6–8 are reserved.
 
 ---
 
@@ -340,7 +436,7 @@ LDW   R3, [Rv + #VECT_PDBASE]
 ; ... walk PD → PT, load PTE into R_pte, build R_vpn ...
 
 ; ── Replacement decision ──────────────────────────
-; set = VPN[4:0]. Read both ways, pick victim.
+; set = VPN mod SETS. Read the set's ways, pick a victim.
 
 ; ── Commit entry ──────────────────────────────────
 WRSYS R_idx, #0, #5
@@ -382,8 +478,8 @@ The pinned vector page is mapped at a port-chosen virtual address
 it is distinct from the physical vector table at `0x00000000` that the
 hardware reads during exception dispatch.
 
-Pinned entries do not consume main-TLB slots — the full 64-slot main
-TLB remains available for demand-loaded mappings.
+Pinned entries do not consume main-TLB slots — the whole main TLB
+remains available for demand-loaded mappings.
 
 ---
 
@@ -410,7 +506,8 @@ decide which pages need writing.
 ### Without ASID (initial bring-up)
 
 1. Save outgoing process state (registers, PC, SR).
-2. Flush the main TLB (software loop, ~320 instructions).
+2. Flush the main TLB (`TLB_INVAL_ALL` in version 2; in version 1, a
+   software loop over every slot).
 3. Stash the new PD base pointer on the pinned vector page (the
    miss handler reads it from there).
 4. Re-pin the incoming process's user page-table root (slot 4 in
@@ -427,9 +524,9 @@ decide which pages need writing.
 4. Restore incoming state; `ERET`.
 
 No TLB flush needed — entries from different ASIDs coexist. Kernel
-pages with `G=1` are shared across all ASIDs. When all 256 ASIDs are
-in use, flush the TLB and restart allocation (generational ASID
-recycling).
+pages with `G=1` are shared across all ASIDs. When every ASID is in
+use (256 of them with an 8-bit ASID), flush the TLB and restart
+allocation (generational ASID recycling).
 
 ---
 
@@ -520,12 +617,14 @@ Two safe patterns:
 ```asm
 ; Boot code running at physical address (M=0).
 ; Port-defined constants:
+;   PIN_SEL    — TLB_INDEX's pinned select for the MMU's version
+;                (0x40 in version 1, 0x8000_0000 in version 2)
 ;   VECT_VPN   — VPN of the pinned vector page in kernel virtual space
 ;   VECT_PPN   — PPN where the handler code actually lives in RAM
 ;   PGD_VPN / PGD_PPN — same, for the page directory
 
 ; Step 1: Pin the vector page in pinned slot 0
-LLI   R1, #0x40                ; TLB_INDEX: bit 6 = pinned, slot 0
+LI    R1, #(PIN_SEL | 0)       ; TLB_INDEX: pinned slot 0
 WRSYS R1, #0, #5
 LI    R2, #((VECT_VPN << 8) | 0)  ; TLB_VPN: VPN + ASID=0
 WRSYS R2, #0, #3
