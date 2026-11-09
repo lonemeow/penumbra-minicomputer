@@ -191,15 +191,17 @@ behind it 3 cycles longer than an independent op (spine testbench).
   is the gen2 top's, shared (`hw/sim/nexysvideo_top_tb.h`)
 
 **Next:** feature work, in the order `doc/internals/penumbra3/overview.md`
-ranks ("Levers ranked by measured benefit"). Phase 1's full-top timing read
-passed with the line SDRAM stack and no floorplan, the placement choices
-taken over from gen2: 7 of 10 seeds close at 37.5 MHz, the CPU clock the
-worst domain on each. On 9 of them the CPU clock's critical path is IF2's --
-the L1-I data word or the I-TLB's VPN word through the way select and
-decode-on-enqueue into the fetch buffer's write, about 60% of it routing --
-and IF1's hold is the worst path on none. Branch prediction puts its
-pre-decode and redirect in that cone, so its full-top sweep is the one to
-read against this one.
+ranks ("Levers ranked by measured benefit"). The full-top timing read
+passes with the line SDRAM stack and no floorplan, the placement choices
+taken over from gen2: all 10 seeds close at 37.5 MHz, the CPU clock the
+worst domain on each. Its critical path is MEM2's on 6 of them -- the
+D-TLB's word through the TLB match, the L1-D's tag compare and way select
+and the byte extract into MEM2's writeback payload -- and IF2's on the
+other 4 -- the L1-I data word or the I-TLB's VPN word through the way
+select and decode-on-enqueue into the fetch buffer's write -- with 60-64%
+of it routing; IF1's hold is the worst path on none. Branch prediction
+puts its pre-decode and redirect in IF2's cone, so its full-top sweep is
+the one to read against this one.
 
 **The 256x2 TLB:** its interface is `MMU_CONFIG` version 2
 (`doc/system/mmu.md`, "Interface Versions"): the geometry bounds lifted,
