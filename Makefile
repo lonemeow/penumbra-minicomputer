@@ -795,12 +795,13 @@ test-compiler-pic: $(ISS)
 #        make simulate RAW=1                  (full raw TTY for job control)
 #        make simulate ETH=loop               (attach an Ethernet adapter)
 #        make simulate RAM=512M               (another board's RAM; also benchmark)
+#        make simulate MMU=2:256x2            (another MMU interface and TLB)
 #        make simulate LLVM_PREFIX=/other/llvm/build
 
 .PHONY: simulate
 simulate: $(ISS)
 	@$(MAKE) -C hw/rom LLVM_PREFIX=$(LLVM_PREFIX)
-	@$(ISS) program.hex $(if $(RAM),+ram=$(RAM)) $(if $(SDCARD),+sdcard=$(SDCARD)) $(if $(USBDEV),+usbdev=$(USBDEV)) $(if $(ETH),+eth=$(ETH)) $(if $(TRACE),+trace=$(TRACE)) $(if $(TRACE_WINDOW),+trace_window=$(TRACE_WINDOW)) $(if $(HALT_ON),'+halt_on=$(HALT_ON)') $(if $(RAW),+raw)
+	@$(ISS) program.hex $(if $(RAM),+ram=$(RAM)) $(if $(MMU),+mmu=$(MMU)) $(if $(SDCARD),+sdcard=$(SDCARD)) $(if $(USBDEV),+usbdev=$(USBDEV)) $(if $(ETH),+eth=$(ETH)) $(if $(TRACE),+trace=$(TRACE)) $(if $(TRACE_WINDOW),+trace_window=$(TRACE_WINDOW)) $(if $(HALT_ON),'+halt_on=$(HALT_ON)') $(if $(RAW),+raw)
 
 $(ISS): sw/sim/penumbra_iss.cpp sw/sim/penumbra_cores.h sw/sim/cache_model.h sw/sim/tlb_model.h sw/sim/sb_model.h sw/sim/bp_model.h sw/sim/issue_op.h sw/sim/pair_model.h sw/sim/loaduse_model.h hw/sim/usb_device_sim.h hw/sim/usb_msc_sim.h
 	@$(MAKE) -C sw/sim

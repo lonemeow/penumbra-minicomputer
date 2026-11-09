@@ -147,7 +147,8 @@ Open work lives in `doc/TODO/`, one file per area; the table in
   `USBDEV=<type>:<config>` (attach a simulated USB device, e.g.
   `USBDEV=disk:disk.img`; hot-plug at runtime with `Ctrl-A U` under
   `RAW=1`), `ETH=<spec>` (attach an Ethernet adapter, the ISS's
-  `+eth=`, e.g. `ETH=loop`), `TRACE=trace.log`,
+  `+eth=`, e.g. `ETH=loop`), `MMU=<ver>[:<sets>x<ways>]` (the ISS's
+  `+mmu=`, e.g. `MMU=2:256x2`), `TRACE=trace.log`,
   `RAW=1` (passes Ctrl-C etc. to guest; Ctrl-A is escape prefix —
   `Ctrl-A X` exit, `Ctrl-A C` CPU state, `Ctrl-A H` help).
   ROM monitor accepts `break` (or `b`) to halt cleanly.
@@ -327,6 +328,9 @@ rom.ld ──────────────────┘
   The table is `sw/sim/penumbra_cores.h`; a generation's cache or
   TLB geometry, CPU name or multiplier step changing in RTL has to
   change there too.
+  `+mmu=VER[:SETSxWAYS]` presents `MMU_CONFIG` version VER, and that
+  main-TLB geometry when given, in place of the generation's
+  (`+mmu=2:256x2`), so software can meet an MMU no generation builds.
   `+eth=backend[,mdio][,rx=N][,tx=N][,speed=MBIT]` attaches an
   Ethernet adapter (`CLASS_ETHERNET`,
   `doc/system/devices/ethernet.md`) with N slots in each ring; the

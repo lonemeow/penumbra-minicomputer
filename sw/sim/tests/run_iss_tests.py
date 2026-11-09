@@ -49,6 +49,19 @@ CORE_IDENTITY = {
 }
 CTRL_READBACK = {6: 0, 7: 1}
 
+
+def mmu_config(ver, sets, ways, pinned=8, page_log2=12, asid=8):
+    """An MMU_CONFIG word in doc/system/mmu.md's layout."""
+    return (ver | pinned << 4 | (sets.bit_length() - 1) << 10 | ways << 15
+            | page_log2 << 20 | asid << 25)
+
+
+# mmu_v2.s under +mmu=2:256x2: the slots read back, nothing past the end,
+# and what each invalidation register leaves (the program's comments
+# name the entries).
+MMU_V2 = {2: mmu_config(2, 256, 2), 3: 0x01012305, 4: 0x10123019, 5: 0x00042099,
+          6: 0, 7: 0b10110, 8: 0b110, 9: 0b10000, 11: 0x77, 12: 0x0ABCDE05}
+
 # audio.sv's CAP_VALUE at the board's four channels: version 1, PITCH,
 # VOLUME and STATUS.  audio_status.s leaves the class of the chain's
 # fourth device in R8 (CLASS_AUDIO) and queues two frames, so a LEVEL of
@@ -784,6 +797,19 @@ CASES = [
          regs={**CORE_IDENTITY["penumbra1"], **CTRL_READBACK}),
     Case("unknown core", "core_identity.s", ["+core=penumbra9"],
          error=r"unknown \+core generation 'penumbra9'"),
+    Case("+mmu=2:256x2", "mmu_v2.s", ["+mmu=2:256x2"], regs=MMU_V2),
+    Case("MMU version 1 reserves 6-8", "mmu_inval_reserved.s", [],
+         regs={2: mmu_config(1, 32, 2), 3: 1}),
+    Case("+mmu=2 keeps the core's TLB", "mmu_inval_reserved.s", ["+mmu=2"],
+         regs={2: mmu_config(2, 32, 2), 3: 0}),
+    Case("MMU version 1 past its bounds", "mmu_inval_reserved.s", ["+mmu=1:64x2"],
+         error=r"MMU version 1 cannot report a 64x2 main TLB"),
+    Case("MMU sets not a power of two", "mmu_inval_reserved.s", ["+mmu=2:96x2"],
+         error=r"MMU version 2 cannot report a 96x2 main TLB"),
+    Case("unknown MMU version", "mmu_inval_reserved.s", ["+mmu=3"],
+         error=r"MMU version 3 cannot report"),
+    Case("bad +mmu", "mmu_inval_reserved.s", ["+mmu=2:256"],
+         error=r"\+mmu=2:256: expected VER or VER:SETSxWAYS"),
     Case("audio device ready", "audio_status.s", [],
          regs={2: AUDIO_CAP, 3: 0, 4: 0, 5: 0,
                6: AUDIO_DEPTH, 7: AUDIO_DEPTH, 8: 7}),

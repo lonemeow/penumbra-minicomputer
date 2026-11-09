@@ -23,7 +23,11 @@
 //
 // +core= names the hardware generation the ISS presents, spelled as
 // `make CORE=` spells it (penumbra_cores.h): its CPU name and the
-// geometry its caches report.  The default is penumbra1.
+// geometry its caches and its MMU report.  The default is penumbra1.
+//
+// +mmu=VER[:SETSxWAYS] presents MMU interface version VER, and the main
+// TLB SETSxWAYS when given, in place of the generation's, so software
+// can meet an MMU no generation builds; MMU_CONFIG reports it.
 //
 // +eth=backend[,mdio][,rx=N][,tx=N][,speed=MBIT] attaches an Ethernet
 // adapter (CLASS_ETHERNET) at the end of the autoconfig chain, with N
@@ -477,19 +481,22 @@ static struct {
 
 // MMU sysreg addresses
 enum { MMU_CR=0, MMU_FADDR=1, MMU_FSTAT=2, MMU_TLB_VPN=3, MMU_TLB_PTE=4, MMU_TLB_IDX=5,
-       MMU_CFG=15 };
+       MMU_INVAL_VA=6, MMU_INVAL_ASID=7, MMU_INVAL_ALL=8, MMU_CFG=15 };
 
-// The MMU as this model is built, and the MMU_CONFIG value that reports
-// it (doc/system/mmu.md): v1, 8 pinned slots, 32 sets x 2 ways, 4 KB
-// pages, 8-bit ASID.  Software selects its TLB miss handler from it.
-static constexpr int         PTLB_ENTRIES  = 8;
-static constexpr TlbGeometry TLB_GEOMETRY  = { 32, 2 };
-static constexpr uint32_t    MMU_VER       = 1;
-static constexpr uint32_t    MMU_PAGE_LOG2 = 12;
-static constexpr uint32_t    MMU_ASID_BITS = 8;
-static constexpr uint32_t MMU_CONFIG_VALUE =
-    MMU_VER | PTLB_ENTRIES << 4 | __builtin_ctz(TLB_GEOMETRY.sets) << 10 |
-    TLB_GEOMETRY.ways << 15 | MMU_PAGE_LOG2 << 20 | MMU_ASID_BITS << 25;
+// The MMU this model presents (doc/system/mmu.md): the interface version
+// and the main TLB's geometry, the +core= generation's unless +mmu= names
+// others, beside 8 pinned slots, 4 KB pages and an 8-bit ASID.  Software
+// selects its TLB miss handler from the MMU_CONFIG value that reports it.
+static constexpr int      PTLB_ENTRIES  = 8;
+static constexpr uint32_t MMU_PAGE_LOG2 = 12;
+static constexpr uint32_t MMU_ASID_BITS = 8;
+static uint32_t    mmu_version;
+static TlbGeometry mmu_geometry;
+
+static uint32_t mmu_config_value() {
+    return mmu_version | PTLB_ENTRIES << 4 | __builtin_ctz(mmu_geometry.sets) << 10 |
+           mmu_geometry.ways << 15 | MMU_PAGE_LOG2 << 20 | MMU_ASID_BITS << 25;
+}
 
 static constexpr uint32_t PAGE_BYTES = 1u << MMU_PAGE_LOG2;
 
@@ -1743,10 +1750,10 @@ static struct {
     }
 } display;
 
-// --- TLB (64 entries: 32 sets × 2 ways) ---
+// --- Main TLB: slot way * sets + set, for the presented geometry ---
 static struct {
-    uint32_t vpn[64];   // {4'b0, VPN[19:0], ASID[7:0]}
-    uint32_t pte[64];   // {PPN[19:0], SW[3:0], flags[7:0]}
+    std::vector<uint32_t> vpn;   // {4'b0, VPN[19:0], ASID[7:0]}
+    std::vector<uint32_t> pte;   // {PPN[19:0], SW[3:0], flags[7:0]}
 } tlb;
 
 // --- Pinned TLB (8 entries, fully associative) ---
@@ -1760,7 +1767,7 @@ static struct {
     uint32_t cr;          // [0]=M enable, [15:8]=ASID
     uint32_t fault_addr;
     uint32_t fault_status;
-    uint32_t tlb_idx;     // [6]=pinned, [5]=way, [4:0]=set (or [2:0]=pin slot)
+    uint32_t tlb_idx;     // pinned select [6] (v1) or [31] (v2), slot below
     uint32_t tlb_vpn_reg; // Shared staging register
     bool     enabled() const { return cr & 1; }
     uint8_t  asid()    const { return (cr >> 8) & 0xFF; }
@@ -1914,7 +1921,7 @@ static void model_window_close(const char* why) {
             model_window.number, (unsigned long long)insns, model_window.opened_by, why);
     if (opstats_enabled) opstats_report(out);
     if (cache_model) cache_model->report(out, insns);
-    if (tlb_model) tlb_model->report(out, insns, TLB_GEOMETRY);
+    if (tlb_model) tlb_model->report(out, insns, mmu_geometry);
     if (sb_model) sb_model->report(out, insns);
     if (bp_model) bp_model->report(out, insns);
     if (pair_model) {
@@ -2107,9 +2114,9 @@ static bool tlb_lookup(uint32_t vaddr, uint8_t asid, uint8_t access,
     }
 
     // Fall through to main TLB (set-associative)
-    int set = va_vpn & 0x1F;
-    for (int way = 0; way < 2; way++) {
-        int idx = way * 32 + set;
+    uint32_t set = va_vpn & (mmu_geometry.sets - 1);
+    for (uint32_t way = 0; way < mmu_geometry.ways; way++) {
+        uint32_t idx = way * mmu_geometry.sets + set;
         uint32_t vpn_word = tlb.vpn[idx];
         uint32_t pte_word = tlb.pte[idx];
 
@@ -2724,29 +2731,59 @@ static void phys_write(uint32_t addr, uint32_t data, int size, bool& bus_fault) 
 // Sysreg Access (WRSYS/RDSYS)
 // ═══════════════════════════════════════════════════════════════
 
+// What TLB_INDEX selects under the presented version: a pinned or a
+// main slot, or none (index < 0) for a slot number past its TLB's end.
+struct TlbSlot { bool pinned; int index; };
+static TlbSlot tlb_selected() {
+    uint32_t sel = mmu_version >= 2 ? 0x80000000u : 0x40u;
+    uint32_t slot = mmu.tlb_idx & (mmu_version >= 2 ? 0x7FFFFFFFu : 0x3Fu);
+    bool pinned = mmu.tlb_idx & sel;
+    if (mmu_version < 2 && pinned) slot &= PTLB_ENTRIES - 1;
+    uint32_t count = pinned ? PTLB_ENTRIES : (uint32_t)tlb.pte.size();
+    return { pinned, slot < count ? (int)slot : -1 };
+}
+
+// Version 2's invalidation registers: every valid main-TLB entry the
+// written value names goes (TLB_INVAL_VA reads only the VPN's set), and
+// the TLB model hears of each as of a software invalidation.
+static void tlb_invalidate(int reg, uint32_t val) {
+    uint32_t vpn = TLB_VPN_GET_VPN(val), asid = TLB_VPN_GET_ASID(val);
+    uint32_t sets = mmu_geometry.sets;
+    for (uint32_t i = 0; i < tlb.pte.size(); i++) {
+        uint32_t pte = tlb.pte[i], word = tlb.vpn[i];
+        if (!(pte & TLB_V)) continue;
+        bool global = pte & TLB_G;
+        bool hit;
+        if (reg == MMU_INVAL_VA)
+            hit = i % sets == (vpn & (sets - 1)) && TLB_VPN_GET_VPN(word) == vpn &&
+                  (global || TLB_VPN_GET_ASID(word) == asid);
+        else if (reg == MMU_INVAL_ASID)
+            hit = !global && TLB_VPN_GET_ASID(word) == asid;
+        else
+            hit = true;
+        if (!hit) continue;
+        if (tlb_model) tlb_model->real_slot_written(word, pte, pte & ~TLB_V);
+        tlb.pte[i] = pte & ~TLB_V;
+    }
+}
+
 static uint32_t sysreg_read(int dev, int reg) {
     switch (dev) {
     case SYSDEV_MMU:
         switch (reg) {
-            case MMU_CFG: return MMU_CONFIG_VALUE;
+            case MMU_CFG: return mmu_config_value();
             case MMU_CR: return mmu.cr;
             case MMU_FADDR: return mmu.fault_addr;
             case MMU_FSTAT: return mmu.fault_status;
             case MMU_TLB_VPN: {
-                if (mmu.tlb_idx & 0x40) {
-                    return ptlb.vpn[mmu.tlb_idx & (PTLB_ENTRIES - 1)];
-                } else {
-                    int idx = (mmu.tlb_idx & 0x20 ? 32 : 0) + (mmu.tlb_idx & 0x1F);
-                    return tlb.vpn[idx];
-                }
+                TlbSlot t = tlb_selected();
+                if (t.index < 0) return 0;
+                return t.pinned ? ptlb.vpn[t.index] : tlb.vpn[t.index];
             }
             case MMU_TLB_PTE: {
-                if (mmu.tlb_idx & 0x40) {
-                    return ptlb.pte[mmu.tlb_idx & (PTLB_ENTRIES - 1)];
-                } else {
-                    int idx = (mmu.tlb_idx & 0x20 ? 32 : 0) + (mmu.tlb_idx & 0x1F);
-                    return tlb.pte[idx];
-                }
+                TlbSlot t = tlb_selected();
+                if (t.index < 0) return 0;
+                return t.pinned ? ptlb.pte[t.index] : tlb.pte[t.index];
             }
             case MMU_TLB_IDX: return mmu.tlb_idx;
             default: return 0;
@@ -2769,20 +2806,23 @@ static void sysreg_write(int dev, int reg, uint32_t val) {
             case MMU_TLB_IDX: mmu.tlb_idx = val; break;
             case MMU_TLB_VPN: mmu.tlb_vpn_reg = val; break;
             case MMU_TLB_PTE: {
-                // Writing PTE commits VPN + PTE; TLB_INDEX[6] selects target
-                if (mmu.tlb_idx & 0x40) {
-                    int i = mmu.tlb_idx & (PTLB_ENTRIES - 1);
-                    ptlb.vpn[i] = mmu.tlb_vpn_reg;
-                    ptlb.pte[i] = val;
+                // Writing PTE commits VPN + PTE into the selected slot
+                TlbSlot t = tlb_selected();
+                if (t.index < 0) break;
+                if (t.pinned) {
+                    ptlb.vpn[t.index] = mmu.tlb_vpn_reg;
+                    ptlb.pte[t.index] = val;
                 } else {
-                    int idx = (mmu.tlb_idx & 0x20 ? 32 : 0) + (mmu.tlb_idx & 0x1F);
                     if (tlb_model)
-                        tlb_model->real_slot_written(tlb.vpn[idx], tlb.pte[idx], val);
-                    tlb.vpn[idx] = mmu.tlb_vpn_reg;
-                    tlb.pte[idx] = val;
+                        tlb_model->real_slot_written(tlb.vpn[t.index], tlb.pte[t.index], val);
+                    tlb.vpn[t.index] = mmu.tlb_vpn_reg;
+                    tlb.pte[t.index] = val;
                 }
                 break;
             }
+            case MMU_INVAL_VA: case MMU_INVAL_ASID: case MMU_INVAL_ALL:
+                if (mmu_version >= 2) tlb_invalidate(reg, val);
+                break;
         }
         break;
     case SYSDEV_BUS:
@@ -3966,7 +4006,8 @@ static void cpu_reset() {
     usb.dev_attached = true;
     usb.dev.enumerate = true;
     memset(&mmu, 0, sizeof(mmu));
-    memset(&tlb, 0, sizeof(tlb));
+    std::fill(tlb.vpn.begin(), tlb.vpn.end(), 0);
+    std::fill(tlb.pte.begin(), tlb.pte.end(), 0);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -4118,6 +4159,7 @@ int main(int argc, char** argv) {
     const char* trace_path = nullptr;
     const char* audio_path = nullptr;
     const char* core_name = DEFAULT_CORE_GENERATION;
+    const char* mmu_spec = nullptr;
     const char* cachemodel_spec = nullptr;
     const char* tlbmodel_spec = nullptr;
     const char* sbmodel_spec = nullptr;
@@ -4182,6 +4224,7 @@ int main(int argc, char** argv) {
         else if (strncmp(argv[i], "+trace_window=", 14) == 0)
             trace_window = (size_t)strtoull(argv[i] + 14, nullptr, 0);
         else if (strncmp(argv[i], "+core=", 6) == 0) core_name = argv[i] + 6;
+        else if (strncmp(argv[i], "+mmu=", 5) == 0) mmu_spec = argv[i] + 5;
         else if (strcmp(argv[i], "+cachemodel") == 0) cachemodel_spec = "";
         else if (strncmp(argv[i], "+cachemodel=", 12) == 0) cachemodel_spec = argv[i] + 12;
         else if (strcmp(argv[i], "+tlbmodel") == 0) tlbmodel_spec = "";
@@ -4204,7 +4247,7 @@ int main(int argc, char** argv) {
     }
 
     if (!hex_path) {
-        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+ram=size] [+sdcard=path] [+usbdev=type:config] [+eth=loop|tap[:name][,mdio][,rx=N][,tx=N][,speed=MBIT]] [+audiofile=path] [+audio_status=busy[:N]|fault[:CODE]] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+pcprof=path [+pcprof_start=addr]] [+irq_at_pc=addr[,period]] [+core=generation] [+cachemodel[=list]] [+tlbmodel[=list]] [+sbmodel[=list] [+sbmodel_cpi=N]] [+bpmodel[=list]] [+pairmodel[=list]] [+loadusemodel[=list]] [+model_start=addr] [+model_stop=addr] [+model_report=path]\n");
+        fprintf(stderr, "Usage: penumbra-iss [program.hex] [+ram=size] [+sdcard=path] [+usbdev=type:config] [+eth=loop|tap[:name][,mdio][,rx=N][,tx=N][,speed=MBIT]] [+audiofile=path] [+audio_status=busy[:N]|fault[:CODE]] [+trace=path] [+trace_window=N] [+halt_on=str] [+raw] [+hosted] [+quiet] [+max-insn=N] [+trap-pc0] [+halt-on-break] [+branchstats] [+opstats] [+pcprof=path [+pcprof_start=addr]] [+irq_at_pc=addr[,period]] [+core=generation] [+mmu=ver[:SETSxWAYS]] [+cachemodel[=list]] [+tlbmodel[=list]] [+sbmodel[=list] [+sbmodel_cpi=N]] [+bpmodel[=list]] [+pairmodel[=list]] [+loadusemodel[=list]] [+model_start=addr] [+model_stop=addr] [+model_report=path]\n");
         return 1;
     }
 
@@ -4215,14 +4258,32 @@ int main(int argc, char** argv) {
         fprintf(stderr, ")\n");
         return 1;
     }
-    // The main TLB is one fixed array; a generation built with another
-    // geometry would report one TLB through MMU_CONFIG and run another.
-    if (core_gen->tlb.sets != TLB_GEOMETRY.sets || core_gen->tlb.ways != TLB_GEOMETRY.ways) {
-        fprintf(stderr, "+core=%s has a %ux%u main TLB; the ISS implements %ux%u\n",
-                core_gen->name, core_gen->tlb.sets, core_gen->tlb.ways,
-                TLB_GEOMETRY.sets, TLB_GEOMETRY.ways);
+    // The MMU the generation is built with, unless +mmu= names another:
+    // VER, or VER:SETSxWAYS.  Each version reports only the geometries
+    // its bounds reach (doc/system/mmu.md, "Interface Versions").
+    mmu_version = core_gen->mmu_version;
+    mmu_geometry = core_gen->tlb;
+    if (mmu_spec) {
+        unsigned ver = 0, sets = mmu_geometry.sets, ways = mmu_geometry.ways;
+        char extra = 0;
+        int n = sscanf(mmu_spec, "%u:%ux%u%c", &ver, &sets, &ways, &extra);
+        if (n != 1 && n != 3) {
+            fprintf(stderr, "+mmu=%s: expected VER or VER:SETSxWAYS\n", mmu_spec);
+            return 1;
+        }
+        mmu_version = ver;
+        mmu_geometry = { sets, ways };
+    }
+    uint32_t max_sets = mmu_version >= 2 ? 1u << 20 : 32, max_ways = mmu_version >= 2 ? 31 : 2;
+    if (mmu_version < 1 || mmu_version > 2 || !mmu_geometry.sets ||
+        (mmu_geometry.sets & (mmu_geometry.sets - 1)) || mmu_geometry.sets > max_sets ||
+        !mmu_geometry.ways || mmu_geometry.ways > max_ways) {
+        fprintf(stderr, "MMU version %u cannot report a %ux%u main TLB\n",
+                mmu_version, mmu_geometry.sets, mmu_geometry.ways);
         return 1;
     }
+    tlb.vpn.assign(mmu_geometry.sets * mmu_geometry.ways, 0);
+    tlb.pte.assign(mmu_geometry.sets * mmu_geometry.ways, 0);
 
     if (cachemodel_spec) {
         static CacheModel model;
@@ -4236,7 +4297,9 @@ int main(int argc, char** argv) {
     if (tlbmodel_spec) {
         static TlbModel model;
         std::string err;
-        if (!TlbModel::parse(tlbmodel_spec, *core_gen, model, err)) {
+        CoreGeneration presented = *core_gen;
+        presented.tlb = mmu_geometry;
+        if (!TlbModel::parse(tlbmodel_spec, presented, model, err)) {
             fprintf(stderr, "+tlbmodel: %s\n", err.c_str());
             return 1;
         }
