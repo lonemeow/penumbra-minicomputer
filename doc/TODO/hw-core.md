@@ -190,19 +190,16 @@ behind it 3 cycles longer than an independent op (spine testbench).
   `machine_penumbra3`, with the ULX3S's cache geometry; its boot testbench
   is the gen2 top's, shared (`hw/sim/nexysvideo_top_tb.h`)
 
-**Next:** Phase-1's gating checkpoint, the **full-top composition timing
-read** (`make fpga BOARD=ulx3s CORE=penumbra3` across a seed sweep; bare
-skeleton, no BTB) -- calibrates the probe->full margin before feature work.
-It is also where the fetch side's replay shows its worth: P0.5 settled the
-lookup and the IF2 shape (`doc/internals/penumbra3/phase0-probes.md`, "P0.5 --
-physical-tag compare behind the TLB verdict") but never saw IF1's hold form as
-its worst path. Two of the top's placement choices are gen2's, unmeasured on
-gen3, and the sweep settles both: the line SDRAM stack
-(`SDRAM_STACK_ulx3s_penumbra3_top`), and no floorplan, since gen2's regions
-(`hw/constraints/ulx3s_penumbra2_floorplan.py`) were measured against gen2's
-core filling X75..113. Feature work then follows the order
-`doc/internals/penumbra3/overview.md` ranks ("Levers ranked by measured
-benefit").
+**Next:** feature work, in the order `doc/internals/penumbra3/overview.md`
+ranks ("Levers ranked by measured benefit"). Phase 1's full-top timing read
+passed with the line SDRAM stack and no floorplan, the placement choices
+taken over from gen2: 7 of 10 seeds close at 37.5 MHz, the CPU clock the
+worst domain on each. On 9 of them the CPU clock's critical path is IF2's --
+the L1-I data word or the I-TLB's VPN word through the way select and
+decode-on-enqueue into the fetch buffer's write, about 60% of it routing --
+and IF1's hold is the worst path on none. Branch prediction puts its
+pre-decode and redirect in that cone, so its full-top sweep is the one to
+read against this one.
 
 **Before the TLB store's geometry is fixed:** the proposed 256x2 needs
 `MMU_CONFIG` version 2 and a wider `TLB_INDEX` in `doc/system/mmu.md`
