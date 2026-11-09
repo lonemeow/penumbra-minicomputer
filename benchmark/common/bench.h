@@ -10,6 +10,8 @@
 
 #include <stdint.h>
 
+#include "mmu.h"
+
 /*
  * Initialize the benchmark harness: start the periodic timer
  * and enable interrupts for overflow counting.
@@ -53,7 +55,7 @@ uint32_t bench_timer_freq_hz(void);
 
 /*
  * Enable / disable both data and instruction caches.
- * crt0.S enables them by default after MMU setup.  Memtest and any
+ * bench_mmu_start enables them during startup.  Memtest and any
  * other benchmark that needs to bypass the cache and exercise raw
  * memory should call bench_caches_disable() at entry to bench_main.
  *
@@ -64,22 +66,6 @@ uint32_t bench_timer_freq_hz(void);
  */
 void bench_caches_enable(void);
 void bench_caches_disable(void);
-
-/*
- * Map [base, limit) cached even where it falls in the MMIO range the
- * TLB miss handler otherwise maps uncached.  For a device aperture
- * that behaves as plain memory — a framebuffer whose only writer is
- * the CPU — where a cached copy cannot go stale; never for registers
- * the device itself updates.
- *
- * Flushes the main TLB, since entries installed under the previous
- * range still carry its cacheability.  Pass (0, 0) to restore the
- * default, under which every device is uncached.
- *
- * Lives in tlbrange.c, which depends on the handler crt0.S installs —
- * link that object to use this.
- */
-void bench_map_cached(uint32_t base, uint32_t limit);
 
 /*
  * CPU performance counter snapshot.

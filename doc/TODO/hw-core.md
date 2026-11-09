@@ -205,19 +205,19 @@ the one to read against this one.
 
 **The 256x2 TLB:** its interface is `MMU_CONFIG` version 2
 (`doc/system/mmu.md`, "Interface Versions"): the geometry bounds lifted,
-`TLB_INDEX`'s pinned select at bit 31, and invalidation in the MMU through
-three registers (evidence for the geometry:
-`doc/internals/penumbra3/memory-performance.md`, "TLB: sets, and a cheaper
-refill"). The kernel and the `isa/` tests drive both versions, the gen3
-MMU builds version 2 with its set count a machine parameter, and the ISS
-presents it as gen3 does or on request (`+mmu=2:256x2`). Open: a
-version-2 MMU stops every program that knows only version 1, and the
-bare-metal programs still do -- the benchmark harness's startup
-(`crt0.S`, `crt0_static.S`) and `tlbrange.c`, `membench` and `fbtest`.
-Each has to read the version and the geometry instead of assuming slot 16
-and bit 6, and initialize the TLB before it turns translation on, since
-its contents are undefined after reset (`doc/system/mmu.md`, "Boot
-Sequence").
+`TLB_INDEX`'s pinned select at bit 31, and invalidation in the MMU
+through three registers (evidence for the geometry:
+`doc/internals/penumbra3/memory-performance.md`, "TLB: sets, and a
+cheaper refill"). The kernel, the `isa/` tests and the benchmark harness
+(`benchmark/common/mmu.S`) drive both versions, the gen3 MMU builds
+version 2 with its set count a machine parameter, and the ISS presents
+it as gen3 does or on request (`+mmu=2:256x2`). Open: a version-2 MMU
+stops every program that knows only version 1, and the demo runtime
+(`sw/demoscene/skrolli2026/runtime/crt0.S`) still does. It has to read
+the version and the geometry instead of assuming 32 sets of 2 ways and
+the pinned select at bit 6, and initialize the TLB before it turns
+translation on, since its contents are undefined after reset
+(`doc/system/mmu.md`, "Boot Sequence").
 
 **Locked hazard-model decisions** (context for resuming):
 

@@ -753,18 +753,17 @@ counts are common.
 
 ## Benchmark: bare-metal startups use fixed low RAM
 
-The harness startups (`benchmark/common/crt0.S`,
-`benchmark/common/crt0_static.S`) copy their TLB-miss and interrupt
-handlers to physical `0x1000` and pin that page, keep the timer's
-accumulated ticks at `0x38` — reserved vector 14 — and pin page 0 so
-the handlers reach it with the MMU on. `bench.c` and `tlbrange.c`
-address both by constant, and `memtest` and `membench` fall back to
-boot data at `0x40` when R1 is 0. None of it comes from the boot
-data, and the two low pages are guaranteed to the ROM, not to what
-it loads ([boot-protocol.md: ROM to Loaded
-Program](../system/boot-protocol.md#rom-to-loaded-program)). It
-works only because every machine so far has RAM there, and the tick
-word breaks silently once vector 14 is assigned.
+The harness (`benchmark/common/mmu.S`, which both startups call) copies
+its TLB-miss and interrupt handlers to physical `0x1000` and pins that
+page, keeps the timer's accumulated ticks at `0x38` — reserved vector 14
+— and pins page 0 so the handlers reach it with the MMU on. `bench.c`
+and `tlb.c` address both by constant, and `memtest` and `membench` fall
+back to boot data at `0x40` when R1 is 0. None of it comes from the boot
+data, and the two low pages are guaranteed to the ROM, not to what it
+loads ([boot-protocol.md: ROM to Loaded
+Program](../system/boot-protocol.md#rom-to-loaded-program)). It works
+only because every machine so far has RAM there, and the tick word
+breaks silently once vector 14 is assigned.
 
 Open:
 

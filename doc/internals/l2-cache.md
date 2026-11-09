@@ -52,9 +52,9 @@ What's wired up today:
   (1024 x 16B, 4-way) unified` in the banner.  The ROM **does
   not** enable the L2 (or any cache, or the MMU) — that's the
   OS's job, by long-standing project convention.
-- Benchmark harness (`benchmark/common/crt0.S`) enables the L2
+- Benchmark harness (`benchmark/common/mmu.S`) enables the L2
   if present (`RDSYS SYSDEV_L2_CACHE INFO != 0`).  The probe is
-  preserved so this same crt0 still handles a hypothetical
+  preserved so this same harness still handles a hypothetical
   future L2-less bitstream variant without code change.
 
 Verification gates that have to stay green on every L2 commit:
@@ -457,7 +457,7 @@ Why this works:
 A future FPGA target that needs to reclaim the ~half-BRAM the L2
 occupies can drop the `l2_cache` instance entirely and tie the
 sysreg fan-in for ID 9 to zero; software's `INFO != 0` probe in
-crt0.S / locore.S handles that case unchanged.
+the benchmark harness and locore.S handles that case unchanged.
 
 **History note.**  An earlier `HAS_L2` build-time parameter and a
 phase-0 `l2_passthrough.sv` stub used to gate this — that scaffolding

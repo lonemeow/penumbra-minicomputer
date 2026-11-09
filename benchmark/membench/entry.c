@@ -51,23 +51,6 @@ struct btag_device {
     char     name[16];
 };
 
-/* ── Sysreg numbers (mirrors crt0.S) ──────────────────────────── */
-#define _STR(x)  #x
-#define XSTR(x)  _STR(x)
-
-#define SYSDEV_MMU       0
-#define MMU_TLB_VPN      3
-#define MMU_TLB_PTE      4
-#define MMU_TLB_INDEX    5
-#define PTE_KERNEL_NC    0x99u
-#define TLB_PINNED       0x40u
-
-#define write_sysreg(dev, reg, val) do {                         \
-    uint32_t _v = (val);                                         \
-    __asm__ __volatile__("wrsys %0, " XSTR(dev) ", " XSTR(reg)   \
-                         : : "r"(_v));                           \
-} while (0)
-
 /* ── Test geometry ────────────────────────────────────────────── */
 /* Working sets are derived from the cache geometry the machine reports,
  * not written down here.  A constant chosen against one hierarchy
@@ -111,20 +94,6 @@ static const struct btag_device *find_first_memory_region(uint32_t bootdata) {
     }
 }
 
-/* ── Pin a TLB slot with explicit PTE flags ───────────────────── */
-/*
- * Slots 0 and 1 are taken by the bench harness (handler page +
- * page 0).  Slot 2 is the next free pinned slot — we use it for
- * the uncached test page.
- */
-static void pin_uncached(unsigned slot, uint32_t va, uint32_t pa) {
-    uint32_t idx = TLB_PINNED | (slot & 0x3);
-    uint32_t vpn = (va >> 12);
-    uint32_t pte = (pa & ~0xFFFu) | PTE_KERNEL_NC;
-    write_sysreg(SYSDEV_MMU, MMU_TLB_INDEX, idx);
-    write_sysreg(SYSDEV_MMU, MMU_TLB_VPN,   vpn << 8);   /* ASID = 0 */
-    write_sysreg(SYSDEV_MMU, MMU_TLB_PTE,   pte);
-}
 
 /* ── Hex print helper ─────────────────────────────────────────── */
 static void print_hex32(uint32_t v) {
@@ -524,7 +493,9 @@ void bench_main(uint32_t bootdata) {
         return;
     }
 
-    pin_uncached(2, UNCACHED_TEST_VA, uncached_pa);
+    /* The program's first pinned slot: the uncached test page */
+    bench_tlb_pin(BENCH_PIN_FIRST_FREE, UNCACHED_TEST_VA,
+                  (uncached_pa & ~0xFFFu) | PTE_KERNEL_NC);
 
     bench_puts("L1-D:                 ");
     if (l1d.present) {

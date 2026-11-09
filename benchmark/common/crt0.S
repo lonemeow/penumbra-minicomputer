@@ -7,10 +7,8 @@
  *
  * Startup phases:
  *   1. PIE self-relocation (process R_PENUMBRA_RELATIVE)
- *   2. Copy TLB miss + IRQ handlers to page 0x1000
- *   3. Install vector table entries, pin handler page + page 0
- *   4. Identity-map current code page, enable MMU (for caching)
- *   5. Set up the stack (in .bss), call bench_main(bootdata)
+ *   2. bench_mmu_start (mmu.S): TLB, handlers, translation and caches
+ *   3. Set up the stack (in .bss), call bench_main(bootdata)
  */
 
 /* ── ELF dynamic section tags ─────────────────────────────────── */
@@ -18,44 +16,6 @@
 #define DT_RELA             7
 #define DT_RELASZ           8
 #define R_PENUMBRA_RELATIVE 8
-
-/* ── MMU sysregs (device 0) ───────────────────────────────────── */
-#define SYSDEV_MMU          0
-#define MMU_MMUCR           0
-#define MMU_FAULT_ADDR      1
-#define MMU_TLB_VPN         3
-#define MMU_TLB_PTE         4
-#define MMU_TLB_INDEX       5
-#define MMUCR_M             1
-
-/* ── Timer sysregs (device 7) ─────────────────────────────────── */
-#define SYSDEV_TIMER        7
-#define TM_STATUS           4
-
-/* ── Cache sysregs (DCACHE/ICACHE/L2, identical layout) ─────────
- *
- * Every cache device exposes the same register map.  INFO=0 means
- * the device is absent (no instantiation, or device id unmapped);
- * software detects presence with a single RDSYS and skips ops on
- * absent caches.  See hw/rom/penumbra.h for the full layout.
- */
-#define SYSDEV_L1_DCACHE    2
-#define SYSDEV_L1_ICACHE    3
-#define SYSDEV_L2_CACHE     9
-#define CACHE_INFO          0
-#define CACHE_CTRL          1
-#define CACHE_CTRL_ENABLE   1
-
-/* ── PTE flags (must match hardware TLB_PTE layout) ───────────── */
-#define PTE_KERNEL          0xBD    /* V|C|R|W|X|G */
-#define PTE_KERNEL_NC       0x99    /* V|R|W|G (uncached, for MMIO) */
-
-/* ── Pinned TLB ───────────────────────────────────────────────── */
-#define TLB_PINNED          0x40
-
-/* ── Fixed addresses ──────────────────────────────────────────── */
-#define HANDLER_PAGE        0x1000
-#define TIMER_BASE_ADDR    0x38    /* accumulated ticks, page 0 */
 
 /* ── Stack ────────────────────────────────────────────────────────
  * The stack is part of the image's .bss, so the ROM allocates it with
@@ -145,161 +105,22 @@ _start:
 .Lreloc_done:
 
 /* ═════════════════════════════════════════════════════════════════
- * Phase 2: Copy handlers to page 0x1000
+ * Phase 2: Translation, through the harness (mmu.S)
  *
- * The handler block (_handler_start to _handler_end) is a
- * self-contained unit using PC-relative scratch addressing.
- * Copying preserves relative offsets — works at any address.
- *
- * Symbol addresses are loaded from .data slots (patched by the
- * self-relocator above) via PC-relative indirection — same
- * technique the bootloader uses for _DYNAMIC.
+ * A PIE image runs where it was loaded, so its load bias for the
+ * BENCH_VBASE window is zero.  The handler block's runtime address
+ * comes from a .data slot the relocator patched.
  * ═════════════════════════════════════════════════════════════════ */
 
-        /* Clear overflow counter */
-        stw     r0, [r0 + TIMER_BASE_ADDR]
-
-        /* Load runtime addresses of handler block bounds.
-         * .Laddr_* slots in .data were patched by the relocator. */
-
-        /* r1 = &_handler_start (runtime) */
         mov     r1, pc
         add     r1, #8
         add     r1, #%pcrel(.Laddr_handler_start)
         ldw     r1, [r1]
-
-        /* r2 = &_handler_end (runtime) */
-        mov     r2, pc
-        add     r2, #8
-        add     r2, #%pcrel(.Laddr_handler_end)
-        ldw     r2, [r2]
-
-        /* Copy handler block word-by-word to HANDLER_PAGE */
-        li      r3, HANDLER_PAGE
-
-.Lcopy_loop:
-        cmp     r1, r2
-        bhs     .Lcopy_done
-        ldw     r4, [r1]
-        stw     r4, [r3]
-        add     r1, #4
-        add     r3, #4
-        b       .Lcopy_loop
-.Lcopy_done:
-
-        /* Install vector table entries.
-         * Compute: HANDLER_PAGE + (symbol - _handler_start)
-         */
-
-        /* Load _handler_start into r6 for offset computations */
-        mov     r6, pc
-        add     r6, #8
-        add     r6, #%pcrel(.Laddr_handler_start)
-        ldw     r6, [r6]
-
-        /* vector[2] = TLB miss handler */
-        mov     r1, pc
-        add     r1, #8
-        add     r1, #%pcrel(.Laddr_bench_tlb_miss)
-        ldw     r1, [r1]
-        sub     r1, r6
-        add     r1, #HANDLER_PAGE
-        stw     r1, [r0 + 8]            /* vector[2] at phys 0x08 */
-
-        /* vector[1] = IRQ handler */
-        mov     r1, pc
-        add     r1, #8
-        add     r1, #%pcrel(.Laddr_bench_irq)
-        ldw     r1, [r1]
-        sub     r1, r6
-        add     r1, #HANDLER_PAGE
-        stw     r1, [r0 + 4]            /* vector[1] at phys 0x04 */
+        mov     r2, r0
+        bl      bench_mmu_start         /* keeps R5 */
 
 /* ═════════════════════════════════════════════════════════════════
- * Phase 3: Pin TLB slots
- *
- * Slot 0: handler page (0x1000) — TLB miss + IRQ code
- * Slot 1: page 0 (0x0000) — vectors, bootdata, overflow counter
- *
- * Both identity-mapped (VA = PA) so handlers can run without
- * nested TLB misses.
- * ═════════════════════════════════════════════════════════════════ */
-
-        /* Slot 0: handler page at PA 0x1000 */
-        lli     r1, #TLB_PINNED
-        wrsys   r1, #SYSDEV_MMU, #MMU_TLB_INDEX
-
-        lli     r1, #0x100              /* TLB_VPN = (0x1 << 8) | ASID=0 */
-        wrsys   r1, #SYSDEV_MMU, #MMU_TLB_VPN
-
-        lli     r1, #0x10BD            /* TLB_PTE = PA 0x1000 | PTE_KERNEL */
-        wrsys   r1, #SYSDEV_MMU, #MMU_TLB_PTE
-
-        /* Slot 1: page 0 at PA 0x0000 */
-        lli     r1, #(TLB_PINNED | 1)
-        wrsys   r1, #SYSDEV_MMU, #MMU_TLB_INDEX
-
-        lli     r1, #0                  /* TLB_VPN = 0 */
-        wrsys   r1, #SYSDEV_MMU, #MMU_TLB_VPN
-
-        lli     r1, #PTE_KERNEL         /* TLB_PTE = PA 0 | PTE_KERNEL */
-        wrsys   r1, #SYSDEV_MMU, #MMU_TLB_PTE
-
-/* ═════════════════════════════════════════════════════════════════
- * Phase 4: Identity-map current code page + enable MMU
- *
- * After WRSYS sets M=1, instruction fetches go through the TLB.
- * This identity-map entry (VA = PA) lets the PC continue
- * executing at the same physical address.  It will be naturally
- * evicted once the benchmark runs at other addresses (the TLB
- * miss handler refills on demand).
- * ═════════════════════════════════════════════════════════════════ */
-
-.Lmmu_ref:
-        mov     r1, pc                  /* physical address of this instr */
-        shr     r1, #12                 /* PPN */
-
-        /* TLB_INDEX = PPN[4:0] (set), way 0 */
-        mov     r2, r1
-        and     r2, #0x1F
-        wrsys   r2, #SYSDEV_MMU, #MMU_TLB_INDEX
-
-        /* TLB_VPN = (PPN << 8) | ASID=0 */
-        mov     r2, r1
-        shl     r2, #8
-        wrsys   r2, #SYSDEV_MMU, #MMU_TLB_VPN
-
-        /* TLB_PTE = (PPN << 12) | PTE_KERNEL */
-        shl     r1, #12
-        lli     r2, #PTE_KERNEL
-        or      r1, r2
-        wrsys   r1, #SYSDEV_MMU, #MMU_TLB_PTE
-
-        /* Enable MMU — identity mapping means we continue here */
-        lli     r1, #MMUCR_M
-        wrsys   r1, #SYSDEV_MMU, #MMU_MMUCR
-
-        /* Enable both caches.  PTE.C declares pages cacheable but
-         * the cache modules themselves are disabled at reset and
-         * pass everything through to memory until ENABLE is set.
-         * Valid bits are cleared at reset, so no invalidate needed. */
-        lli     r1, #CACHE_CTRL_ENABLE
-        wrsys   r1, #SYSDEV_L1_DCACHE, #CACHE_CTRL
-        wrsys   r1, #SYSDEV_L1_ICACHE, #CACHE_CTRL
-
-        /* Enable L2 if present.  INFO=0 means the device id is
-         * unmapped on this bitstream (RDSYS returns zero); skip the
-         * enable write so this same crt0 handles a possible
-         * L2-less variant without code change. */
-        rdsys   r2, #SYSDEV_L2_CACHE, #CACHE_INFO
-        cmp     r2, r0
-        beq     .Lno_l2
-        lli     r1, #CACHE_CTRL_ENABLE
-        wrsys   r1, #SYSDEV_L2_CACHE, #CACHE_CTRL
-.Lno_l2:
-
-/* ═════════════════════════════════════════════════════════════════
- * Phase 5: Set stack + call bench_main
+ * Phase 3: Set stack + call bench_main
  * ═════════════════════════════════════════════════════════════════ */
 
         /* The stack's top, from a .data slot the relocator patched: a
@@ -325,172 +146,6 @@ _start:
         .long   _bench_stack_top
 .Laddr_handler_start:
         .long   _handler_start
-.Laddr_handler_end:
-        .long   _handler_end
-.Laddr_bench_tlb_miss:
-        .long   _bench_tlb_miss
-.Laddr_bench_irq:
-        .long   _bench_irq
-
-
-/* ═════════════════════════════════════════════════════════════════
- * Handler code — copied to page 0x1000 at startup.
- *
- * This is a self-contained block: all scratch access is
- * PC-relative, so the code works correctly after being copied
- * to any page-aligned address.
- *
- * Layout after copy:
- *   +0x000  TLB miss handler (identity map, VA = PA)
- *           IRQ handler (timer overflow counter)
- *           Scratch data (register save, way counter)
- * ═════════════════════════════════════════════════════════════════ */
-
-        .section .handlers,"ax",@progbits
-        .balign 4
-        .globl  _handler_start
-        .globl  _handler_end
-
-_handler_start:
-
-/* ── TLB miss handler ──────────────────────────────────────────
- *
- * Identity-maps the faulting address: VA = PA.
- * Cached (PTE_KERNEL) for addresses below 0xFF000000.
- * Uncached (PTE_KERNEL_NC) for addresses >= 0xFF000000 (MMIO).
- * Uses alternating way counter for TLB replacement.
- *
- * The MMIO default is overridable through the [_rmh_cached_base,
- * _rmh_cached_limit) range, for a device aperture that behaves as
- * plain memory rather than as registers — a framebuffer the CPU is
- * the only writer of can be cached, where a status register cannot.
- * The range is empty at reset, so a consumer opts in explicitly.
- * ────────────────────────────────────────────────────────────── */
-        .globl  _bench_tlb_miss
-_bench_tlb_miss:
-        stw     r1, [pc + _rmh_save_r1 - .]
-        stw     r2, [pc + _rmh_save_r2 - .]
-        stw     r3, [pc + _rmh_save_r3 - .]
-
-        /* Read faulting virtual address */
-        rdsys   r1, #SYSDEV_MMU, #MMU_FAULT_ADDR
-
-        /* VPN = fault_addr >> 12 */
-        mov     r2, r1
-        shr     r2, #12
-
-        /* TLB_INDEX = set (VPN[4:0]) | way_counter */
-        mov     r3, r2
-        and     r3, #0x1F
-        ldw     r1, [pc + _rmh_way_ctr - .]
-        or      r3, r1
-        wrsys   r3, #SYSDEV_MMU, #MMU_TLB_INDEX
-
-        /* TLB_VPN = (VPN << 8) | ASID=0 */
-        mov     r3, r2
-        shl     r3, #8
-        wrsys   r3, #SYSDEV_MMU, #MMU_TLB_VPN
-
-        /* TLB_PTE: choose cached vs uncached by address range.
-         * VPN >> 12 gives fault_addr[31:24].  If >= 0xFF, uncached.
-         *
-         * Attribute bits are added rather than or'd because OR carries
-         * no immediate form, and the PPN shift below leaves the low
-         * twelve bits clear — on those bits the two are the same
-         * operation, and ADD saves materialising the constant. */
-        mov     r3, r2
-        shl     r3, #12                /* PPN << 12 (= PA page base) */
-        mov     r1, r2
-        shr     r1, #12                /* fault_addr[31:24] */
-        cmp     r1, #0xFF
-        bhs     .Luncached
-        add     r3, #PTE_KERNEL
-        b       .Lcommit
-
-        /* R3 holds the page base and R1 is dead from here, so the
-         * range test has both a value to compare and a register to
-         * load bounds into.  Page granularity is enough: the bounds
-         * only ever select whole pages. */
-.Luncached:
-        /* An explicit range overrides the MMIO default, tested
-         * half-open as [base, limit).  Unsigned throughout — these are
-         * addresses, and every one reaching here has bit 31 set, which
-         * the signed conditions would read as negative.  At reset the
-         * range is empty, and the limit test rejects every address
-         * against a zero bound, so a device stays uncached until a
-         * consumer opts in. */
-        ldw     r1, [pc + _rmh_cached_base - .]
-        cmp     r3, r1
-        blo     .Lnocache
-        ldw     r1, [pc + _rmh_cached_limit - .]
-        cmp     r3, r1
-        bhs     .Lnocache
-        add     r3, #PTE_KERNEL
-        b       .Lcommit
-.Lnocache:
-        add     r3, #PTE_KERNEL_NC
-.Lcommit:
-        wrsys   r3, #SYSDEV_MMU, #MMU_TLB_PTE
-
-        /* Toggle way counter (0 ↔ 0x20 = bit 5) */
-        lli     r1, #0x20
-        ldw     r2, [pc + _rmh_way_ctr - .]
-        xor     r2, r1
-        stw     r2, [pc + _rmh_way_ctr - .]
-
-        ldw     r1, [pc + _rmh_save_r1 - .]
-        ldw     r2, [pc + _rmh_save_r2 - .]
-        ldw     r3, [pc + _rmh_save_r3 - .]
-        eret
-
-
-/* ── IRQ handler: timer tick accumulation ──────────────────────
- *
- * On timer underflow, clears the UDF flag and adds one full
- * period (0xFFFF = 65535 ticks, matching TMRELOAD=0xFFFE) to
- * the base tick counter at TIMER_BASE_ADDR (0x38) on page 0.
- *
- * Accumulating ticks directly avoids an expensive software
- * multiply in the readback function (no hardware MUL).
- * Only R1 is saved (to PC-relative scratch on handler page).
- * SR/flags restored automatically by ERET from ESR.
- * ────────────────────────────────────────────────────────────── */
-        .balign 4
-        .globl  _bench_irq
-_bench_irq:
-        stw     r1, [pc + _irq_save_r1 - .]
-
-        /* Clear timer UDF (write-1-to-clear) */
-        lli     r1, #1
-        wrsys   r1, #SYSDEV_TIMER, #TM_STATUS
-
-        /* Accumulate one period of ticks (0xFFFF = reload + 1) */
-        ldw     r1, [r0 + TIMER_BASE_ADDR]
-        add     r1, #0xFFFF
-        stw     r1, [r0 + TIMER_BASE_ADDR]
-
-        ldw     r1, [pc + _irq_save_r1 - .]
-        eret
-
-
-/* ── Scratch data (contiguous with code for PC-relative access) ─ */
-        .balign 4
-_rmh_save_r1:   .long 0
-_rmh_save_r2:   .long 0
-_rmh_save_r3:   .long 0
-_rmh_way_ctr:   .long 0
-_irq_save_r1:   .long 0
-
-/* Cacheable-range override, adjacent so a consumer writes the pair as
- * two words from one base.  Empty (base = limit = 0) leaves every
- * device uncached, which no address satisfies whichever way the bounds
- * are compared. */
-        .globl  _rmh_cached_base
-        .globl  _rmh_cached_limit
-_rmh_cached_base:  .long 0
-_rmh_cached_limit: .long 0
-
-_handler_end:
 
 
 /* ── Stack, allocated with the image ─────────────────────────────── */

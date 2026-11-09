@@ -28,19 +28,6 @@
 #include "display.h"
 #include "penumbra.h"
 
-/* ── MMU sysregs ───────────────────────────────────────────────
- *
- * penumbra.h carries the cache and CPU register maps but not the TLB
- * ones.  Layout and semantics are in doc/system/mmu.md.
- */
-#define SYSDEV_MMU      0
-#define MMU_TLB_VPN     3
-#define MMU_TLB_PTE     4
-#define MMU_TLB_INDEX   5
-#define PTE_C           0x04    /* cacheable */
-#define TLB_SETS        32
-#define TLB_WAYS        2
-
 /* The pixel array at the geometry this device declares.  Sizes the
  * SDRAM comparison buffer, and bounds a sweep if a future device
  * declares more than this runtime is built to hold. */
@@ -318,28 +305,6 @@ static void measure_uncached(void)
 
 /* ── Cached mapping of the pixel aperture ─────────────────────── */
 /*
- * What the miss handler decided for `va`, or 0 if the page is not
- * resident.  The set is VPN[4:0] and the handler alternates ways, so
- * both are searched for the matching tag.
- *
- * This is how the range is verified rather than the cache counters:
- * it needs only a working MMU, so a mistake in the handler's range
- * test shows up under simulation instead of costing a flash cycle.
- */
-static uint32_t tlb_pte_for(uint32_t va)
-{
-    uint32_t vpn = va >> 12;
-    uint32_t set = vpn & (TLB_SETS - 1);
-
-    for (uint32_t way = 0; way < TLB_WAYS; way++) {
-        penumbra_write_sysreg(SYSDEV_MMU, MMU_TLB_INDEX, set | (way << 5));
-        if ((penumbra_read_sysreg(SYSDEV_MMU, MMU_TLB_VPN) >> 8) == vpn)
-            return penumbra_read_sysreg(SYSDEV_MMU, MMU_TLB_PTE);
-    }
-    return 0;
-}
-
-/*
  * Caching a device aperture is sound here for a reason peculiar to
  * this device: scan-out only ever reads the pixel array, so the CPU is
  * its sole writer and a cached copy cannot go stale.  The range covers
@@ -364,9 +329,12 @@ static void measure_cached(uint32_t words)
 
     /* Fault a page in, then read back the attribute the handler chose.
      * A range that never matches leaves the aperture uncached and every
-     * row below silently measures the uncached path again. */
+     * row below silently measures the uncached path again.  The TLB is
+     * read rather than the cache counters: that needs only a working
+     * MMU, so a mistake in the handler's range test shows up under
+     * simulation instead of costing a flash cycle. */
     sink = p[0];
-    uint32_t pte = tlb_pte_for(fb);
+    uint32_t pte = bench_tlb_lookup(fb);
     if (pte == 0)
         bench_puts("  !! no TLB entry for the aperture\r\n");
     else if (!(pte & PTE_C))

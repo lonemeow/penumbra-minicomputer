@@ -1,16 +1,11 @@
 /*
  * crt0_static.S — Bare-metal startup for the static-link benchmarks.
  *
- * Differs from crt0.S in two ways:
- *   1. The image is NOT PIE.  It is linked statically at virtual
- *      address 0x80000000, so global accesses compile down to the
- *      classic 2-instruction LUI+LDW sequence — no GOT indirection.
- *   2. The TLB miss handler is range-aware.  Faults inside the
- *      [BENCH_VBASE, BENCH_VBASE+image_size) window are mapped to
- *      PA = VA - BENCH_VBASE + load_base (the physical address ROM
- *      chose); faults below BENCH_VBASE stay identity-mapped (low
- *      RAM, page-0 vectors); faults at >= 0xFF000000 stay
- *      identity-mapped uncached (MMIO).
+ * Differs from crt0.S in that the image is NOT PIE.  It is linked at
+ * virtual address BENCH_VBASE (0x80000000), so global accesses compile
+ * down to the classic 2-instruction LUI+LDW sequence — no GOT
+ * indirection.  The harness's miss handler maps that window to where
+ * the ROM loaded the image, PA = VA + load_bias (mmu.h).
  *
  * Entry state (from ROM boot command):
  *   R1 = physical pointer to boot data
@@ -19,52 +14,16 @@
  * Startup phases:
  *   1. Compute load_bias = runtime_PC − linktime_PC
  *      (= load_base − BENCH_VBASE, possibly negative i.e. wrapping)
- *   2. Copy TLB miss + IRQ handlers to page 0x1000 and patch the
- *      load_bias scratch slot inside the copy
- *   3. Install vector table entries, pin handler page + page 0
- *   4. Enable MMU (image is now reachable at its linked VA)
- *   5. Enable caches
- *   6. Set up the stack (in .bss), call bench_main(bootdata) at fixed VA
+ *   2. bench_mmu_start (mmu.S): TLB, handlers, translation and caches
+ *   3. Jump to the linked VA, set up the stack (in .bss), call
+ *      bench_main(bootdata)
  */
-
-/* ── MMU sysregs (device 0) ───────────────────────────────────── */
-#define SYSDEV_MMU          0
-#define MMU_MMUCR           0
-#define MMU_FAULT_ADDR      1
-#define MMU_TLB_VPN         3
-#define MMU_TLB_PTE         4
-#define MMU_TLB_INDEX       5
-#define MMUCR_M             1
-
-/* ── Timer sysregs (device 7) ─────────────────────────────────── */
-#define SYSDEV_TIMER        7
-#define TM_STATUS           4
-
-/* ── Cache sysregs ────────────────────────────────────────────── */
-#define SYSDEV_L1_DCACHE    2
-#define SYSDEV_L1_ICACHE    3
-#define SYSDEV_L2_CACHE     9
-#define CACHE_INFO          0
-#define CACHE_CTRL          1
-#define CACHE_CTRL_ENABLE   1
-
-/* ── PTE flags ────────────────────────────────────────────────── */
-#define PTE_KERNEL          0xBD    /* V|C|R|W|X|G */
-#define PTE_KERNEL_NC       0x99    /* V|R|W|G (uncached, for MMIO) */
-
-/* ── Pinned TLB ───────────────────────────────────────────────── */
-#define TLB_PINNED          0x40
-
-/* ── Fixed addresses ──────────────────────────────────────────── */
-#define HANDLER_PAGE        0x1000
-#define TIMER_BASE_ADDR     0x38         /* accumulated ticks, page 0 */
 
 /* ── Stack ────────────────────────────────────────────────────────
  * The stack is part of the image's .bss, above BENCH_VBASE, so the ROM
  * allocates it with the program and the miss handler maps it with the
  * load bias. */
 #define BENCH_STACK_BYTES   16384
-#define BENCH_VBASE         0x80000000   /* must match bench_static.ld */
 
 
 /* ═════════════════════════════════════════════════════════════════
@@ -96,139 +55,26 @@ _start:
         sub     r4, r6                   /* r4 = load_bias */
 
 /* ═════════════════════════════════════════════════════════════════
- * Phase 2: Copy handlers to page 0x1000 and patch load_bias
+ * Phase 2: Translation, through the harness (mmu.S)
  *
- * Handler block uses PC-relative scratch addressing throughout, so
- * a verbatim word-for-word copy works at any page-aligned target.
- * After copy we patch a single scratch word inside the copied block
- * with the load_bias value the miss handler needs at runtime.
+ * PC-relative, the handler block's address is its runtime one.  The
+ * harness returns with translation on, still at the physical address,
+ * which its handler maps identically; the absolute jump then lands in
+ * the BENCH_VBASE window, mapped with the bias.
  * ═════════════════════════════════════════════════════════════════ */
 
-        /* Clear timer overflow accumulator */
-        stw     r0, [r0 + TIMER_BASE_ADDR]
-
-        /* r1 = runtime &_handler_start, r2 = runtime &_handler_end */
         mov     r1, pc
         add     r1, #8
         add     r1, #%pcrel(_handler_start)
-        mov     r2, pc
-        add     r2, #8
-        add     r2, #%pcrel(_handler_end)
+        mov     r2, r4
+        bl      bench_mmu_start         /* keeps R5 */
 
-        /* Word-by-word copy to HANDLER_PAGE */
-        li      r3, HANDLER_PAGE
-.Lcopy_loop:
-        cmp     r1, r2
-        bhs     .Lcopy_done
-        ldw     r6, [r1]
-        stw     r6, [r3]
-        add     r1, #4
-        add     r3, #4
-        b       .Lcopy_loop
-.Lcopy_done:
-
-        /* Patch the load_bias slot inside the copy.
-         * Offset of slot from _handler_start is a link-time constant. */
-        li      r1, HANDLER_PAGE + (_rmh_load_bias - _handler_start)
-        stw     r4, [r1]
-
-        /* Install vector table entries.
-         * Target = HANDLER_PAGE + (handler_symbol − _handler_start). */
-        li      r1, HANDLER_PAGE + (_bench_tlb_miss - _handler_start)
-        stw     r1, [r0 + 8]            /* vector[2] = TLB miss */
-
-        li      r1, HANDLER_PAGE + (_bench_irq - _handler_start)
-        stw     r1, [r0 + 4]            /* vector[1] = IRQ */
-
-/* ═════════════════════════════════════════════════════════════════
- * Phase 3: Pin TLB slots
- *
- * Slot 0: handler page (0x1000) — TLB miss + IRQ code
- * Slot 1: page 0 (0x0000) — vectors, bootdata, overflow counter
- *
- * Both identity-mapped (VA = PA) so handlers can run without
- * nested TLB misses.  The image window at BENCH_VBASE is
- * left to the miss handler.
- * ═════════════════════════════════════════════════════════════════ */
-
-        /* Slot 0: handler page at PA 0x1000 */
-        lli     r1, #TLB_PINNED
-        wrsys   r1, #SYSDEV_MMU, #MMU_TLB_INDEX
-
-        lli     r1, #0x100              /* VPN = (0x1 << 8) | ASID=0 */
-        wrsys   r1, #SYSDEV_MMU, #MMU_TLB_VPN
-
-        lli     r1, #0x10BD             /* PTE = PA 0x1000 | PTE_KERNEL */
-        wrsys   r1, #SYSDEV_MMU, #MMU_TLB_PTE
-
-        /* Slot 1: page 0 at PA 0x0000 */
-        lli     r1, #(TLB_PINNED | 1)
-        wrsys   r1, #SYSDEV_MMU, #MMU_TLB_INDEX
-
-        lli     r1, #0                  /* VPN = 0 */
-        wrsys   r1, #SYSDEV_MMU, #MMU_TLB_VPN
-
-        lli     r1, #PTE_KERNEL         /* PTE = PA 0 | PTE_KERNEL */
-        wrsys   r1, #SYSDEV_MMU, #MMU_TLB_PTE
-
-/* ═════════════════════════════════════════════════════════════════
- * Phase 4: Pin a TLB entry for the current code page, then enable MMU
- *
- * After MMUCR.M=1, instruction fetches go through the TLB.  We are
- * still running at the physical load address, so this entry maps
- * VA == PA for the current page (one extra pinned slot).  Once the
- * very next instruction (a fixed-VA branch) lands, fetches come
- * from the BENCH_VBASE range and the miss handler refills as needed.
- * ═════════════════════════════════════════════════════════════════ */
-
-        /* Slot 2: identity-map current physical code page */
-        lli     r1, #(TLB_PINNED | 2)
-        wrsys   r1, #SYSDEV_MMU, #MMU_TLB_INDEX
-
-        mov     r1, pc
-        shr     r1, #12                 /* PPN of current PC */
-
-        mov     r2, r1
-        shl     r2, #8                  /* VPN<<8 | ASID=0 */
-        wrsys   r2, #SYSDEV_MMU, #MMU_TLB_VPN
-
-        shl     r1, #12                 /* PA page base */
-        lli     r2, #PTE_KERNEL
-        or      r1, r2
-        wrsys   r1, #SYSDEV_MMU, #MMU_TLB_PTE
-
-        /* Turn the MMU on */
-        lli     r1, #MMUCR_M
-        wrsys   r1, #SYSDEV_MMU, #MMU_MMUCR
-
-        /* Long jump to fixed-VA continuation.  Until this branch
-         * resolves, we are still fetching from the identity-pinned
-         * physical page.  The target is an absolute (fixed-VA)
-         * address, so the very next fetch goes through the miss
-         * handler, which refills via the biased PA mapping. */
         li      r1, .Lin_vaddr
         jmp     r1
-
 .Lin_vaddr:
-        /* Enable caches.  PTE.C declares pages cacheable but the
-         * cache modules themselves are disabled at reset and pass
-         * everything through to memory until ENABLE is set.  Valid
-         * bits are cleared at reset, so no invalidate needed. */
-        lli     r1, #CACHE_CTRL_ENABLE
-        wrsys   r1, #SYSDEV_L1_DCACHE, #CACHE_CTRL
-        wrsys   r1, #SYSDEV_L1_ICACHE, #CACHE_CTRL
-
-        /* Enable L2 if present.  INFO=0 means the device id is
-         * unmapped on this bitstream; skip the enable write. */
-        rdsys   r2, #SYSDEV_L2_CACHE, #CACHE_INFO
-        cmp     r2, r0
-        beq     .Lno_l2
-        lli     r1, #CACHE_CTRL_ENABLE
-        wrsys   r1, #SYSDEV_L2_CACHE, #CACHE_CTRL
-.Lno_l2:
 
 /* ═════════════════════════════════════════════════════════════════
- * Phase 5: Set stack + call bench_main
+ * Phase 3: Set stack + call bench_main
  * ═════════════════════════════════════════════════════════════════ */
 
         li      sp, _bench_stack_top
@@ -249,155 +95,6 @@ _start:
         .align  4
 .Lselfaddr:
         .long   .Lselfaddr
-
-
-/* ═════════════════════════════════════════════════════════════════
- * Handler code — copied to page 0x1000 at startup.
- *
- * Block layout (all PC-relative addressing inside):
- *   _handler_start
- *     _bench_tlb_miss   (range-aware refill)
- *     _bench_irq        (timer overflow accumulator)
- *     scratch words     (register saves, way counter, load_bias)
- *   _handler_end
- * ═════════════════════════════════════════════════════════════════ */
-
-        .section .handlers,"ax",@progbits
-        .balign 4
-        .globl  _handler_start
-        .globl  _handler_end
-
-_handler_start:
-
-/* ── Range-aware TLB miss handler ──────────────────────────────
- *
- * Three address ranges, three mapping policies:
- *
- *   VA >= 0xFF000000              → uncached identity (MMIO)
- *   VA >= BENCH_VBASE (0x80000000) → cached, PA = VA + load_bias
- *   otherwise                      → cached identity (low RAM)
- *
- * Uses alternating-way replacement (bit 5 of TLB_INDEX).
- * ────────────────────────────────────────────────────────────── */
-        .globl  _bench_tlb_miss
-_bench_tlb_miss:
-        stw     r1, [pc + _rmh_save_r1 - .]
-        stw     r2, [pc + _rmh_save_r2 - .]
-        stw     r3, [pc + _rmh_save_r3 - .]
-
-        /* r1 = fault VA */
-        rdsys   r1, #SYSDEV_MMU, #MMU_FAULT_ADDR
-
-        /* r2 = VPN, r3 = TLB_INDEX (set ∈ VPN[4:0] | way bit) */
-        mov     r2, r1
-        shr     r2, #12
-        mov     r3, r2
-        and     r3, #0x1F
-        ldw     r1, [pc + _rmh_way_ctr - .]
-        or      r3, r1
-        wrsys   r3, #SYSDEV_MMU, #MMU_TLB_INDEX
-
-        /* TLB_VPN = (VPN << 8) | ASID=0 */
-        mov     r3, r2
-        shl     r3, #8
-        wrsys   r3, #SYSDEV_MMU, #MMU_TLB_VPN
-
-        /* ── Compose TLB_PTE ────────────────────────────────────
-         * On entry: r1 = fault VA, r2 = VPN (= fault VA >> 12).
-         * On exit:  r3 = TLB_PTE value (PA page base | PTE flags).
-         * Then fall through to the WRSYS + restore below.
-         *
-         * Three cases (see header comment for ranges).  The
-         * load_bias scratch slot holds (load_base − BENCH_VBASE)
-         * as a wrap-around uint32_t; adding it to a high-half VA
-         * yields the physical address.
-         */
-        /* Classify on VA[31:24] (top byte of VPN).  Three policies:
-         *   top >= 0xFF → uncached identity (MMIO)
-         *   top >= 0x80 → cached biased    (image window)
-         *   otherwise   → cached identity  (low RAM, stack)
-         *
-         * Common prefix: r3 = VPN << 12 = VA page base.  For both
-         * identity arms this is already the PA page base; only the
-         * biased arm needs to add load_bias (which is page-aligned,
-         * so it doesn't disturb the low 12 bits we're about to OR
-         * with the PTE flag word).  Avoids depending on the fault
-         * VA in r1, which the way-counter load above has clobbered.
-         */
-        mov     r3, r2
-        shl     r3, #12                 /* r3 = VA page base */
-
-        mov     r1, r2
-        shr     r1, #12                 /* r1 = VA[31:24] */
-        cmp     r1, #0xFF
-        bhs     .Luncached
-        cmp     r1, #0x80
-        bhs     .Lbiased
-
-        /* Identity, cached */
-        add     r3, #PTE_KERNEL
-        b       .Lwrite_pte
-
-.Lbiased:
-        /* Cached, with load_bias (load_bias is page-aligned) */
-        ldw     r1, [pc + _rmh_load_bias - .]
-        add     r3, r1                  /* r3 = PA page base */
-        add     r3, #PTE_KERNEL
-        b       .Lwrite_pte
-
-.Luncached:
-        /* Identity, uncached (MMIO) */
-        add     r3, #PTE_KERNEL_NC
-
-.Lwrite_pte:
-        wrsys   r3, #SYSDEV_MMU, #MMU_TLB_PTE
-
-        /* Toggle way counter (0 ↔ 0x20 = bit 5) */
-        lli     r1, #0x20
-        ldw     r2, [pc + _rmh_way_ctr - .]
-        xor     r2, r1
-        stw     r2, [pc + _rmh_way_ctr - .]
-
-        ldw     r1, [pc + _rmh_save_r1 - .]
-        ldw     r2, [pc + _rmh_save_r2 - .]
-        ldw     r3, [pc + _rmh_save_r3 - .]
-        eret
-
-
-/* ── IRQ handler: timer tick accumulation (unchanged from common) ─ */
-        .balign 4
-        .globl  _bench_irq
-_bench_irq:
-        stw     r1, [pc + _irq_save_r1 - .]
-
-        /* Clear timer UDF (write-1-to-clear) */
-        lli     r1, #1
-        wrsys   r1, #SYSDEV_TIMER, #TM_STATUS
-
-        /* Accumulate one period (0xFFFF = reload + 1) */
-        ldw     r1, [r0 + TIMER_BASE_ADDR]
-        add     r1, #0xFFFF
-        stw     r1, [r0 + TIMER_BASE_ADDR]
-
-        ldw     r1, [pc + _irq_save_r1 - .]
-        eret
-
-
-/* ── Scratch words (contiguous with code for PC-relative access) ─
- *
- * _rmh_load_bias is patched by phase 2 of _start before the MMU
- * is enabled, so the miss handler sees the correct value on its
- * very first invocation.
- */
-        .balign 4
-_rmh_save_r1:   .long 0
-_rmh_save_r2:   .long 0
-_rmh_save_r3:   .long 0
-_rmh_way_ctr:   .long 0
-_rmh_load_bias: .long 0
-_irq_save_r1:   .long 0
-
-_handler_end:
 
 
 /* ── Stack, allocated with the image ─────────────────────────────── */

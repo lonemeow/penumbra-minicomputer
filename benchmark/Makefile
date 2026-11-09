@@ -50,7 +50,7 @@ all: dhrystone coremark memtest membench fbtest audiotest ps2test
 
 CRT0_OBJ   := $(BUILDDIR)/crt0.o
 COMMON_OBJ := $(BUILDDIR)/bench.o $(BUILDDIR)/librt.o \
-              $(BUILDDIR)/softfloat_stub.o
+              $(BUILDDIR)/softfloat_stub.o $(BUILDDIR)/mmu.o $(BUILDDIR)/tlb.o
 
 $(BUILDDIR):
 	mkdir -p $(BUILDDIR)
@@ -58,7 +58,14 @@ $(BUILDDIR):
 $(CRT0_OBJ): common/crt0.S | $(BUILDDIR)
 	$(CC) $(ASFLAGS) -x assembler-with-cpp $< -o $@
 
-$(BUILDDIR)/bench.o: common/bench.c common/bench.h | $(BUILDDIR)
+# Translation set-up and the exception handlers, for both startups
+$(BUILDDIR)/mmu.o: common/mmu.S common/mmu.h | $(BUILDDIR)
+	$(CC) $(ASFLAGS) -x assembler-with-cpp -I common $< -o $@
+
+$(BUILDDIR)/tlb.o: common/tlb.c common/bench.h common/mmu.h | $(BUILDDIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILDDIR)/bench.o: common/bench.c common/bench.h common/mmu.h | $(BUILDDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILDDIR)/librt.o: common/librt.c | $(BUILDDIR)
@@ -75,12 +82,15 @@ $(BUILDDIR)/softfloat_stub.o: common/softfloat_stub.c | $(BUILDDIR)
 # either image base.
 STATIC_CRT0_OBJ   := $(BUILDDIR)/crt0_static.o
 STATIC_COMMON_OBJ := $(BUILDDIR)/bench.static.o $(BUILDDIR)/librt.static.o \
-                     $(BUILDDIR)/softfloat_stub.static.o
+                     $(BUILDDIR)/softfloat_stub.static.o $(BUILDDIR)/mmu.static.o
 
 $(STATIC_CRT0_OBJ): common/crt0_static.S | $(BUILDDIR)
 	$(CC) $(STATIC_ASFLAGS) -x assembler-with-cpp $< -o $@
 
-$(BUILDDIR)/bench.static.o: common/bench.c common/bench.h | $(BUILDDIR)
+$(BUILDDIR)/mmu.static.o: common/mmu.S common/mmu.h | $(BUILDDIR)
+	$(CC) $(STATIC_ASFLAGS) -x assembler-with-cpp -I common $< -o $@
+
+$(BUILDDIR)/bench.static.o: common/bench.c common/bench.h common/mmu.h | $(BUILDDIR)
 	$(CC) $(STATIC_CFLAGS) -c $< -o $@
 
 $(BUILDDIR)/librt.static.o: common/librt.c | $(BUILDDIR)
@@ -188,10 +198,10 @@ $(BUILDDIR)/dhry_1.o: dhrystone/dhry_1.c dhrystone/dhry.h $(DHRY_STAMP) | $(BUIL
 $(BUILDDIR)/dhry_2.o: dhrystone/dhry_2.c dhrystone/dhry.h | $(BUILDDIR)
 	$(CC) $(DHRY_CFLAGS) -c $< -o $@
 
-$(BUILDDIR)/dhry_shim.o: dhrystone/shim.c common/bench.h $(DHRY_STAMP) | $(BUILDDIR)
+$(BUILDDIR)/dhry_shim.o: dhrystone/shim.c common/bench.h common/mmu.h $(DHRY_STAMP) | $(BUILDDIR)
 	$(CC) $(STATIC_CFLAGS) -DDHRYSTONE_ITERATIONS=$(DHRYSTONE_ITERATIONS) -c $< -o $@
 
-$(BUILDDIR)/dhry_entry.o: dhrystone/entry.c common/bench.h $(DHRY_STAMP) | $(BUILDDIR)
+$(BUILDDIR)/dhry_entry.o: dhrystone/entry.c common/bench.h common/mmu.h $(DHRY_STAMP) | $(BUILDDIR)
 	$(CC) $(STATIC_CFLAGS) -DDHRYSTONE_ITERATIONS=$(DHRYSTONE_ITERATIONS) -c $< -o $@
 
 dhrystone: $(BUILDDIR)/DHRYSTON.ELF
@@ -236,11 +246,12 @@ COREMARK_CFLAGS    := $(STATIC_CFLAGS) -I coremark -I coremark/penumbra \
 COREMARK_CORE := core_list_join core_main core_matrix core_state core_util
 COREMARK_PORT := core_portme ee_printf entry
 COREMARK_HDRS := coremark/coremark.h coremark/penumbra/core_portme.h \
-                 coremark/penumbra/port.h common/bench.h
+                 coremark/penumbra/port.h common/bench.h common/mmu.h
 COREMARK_TIMED_OBJ := $(COREMARK_CORE:%=$(BUILDDIR)/coremark_%.o)
 COREMARK_GLUE_OBJ  := $(COREMARK_PORT:%=$(BUILDDIR)/coremark_%.o)
 
-COREMARK_COMMON_OBJ := $(BUILDDIR)/bench.static.o $(BUILDDIR)/librt.static.o
+COREMARK_COMMON_OBJ := $(BUILDDIR)/bench.static.o $(BUILDDIR)/librt.static.o \
+                       $(BUILDDIR)/mmu.static.o
 
 COREMARK_CHECKED := $(BUILDDIR)/.coremark_checked
 $(COREMARK_CHECKED): coremark/coremark.md5 coremark/coremark.h \
@@ -275,10 +286,10 @@ $(BUILDDIR)/COREMARK.ELF: $(STATIC_CRT0_OBJ) $(COREMARK_TIMED_OBJ) $(PENSTRING_L
 
 MEMTEST_OBJ := $(BUILDDIR)/memtest_entry.o $(BUILDDIR)/memtest_patterns.o
 
-$(BUILDDIR)/memtest_entry.o: memtest/entry.c memtest/patterns.h common/bench.h | $(BUILDDIR)
+$(BUILDDIR)/memtest_entry.o: memtest/entry.c memtest/patterns.h common/bench.h common/mmu.h | $(BUILDDIR)
 	$(CC) $(CFLAGS) -Imemtest -c $< -o $@
 
-$(BUILDDIR)/memtest_patterns.o: memtest/patterns.c memtest/patterns.h common/bench.h | $(BUILDDIR)
+$(BUILDDIR)/memtest_patterns.o: memtest/patterns.c memtest/patterns.h common/bench.h common/mmu.h | $(BUILDDIR)
 	$(CC) $(CFLAGS) -Imemtest -c $< -o $@
 
 memtest: $(BUILDDIR)/MEMTEST.ELF
@@ -298,7 +309,7 @@ $(BUILDDIR)/MEMTEST.ELF: $(CRT0_OBJ) $(MEMTEST_OBJ) $(COMMON_OBJ) $(HARNESS_LIBS
 # fixed across compiler changes — see membench/loops.S.
 MEMBENCH_OBJ := $(BUILDDIR)/membench_entry.o $(BUILDDIR)/membench_loops.o
 
-$(BUILDDIR)/membench_entry.o: membench/entry.c common/bench.h | $(BUILDDIR)
+$(BUILDDIR)/membench_entry.o: membench/entry.c common/bench.h common/mmu.h | $(BUILDDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILDDIR)/membench_loops.o: membench/loops.S | $(BUILDDIR)
@@ -321,7 +332,7 @@ $(BUILDDIR)/MEMBENCH.ELF: $(CRT0_OBJ) $(MEMBENCH_OBJ) $(COMMON_OBJ) $(HARNESS_LI
 
 STRTEST_OBJ := $(BUILDDIR)/strtest_entry.o
 
-$(BUILDDIR)/strtest_entry.o: strtest/entry.c common/bench.h | $(BUILDDIR)
+$(BUILDDIR)/strtest_entry.o: strtest/entry.c common/bench.h common/mmu.h | $(BUILDDIR)
 	$(CC) $(CFLAGS) -fno-builtin -c $< -o $@
 
 strtest: $(BUILDDIR)/STRTEST.ELF
@@ -345,7 +356,7 @@ $(BUILDDIR)/STRTEST.ELF: $(CRT0_OBJ) $(STRTEST_OBJ) $(COMMON_OBJ) $(HARNESS_LIBS
 # bandwidth.c reads the cache register map from the ROM's penumbra.h
 # rather than restating it, so CACHE_INFO decoding lives in one place.
 FBTEST_CFLAGS := $(CFLAGS) -I ../hw/rom
-FBTEST_DEPS   := fbtest/display.h fbtest/bandwidth.h common/bench.h
+FBTEST_DEPS   := fbtest/display.h fbtest/bandwidth.h common/bench.h common/mmu.h
 FBTEST_OBJ    := $(BUILDDIR)/fbtest_entry.o $(BUILDDIR)/fbtest_bandwidth.o
 
 $(BUILDDIR)/fbtest_entry.o: fbtest/entry.c $(FBTEST_DEPS) | $(BUILDDIR)
@@ -356,11 +367,8 @@ $(BUILDDIR)/fbtest_bandwidth.o: fbtest/bandwidth.c $(FBTEST_DEPS) | $(BUILDDIR)
 
 fbtest: $(BUILDDIR)/FBTEST.ELF
 
-$(BUILDDIR)/fbtest_tlbrange.o: common/tlbrange.c common/bench.h | $(BUILDDIR)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILDDIR)/FBTEST.ELF: $(CRT0_OBJ) $(FBTEST_OBJ) $(BUILDDIR)/fbtest_tlbrange.o $(COMMON_OBJ) $(HARNESS_LIBS) common/bench.ld
-	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(FBTEST_OBJ) $(BUILDDIR)/fbtest_tlbrange.o $(COMMON_OBJ) $(HARNESS_LIBS) -o $@
+$(BUILDDIR)/FBTEST.ELF: $(CRT0_OBJ) $(FBTEST_OBJ) $(COMMON_OBJ) $(HARNESS_LIBS) common/bench.ld
+	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(FBTEST_OBJ) $(COMMON_OBJ) $(HARNESS_LIBS) -o $@
 
 # ── audiotest ────────────────────────────────────────────────
 #
@@ -429,7 +437,7 @@ $(BUILDDIR)/audio_sample.bin: ../hw/tools/wav2sample.py $(AUDIOTEST_STAMP) \
 		-f bin -c 2 -n $(AUDIOTEST_FRAMES)
 
 $(BUILDDIR)/audiotest_entry.o: audiotest/entry.c audiotest/audio.h \
-                               common/bench.h | $(BUILDDIR)
+                               common/bench.h common/mmu.h | $(BUILDDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # .incbin resolves against the assembler's include path, so the source
@@ -458,7 +466,7 @@ $(BUILDDIR)/AUDIOTES.ELF: $(CRT0_OBJ) $(AUDIOTEST_OBJ) $(COMMON_OBJ) $(HARNESS_L
 
 PS2TEST_OBJ := $(BUILDDIR)/ps2test_entry.o
 
-$(BUILDDIR)/ps2test_entry.o: ps2test/entry.c common/bench.h | $(BUILDDIR)
+$(BUILDDIR)/ps2test_entry.o: ps2test/entry.c common/bench.h common/mmu.h | $(BUILDDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 ps2test: $(BUILDDIR)/PS2TEST.ELF
