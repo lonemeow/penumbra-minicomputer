@@ -489,7 +489,8 @@ rom.ld ──────────────────┘
 - **Microcode assembler** (`hw/tools/uasm.py`) — symbolic microcode
   → `$readmemh` hex.
 - **ISA assembler** (`sw/tools/pasm.py`) — two-pass, all 4 formats,
-  labels, pseudo-ops, `.equ`, data directives. Still used by
+  labels, pseudo-ops, `.equ`, data directives, `.include` (relative
+  to the including file). Still used by
   `make test` for hardware test programs. Comments: `;` (legacy)
   or `//` (LLVM convention).
 - **bin2hex** (`sw/tools/bin2hex.py`) — flat LE binary → `$readmemh`

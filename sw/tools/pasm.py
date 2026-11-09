@@ -26,6 +26,7 @@ Source format:
         .byte 0x41, 0x42   ; Raw bytes (packed little-endian into words)
         .asciz "Hello\\n"   ; Null-terminated ASCII string
         .equ NAME, 0xFF    ; Named constant
+        .include "mmu.inc" ; Another file, named from this file's directory
 
 Registers: R0-R15 (R0 is always zero, R13=LR, R14=SP, R15=PC)
 Immediates: #decimal, #0xHEX, #0bBIN, #-decimal, or #NAME
@@ -37,6 +38,7 @@ Built-in constants for sysreg access:
 
 import sys
 import argparse
+import os
 import re
 
 # ── Built-in constants (mirrors penumbra_pkg.sv) ─────────────
@@ -55,6 +57,10 @@ BUILTIN_CONSTANTS = {
     "TLB_VPN":      3,
     "TLB_PTE":      4,
     "TLB_INDEX":    5,
+    "TLB_INVAL_VA":   6,    # version 2
+    "TLB_INVAL_ASID": 7,    # version 2
+    "TLB_INVAL_ALL":  8,    # version 2
+    "MMU_CONFIG":   15,
 
     # CPU registers (device 1)
     "CPU_ISA":           0,
@@ -752,6 +758,28 @@ def emit_hex(entries, outfile, labels=None, base=0):
             f.write(f"{word:08X}\n")
 
 
+INCLUDE_RE = re.compile(r'^\s*\.include\s+"([^"]+)"\s*(?:[;/].*)?$', re.IGNORECASE)
+
+
+def read_source(path, including=()):
+    """A source file's lines, each .include replaced by the named file's
+    lines; the name is taken from the including file's directory."""
+    path = os.path.abspath(path)
+    if path in including:
+        raise ValueError(f".include: {path} includes itself")
+    with open(path) as f:
+        lines = f.readlines()
+    out = []
+    for line in lines:
+        m = INCLUDE_RE.match(line)
+        if m:
+            name = os.path.join(os.path.dirname(path), m.group(1))
+            out += read_source(name, including + (path,))
+        else:
+            out.append(line)
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser(description="Penumbra Assembler")
     parser.add_argument("input", help="Source file (.s)")
@@ -763,8 +791,7 @@ def main():
 
     org = int(args.org, 0)
 
-    with open(args.input) as f:
-        lines = f.readlines()
+    lines = read_source(args.input)
 
     entries, labels = assemble(lines, org=org)
     emit_hex(entries, args.output, labels, base=org)
