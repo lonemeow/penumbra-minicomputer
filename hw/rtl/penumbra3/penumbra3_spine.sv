@@ -7,8 +7,8 @@
 //     ctrl_bundle_t + dpath_payload_t),
 //   - the operand- and flag-forward *sources* into EX (the network lives in EX;
 //     the spine feeds it the MEM2-resolved and MEM2/WB-register producers),
-//   - the scoreboard clear (the back end tells ID when a tracked producer's
-//     value has landed),
+//   - the late writers in flight, listed for ID's scoreboard from the EX,
+//     MEM1 and MEM2 registers,
 //   - the back-pressure / freeze distribution -- the timing-critical part: the
 //     registered mem_pending freezes the launch side and issue, the MEM2/WB
 //     register is held only by WB back-pressure, and a fault/branch redirect
@@ -228,6 +228,7 @@ module penumbra3_spine
     logic ex_stall_in;    // MEM1 cannot accept (-> EX)
     logic id_stall_in;    // EX cannot accept (-> ID register hold)
     logic id_pipe_hold;   // registered back-end hold (-> ID issue gate)
+    logic id_issue;       // ID moves its slot into EX, consuming the FIFO head
 
     // The freeze distribution: the five signals above are driven from
     // {mem_pending, wb_local_stall, ex_local_stall}, per the load-completion
@@ -400,55 +401,58 @@ module penumbra3_spine
     );
 
     // ════════════════════════════════════════════════════════════
-    // Scoreboard clear (the back end releases a tracked producer)
+    // The late writers in flight (ID's scoreboard compares against them)
     // ════════════════════════════════════════════════════════════
-    // A tracked producer (load / divmul / rdsys) clears its bit when its value
-    // lands: a missed load on completion (o_complete), a divmul aux on its WB
-    // writeback cycle, every other producer at its WB commit. One clear port;
-    // the three sources do not contend (the freeze geometry keeps o_complete off
-    // any WB commit, and a divmul holds WB for its two commit cycles alone). The
-    // aux WB cycle is the held divmul slot writing a register while not counting
-    // a new retire.
-    logic                sb_clr_en;
-    logic [SB_IDX_W-1:0] sb_clr_idx;
-    logic                aux_wb_cycle;
-    assign aux_wb_cycle = mem2wb_valid & ~wb_insn_committed & wb_regfile_we;
+    // Every late writer (penumbra3_pkg::late_result) in EX, MEM1 and MEM2,
+    // primary and aux destination, from registered state alone. A late writer
+    // that has left MEM2 for WB has its value, since MEM2 parks every load it
+    // has no word for, and WB writes a primary as it takes it, the regfile's
+    // reads being write-first. The two writes still to come past MEM2 need no
+    // slot because each holds issue outright until it is made: a divmul's
+    // aux, by WB's second-write hold, and a parked load, by the L1-D's busy
+    // (asserted below).
+    logic [LATE_WRITERS-1:0]               late_wr_en;
+    logic [LATE_WRITERS-1:0][SB_IDX_W-1:0] late_wr_idx;
     always_comb begin
-        if (mc_complete & mc_complete_we) begin
-            sb_clr_en  = 1'b1;
-            sb_clr_idx = mc_complete_dest;
-        end else if (aux_wb_cycle) begin
-            sb_clr_en  = 1'b1;
-            sb_clr_idx = wb_regfile_idx;
-        end else begin
-            sb_clr_en  = wb_insn_committed & mem2wb_payload.phys_dst_we;
-            sb_clr_idx = mem2wb_payload.phys_dst;
-        end
+        late_wr_en[0]  = idex_valid & late_result(idex_bundle.op_class)
+                       & idex_phys_dst_we;
+        late_wr_idx[0] = idex_phys_dst;
+        late_wr_en[1]  = idex_valid & idex_phys_dst_aux_we;
+        late_wr_idx[1] = idex_phys_dst_aux;
+        late_wr_en[2]  = exmem1_valid & late_result(exmem1_bundle.op_class)
+                       & exmem1_payload.phys_dst_we;
+        late_wr_idx[2] = exmem1_payload.phys_dst;
+        late_wr_en[3]  = exmem1_valid & exmem1_payload.phys_dst_aux_we;
+        late_wr_idx[3] = exmem1_payload.phys_dst_aux;
+        late_wr_en[4]  = mem1mem2_valid & late_result(mem1mem2_bundle.op_class)
+                       & mem1mem2_payload.phys_dst_we;
+        late_wr_idx[4] = mem1mem2_payload.phys_dst;
+        late_wr_en[5]  = mem1mem2_valid & mem1mem2_payload.phys_dst_aux_we;
+        late_wr_idx[5] = mem1mem2_payload.phys_dst_aux;
     end
 
     // ════════════════════════════════════════════════════════════
     // ID -- issue (owns the scoreboard)
     // ════════════════════════════════════════════════════════════
-    // Forward broadcasts are tied off in this increment (correctness-first:
-    // dependents on a tracked producer wait for the registered scoreboard clear,
-    // not a same-cycle release). They are driven in the forwarding-release
-    // increment.
+    // Forward broadcasts are tied off in this increment (correctness-first: a
+    // reader of a late writer waits until the writer has left the late-writer
+    // list, not for a release as its value reaches a forward leg). They are
+    // driven in the forwarding-release increment.
     penumbra3_id_stage u_id (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_bundle(i_bundle), .i_pc(i_pc), .i_next_pc(i_next_pc),
         .i_valid(i_valid),
         .i_if_fault_pending(i_if_fault_pending), .i_if_fault_vec(i_if_fault_vec),
         .i_if_fault_status(i_if_fault_status),
-        .o_deq_ready(o_deq_ready),
+        .o_deq_ready(id_issue),
         .i_supervisor(supervisor),
         .i_stall_in(id_stall_in), .i_bubble(id_bubble),
-        .i_fault_flush(younger_flush),
         .i_fetch_busy(i_fetch_busy), .i_pipe_hold(id_pipe_hold),
         .o_local_stall(/* perfctr; surfaced via o_bcause at commit */),
         .o_rd_idx_a(rf_rd_idx_a), .o_rd_idx_b(rf_rd_idx_b),
         .i_rd_data_a(rf_rd_data_a), .i_rd_data_b(rf_rd_data_b),
         .o_spr_rd_sel(id_spr_rd_sel), .i_spr_src_value(spr_operand_value),
-        .i_clr_en(sb_clr_en), .i_clr_idx(sb_clr_idx),
+        .i_late_wr_en(late_wr_en), .i_late_wr_idx(late_wr_idx),
         .i_fwd0_en(1'b0), .i_fwd0_idx('0), .i_fwd1_en(1'b0), .i_fwd1_idx('0),
         .o_ex_bundle(idex_bundle),
         .o_ex_op_a(idex_op_a), .o_ex_op_b(idex_op_b), .o_ex_store_data(idex_store_data),
@@ -462,6 +466,7 @@ module penumbra3_spine
         .o_ex_fault_vec(idex_fault_vec), .o_ex_fault_status(idex_fault_status),
         .o_ex_bcause(idex_bcause)
     );
+    assign o_deq_ready = id_issue;
 
     // ════════════════════════════════════════════════════════════
     // EX -- execute (ALU, forwarding, flags, branch, divmul, drain-commit)
@@ -632,6 +637,16 @@ module penumbra3_spine
     always_comb
         assert (!(mc_complete && mem2wb_valid))
             else $error("penumbra3_spine: an access completed with a live slot in WB");
+
+    // A parked load and a divmul's second write have no slot in the
+    // late-writer list: ID's scoreboard sees neither, and nothing but these
+    // holds keeps their readers from issuing ahead of the write.
+    always_comb
+        assert (!(id_issue && mem_pending))
+            else $error("penumbra3_spine: issue while the L1-D is busy");
+    always_comb
+        assert (!(id_issue && wb_local_stall))
+            else $error("penumbra3_spine: issue ahead of a divmul's second write");
 
     /* verilator lint_on PINCONNECTEMPTY */
 endmodule

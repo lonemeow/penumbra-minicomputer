@@ -4,8 +4,8 @@
 // this drives instructions and checks ID's job:
 //   - a clean ALU op issues, drives the regfile read indices, selects the
 //     operands, and latches the ID/EX register
-//   - a source pending in the scoreboard blocks issue (o_local_stall), and a
-//     matching forward broadcast unblocks it
+//   - a source with a late writer in flight, as the spine lists them, blocks
+//     issue (o_local_stall), and a matching forward broadcast unblocks it
 //   - a privileged op faults in user mode (priv_op & ~supervisor -> VEC_PRIV)
 //     but not in supervisor mode; an undefined opcode faults VEC_ILLEGAL --
 //     both still advance (faults are taken at WB)
@@ -42,13 +42,16 @@ static uint32_t enc_m(int L, int sz, int se, int rd, int rb, uint16_t off) {
          | ((rd & 0xF) << 22) | ((rb & 0xF) << 18) | ((uint32_t)off << 2);
 }
 
+// The late-writer index list as the port packs it: SB_IDX_W bits a slot.
+static uint64_t late_slot(int slot, uint64_t idx) { return idx << (slot * 5); }
+
 static void clear(Vpenumbra3_id_stage_test* dut) {
     dut->i_ir = 0; dut->i_pc = 0; dut->i_next_pc = 0; dut->i_valid = 0;
     dut->i_if_fault_pending = 0; dut->i_if_fault_vec = 0; dut->i_if_fault_status = 0;
     dut->i_supervisor = 1;
     dut->i_stall_in = 0; dut->i_bubble = 0; dut->i_fetch_busy = 0; dut->i_pipe_hold = 0;
     dut->i_rd_data_a = 0; dut->i_rd_data_b = 0; dut->i_spr_src_value = 0;
-    dut->i_clr_en = 0; dut->i_clr_idx = 0;
+    dut->i_late_wr_en = 0; dut->i_late_wr_idx = 0;
     dut->i_fwd0_en = 0; dut->i_fwd0_idx = 0; dut->i_fwd1_en = 0; dut->i_fwd1_idx = 0;
 }
 
@@ -89,23 +92,33 @@ int main(int argc, char** argv) {
     check("alu_src_b",     dut->o_ex_phys_src_b, 2);
     check("alu_src_b_fwd", dut->o_ex_src_b_fwdable, 1);
 
-    // ── Scoreboard stall + forward unblock ───────────────────────
-    // A LOAD into R3 (pending-class) sets the scoreboard bit at issue.
+    // ── Scoreboard: a late writer holds its readers back ─────────
+    // The testbench plays the spine, which lists the late writers in flight:
+    // a LOAD into R3 in one slot. A dependent ADD R4, R3 is blocked on its
+    // source B, a forward broadcast naming R3 releases it, and so does the
+    // writer leaving the list. A writer of R4 blocks it on source A; a writer
+    // of another entry blocks nothing.
     clear(dut);
     dut->i_ir = enc_m(1, 2, 0, 3, 5, 0);   // LDW R3, [R5+0]
     dut->i_valid = 1; dut->eval();
     check("ld_deq", dut->o_deq_ready, 1);          // LOAD issues
-    tick(dut);                                      // scoreboard[R3] set
-    // Now a dependent ADD R4, R3 reads R3 (pending) -> blocked.
+    tick(dut);
     clear(dut);
     dut->i_ir = enc_r(ALU_ADD, 4, 3, 0);   // ADD R4, R3 (R3 = srcB)
-    dut->i_valid = 1; dut->eval();
+    dut->i_valid = 1;
+    dut->i_late_wr_en = 1u << 5; dut->i_late_wr_idx = late_slot(5, 3);
+    dut->eval();
     check("dep_blocked_deq",   dut->o_deq_ready, 0);
     check("dep_blocked_stall", dut->o_local_stall, 1);
-    // A forward broadcast naming R3 unblocks it.
     dut->i_fwd0_en = 1; dut->i_fwd0_idx = 3; dut->eval();
     check("dep_fwd_deq",   dut->o_deq_ready, 1);
     check("dep_fwd_stall", dut->o_local_stall, 0);
+    dut->i_fwd0_en = 0; dut->i_late_wr_en = 0; dut->eval();
+    check("dep_released_deq", dut->o_deq_ready, 1);
+    dut->i_late_wr_en = 1u << 0; dut->i_late_wr_idx = late_slot(0, 4); dut->eval();
+    check("dep_src_a_blocked", dut->o_deq_ready, 0);
+    dut->i_late_wr_en = 1u << 3; dut->i_late_wr_idx = late_slot(3, 9); dut->eval();
+    check("dep_other_entry", dut->o_deq_ready, 1);
 
     // ── Privileged op: faults in user mode, not in supervisor ────
     clear(dut);
@@ -149,7 +162,7 @@ int main(int argc, char** argv) {
     check("hs_flushed_first", dut->o_ex_first_cycle, 0);
 
     // ── divmul: aux (Rdh) maps to its own GPR and is scoreboarded ──
-    dut->i_rst = 1; tick(dut); dut->i_rst = 0;     // clear the scoreboard first
+    dut->i_rst = 1; tick(dut); dut->i_rst = 0;
     clear(dut);
     dut->i_ir = enc_r(OP_R_MUL, 1, 2, 0) | (3 << 12);  // MUL R1,R2 -> R1 (lo), R3 (hi)
     dut->i_valid = 1; dut->eval();
@@ -158,11 +171,13 @@ int main(int argc, char** argv) {
     check("mul_dst",    dut->o_ex_phys_dst, 1);          // Rd = R1 (lo half)
     check("mul_aux",    dut->o_ex_phys_dst_aux, 3);       // Rdh = R3 (hi half), its own reg
     check("mul_aux_we", dut->o_ex_phys_dst_aux_we, 1);
-    // The aux (R3) is scoreboard-pending and not EX-forwarded, so a dependent
-    // reading R3 must block at issue.
+    // The aux (R3) is not EX-forwarded, so the spine reports it from the
+    // ID/EX register as a late writer, and a dependent reading R3 blocks.
     clear(dut);
     dut->i_ir = enc_r(ALU_ADD, 4, 3, 0);   // ADD R4, R3 (R3 = srcB = the divmul Rdh)
-    dut->i_valid = 1; dut->eval();
+    dut->i_valid = 1;
+    dut->i_late_wr_en = 1u << 1; dut->i_late_wr_idx = late_slot(1, 3);
+    dut->eval();
     check("aux_dep_blocked", dut->o_deq_ready, 0);
 
     printf("%s: %d/%d checks passed\n",

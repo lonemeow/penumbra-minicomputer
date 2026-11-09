@@ -12,14 +12,14 @@
 package penumbra3_pkg;
 
   // ── Scoreboard physical entries ──────────────────────────────────
-  // The scoreboard is a flat array of *physical* entries, one pending bit
-  // each. Physical (not architectural) so R14's two banks (USP/SSP) and the
+  // The scoreboard compares sources and destinations as *physical* entries.
+  // Physical (not architectural) so R14's two banks (USP/SSP) and the
   // scoreboarded SPRs are distinct entries -- this is what catches the
   // WRSPR-USP / R14 aliasing hazard. Entry 0 (R0) is reserved-unused (the
   // decoder never names it); entries 1..13 map directly from R1..R13.
   //
   // No part of SR is a scoreboard entry: NZCV resolves by forwarding and the
-  // S/I bits serialize via drain-commit, so neither needs a pending bit.
+  // S/I bits serialize via drain-commit, so neither is ever pending.
   localparam int SB_NUM_ENTRIES = 22;                 // entries 0..21 (21 live)
   localparam int SB_IDX_W       = $clog2(SB_NUM_ENTRIES);
 
@@ -83,6 +83,21 @@ package penumbra3_pkg;
     OPC_BREAK,      // 14
     OPC_ILLEGAL     // 15 reserved/undefined opcode
   } op_class_e;
+
+  // ── Late writers ─────────────────────────────────────────────────
+  // An op whose register result the scoreboard holds its readers back from:
+  // a load's and a sysreg read's resolve in MEM2, after a reader issued
+  // behind them would take its operands, and a divmul's two results are
+  // written over two WB cycles. Every other result forwards to EX. A
+  // divmul's second result is a late write too, of the aux destination.
+  function automatic logic late_result(op_class_e op_class);
+    return (op_class == OPC_LOAD) || (op_class == OPC_RDSYS)
+        || (op_class == OPC_DIVMUL);
+  endfunction
+
+  // The late writers the spine reports to ID each cycle, a slot each: the
+  // primary and aux destinations of EX, MEM1 and MEM2.
+  localparam int LATE_WRITERS = 6;
 
   // ── Memory operation ─────────────────────────────────────────────
   typedef enum logic [1:0] {

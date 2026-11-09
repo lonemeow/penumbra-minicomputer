@@ -127,10 +127,11 @@ skeleton stage-by-stage: each module is forked or written, given a
   SCR0..3; each flat-port unit-tested (`3e40ce4`)
 - `penumbra3_spine` -- ID/EX/MEM1/MEM2/WB integration around the
   regfile/SPR/scratch files: bundle+payload handoffs, operand/flag forward
-  sources into EX, the scoreboard clear, the regfile write-port mux (commit vs
-  load completion), drain-commit (ERET/EI/DI, WRSYS) + fault commit/flush, and
-  the freeze distribution (registered `mem_pending` freezes the launch side +
-  issue; the MEM2/WB register is held only by WB back-pressure -- the carve-out).
+  sources into EX, the late-writer list for ID's scoreboard, the regfile
+  write-port mux (commit vs load completion), drain-commit (ERET/EI/DI,
+  WRSYS) + fault commit/flush, and the freeze distribution (registered
+  `mem_pending` freezes the launch side + issue; the MEM2/WB register is held
+  only by WB back-pressure -- the carve-out).
   Fetch-stream unit test: ALU forwarding, divmul dual-write, precise fault
   (`297b12d`)
 - `penumbra3_vecfetch` -- exception vector-fetch FSM: borrows the fetch port on
@@ -150,8 +151,12 @@ skeleton stage-by-stage: each module is forked or written, given a
 
 **Spine follow-ons** (do not block the memory-hierarchy fork): the
 *forwarding-release* increment
-(early scoreboard clear + the `i_fwd` broadcasts -- correctness-first leaves
-them tied off today, so a load/divmul-use waits for the registered clear).
+(the `i_fwd` broadcasts -- correctness-first leaves them tied off today, so a
+reader of a late writer waits until the writer has written the regfile). A
+divmul's low half need not be a late writer at all: EX's MEM1 leg already
+forwards it, and gen2.5 takes it at no cost (`MUL` 11/11, `DIV` 35/35 in
+`doc/system/instruction-timing.md`) where gen3 holds a reader directly
+behind it 3 cycles longer than an independent op (spine testbench).
 
 **Memory hierarchy** (the fork in progress):
 
@@ -209,9 +214,10 @@ cheaper refill").
 - The bundle carries a single positive-sense `dst_we` (routed GPR/SPR by
   `dst_is_spr`): a forwarding machine's destination-valid bit must mean
   "actually writes", so a CMP must advertise no destination.
-- The scoreboard tracks only the non-forwardable producers (LOAD / DIVMUL /
-  RDSYS); ALU results never set a bit -- EX forwards them. The issue gate
-  blocks a source only on `used & pending & ~forwardable`.
+- The scoreboard holds back only the readers of late writers (LOAD / DIVMUL
+  / RDSYS), found each cycle among the destinations in flight rather than
+  kept in bits; ALU results are never late writers -- EX forwards them. The
+  issue gate blocks a source only on `used & pending & ~forwardable`.
 - Forward broadcasts to ID are producer *stages* (not source lanes), so every
   source matches every broadcast slot.
 - The fetch FIFO *is* the IF2/ID register (decode folds into enqueue, no extra
@@ -245,9 +251,6 @@ cheaper refill").
   task: drive ID's `i_fwd*` to release a scoreboard-pending load / sysreg read
   at the cycle its value reaches MEM2/WB -- gated on the registered
   `mem_pending`, never a live verdict. ID owns only the match today.
-- *divmul aux-destination scoreboard bit* -- set path done (`4fa078b`): the
-  scoreboard has a second set port, ID regmaps the aux (Rdh) and sets its bit at
-  issue; the spine drives the matching clear at the aux writeback.
 - *divmul writeback back-pressure reach* (`wb_local_stall`: the WB dual-write
   ripple WB->MEM2->MEM1->EX->ID). The divmul's two-cycle WB writeback makes WB
   occupy two cycles, and that hold ripples up the pure-stall chain. It is 1-bit

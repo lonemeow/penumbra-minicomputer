@@ -39,11 +39,23 @@ A load that hits needs no pipe stall; it creates only a load-use hazard for
 a dependent issued too close behind. That hazard is resolved against
 **registered** state:
 
-- Issuing a load sets its destination's scoreboard bit (a flop).
-- A dependent reads that bit at issue; if the value isn't yet forwardable
-  (from the MEM2/WB register), it stalls at issue — reading a flop, never
-  the cache verdict.
-- The bit clears on completion (the cycle the hit resolves, registered).
+- A load is a *late writer* from its issue until it leaves MEM2: the
+  scoreboard finds it in whichever pipeline register holds it.
+- A dependent compares its sources against the late writers in flight at
+  issue, and stalls while one writes a source — comparing registered
+  destinations, never the cache verdict.
+- A hit stops counting as it reaches WB, which writes the regfile in that
+  cycle, and the regfile's reads are write-first.
+- A parked load is in no pipeline register, and the scoreboard does not
+  see it. Nothing issues while it is parked: the back end's hold
+  ([what the pipe gate freezes](#what-the-pipe-gate-freezes)) keeps every
+  instruction in ID until its completion has written the regfile.
+
+The scoreboard keeps no state of its own, so two late writers of one
+register never confuse it: the register stays pending until the younger
+has written it. A divmul's second result is a late write of the same kind,
+seen in EX, MEM1 and MEM2. WB writes it a cycle after the first, and holds
+issue until it does.
 
 A load's value forwards from the MEM2/WB register, so a dependent issued
 directly behind it waits 2 cycles. MEM2 forwards only results computed
@@ -107,7 +119,7 @@ graph LR
 ## Stores — write-through, write-no-allocate
 
 A store has no register result, so it never creates a load-use hazard and
-never sets a scoreboard bit. Its architectural effect *is* the memory write.
+is never a late writer. Its architectural effect *is* the memory write.
 
 The write policy is **write-through, write-no-allocate (WnA)**:
 
@@ -183,8 +195,9 @@ load *or* store; a store pends identically to a load (only its completion
 differs — no register writeback).
 
 - **Held while an access is pending:** MEM1, the MEM1/MEM2 register, the
-  [address-translation launch](./mem-stage.md), and issue (a dependent stalls
-  on the scoreboard, see [the issue gate](#the-issue-gate)). The pending
+  [address-translation launch](./mem-stage.md), and issue: nothing issues,
+  so a parked load's dependents need no scoreboard entry
+  ([the issue gate](#the-issue-gate)). The pending
   access and every younger instruction hold in place. The instruction held
   in MEM2 keeps its verdict and does nothing with it: its commit, a store's
   cache write and a miss of its own all happen in the one cycle it leaves
@@ -254,10 +267,9 @@ has left the pipe by then, so the parked access keeps what the fault
 reports: the PC for `EPC`, the virtual address for `FADDR`, and the mode
 and access type for `FSTAT`.
 The completion commits the fault in WB's place, with the same flush and
-save-state. Everything issued after the access is squashed with nothing left
-to clear its pending bit, so any fault commit clears the scoreboard: the
-faulting instruction is the oldest in flight, so every bit still set belongs
-to something squashed.
+save-state. Everything issued after the access is squashed, and the
+scoreboard, which keeps no state, stops seeing each squashed late writer as
+the flush empties its pipeline register.
 
 A deferred bus fault plays no part in completion. The uncore reports it
 with a `store_fault` pulse and the write's physical address, in whatever
@@ -359,15 +371,16 @@ the write case comes along on the one qualifier above.
 
 Issue computes `can_issue` from registered inputs only: the decoded source
 register numbers (registered out of the pre-decode FIFO) compared against
-the scoreboard's pending bits (flops), qualified by what the forwarding
-network can supply this cycle. This compare is reg#-equality on already-
-registered fields — 1–2 LUT levels, the shape every surveyed core uses,
+the destinations of the late writers in the EX, MEM1 and MEM2 pipeline
+registers, qualified by what the forwarding network can supply this cycle.
+This compare is reg#-equality on already-registered fields — 1–2 LUT
+levels and an OR across the writers, the shape every surveyed core uses,
 never a long path. It is the cone P0.1 and P0.2 share, and the natural place
 for a focused contribution when the RTL lands.
 
 ALU results stay **bypassable and out of the scoreboard** (biRISC-V), so a
-dependent ALU chain never stalls; only loads, divmul, and serializing ops
-carry a pending bit. Stores carry none — they produce no register result.
+dependent ALU chain never stalls; only loads, divmul and sysreg reads are
+late writers. Stores are not — they produce no register result.
 
 ## The structural invariant
 

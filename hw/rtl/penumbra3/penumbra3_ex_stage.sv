@@ -15,10 +15,10 @@
 //   - sequences drain-commit ops (ERET / WRSYS / EI / DI), and
 //   - latches the EX/MEM1 register under the back-pressure handshake.
 //
-// Forwarding model. EX owns operand forwarding. The scoreboard tracks only the
-// non-forwardable producers (loads, divmul, sysreg reads); every other
-// dependency is supplied here from an in-flight result, so those producers
-// carry no scoreboard bit. The issue-release broadcasts ID matches against are
+// Forwarding model. EX owns operand forwarding. The scoreboard holds back only
+// the readers of late writers (loads, divmul, sysreg reads;
+// penumbra3_pkg::late_result); every other dependency is supplied here from an
+// in-flight result. The issue-release broadcasts ID matches against are
 // driven by the spine from the back end, where loads and sysreg reads resolve,
 // not from here.
 //

@@ -52,7 +52,10 @@ static uint32_t ldw(int rd, int rb, uint16_t off) { return enc_m(1, 2, rd, rb, o
 static uint32_t stw(int rd, int rb, uint16_t off) { return enc_m(0, 2, rd, rb, off); }
 
 enum { OP_L_LLI = 0, OP_L_ADDI = 3, OP_R_ADD = 0, OP_R_MUL = 16, OP_R_RESERVED = 12,
-       OP_R_WRSYS = 23, OP_R_DI = 29 };
+       OP_R_WRSYS = 23, OP_R_RDSYS = 24, OP_R_DI = 29 };
+static uint32_t rdsys(int rd, int dev, int reg) {
+    return enc_r(OP_R_RDSYS, rd, 0, 0) | ((dev & 0xF) << 12) | ((reg & 0xF) << 8);
+}
 static uint32_t wrsys(int rd, int dev, int reg) {
     return enc_r(OP_R_WRSYS, rd, 0, 0) | ((dev & 0xF) << 12) | ((reg & 0xF) << 8);
 }
@@ -338,6 +341,31 @@ int main(int argc, char** argv) {
         check("mul_nofault", (uint32_t)flt.size(), 0);
     }
 
+    // The hi half read behind the MUL, at each distance: no forward leg
+    // carries it, so the reader waits for its write. R3 holds another value
+    // until then, a different one in each run (the regfile is not reset).
+    for (int lead = 0; lead <= 3; lead++) {
+        uint16_t stale = (uint16_t)(0x3300 | lead);
+        std::vector<uint32_t> prog = {
+            enc_l(OP_L_LLI, 1, 6), enc_l(OP_L_LLI, 2, 7),
+            enc_l(OP_L_LLI, 3, stale), enc_l(OP_L_LLI, 4, 0x100),
+            enc_r(OP_R_MUL, 1, 2, 0) | (3 << 12),        // R1 = 42, R3 = 0
+        };
+        std::vector<Commit> want = {{1, 6}, {2, 7}, {3, stale}, {4, 0x100},
+                                    {1, 42}, {3, 0}};
+        for (int k = 0; k < lead; k++) {
+            prog.push_back(enc_l(OP_L_LLI, 7, (uint16_t)k));
+            want.push_back({7, (uint32_t)k});
+        }
+        prog.push_back(enc_r(OP_R_ADD, 4, 3, 0));        // R4 += R3
+        want.push_back({4, 0x100});
+        std::vector<Commit> got; std::vector<FaultEvt> flt;
+        run(dut, prog, 120, got, flt);
+        char tag[40];
+        snprintf(tag, sizeof tag, "mul_hi_reader_%d", lead);
+        check_commits(tag, got, want);
+    }
+
     // ── Precise fault: an illegal op faults, commits no register ─
     {
         std::vector<uint32_t> prog = {
@@ -398,6 +426,53 @@ int main(int argc, char** argv) {
         if (t.retire_cycles.size() > 1 && !t.done_cycles.empty())
             check("parked_load_retires_after_done",
                   t.retire_cycles[1] > t.done_cycles[0], 1);
+    }
+
+    // A parked load whose destination is its own base, used at once.
+    {
+        Trace t;
+        run_mem(dut, {enc_l(OP_L_LLI, 1, 0x1000), ldw(1, 1, 8), enc_l(OP_L_ADDI, 1, 1)},
+                {}, 40, t);
+        uint32_t w = mem_word(0x1008);
+        check_commits("parked_load_self", t.commits, {{1, 0x1000}, {1, w}, {1, w + 1}});
+    }
+
+    // An older late writer of the parked load's destination (an RDSYS,
+    // committing at WB as the load parks): its write must not release the
+    // load's readers. The fillers set where the RDSYS's commit falls.
+    for (int lead = 0; lead <= 2; lead++) {
+        Trace t;
+        std::vector<uint32_t> prog = {enc_l(OP_L_LLI, 5, 0x1000), rdsys(1, 8, 0)};
+        for (int k = 0; k < lead; k++) prog.push_back(enc_l(OP_L_LLI, 7, (uint16_t)k));
+        prog.push_back(ldw(1, 5, 8));
+        prog.push_back(enc_l(OP_L_ADDI, 1, 1));
+        run_mem(dut, prog, {}, 60, t);
+        uint32_t w = mem_word(0x1008);
+        char tag[40];
+        snprintf(tag, sizeof tag, "older_late_writer_%d", lead);
+        check(tag, t.commits.empty() ? 0 : t.commits.back().data, w + 1);
+    }
+
+    // Two loads to one register: the first's completion must not release
+    // the second's readers.
+    {
+        Trace t;
+        run_mem(dut, {enc_l(OP_L_LLI, 5, 0x1000), ldw(1, 5, 8), ldw(1, 5, 0x40),
+                      enc_l(OP_L_ADDI, 1, 1)}, {}, 80, t);
+        uint32_t w = mem_word(0x1040);
+        check("two_loads_one_reg", t.commits.empty() ? 0 : t.commits.back().data, w + 1);
+    }
+
+    // The jump-table shape: an ALU result as the base, the loaded word added
+    // back to the same base register.
+    {
+        Trace t;
+        run_mem(dut, {enc_l(OP_L_LLI, 10, 0x1000), enc_l(OP_L_LLI, 1, 4),
+                      enc_r(OP_R_ADD, 1, 10, 0), ldw(1, 1, 4), enc_r(OP_R_ADD, 1, 10, 0)},
+                {}, 50, t);
+        uint32_t w = mem_word(0x1008);
+        check_commits("parked_load_table", t.commits,
+                      {{10, 0x1000}, {1, 4}, {1, 0x1004}, {1, w}, {1, w + 0x1000}});
     }
 
     // ── A cacheable store retires once, ahead of its write ───────

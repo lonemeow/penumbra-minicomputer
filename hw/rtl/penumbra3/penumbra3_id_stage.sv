@@ -5,7 +5,8 @@
 // ID reads a *pre-decoded* ctrl_bundle_t off the FIFO head. Each cycle it:
 //   - maps the bundle's architectural register refs to physical scoreboard
 //     indices (penumbra3_regmap for GPRs; an inline map for SPR refs),
-//   - reads the scoreboard pending bits for the two sources,
+//   - asks the scoreboard whether a late writer of either source is in
+//     flight,
 //   - decides issue (penumbra3_issue): block a source only when it is read,
 //     pending, and not forwardable this cycle,
 //   - drives the regfile read ports and selects the final ALU operands,
@@ -13,12 +14,14 @@
 //   - latches the bundle + operands + physical dst + PC into the ID/EX
 //     register under the back-pressure handshake.
 //
-// Hazard model. The core forwards, so the scoreboard tracks only the
-// *non-forwardable* producers -- loads, divmul, and sysreg reads
-// (is_pending_class) -- whose results are not available by the time a
-// back-to-back dependent would forward them. ALU results never set a bit;
-// EX forwards them. NZCV is not a scoreboard entry (it forwards in EX), so
-// flag reads never stall here.
+// Hazard model. The core forwards, so the scoreboard holds back only the
+// readers of *late writers* -- loads, divmul, and sysreg reads
+// (penumbra3_pkg::late_result) -- whose results are not available by the
+// time a back-to-back dependent would forward them. The spine lists the
+// late writers in flight each cycle (i_late_wr_*); ID compares its two
+// sources against them. ALU results are never late writers; EX forwards
+// them. NZCV is not a scoreboard entry (it forwards in EX), so flag reads
+// never stall here.
 //
 // Forwarding boundary. Whether a pending source can be supplied *this* cycle
 // depends on where its producer sits in EX/MEM/WB -- so the spine broadcasts
@@ -48,7 +51,6 @@ module penumbra3_id_stage
     // ── Pipeline handshake ───────────────────────────────────────
     input  logic                  i_stall_in,       // EX cannot accept this cycle
     input  logic                  i_bubble,         // redirect / fault flush
-    input  logic                  i_fault_flush,    // a fault commit's squash
     input  logic                  i_fetch_busy,     // front end memory-bound (bcause split)
     input  logic                  i_pipe_hold,      // registered back-end hold (mem_pending, ...)
     output logic                  o_local_stall,    // scoreboard interlock (spine back-pressure + perfctr)
@@ -63,9 +65,10 @@ module penumbra3_id_stage
     output logic [3:0]            o_spr_rd_sel,
     input  logic [31:0]           i_spr_src_value,
 
-    // ── Scoreboard clear (from a downstream completion) ──────────
-    input  logic                  i_clr_en,
-    input  logic [SB_IDX_W-1:0]   i_clr_idx,
+    // ── The late writers in flight (driven by the spine) ─────────
+    // One slot each; a slot's index is the physical entry it writes.
+    input  logic [LATE_WRITERS-1:0]               i_late_wr_en,
+    input  logic [LATE_WRITERS-1:0][SB_IDX_W-1:0] i_late_wr_idx,
 
     // ── Forward broadcasts (driven by the spine from EX/MEM2/WB) ─
     // Each names a physical register whose value is forwardable to EX this
@@ -105,7 +108,7 @@ module penumbra3_id_stage
     // penumbra3_regmap (R14 banks on live supervisor); SPR refs map inline to
     // their scoreboard entry (SR is untracked -- it forwards / serializes).
     logic [SB_IDX_W-1:0] gpr_src_a, gpr_src_b, gpr_dst, gpr_dst_aux;
-    logic                gpr_src_a_tr, gpr_src_b_tr, gpr_dst_tr, gpr_dst_aux_tr;
+    logic                gpr_src_a_tr, gpr_src_b_tr, gpr_dst_tr;
 
     penumbra3_regmap #(.IDX_BITS (SB_IDX_W)) u_rm_a (
         .i_areg       (i_bundle.src_a_sel),
@@ -127,13 +130,16 @@ module penumbra3_id_stage
     );
     // The aux (Rdh) destination is a GPR field distinct from the primary Rd, so
     // it needs its own arch->phys map -- the divmul high half writes a different
-    // register than the low half.
+    // register than the low half. An untracked aux (R0, PC) maps to entry 0,
+    // which no source reads as tracked, so its late write holds nothing back.
+    /* verilator lint_off PINCONNECTEMPTY */
     penumbra3_regmap #(.IDX_BITS (SB_IDX_W)) u_rm_aux (
         .i_areg       (i_bundle.dst_aux_sel),
         .i_supervisor (i_supervisor),
         .o_pidx       (gpr_dst_aux),
-        .o_tracked    (gpr_dst_aux_tr)
+        .o_tracked    ()
     );
+    /* verilator lint_on PINCONNECTEMPTY */
 
     // SPR# -> scoreboard entry. SR has no entry (returns 0, untracked).
     function automatic logic [SB_IDX_W-1:0] spr_to_sb(input logic [3:0] spr);
@@ -217,36 +223,16 @@ module penumbra3_id_stage
         else                                    insn_fault_vec = 4'd0;
     end
 
-    // A faulting / bubble slot is inert to the scoreboard.
-    logic sb_eligible;
-    assign sb_eligible = i_valid & ~insn_fault_pending;
-
-    // ── Pending-class: producers the scoreboard must track ───────
-    // Results not available by EX-forward time -- loads, divmul, sysreg reads.
-    // Everything else issues freely and is forwarded in EX, so it sets no bit.
-    logic is_pending_class;
-    assign is_pending_class = (i_bundle.op_class == OPC_LOAD)
-                            | (i_bundle.op_class == OPC_DIVMUL)
-                            | (i_bundle.op_class == OPC_RDSYS);
-
     // ── Scoreboard ───────────────────────────────────────────────
     logic src_a_pending, src_b_pending;
     logic issue;   // forward-declared; driven by the issue/handshake block
 
-    penumbra3_scoreboard #(.NREGS (SB_NUM_ENTRIES)) u_scoreboard (
-        .i_clk          (i_clk),
-        .i_rst          (i_rst),
-        // Set both destination bits a pending-class op occupies on issue: the
-        // primary (Rd) always, and the aux (Rdh) for the dual-destination
-        // divmul -- the aux is not EX-forwarded, so a dependent must stall on it
-        // until it writes back.
-        .i_set_en       (issue & sb_eligible & is_pending_class & phys_dst_we),
-        .i_set_idx      (phys_dst),
-        .i_set2_en      (issue & sb_eligible & i_bundle.dst_aux_we & gpr_dst_aux_tr),
-        .i_set2_idx     (gpr_dst_aux),
-        .i_clr_en       (i_clr_en),
-        .i_clr_idx      (i_clr_idx),
-        .i_flush        (i_fault_flush),
+    penumbra3_scoreboard #(
+        .IDX_BITS (SB_IDX_W),
+        .WRITERS  (LATE_WRITERS)
+    ) u_scoreboard (
+        .i_wr_en        (i_late_wr_en),
+        .i_wr_idx       (i_late_wr_idx),
         .i_src0_idx     (phys_src_a),
         .i_src1_idx     (phys_src_b),
         .o_src0_pending (src_a_pending),
@@ -277,8 +263,8 @@ module penumbra3_id_stage
         .o_can_issue    (can_issue)
     );
 
-    // A fault-tagged slot always issues (it never scoreboard-stalls --
-    // sb_eligible gates its sources off -- and faults at WB).
+    // A fault-tagged slot always issues (it never scoreboard-stalls, and
+    // faults at WB).
     logic eligible;
     assign eligible = can_issue | (i_valid & insn_fault_pending & ~i_pipe_hold);
 

@@ -74,8 +74,9 @@ Corollary on register placement:
   *and* MMU verdict, one die-spanning cone. Several ~26 ns paths are this *same*
   cone with different tails (load-use, MMU). Fixing it collapses a whole cluster.
 - **No combinational path from cache hit/busy into issue or the MMU.** The fix is a
-  **registered `mem_pending` flop**, not the combinational `~hit`. Dependents stall
-  at *issue* reading that flop (scoreboard bit); the `busy → ID` cone is gone.
+  **registered `mem_pending` flop**, not the combinational `~hit`. Issue
+  holds on that flop, and dependents stall on the scoreboard's compare of
+  registered destinations; the `busy → ID` cone is gone.
 - Hazard interlock is **local FU-busy/ready bits** (scoreboard-style), not a global
   spine OR-tree that spans the pipeline. (biRISC-V/CVA6 have no "spine"; the
   scoreboard *is* the stall logic.)
@@ -174,9 +175,10 @@ registered *completion* (the §2 load model) and the registered *serialize+redir
 cycles, never critical-path logic.**
 
 - **div/mul — long EX latency + dual-register WB = the load-completion pattern.**
-  - Launch into a side FU; mark a **registered pending** bit (scoreboard dst + aux —
-    gen2.5 already carries `o_phys_dst_aux`/`i_aux_dst`). Dependents stall at issue on
-    the scoreboard bit, never on a combinational EX-busy.
+  - Launch into a side FU; the scoreboard finds dst + aux in the
+    **registered** pipeline state, as gen2.5's derived scoreboard does
+    (`o_phys_dst_aux`/`i_aux_dst`). Dependents stall at issue on that, never
+    on a combinational EX-busy.
   - Result returns on a **registered completion** delivering `{dst, aux}` or a fault
     (div-by-zero) — same event shape as a load completion; precise by in-order-oldest.
   - **Dual WB = serialize two single-port writes** (low then high). Rare + already

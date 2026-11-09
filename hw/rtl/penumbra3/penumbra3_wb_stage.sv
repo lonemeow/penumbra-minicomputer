@@ -20,7 +20,7 @@
 // WB is the downstream-most stage, so its only back-pressure is the dual-write
 // second-write hold; the spine ORs o_local_stall into MEM2's freeze. The
 // committing destinations are visible on the MEM2/WB register the spine already
-// taps for forwarding, so WB does not re-export them or clear the scoreboard.
+// taps for forwarding, so WB does not re-export them.
 
 module penumbra3_wb_stage
     import penumbra_pkg::*;
