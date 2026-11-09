@@ -294,8 +294,8 @@ _start_bias:
  *
  * The kernel drives the MMUs it has a refill handler for, each built
  * for one MMU_CONFIG value and entered in .Lrefill_handlers.  This step
- * finds the handler, flushes the main TLB through the version's
- * interface, and leaves
+ * finds the handler, initializes the TLB, whose contents are undefined
+ * after reset (doc/system/mmu.md, "Boot Sequence"), and leaves
  *   R8/R9  link-time bounds of the refill handler for this MMU,
  *          RMH_SPACE bytes
  *   R10    the pinned select of TLB_INDEX
@@ -327,6 +327,11 @@ _start_bias:
 	mov	r9, r8
 	add	r9, #RMH_SPACE
 
+	/* R5 = PINNED, the pinned slots to clear (R5 is free since step 5) */
+	mov	r5, r1
+	shr	r5, #MMUCFG_PINNED_SHIFT
+	and	r5, #0x3F		/* PINNED is 6 bits */
+
 	/* R11 = (1 << SETS_L2) - 1 */
 	mov	r2, r1
 	shr	r2, #MMUCFG_SETS_LOG2_SHIFT
@@ -355,6 +360,19 @@ _start_bias:
 	wrsys	r0, #SYSDEV_MMU, #MMU_TLB_INVAL_ALL
 
 .Lmmucfg_known:
+	/* A pinned hit wins over everything, so an entry left in any pinned
+	 * slot would capture its addresses: clear every one; step 9 pins
+	 * those in use. */
+	mov	r1, r0
+.Lclear_pinned:
+	mov	r2, r1
+	or	r2, r10
+	wrsys	r2, #SYSDEV_MMU, #MMU_TLB_INDEX
+	wrsys	r0, #SYSDEV_MMU, #MMU_TLB_PTE
+	add	r1, #1
+	cmp	r1, r5
+	blo	.Lclear_pinned
+
 	/* pmap_pin_slot() builds its TLB_INDEX values from this */
 	la	r1, tlb_pinned_select
 	add	r1, r6
