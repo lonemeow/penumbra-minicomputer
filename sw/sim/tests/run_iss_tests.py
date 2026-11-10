@@ -548,6 +548,71 @@ PAIR_OPBR = {
         several=(1, {"slot-older": 1, "flags": 1})),
 }
 
+# pair_addr.s: 40 instructions, 15 of them DI or BREAK.
+#   single+fuse:shadd:          A and J's SHL and ADD; B's scale is too far,
+#                               C's ADD reads R5 twice, D's sum is in R6.
+#   single+fuse:addmem:         E, G and J's ADD and load; F's load writes
+#                               another register, H adds an immediate, and
+#                               I's ADD and branch are opbr's.
+#   +agu:3:                     the same: three inputs is the default.
+#   +agu:2:                     E and J, whose accesses have no offset; G's
+#                               store has one.
+#   single+fuse:shadd:addmem:   J's SHL takes its ADD first, and an
+#                               instruction is in one fusion only.
+#   single+fuse:opbr:addmem:    I fuses as opbr beside addmem's three.
+#   dual+fuse:shadd:addmem:     nothing pairs: B C D wait for an operand,
+#                               F H and J's load for a base, I's branch for
+#                               the flags.
+PAIR_ADDR = {
+    "pairing single+fuse:shadd": fusing(40, {"shadd": 2}),
+    "pairing single+fuse:addmem": fusing(40, {"addmem": 3}),
+    "pairing single+fuse:addmem+agu:3": fusing(40, {"addmem": 3}),
+    "pairing single+fuse:addmem+agu:2": fusing(40, {"addmem": 2}),
+    "pairing single+fuse:shadd:addmem": fusing(40, {"shadd": 2, "addmem": 2}),
+    "pairing single+fuse:opbr:addmem": fusing(40, {"opbr": 1, "addmem": 3}),
+    "pairing dual+fuse:shadd:addmem": pairing(
+        40, fused={"shadd": 2, "addmem": 2}, alone={"system": 28, "end": 1},
+        one={"operand": 3, "base": 3, "flags": 1}),
+}
+
+# pair_wb.s: 30 instructions, 11 of them DI or BREAK.
+#   single+fuse:addwb:            A, and D's and E's ADD and load; G's load
+#                                 overwrites its base.
+#   single+fuse:incmem:           B, C and F.
+#   single+fuse:addmem:addwb:     G as addmem beside addwb's three.
+#   single+fuse:addwb:incmem+agu:2:  every access here has no offset, so all
+#                                 six fuse with a two-input address adder.
+#   dual+fuse:addwb:incmem+flex:  E's fused load and its compare pair, the
+#                                 load in Y; D's copy and fused load need
+#                                 three write ports; G's load waits for its
+#                                 base.
+PAIR_WB = {
+    "pairing single+fuse:addwb": fusing(30, {"addwb": 3}),
+    "pairing single+fuse:incmem": fusing(30, {"incmem": 3}),
+    "pairing single+fuse:addmem:addwb": fusing(30, {"addmem": 1, "addwb": 3}),
+    "pairing single+fuse:addwb:incmem+agu:2": fusing(30, {"addwb": 3, "incmem": 3}),
+    "pairing dual+fuse:addwb:incmem+flex": pairing(
+        30, 1, fused={"addwb": 3, "incmem": 3}, forward={"none": 1}, younger={"alu": 1},
+        alone={"system": 19, "end": 1}, one={"ports": 1, "base": 1}),
+}
+
+# pair_ext.s: 33 instructions, 12 of them DI or BREAK.
+#   single+fuse:ext:        A B C E, and H's shifts; D's distances differ,
+#                           F shifts two registers, G is an SHL and an ADD,
+#                           and I's SHL takes its distance from a register.
+#   single+fuse:movop:ext:  H's MOV takes its SHL first, leaving the SAR.
+#   single+fuse:ext:shadd:  G fuses as shadd beside ext's five.
+#   dual+fuse:ext:          F's two shifts pair; D, G and I wait for an
+#                           operand, and so does H's fused op for its MOV.
+PAIR_EXT = {
+    "pairing single+fuse:ext": fusing(33, {"ext": 5}),
+    "pairing single+fuse:movop:ext": fusing(33, {"movop": 1, "ext": 4}),
+    "pairing single+fuse:ext:shadd": fusing(33, {"ext": 5, "shadd": 1}),
+    "pairing dual+fuse:ext": pairing(
+        33, 1, fused={"ext": 5}, forward={"none": 1}, younger={"sh": 1},
+        alone={"system": 21, "end": 1}, one={"operand": 4}),
+}
+
 # pair_reach.s: 9 instructions, three LLI+LUI pairs: one aligned in a
 # line, one straddling two lines, one in a line from an odd word.
 PAIR_REACH = {
@@ -952,6 +1017,9 @@ CASES = [
     pair_case("pairmodel fusions", "pair_fuse.s", PAIR_FUSE),
     pair_case("pairmodel traps", "pair_trap.s", PAIR_TRAP),
     pair_case("pairmodel op-and-branch fusion", "pair_opbr.s", PAIR_OPBR),
+    pair_case("pairmodel address fusions", "pair_addr.s", PAIR_ADDR),
+    pair_case("pairmodel extension fusion", "pair_ext.s", PAIR_EXT),
+    pair_case("pairmodel write-back fusions and write ports", "pair_wb.s", PAIR_WB),
     pair_case("pairmodel fuser reach", "pair_reach.s", PAIR_REACH),
     pair_case("pairmodel fetch stage", "pair_fetch.s", PAIR_FETCH),
     pair_case("pairmodel fusion behind a fetch stage", "pair_reach.s", PAIR_FETCH_FUSE),
@@ -983,6 +1051,8 @@ CASES = [
          error=r"unknown modifier 'wait:x'"),
     Case("pairmodel unknown reach", "pair_reach.s", ["+pairmodel=dual+reach:far"],
          error=r"unknown modifier 'reach:far'"),
+    Case("pairmodel unknown agu", "pair_addr.s", ["+pairmodel=dual+agu:4"],
+         error=r"unknown modifier 'agu:4'"),
     Case("pairmodel fetch of nothing", "pair_fetch.s", ["+pairmodel=dual+fetch:0"],
          error=r"unknown modifier 'fetch:0'"),
     Case("pairmodel queue with no fetch stage", "pair_fetch.s", ["+pairmodel=dual+queue:16"],

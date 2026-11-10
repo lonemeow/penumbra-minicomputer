@@ -410,9 +410,12 @@ rom.ld ──────────────────┘
   class lists (`alu`, `sh`, `mov`, `adc`, `ld`, `st`, `br`, `md`, or
   `simple`, `all`, `none`), `fw:` same-cycle forwards (`cond`,
   `carry`, `mov`, `imm`, `data`, `ea`, `alu`), `fuse:` fusions
-  (`lilui`, `cmpbr`, `opbr`, `movop`), `reach:any|line|pair` (which
+  (`lilui`, `cmpbr`, `opbr`, `movop`, `ext`, `shadd`, `addmem`,
+  `addwb`, `incmem`),
+  `reach:any|line|pair` (which
   adjacent instructions the fuser sees: any two, two in one line, or
-  an aligned pair), `mem:1|ld2|2`, `flex` (either op in either slot),
+  an aligned pair), `agu:3|2` (whether an address fusion's adder also
+  takes the access's offset), `mem:1|ld2|2`, `flex` (either op in either slot),
   `yflags` (only the younger op commits flags), and a fetch stage:
   `fetch:N` or `fetch:Nl` (up to N instructions a cycle into a queue,
   `l` ending a fetch at the end of its line), with `bubble:N` (cycles

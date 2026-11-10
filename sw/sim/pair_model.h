@@ -21,6 +21,9 @@
 //    its classes; `flex` also allows the older in Y and the younger in X.
 //  - Units.  One branch and one MUL/DIV a cycle, and one memory access
 //    (`mem:ld2`: or two loads; `mem:2`: any two).
+//  - Write ports.  Two register writes a cycle, so a fused load that also
+//    writes its address (addwb, incmem) pairs only with an op that writes
+//    none.  MUL and DIV count one: they sequence their second write.
 //  - Dependencies.  The younger takes nothing the older writes that
 //    cycle, a register or the flags, unless a configured forward
 //    carries it.
@@ -49,10 +52,26 @@
 //             op-and-branch (no shift, and no ADC or SBC)
 //      movop  MOV Rd, Rs; an ALU op or shift updating Rd in place, as
 //             one three-operand op
+//      ext    SHL Rd, #n; SHR or SAR Rd, #n as one zero or sign
+//             extension of Rd's low 32 - n bits
+//      shadd  SHL Rd, #1..3; ADD Rd, Rs as one add with Rd scaled on its
+//             way into the adder (Rs not Rd)
+//      addmem ADD Rd, Rs; a load or store with Rd as its base, as one
+//             access through the sum of two registers.  A load fuses
+//             only when it writes Rd, so the fused op writes one register
+//      addwb  ADD Rd, Rs; a load through Rd into another register, as one
+//             load that also writes its address back to Rd
+//      incmem ADD or SUB Rd, #imm; a load or store with Rd as its base,
+//             as one pre-incremented access; a load into another
+//             register writes two, as addwb's does
 //  - reach:any | reach:line | reach:pair: which adjacent instructions
 //    the fuser sees.  Any two; two in one 16-byte line; or an aligned
 //    pair, the first at an even word, as a fuser that looks inside each
 //    fetch of two would.
+//  - agu:3 | agu:2: the inputs of the address adder an address fusion
+//    (addmem, addwb, incmem) uses.  Three takes the add's two and the
+//    access's offset; two only the add's, so an access with an offset
+//    does not fuse.  Three unless given.
 //  - mem:1 | mem:ld2 | mem:2: memory accesses a cycle.
 //  - flex: either op may take either slot.
 //  - yflags: only the younger op of a pair commits flags.
@@ -110,9 +129,16 @@ static const char* const FORWARD_NAMES[FORWARDS] =
 // Fusions (fuse:), as bits of IssueConfig::fusions.
 enum : uint32_t {
     FUSE_LILUI = 1 << 0, FUSE_CMPBR = 1 << 1, FUSE_MOVOP = 1 << 2, FUSE_OPBR = 1 << 3,
+    FUSE_EXT   = 1 << 4, FUSE_SHADD = 1 << 5, FUSE_ADDMEM = 1 << 6, FUSE_ADDWB = 1 << 7,
+    FUSE_INCMEM = 1 << 8,
 };
-static constexpr int FUSIONS = 4;
-static const char* const FUSION_NAMES[FUSIONS] = { "lilui", "cmpbr", "movop", "opbr" };
+static constexpr int FUSIONS = 9;
+static const char* const FUSION_NAMES[FUSIONS] =
+    { "lilui", "cmpbr", "movop", "opbr", "ext", "shadd", "addmem", "addwb", "incmem" };
+
+// The scale shadd's shift may apply on the way into the adder: the
+// element sizes of halfword, word and doubleword arrays.
+static constexpr int SHADD_MAX_SHIFT = 3;
 
 // Which adjacent instructions the fuser sees (reach:): any two, two in
 // one cache line, or an aligned pair.
@@ -134,10 +160,15 @@ enum : uint32_t {
     CAUSE_SLOT_OLDER = 1 << 0, CAUSE_SLOT_YOUNGER = 1 << 1, CAUSE_UNIT = 1 << 2,
     CAUSE_MEMORY     = 1 << 3, CAUSE_FLAGS        = 1 << 4, CAUSE_OPERAND = 1 << 5,
     CAUSE_BASE       = 1 << 6, CAUSE_DATA         = 1 << 7, CAUSE_TARGET  = 1 << 8,
+    CAUSE_PORTS      = 1 << 9,
 };
-static constexpr int CAUSES = 9;
+static constexpr int CAUSES = 10;
 static const char* const CAUSE_NAMES[CAUSES] =
-    { "slot-older", "slot-younger", "unit", "memory", "flags", "operand", "base", "data", "target" };
+    { "slot-older", "slot-younger", "unit", "memory", "flags", "operand", "base", "data", "target",
+      "ports" };
+
+// Register writes a cycle: the register file's write ports.
+static constexpr int WRITE_PORTS = 2;
 
 // The words from an instruction to the end of its 16-byte line, its own
 // among them.
@@ -261,6 +292,7 @@ struct IssueConfig {
     uint32_t    forwards = 0;       // FW_* bits: the same-cycle forwards that exist
     uint32_t    fusions = 0;        // FUSE_* bits
     FuserReach  reach = FuserReach::Any;
+    int         agu_inputs = 3;     // agu:N — the address adder's inputs in an address fusion
     MemoryLimit memory = MemoryLimit::One;
     bool        flex = false;       // the older op may take Y and the younger X
     bool        younger_commits_flags = false;  // yflags: the flag state takes only the younger op's write
@@ -359,6 +391,57 @@ private:
         return op.cls == IssueClass::Alu && op.writes_flags && op.writes;
     }
 
+    // `shl` is SHL Rd, #a and `shr` the SHR or SAR Rd, #b behind it.  Equal
+    // distances are one extension of Rd from bit 31 - a: nothing moves,
+    // and every bit above that one takes its value (SAR) or zero (SHR).
+    // Unequal ones would need the shifter too.  A pair of #0 extends from
+    // bit 31, which leaves Rd as it is and sets the flags: it is legal,
+    // and excluding it would cost the decoder more than fusing it.
+    static bool extends(const IssueOp& shl, const IssueOp& shr) {
+        return shl.amount == shr.amount;
+    }
+
+    // SHL Rd, #1..3 and ADD Rd, Rs behind it, Rs another register: one ADD
+    // whose Rd operand is scaled on its way into the adder.  With Rs as Rd
+    // the ADD would read the shifted value twice.
+    static bool scales_add(const IssueOp& shl, const IssueOp& add) {
+        return shl.tied == TiedOp::ShlImm && add.tied == TiedOp::AddReg
+            && add.rd == shl.rd && add.rs != shl.rd
+            && shl.amount >= 1 && shl.amount <= SHADD_MAX_SHIFT;
+    }
+
+    // An add writing Rd and a load or store with Rd as its base: the
+    // access whose address the add forms.
+    static bool forms_base(const IssueOp& add, const IssueOp& access) {
+        return add.writes && (access.reads[int(Use::Base)] & add.writes)
+            && (access.cls == IssueClass::Load || access.cls == IssueClass::Store);
+    }
+
+    // The fused access would write the sum and a loaded value: a load into
+    // a register other than the sum's.
+    static bool writes_both(const IssueOp& add, const IssueOp& access) {
+        return access.cls == IssueClass::Load && access.writes != add.writes;
+    }
+
+    // The access through the sum `add` forms, as one op: its base is the
+    // add's registers, and it writes the sum unless its load overwrites
+    // it.  What a fused load writes is ready when its value is.
+    static void fuse_access(const IssueOp& add, const IssueOp& access, IssueOp& fused) {
+        fused = access;
+        fused.reads[int(Use::Base)] = add.reads[int(Use::Operand)];
+        fused.reads[int(Use::Data)] &= ~add.writes;     // storing the sum: the op's own
+        fused.writes = access.writes | add.writes;
+        if (access.cls == IssueClass::Store) fused.produces = add.produces;
+        fused.writes_flags = true;
+    }
+
+    // Register writes `op` needs ports for in its cycle.  MUL and DIV write
+    // their second register a cycle later, through the same port.
+    static int ports_used(const IssueOp& op) {
+        if (op.cls == IssueClass::MulDiv) return op.writes ? 1 : 0;
+        return __builtin_popcount(op.writes);
+    }
+
     // The fuser sees `first` and the instruction behind it together.
     bool in_reach(const IssueOp& first) const {
         uint32_t word = first.pc >> 2;
@@ -369,32 +452,36 @@ private:
         }
     }
 
-    bool starts_fusion(const IssueOp& op) const {
-        if (op.trapped || !in_reach(op)) return false;
-        return (op.shape == Shape::Lli && (cfg_.fusions & FUSE_LILUI))
-            || (op.shape == Shape::Compare && (cfg_.fusions & FUSE_CMPBR))
-            || (op.shape == Shape::Mov && (cfg_.fusions & FUSE_MOVOP))
-            || (feeds_branch(op) && (cfg_.fusions & FUSE_OPBR));
+    bool fuses(uint32_t fusion) const { return (cfg_.fusions & fusion) != 0; }
+
+    // The address adder has an input for `access`'s offset, or it needs none.
+    bool agu_reaches(const IssueOp& access) const {
+        return cfg_.agu_inputs == 3 || access.offset == 0;
     }
 
+    // Two adjacent instructions the stage fuses, as the one op they make.
+    // The first instruction alone does not say which fusion applies: an
+    // ADD starts opbr or an address fusion, an SHL ext or shadd.
     bool fuse(const IssueOp& first, const IssueOp& second, IssueOp& fused) const {
-        if (first.shape == Shape::Lli && second.shape == Shape::Lui && first.rd == second.rd) {
+        if (fuses(FUSE_LILUI) && first.shape == Shape::Lli && second.shape == Shape::Lui
+            && first.rd == second.rd) {
             fused = first;                  // a constant, written to Rd
             fused.shape = Shape::Other;
             fused.fusion = 0;
-        } else if (first.shape == Shape::Compare && second.shape == Shape::CondBranch) {
+        } else if (fuses(FUSE_CMPBR) && first.shape == Shape::Compare
+                   && second.shape == Shape::CondBranch) {
             fused = second;                 // a branch that reads the compare's registers
             fused.reads[int(Use::Operand)] = first.reads[int(Use::Operand)];
             fused.writes_flags = true;
             fused.reads_cond = false;
             fused.fusion = 1;
-        } else if (first.shape == Shape::Mov && second.shape == Shape::TiedAlu
+        } else if (fuses(FUSE_MOVOP) && first.shape == Shape::Mov && second.shape == Shape::TiedAlu
                    && second.rd == first.rd && first.writes) {
             fused = second;                 // the op, reading the MOV's source in Rd's place
             fused.reads[int(Use::Operand)] =
                 (second.reads[int(Use::Operand)] & ~first.writes) | first.reads[int(Use::Operand)];
             fused.fusion = 2;
-        } else if (feeds_branch(first) && second.shape == Shape::CondBranch) {
+        } else if (fuses(FUSE_OPBR) && feeds_branch(first) && second.shape == Shape::CondBranch) {
             fused = second;                 // a branch that also does the op
             fused.reads[int(Use::Operand)] = first.reads[int(Use::Operand)];
             fused.writes = first.writes;
@@ -402,6 +489,26 @@ private:
             fused.writes_flags = true;
             fused.reads_cond = false;
             fused.fusion = 3;
+        } else if (fuses(FUSE_EXT) && first.tied == TiedOp::ShlImm && second.rd == first.rd
+                   && (second.tied == TiedOp::ShrImm || second.tied == TiedOp::SarImm)
+                   && extends(first, second)) {
+            fused = second;                 // one shift of Rd that fills its upper bits
+            fused.fusion = 4;
+        } else if (fuses(FUSE_SHADD) && scales_add(first, second)) {
+            fused = second;                 // the ADD, reading Rd before the shift
+            fused.fusion = 5;
+        } else if (fuses(FUSE_ADDMEM) && first.tied == TiedOp::AddReg && forms_base(first, second)
+                   && !writes_both(first, second) && agu_reaches(second)) {
+            fuse_access(first, second, fused);
+            fused.fusion = 6;
+        } else if (fuses(FUSE_ADDWB) && first.tied == TiedOp::AddReg && forms_base(first, second)
+                   && writes_both(first, second) && agu_reaches(second)) {
+            fuse_access(first, second, fused);
+            fused.fusion = 7;
+        } else if (fuses(FUSE_INCMEM) && first.tied == TiedOp::AddSubImm && forms_base(first, second)
+                   && agu_reaches(second)) {
+            fuse_access(first, second, fused);
+            fused.fusion = 8;
         } else {
             return false;
         }
@@ -420,7 +527,7 @@ private:
     IssueOp op_at(size_t at) const {
         const IssueOp& first = queue_[at];
         IssueOp fused;
-        if (at + 1 < queue_.size() && starts_fusion(first) && follows(first, queue_[at + 1])
+        if (at + 1 < queue_.size() && in_reach(first) && follows(first, queue_[at + 1])
             && fuse(first, queue_[at + 1], fused))
             return fused;
         return first;
@@ -510,6 +617,9 @@ private:
             if (cfg_.memory == MemoryLimit::One || (cfg_.memory == MemoryLimit::TwoLoads && !both_load))
                 v.causes |= CAUSE_MEMORY;
         }
+
+        if (ports_used(older) + ports_used(younger) > WRITE_PORTS)
+            v.causes |= CAUSE_PORTS;
 
         Link link[MAX_LINKS];
         int count = links(older, younger, link);
@@ -743,6 +853,8 @@ private:
             else if (part == "reach:any")       c.reach = FuserReach::Any;
             else if (part == "reach:line")      c.reach = FuserReach::Line;
             else if (part == "reach:pair")      c.reach = FuserReach::Pair;
+            else if (part == "agu:3")           c.agu_inputs = 3;
+            else if (part == "agu:2")           c.agu_inputs = 2;
             else if (!list("x:").empty())       ok = parse_classes(list("x:"), c.x);
             else if (!list("y:").empty())       ok = parse_classes(list("y:"), c.y);
             else if (!list("fw:").empty())
@@ -771,7 +883,7 @@ private:
             else ok = false;
             if (!ok) {
                 err = "unknown modifier '" + part + "' (x:CLASSES, y:CLASSES, fw:FORWARDS,"
-                      " fuse:FUSIONS, reach:any|line|pair, mem:1|ld2|2, flex, yflags,"
+                      " fuse:FUSIONS, reach:any|line|pair, agu:3|2, mem:1|ld2|2, flex, yflags,"
                       " fetch:N[l], bubble:N, queue:N)";
                 return false;
             }

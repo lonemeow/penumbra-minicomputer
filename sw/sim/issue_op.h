@@ -31,6 +31,11 @@ enum class Producer {
 // The shapes the pairing model's fusions look for.
 enum class Shape { Other, Lli, Lui, Mov, Compare, TiedAlu, CondBranch };
 
+// The tied ALU ops the shift and address fusions look for by name: an
+// ADD of two registers, an ADD or SUB of an immediate, and the shifts by
+// an immediate distance.
+enum class TiedOp { Other, AddReg, AddSubImm, ShlImm, ShrImm, SarImm };
+
 // One instruction, or a pair the pairing model fused, as an issue stage
 // sees it.
 struct IssueOp {
@@ -49,6 +54,9 @@ struct IssueOp {
     bool       interrupted = false; // an exception it did not raise was entered behind it: an
                                     // interrupt, or a fault ahead of the next instruction's execution
     Shape      shape = Shape::Other;
+    TiedOp     tied = TiedOp::Other;    // for a TiedAlu, the op where a fusion names it
+    int        amount = 0;          // for an immediate shift, its distance
+    int32_t    offset = 0;          // for a load or store, the offset added to its base
     int        rd = 0, rs = 0;      // register fields, for the shapes that name them
     int        fusion = -1;         // the fusion that made it, as the pairing model numbers them; -1 when not fused
 };
@@ -77,6 +85,7 @@ static inline IssueOp issue_decode(uint32_t pc, uint32_t word) {
             op.produces = Producer::Execute;
             op.shape = flag_only ? Shape::Compare : Shape::TiedAlu;
             if (!flag_only) op.writes = issue_reg_bit(op.rd);
+            if (!flag_only && code == 0) op.tied = TiedOp::AddReg;
         } else if (code == 8) {             // MOV
             op.cls = IssueClass::Move;
             operand(op.rs);
@@ -124,6 +133,12 @@ static inline IssueOp issue_decode(uint32_t pc, uint32_t word) {
             op.produces = code <= 4 ? Producer::AddImm : Producer::Execute;
             op.shape = flag_only ? Shape::Compare : Shape::TiedAlu;
             if (!flag_only) op.writes = issue_reg_bit(op.rd);
+            if (code == 3 || code == 4) op.tied = TiedOp::AddSubImm;
+            if (code >= 8) {
+                static constexpr TiedOp shifts[] = { TiedOp::ShlImm, TiedOp::ShrImm, TiedOp::SarImm };
+                op.tied = shifts[code - 8];
+                op.amount = word & 0x1F;
+            }
         } else if (code <= 12) {            // JMP JALR
             op.cls = IssueClass::Branch;
             op.reads[int(Use::Target)] = issue_reg_bit(op.rd);
@@ -134,6 +149,7 @@ static inline IssueOp issue_decode(uint32_t pc, uint32_t word) {
     case 2: {   // Format M
         op.rd = (word >> 22) & 0xF;
         op.reads[int(Use::Base)] = issue_reg_bit((word >> 18) & 0xF);
+        op.offset = int16_t((word >> 2) & 0xFFFF);
         if ((word >> 29) & 1) {
             op.cls = IssueClass::Load;
             op.writes = issue_reg_bit(op.rd);
