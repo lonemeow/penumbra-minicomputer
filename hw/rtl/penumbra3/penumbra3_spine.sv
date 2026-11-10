@@ -36,6 +36,7 @@ module penumbra3_spine
     input  ctrl_bundle_t          i_bundle,
     input  logic [31:0]           i_pc,
     input  logic [31:0]           i_next_pc,
+    input  prediction_t           i_prediction,
     input  logic                  i_valid,
     input  logic                  i_if_fault_pending,
     input  logic [3:0]            i_if_fault_vec,
@@ -86,8 +87,10 @@ module penumbra3_spine
     output logic [3:0]            o_sys_wr_reg,
     output logic [31:0]           o_sys_wdata,
 
-    // ── Branch resolution (to the front end) ──
-    output logic                  o_branch_taken,
+    // ── Branch resolution ──
+    output logic                  o_redirect,         // a mispredicted transfer steers fetch
+    output logic [31:0]           o_redirect_pc,      // to its successor
+    output logic                  o_branch_taken,     // a transfer resolved taken (trace)
     output logic [31:0]           o_branch_target,
 
     // ── Exception entry / return / WRSYS resync (to the front end) ──
@@ -154,6 +157,7 @@ module penumbra3_spine
     logic [SB_IDX_W-1:0] idex_phys_src_a, idex_phys_src_b;
     logic                idex_src_a_fwdable, idex_src_b_fwdable;
     logic [31:0]         idex_pc, idex_next_pc;
+    prediction_t         idex_prediction;
     logic                idex_valid, idex_fault_pending;
     logic                idex_first_cycle;
     logic [3:0]          idex_fault_vec;
@@ -209,7 +213,7 @@ module penumbra3_spine
     logic [31:0]         fault_pc, fault_vaddr, fault_status;
 
     // EX side-effects
-    logic                ex_local_stall, ex_dc_commit, ex_branch_taken;
+    logic                ex_local_stall, ex_dc_commit, ex_redirect;
 
     // ════════════════════════════════════════════════════════════
     // Back-pressure / freeze distribution
@@ -313,13 +317,13 @@ module penumbra3_spine
     end
 
     // Per-stage flush (i_bubble). A fault commit is the oldest, so it flushes
-    // every younger slot (ID/EX/MEM1/MEM2). A taken branch flushes only its
-    // wrong-path successor in ID -- and only once it advances out of EX
-    // (~ex_stall keeps a held branch from being discarded). ERET / WRSYS-resync
+    // every younger slot (ID/EX/MEM1/MEM2). A mispredicted transfer flushes
+    // only its wrong-path successor in ID -- and only once it advances out of
+    // EX (~ex_stall keeps a held branch from being discarded). ERET / WRSYS-resync
     // fire with the pipe drained, so they only flush ID.
     logic id_bubble, younger_flush;
     assign younger_flush = fault_commit;
-    assign id_bubble = (ex_branch_taken & ~ex_stall) | younger_flush
+    assign id_bubble = (ex_redirect & ~ex_stall) | younger_flush
                      | eret_commit | wrsys_resync_q;
 
     // ════════════════════════════════════════════════════════════
@@ -441,6 +445,7 @@ module penumbra3_spine
     penumbra3_id_stage u_id (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_bundle(i_bundle), .i_pc(i_pc), .i_next_pc(i_next_pc),
+        .i_prediction(i_prediction),
         .i_valid(i_valid),
         .i_if_fault_pending(i_if_fault_pending), .i_if_fault_vec(i_if_fault_vec),
         .i_if_fault_status(i_if_fault_status),
@@ -461,6 +466,7 @@ module penumbra3_spine
         .o_ex_phys_src_a(idex_phys_src_a), .o_ex_src_a_fwdable(idex_src_a_fwdable),
         .o_ex_phys_src_b(idex_phys_src_b), .o_ex_src_b_fwdable(idex_src_b_fwdable),
         .o_ex_pc(idex_pc), .o_ex_next_pc(idex_next_pc),
+        .o_ex_prediction(idex_prediction),
         .o_ex_valid(idex_valid), .o_ex_first_cycle(idex_first_cycle),
         .o_ex_fault_pending(idex_fault_pending),
         .o_ex_fault_vec(idex_fault_vec), .o_ex_fault_status(idex_fault_status),
@@ -481,7 +487,9 @@ module penumbra3_spine
         .i_op_a(idex_op_a), .i_op_b(idex_op_b), .i_store_data(idex_store_data),
         .i_phys_dst(idex_phys_dst), .i_phys_dst_we(idex_phys_dst_we),
         .i_phys_dst_aux(idex_phys_dst_aux), .i_phys_dst_aux_we(idex_phys_dst_aux_we),
-        .i_pc(idex_pc), .i_next_pc(idex_next_pc), .i_valid(idex_valid),
+        .i_pc(idex_pc), .i_next_pc(idex_next_pc),
+        .i_prediction(idex_prediction),
+        .i_valid(idex_valid),
         .i_first_cycle(idex_first_cycle),
         .i_fault_pending(idex_fault_pending), .i_fault_vec(idex_fault_vec),
         .i_fault_status(idex_fault_status), .i_bcause(idex_bcause),
@@ -505,12 +513,13 @@ module penumbra3_spine
         .i_bubble(younger_flush),
         .o_local_stall(ex_local_stall), .o_dc_commit(ex_dc_commit),
         .o_sys_wdata(ex_sys_wdata), .o_funit_stall(),
-        .o_branch_taken(ex_branch_taken), .o_branch_target(o_branch_target),
+        .o_redirect(ex_redirect), .o_redirect_pc(o_redirect_pc),
+        .o_branch_taken(o_branch_taken), .o_branch_target(o_branch_target),
         .o_mem1_bundle(exmem1_bundle), .o_mem1_payload(exmem1_payload),
         .o_mem1_store_data(exmem1_store_data), .o_mem1_valid(exmem1_valid),
         .o_mem1_bcause(exmem1_bcause)
     );
-    assign o_branch_taken = ex_branch_taken;
+    assign o_redirect = ex_redirect;
 
     // ════════════════════════════════════════════════════════════
     // MEM1 -- memory access launch

@@ -174,20 +174,24 @@ module penumbra3_core
 
     // ── Fetch buffer handshake ───────────────────────────────────
     logic              fbuf_enq_ready, fbuf_deq_valid;
-    localparam int     FBUF_W = $bits(ctrl_bundle_t) + 32 + 32 + 1 + 4 + 32;
+    localparam int     FBUF_W = $bits(ctrl_bundle_t) + $bits(prediction_t)
+                              + 32 + 32 + 1 + 4 + 32;
     logic [FBUF_W-1:0] fbuf_deq_data;
 
     // ── Spine head (fetch-buffer dequeue, unpacked) ──────────────
     ctrl_bundle_t id_bundle;
+    prediction_t  id_prediction;
     logic [31:0]  id_pc, id_next_pc, id_fault_status;
     logic [3:0]   id_fault_vec;
     logic         id_fault_pending;
-    assign {id_bundle, id_pc, id_next_pc, id_fault_status, id_fault_vec, id_fault_pending}
-             = fbuf_deq_data;
+    assign {id_bundle, id_prediction, id_pc, id_next_pc, id_fault_status, id_fault_vec,
+            id_fault_pending} = fbuf_deq_data;
     logic         id_deq_ready;  // spine consumes the head (-> fetch buffer i_deq_ready)
 
     // ── Branch / exception / interrupt wires ─────────────────────
-    logic        branch_taken;
+    logic        ex_redirect;        // EX: a mispredicted transfer
+    logic [31:0] ex_redirect_pc;
+    logic        branch_taken;       // EX: a transfer resolved taken (trace)
     logic [31:0] branch_target;
     logic        fault_commit;
     logic [3:0]  fault_vec;
@@ -226,11 +230,12 @@ module penumbra3_core
     // ══════════════════════════════════════════════════════════
     // Front-end redirect / flush composition
     // ══════════════════════════════════════════════════════════
-    // Four control-flow events know their redirect target and steer PC: a taken
-    // branch, the vector fetch reaching its handler, an ERET returning to EPC,
-    // and a WRSYS context-sync re-fetch. They are mutually exclusive in time --
-    // each one's flush drains the others' shadow -- so only one is ever active.
-    //   branch:       branch_taken  -> branch_target
+    // Four control-flow events know their redirect target and steer PC: a
+    // mispredicted transfer, the vector fetch reaching its handler, an ERET
+    // returning to EPC, and a WRSYS context-sync re-fetch. They are mutually
+    // exclusive in time -- each one's flush drains the others' shadow -- so
+    // only one is ever active.
+    //   mispredict:   ex_redirect   -> ex_redirect_pc
     //   vector fetch: vecf_redirect -> vecf_redirect_pc
     //   ERET:         eret_commit   -> epc
     //   WRSYS resync: wrsys_resync  -> wrsys_resync_pc
@@ -245,9 +250,9 @@ module penumbra3_core
     // older than it. Any of the four is older than the fetch that missed, so
     // the replay takes the last leg, which doubles as the (don't-care) idle
     // target.
-    assign if_redirect = branch_taken | vecf_redirect | eret_commit | wrsys_resync;
+    assign if_redirect = ex_redirect | vecf_redirect | eret_commit | wrsys_resync;
     always_comb begin
-        if      (branch_taken)  if1_redirect_pc = branch_target;
+        if      (ex_redirect)   if1_redirect_pc = ex_redirect_pc;
         else if (vecf_redirect) if1_redirect_pc = vecf_redirect_pc;
         else if (eret_commit)   if1_redirect_pc = epc;
         else if (wrsys_resync)  if1_redirect_pc = wrsys_resync_pc;
@@ -337,11 +342,16 @@ module penumbra3_core
     // The back-end stall reaches only the dequeue side; IF2 back-pressures on
     // the buffer's registered o_enq_ready instead, so a back-end stall never
     // reaches o_fetch_en combinationally.
+    // Fetch predicts every slot not taken: it runs on at the next PC, and EX
+    // redirects each taken transfer.
+    prediction_t if2_prediction;
+    assign if2_prediction = '{taken: 1'b0, target: 32'b0};
+
     penumbra3_fetch_buffer #(.PAYLOAD_W(FBUF_W), .DEPTH(2)) u_fbuf (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_flush(if_flush),
         .i_enq_valid(if2_enq_valid),
-        .i_enq_data({if2_enq_bundle, if2_enq_pc, if2_enq_next_pc,
+        .i_enq_data({if2_enq_bundle, if2_prediction, if2_enq_pc, if2_enq_next_pc,
                      if2_enq_fault_status, if2_enq_fault_vec, if2_enq_fault_pending}),
         .o_enq_ready(fbuf_enq_ready),
         .o_deq_valid(fbuf_deq_valid),
@@ -355,6 +365,7 @@ module penumbra3_core
     penumbra3_spine u_spine (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_bundle(id_bundle), .i_pc(id_pc), .i_next_pc(id_next_pc),
+        .i_prediction(id_prediction),
         .i_valid(fbuf_deq_valid),
         .i_if_fault_pending(id_fault_pending), .i_if_fault_vec(id_fault_vec),
         .i_if_fault_status(id_fault_status), .i_fetch_busy(i_icache_busy),
@@ -385,7 +396,8 @@ module penumbra3_core
         .i_sys_rdata(i_sys_rdata),
         .o_sys_we(o_sys_we), .o_sys_wr_dev(o_sys_wr_dev), .o_sys_wr_reg(o_sys_wr_reg),
         .o_sys_wdata(o_sys_wdata),
-        // Branch resolution -> the front end.
+        // Branch resolution: the redirect to the front end, the outcome to the trace.
+        .o_redirect(ex_redirect), .o_redirect_pc(ex_redirect_pc),
         .o_branch_taken(branch_taken), .o_branch_target(branch_target),
         // Exception entry / return / WRSYS resync -> the front end.
         .o_fault_commit(fault_commit), .o_fault_vec(fault_vec), .o_epc(epc),

@@ -192,6 +192,19 @@ package penumbra3_pkg;
     logic        priv_op;        // supervisor-only op (ID checks live mode)
   } ctrl_bundle_t;
 
+  // ── Branch prediction carried with a slot ────────────────────────
+  // What the front end predicted for a slot, carried from IF2's enqueue
+  // through ID to EX, which verifies it (doc/internals/penumbra3/
+  // branch-prediction.md, "Design"). taken means fetch already went to
+  // target behind the slot; a slot predicted not taken has fetch running on
+  // at its next PC, and its target is don't-care. Every slot is one or the
+  // other: one the predictor did not recognise is predicted not taken, as
+  // fetch ran on behind it.
+  typedef struct packed {
+    logic        taken;
+    logic [31:0] target;
+  } prediction_t;
+
   // ── Datapath payload ─────────────────────────────────────────────
   // The resolved datapath state carried, as one packed value, across the
   // EX -> MEM -> WB pipeline registers alongside the ctrl_bundle_t. Copying it

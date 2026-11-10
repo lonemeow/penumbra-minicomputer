@@ -9,8 +9,9 @@
 //   - forwards the youngest in-flight NZCV (penumbra3_flag_bypass) and hands
 //     its carry to the ALU for ADC/SBC,
 //   - resolves control transfers -- cond_eval against the forwarded NZCV,
-//     branch target from the ALU (PC + offset), JMP target from op_a -- and
-//     drives the front-end redirect,
+//     branch target from the ALU (PC + offset), JMP target from op_a --
+//     checks each against what the front end predicted for it, and redirects
+//     fetch when the prediction was wrong,
 //   - launches a divmul on the shared peer unit and holds until it completes,
 //   - sequences drain-commit ops (ERET / WRSYS / EI / DI), and
 //   - latches the EX/MEM1 register under the back-pressure handshake.
@@ -53,6 +54,7 @@ module penumbra3_ex_stage
     input  logic                  i_phys_dst_aux_we,
     input  logic [31:0]           i_pc,
     input  logic [31:0]           i_next_pc,        // PC + 4: BL/JALR link value
+    input  prediction_t           i_prediction,     // what fetch did behind this slot
     input  logic                  i_valid,          // 0 = bubble in
     input  logic                  i_first_cycle,    // the slot arrived at the last edge
     input  logic                  i_fault_pending,
@@ -115,7 +117,11 @@ module penumbra3_ex_stage
     output logic [31:0]           o_sys_wdata,       // a WRSYS's value, with its commit
     output logic                  o_funit_stall,     // stall cause: waiting on divmul (perfctr)
 
-    // -- Branch resolution (to IF: redirect + flush IF1/IF2/ID) ---
+    // -- Branch resolution ----------------------------------------
+    // The redirect steers fetch and flushes IF1/IF2/ID when a prediction was
+    // wrong. The resolution reports every transfer taken, for the trace.
+    output logic                  o_redirect,
+    output logic [31:0]           o_redirect_pc,
     output logic                  o_branch_taken,
     output logic [31:0]           o_branch_target,
 
@@ -286,7 +292,9 @@ module penumbra3_ex_stage
     // EX resolves every control transfer. The condition is evaluated against
     // the forwarded NZCV by the shared cond_eval (the cond encoding is ISA).
     // For Format B the ALU already computed the target (PC + offset); JMP/JALR
-    // carry the target in op_a (forwarded).
+    // carry the target in op_a (forwarded). Fetch has already gone where
+    // i_prediction says, so EX redirects only when that was not the transfer's
+    // successor (doc/internals/penumbra3/branch-prediction.md, "Design").
     logic cond_taken;
     cond_eval u_cond_eval (
         .i_flag_n (fwd_flags[0]),
@@ -297,29 +305,44 @@ module penumbra3_ex_stage
         .o_taken  (cond_taken)
     );
 
-    logic        branch_redirect;
-    logic [31:0] branch_target;
+    logic        taken;
+    logic [31:0] target;
+
+    // Whether fetch went to the transfer's successor, and where that is.
+    logic        mispredict;
+    logic [31:0] successor;
+
     always_comb begin
         case (i_bundle.op_class)
             OPC_JMP: begin
-                branch_redirect = 1'b1;
-                branch_target   = op_a;
+                taken      = 1'b1;
+                target     = op_a;
+                mispredict = !i_prediction.taken || i_prediction.target != op_a;
             end
             OPC_BRANCH: begin
-                branch_redirect = cond_taken;
-                branch_target   = alu_result;
+                taken      = cond_taken;
+                target     = alu_result;
+                mispredict = i_prediction.taken != cond_taken;
             end
             default: begin
-                branch_redirect = 1'b0;
-                branch_target   = 32'b0;
+                taken      = 1'b0;
+                target     = 32'b0;
+                mispredict = 1'b0;
             end
         endcase
     end
 
-    // A taken redirect counts only for a real, non-faulting, un-flushed branch
-    // slot; a bubble or a flushed slot must not steer the front end.
-    assign o_branch_taken  = branch_redirect & i_valid & ~i_fault_pending & ~i_bubble;
-    assign o_branch_target = branch_target;
+    assign successor = taken ? target : i_next_pc;
+
+    // A resolution counts only for a real, non-faulting, un-flushed slot; a
+    // bubble or a flushed slot must not steer the front end.
+    logic resolves;
+    assign resolves = i_valid & ~i_fault_pending & ~i_bubble;
+
+    assign o_redirect      = mispredict & resolves;
+    assign o_redirect_pc   = successor;
+    assign o_branch_taken  = taken & resolves;
+    assign o_branch_target = target;
 
     // ================================================================
     // Drain-commit FSM
@@ -587,11 +610,22 @@ module penumbra3_ex_stage
         (i_stall_in && !i_bubble && o_mem1_valid) |=> $stable(o_mem1_payload.phys_dst))
         else $error("penumbra3_ex_stage: back-pressure swapped the held EX/MEM1 slot");
 
-    // EX steers the front end only for an actual control-transfer instruction.
+    // Only a control-transfer instruction resolves taken.
     always_comb
         assert (!o_branch_taken ||
                 i_bundle.op_class == OPC_BRANCH || i_bundle.op_class == OPC_JMP)
-            else $error("penumbra3_ex_stage: branch redirect on a non-branch op_class");
+            else $error("penumbra3_ex_stage: a non-branch op_class resolved taken");
+
+    // The pre-decode and the decode read one word, so fetch predicts only a
+    // transfer taken, and a Format B transfer only to the target in its word.
+    always_comb
+        assert (!(resolves && i_prediction.taken) ||
+                i_bundle.op_class == OPC_BRANCH || i_bundle.op_class == OPC_JMP)
+            else $error("penumbra3_ex_stage: a non-branch op_class was predicted taken");
+    always_comb
+        assert (!(resolves && i_prediction.taken && i_bundle.op_class == OPC_BRANCH)
+                || i_prediction.target == target)
+            else $error("penumbra3_ex_stage: a branch was predicted to another target");
 
     // A drain-commit instruction never advances into MEM1/WB (it would
     // double-commit: once via o_dc_commit, once at WB).

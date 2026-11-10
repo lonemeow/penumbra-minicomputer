@@ -75,6 +75,8 @@ module penumbra3_spine_test
     input  logic [UNCORE_LINE_WORDS-1:0][31:0] i_rsp_line,
 
     // Branch / exception / interrupt
+    output logic        o_redirect,
+    output logic [31:0] o_redirect_pc,
     output logic        o_branch_taken,
     output logic [31:0] o_branch_target,
     output logic        o_fault_commit,
@@ -182,9 +184,15 @@ module penumbra3_spine_test
     );
     /* verilator lint_on PINCONNECTEMPTY */
 
+    // Every slot arrives predicted not taken, as from a front end that
+    // predicts nothing: each taken transfer is EX's redirect.
+    prediction_t prediction;
+    assign prediction = '{taken: 1'b0, target: 32'b0};
+
     penumbra3_spine u_spine (
         .i_clk(i_clk), .i_rst(i_rst),
-        .i_bundle(bundle), .i_pc(i_pc), .i_next_pc(i_next_pc), .i_valid(i_valid),
+        .i_bundle(bundle), .i_pc(i_pc), .i_next_pc(i_next_pc),
+        .i_prediction(prediction), .i_valid(i_valid),
         .i_if_fault_pending(i_if_fault_pending), .i_if_fault_vec(i_if_fault_vec),
         .i_if_fault_status(i_if_fault_status), .i_fetch_busy(i_fetch_busy),
         .o_deq_ready(o_deq_ready),
@@ -209,6 +217,7 @@ module penumbra3_spine_test
         .i_sys_rdata(i_sys_rdata),
         .o_sys_we(o_sys_we), .o_sys_wr_dev(o_sys_wr_dev), .o_sys_wr_reg(o_sys_wr_reg),
         .o_sys_wdata(o_sys_wdata),
+        .o_redirect(o_redirect), .o_redirect_pc(o_redirect_pc),
         .o_branch_taken(o_branch_taken), .o_branch_target(o_branch_target),
         .o_fault_commit(o_fault_commit), .o_fault_vec(o_fault_vec), .o_epc(o_epc),
         .o_eret_commit(o_eret_commit),

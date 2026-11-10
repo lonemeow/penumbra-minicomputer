@@ -11,6 +11,10 @@
 //     computed there) -- the dependent reads the stale value instead
 //   - a store forwards its data register even though op_b is the EA immediate
 //   - branch resolution: a conditional branch against forwarded flags, and JMP
+//   - the prediction check: EX redirects only when fetch did not go to the
+//     transfer's successor -- a direct transfer on its direction, a JMP on its
+//     target too -- and to that successor; a faulting or flushed slot never
+//     redirects
 //   - the divmul peer unit launches, holds EX, and latches both result halves
 //   - the handshake: i_stall_in holds EX/MEM1, i_bubble flushes it
 
@@ -25,7 +29,7 @@ enum { OPC_ALU = 0, OPC_STORE = 2, OPC_DIVMUL = 5 };
 enum { OP_R_ADD = 0, OP_R_MOV = 8, OP_R_MUL = 16, OP_R_WRSYS = 23 };
 // Format-L opcodes
 enum { OP_L_JMP = 11 };
-enum { COND_EQ = 1 };
+enum { COND_AL = 0, COND_EQ = 1 };
 enum { MEM_SZ_WORD = 2 };
 enum { VEC_BUS_FAULT = 0, VEC_ILLEGAL = 7, VEC_ARITH = 10 };
 
@@ -63,6 +67,7 @@ static void clear(Vpenumbra3_ex_stage_test* dut) {
     dut->i_phys_dst = 0; dut->i_phys_dst_we = 0;
     dut->i_phys_dst_aux = 0; dut->i_phys_dst_aux_we = 0;
     dut->i_pc = 0; dut->i_next_pc = 0; dut->i_valid = 0; dut->i_first_cycle = 0;
+    dut->i_pred_taken = 0; dut->i_pred_target = 0;
     dut->i_fault_pending = 0; dut->i_fault_vec = 0; dut->i_fault_status = 0;
     dut->i_phys_src_a = 0; dut->i_src_a_fwdable = 0;
     dut->i_phys_src_b = 0; dut->i_src_b_fwdable = 0;
@@ -218,6 +223,93 @@ int main(int argc, char** argv) {
     dut->i_valid = 1; dut->eval();
     check("jmp_taken",  dut->o_branch_taken, 1);
     check("jmp_target", dut->o_branch_target, 0x3000);
+
+    // ── Prediction check: a conditional branch ───────────────────
+    // BEQ at 0x2000 to 0x2010, falling through to 0x2004. Each outcome
+    // against each prediction: EX redirects exactly when fetch went the
+    // other way, and to where the branch actually goes. The resolution the
+    // trace sees is the outcome, whatever was predicted.
+    struct { const char* n; int z, pred, redirect; uint32_t pc; } bcc[] = {
+        {"bp_bcc_nt_pred_nt", 0, 0, 0, 0},
+        {"bp_bcc_t_pred_nt",  1, 0, 1, 0x2010},
+        {"bp_bcc_t_pred_t",   1, 1, 0, 0},
+        {"bp_bcc_nt_pred_t",  0, 1, 1, 0x2004},
+    };
+    for (auto& c : bcc) {
+        char n[64];
+        clear(dut);
+        dut->i_ir = enc_b(COND_EQ, 4);
+        dut->i_pc = 0x2000; dut->i_next_pc = 0x2004;
+        dut->i_op_a = 0x2000; dut->i_op_b = 0x10;
+        dut->i_mem2_flags = c.z ? 0x2 : 0x0; dut->i_mem2_writes_flags = 1;
+        dut->i_pred_taken = c.pred; dut->i_pred_target = c.pred ? 0x2010 : 0;
+        dut->i_valid = 1; dut->eval();
+        snprintf(n, sizeof n, "%s_redirect", c.n);
+        check(n, dut->o_redirect, c.redirect);
+        if (c.redirect) {
+            snprintf(n, sizeof n, "%s_pc", c.n);
+            check(n, dut->o_redirect_pc, c.pc);
+        }
+        snprintf(n, sizeof n, "%s_resolved", c.n);
+        check(n, dut->o_branch_taken, c.z);
+    }
+
+    // An unconditional B is taken: predicted, nothing to redirect.
+    clear(dut);
+    dut->i_ir = enc_b(COND_AL, 4);
+    dut->i_pc = 0x2000; dut->i_next_pc = 0x2004;
+    dut->i_op_a = 0x2000; dut->i_op_b = 0x10;
+    dut->i_valid = 1; dut->eval();
+    check("bp_b_unpredicted", dut->o_redirect, 1);
+    check("bp_b_unpredicted_pc", dut->o_redirect_pc, 0x2010);
+    dut->i_pred_taken = 1; dut->i_pred_target = 0x2010; dut->eval();
+    check("bp_b_predicted", dut->o_redirect, 0);
+
+    // ── Prediction check: JMP, where the target can be wrong ─────
+    // A slot predicted not taken had fetch run on at its next PC, whatever
+    // its don't-care target says -- even the JMP's own target.
+    struct { const char* n; int pred; uint32_t pred_target; int redirect; } jmp[] = {
+        {"bp_jmp_unpredicted",  0, 0,      1},
+        {"bp_jmp_unpredicted_target_matches", 0, 0x3000, 1},
+        {"bp_jmp_pred_right",   1, 0x3000, 0},
+        {"bp_jmp_pred_wrong",   1, 0x3100, 1},
+    };
+    for (auto& c : jmp) {
+        char n[64];
+        clear(dut);
+        dut->i_ir = enc_l(OP_L_JMP, 13);       // JMP R13: a return
+        dut->i_pc = 0x2000; dut->i_next_pc = 0x2004;
+        dut->i_op_a = 0x3000; dut->i_phys_src_a = 13;
+        dut->i_pred_taken = c.pred; dut->i_pred_target = c.pred_target;
+        dut->i_valid = 1; dut->eval();
+        snprintf(n, sizeof n, "%s_redirect", c.n);
+        check(n, dut->o_redirect, c.redirect);
+        if (c.redirect) {
+            snprintf(n, sizeof n, "%s_pc", c.n);
+            check(n, dut->o_redirect_pc, 0x3000);
+        }
+    }
+
+    // ── Prediction check: what never redirects ───────────────────
+    // An ALU op predicted nothing goes on to its next PC like fetch did.
+    clear(dut);
+    dut->i_ir = enc_r(OP_R_ADD, 1, 2, 0);
+    dut->i_pc = 0x2000; dut->i_next_pc = 0x2004;
+    dut->i_valid = 1; dut->eval();
+    check("bp_alu_no_redirect", dut->o_redirect, 0);
+    // A mispredicted branch in a faulting slot or one being flushed: the
+    // fault, or whatever flushes it, steers fetch instead.
+    clear(dut);
+    dut->i_ir = enc_b(COND_EQ, 4);
+    dut->i_pc = 0x2000; dut->i_next_pc = 0x2004;
+    dut->i_op_a = 0x2000; dut->i_op_b = 0x10;
+    dut->i_mem2_flags = 0x2; dut->i_mem2_writes_flags = 1;   // taken, predicted not
+    dut->i_valid = 1; dut->i_fault_pending = 1; dut->eval();
+    check("bp_fault_no_redirect", dut->o_redirect, 0);
+    dut->i_fault_pending = 0; dut->i_bubble = 1; dut->eval();
+    check("bp_flush_no_redirect", dut->o_redirect, 0);
+    dut->i_bubble = 0; dut->i_valid = 0; dut->eval();
+    check("bp_bubble_no_redirect", dut->o_redirect, 0);
 
     // ── divmul: launch, hold, latch both halves ──────────────────
     clear(dut);

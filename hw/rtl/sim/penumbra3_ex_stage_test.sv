@@ -29,6 +29,8 @@ module penumbra3_ex_stage_test
     input  logic                  i_phys_dst_aux_we,
     input  logic [31:0]           i_pc,
     input  logic [31:0]           i_next_pc,
+    input  logic                  i_pred_taken,
+    input  logic [31:0]           i_pred_target,
     input  logic                  i_valid,
     input  logic                  i_first_cycle,
     input  logic                  i_fault_pending,
@@ -69,6 +71,8 @@ module penumbra3_ex_stage_test
     output logic [31:0]           o_sys_wdata,
     output logic                  o_funit_stall,
 
+    output logic                  o_redirect,
+    output logic [31:0]           o_redirect_pc,
     output logic                  o_branch_taken,
     output logic [31:0]           o_branch_target,
 
@@ -104,6 +108,9 @@ module penumbra3_ex_stage_test
         .o_bundle (bundle)
     );
 
+    prediction_t prediction;
+    assign prediction = '{taken: i_pred_taken, target: i_pred_target};
+
     penumbra3_ex_stage u_ex (
         .i_clk                  (i_clk),
         .i_rst                  (i_rst),
@@ -117,6 +124,7 @@ module penumbra3_ex_stage_test
         .i_phys_dst_aux_we      (i_phys_dst_aux_we),
         .i_pc                   (i_pc),
         .i_next_pc              (i_next_pc),
+        .i_prediction           (prediction),
         .i_valid                (i_valid),
         .i_first_cycle          (i_first_cycle),
         .i_fault_pending        (i_fault_pending),
@@ -152,6 +160,8 @@ module penumbra3_ex_stage_test
         .o_dc_commit            (o_dc_commit),
         .o_sys_wdata            (o_sys_wdata),
         .o_funit_stall          (o_funit_stall),
+        .o_redirect             (o_redirect),
+        .o_redirect_pc          (o_redirect_pc),
         .o_branch_taken         (o_branch_taken),
         .o_branch_target        (o_branch_target),
         .o_mem1_bundle          (mem1_bundle),

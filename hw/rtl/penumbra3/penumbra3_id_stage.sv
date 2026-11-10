@@ -40,6 +40,7 @@ module penumbra3_id_stage
     input  ctrl_bundle_t          i_bundle,
     input  logic [31:0]           i_pc,
     input  logic [31:0]           i_next_pc,
+    input  prediction_t           i_prediction,     // what fetch did behind the slot
     input  logic                  i_valid,          // FIFO head present (o_deq_valid)
     input  logic                  i_if_fault_pending, // IF-stage fault carried in the slot
     input  logic [3:0]            i_if_fault_vec,
@@ -95,6 +96,7 @@ module penumbra3_id_stage
     output logic                  o_ex_src_b_fwdable,
     output logic [31:0]           o_ex_pc,
     output logic [31:0]           o_ex_next_pc,
+    output prediction_t           o_ex_prediction,
     output logic                  o_ex_valid,
     output logic                  o_ex_first_cycle,    // loaded at the last edge
     output logic                  o_ex_fault_pending,
@@ -325,6 +327,7 @@ module penumbra3_id_stage
                 o_ex_src_b_fwdable   <= src_b_fwdable;
                 o_ex_pc              <= i_pc;
                 o_ex_next_pc         <= i_next_pc;
+                o_ex_prediction      <= i_prediction;
                 o_ex_fault_pending   <= insn_fault_pending;
                 o_ex_fault_vec       <= insn_fault_vec;
                 o_ex_fault_status    <= i_if_fault_status;

@@ -17,6 +17,8 @@ module penumbra3_id_stage_test
     input  logic [31:0]           i_ir,
     input  logic [31:0]           i_pc,
     input  logic [31:0]           i_next_pc,
+    input  logic                  i_pred_taken,
+    input  logic [31:0]           i_pred_target,
     input  logic                  i_valid,
     input  logic                  i_if_fault_pending,
     input  logic [3:0]            i_if_fault_vec,
@@ -62,6 +64,8 @@ module penumbra3_id_stage_test
     output logic                  o_ex_src_b_fwdable,
     output logic [31:0]           o_ex_pc,
     output logic [31:0]           o_ex_next_pc,
+    output logic                  o_ex_pred_taken,
+    output logic [31:0]           o_ex_pred_target,
     output logic                  o_ex_valid,
     output logic                  o_ex_first_cycle,
     output logic                  o_ex_fault_pending,
@@ -82,12 +86,18 @@ module penumbra3_id_stage_test
         .o_bundle (bundle)
     );
 
+    prediction_t prediction, ex_prediction;
+    assign prediction = '{taken: i_pred_taken, target: i_pred_target};
+    assign o_ex_pred_taken  = ex_prediction.taken;
+    assign o_ex_pred_target = ex_prediction.target;
+
     penumbra3_id_stage u_id (
         .i_clk               (i_clk),
         .i_rst               (i_rst),
         .i_bundle            (bundle),
         .i_pc                (i_pc),
         .i_next_pc           (i_next_pc),
+        .i_prediction        (prediction),
         .i_valid             (i_valid),
         .i_if_fault_pending  (i_if_fault_pending),
         .i_if_fault_vec      (i_if_fault_vec),
@@ -125,6 +135,7 @@ module penumbra3_id_stage_test
         .o_ex_src_b_fwdable  (o_ex_src_b_fwdable),
         .o_ex_pc             (o_ex_pc),
         .o_ex_next_pc        (o_ex_next_pc),
+        .o_ex_prediction     (ex_prediction),
         .o_ex_valid          (o_ex_valid),
         .o_ex_first_cycle    (o_ex_first_cycle),
         .o_ex_fault_pending  (o_ex_fault_pending),

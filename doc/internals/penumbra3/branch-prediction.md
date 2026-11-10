@@ -152,7 +152,9 @@ fetch FIFO, where the back-end stall does not reach.
 - **IF2 pre-decode redirects** direct transfers (`B`, `BL`, and `Bcc`
   the direction table calls taken), with the target from the word.
 - **A 1K-entry bimodal table** of two-bit counters, read beside IF1 and
-  used in IF2, trained off the fetch loop.
+  used in IF2. EX steps the counter a conditional branch was predicted
+  with toward its outcome, and the table takes the new value a cycle
+  later, off the fetch loop.
 - **A plain return-stack ring,** 4–8 deep, pushed by calls and popped
   by returns as IF2 enqueues them, with no empty check. It updates a
   cycle later, off the redirect's path; a return enqueued the cycle
@@ -166,8 +168,22 @@ fetch FIFO, where the back-end stall does not reach.
   ([P0.5](./phase0-probes.md#p05--physical-tag-compare-behind-the-tlb-verdict)),
   so a buffer adds only indirect targets: 3–15 cycles per 1000, a
   measure-driven option.
-- **EX verifies every prediction** and redirects on any mismatch, so no
-  predictor structure has to be right, only cheap.
+- **Every other redirect outranks the prediction.** A slot that EX's
+  redirect, a fault, `ERET`, a `WRSYS` resync, the vector fetch or a
+  miss's replay discards predicts nothing, so the predicted redirect is
+  the last of IF1's steers.
+- **Each slot carries its prediction** through the fetch buffer and ID
+  to EX: whether the front end redirected behind it, the target it
+  redirected to, and the counter it was predicted with.
+- **EX verifies every prediction** and redirects only on a mismatch, so
+  no predictor structure has to be right, only cheap. A `B`, `BL` or
+  `Bcc` mispredicts when it went the other way from its prediction; its
+  target comes from its own word, so only the direction can be wrong. A
+  `JMP` mispredicts unless it was predicted to the target it reads. A
+  mispredicted transfer redirects to its successor: the target when it
+  is taken, the next instruction when not. EX's redirect is
+  combinational, as before prediction, so a mispredict costs the
+  front end's refill and nothing more.
 
 ## Open
 

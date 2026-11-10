@@ -47,6 +47,7 @@ static uint64_t late_slot(int slot, uint64_t idx) { return idx << (slot * 5); }
 
 static void clear(Vpenumbra3_id_stage_test* dut) {
     dut->i_ir = 0; dut->i_pc = 0; dut->i_next_pc = 0; dut->i_valid = 0;
+    dut->i_pred_taken = 0; dut->i_pred_target = 0;
     dut->i_if_fault_pending = 0; dut->i_if_fault_vec = 0; dut->i_if_fault_status = 0;
     dut->i_supervisor = 1;
     dut->i_stall_in = 0; dut->i_bubble = 0; dut->i_fetch_busy = 0; dut->i_pipe_hold = 0;
@@ -70,6 +71,7 @@ int main(int argc, char** argv) {
     clear(dut);
     dut->i_ir = enc_r(ALU_ADD, 1, 2, 0);   // ADD R1, R2 (R1 = dest + srcA, R2 = srcB)
     dut->i_pc = 0x1000; dut->i_next_pc = 0x1004; dut->i_valid = 1;
+    dut->i_pred_taken = 1; dut->i_pred_target = 0x2468;
     dut->i_rd_data_a = 0xAAAA0001; dut->i_rd_data_b = 0xBBBB0002;
     dut->eval();
     check("alu_rd_a",   dut->o_rd_idx_a, 1);
@@ -85,6 +87,9 @@ int main(int argc, char** argv) {
     check("alu_dst",    dut->o_ex_phys_dst, 1);
     check("alu_dst_we", dut->o_ex_phys_dst_we, 1);
     check("alu_pc",     dut->o_ex_pc, 0x1000);
+    // The slot's prediction rides into ID/EX unchanged, whatever the op.
+    check("alu_pred_taken",   dut->o_ex_pred_taken, 1);
+    check("alu_pred_target",  dut->o_ex_pred_target, 0x2468);
     check("alu_nofault", dut->o_ex_fault_pending, 0);
     // Forward-source export: both operands are GPR regfile reads (forwardable).
     check("alu_src_a",     dut->o_ex_phys_src_a, 1);
