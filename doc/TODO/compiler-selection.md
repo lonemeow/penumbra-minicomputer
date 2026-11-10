@@ -377,6 +377,63 @@ round-down alignment masks.  `shr x, k; shl x, k` matches their
 instruction count and frees the scratch register, but overwrites `x`,
 so it only wins where `x` is dead afterwards.
 
+## Compiler: a mask of more than 16 low ones is built where two shifts do
+
+`ANDi` takes a zero-extended 16-bit immediate, so keeping a value's
+low n bits for n from 17 to 31 builds the mask first: `x & 0xFFFFFF`
+becomes `lli t, 65535; lui t, 255; and x, t`, three instructions and a
+scratch register.  `shl x, 32 - n; shr x, 32 - n` is two and needs no
+register.  Every one of those instructions takes a cycle on gen2.5
+and gen3, and the
+shift pair is the shape gen4's extension fusion takes as one op (the
+ISS pairing model's `fuse:ext`).
+
+A static scan (2026-11-09) finds `lli t, 65535; lui t, 2^k - 1` with
+the `AND` directly behind 59 times in the `GENERIC.DEBUG` kernel, 82
+in `libc`, 192 in `libsqlite3` and twice in Doom.  The masks with any
+use number 263, 270, 265 and 37; most are `0x7FFFFFFF` and
+`0x3FFFFFFF`.
+
+Where `x` stays live, the `AND` can write `t` and keep it, and the
+shift pair needs a `MOV` ahead of it: three instructions either way,
+the scratch register still freed.  Two-shift masks of high ones are
+the same trade with a one-instruction mask (this file, "InstCombine's
+shift-and-mask form costs a constant").
+
+Open:
+
+- A loop-invariant mask that MachineLICM hoists leaves one `AND` an
+  iteration against the shift pair's two.  Selection runs before
+  MachineLICM, so either the rewrite comes after it and takes only the
+  masks left in place, or it leaves loop bodies alone.
+- The static counts say nothing of how often the sites run.
+
+## Compiler: a mask is kept where the shift behind it discards its bits
+
+`(signed char)x` of a `short` argument comes out as `and r1, 65535;
+shl r1, 24; sar r1, 24`.  The `AND` clears only bits the `SHL` shifts
+out, so it does nothing.
+
+InstCombine writes the narrowing as `zext i16 %x to i32` ahead of `shl
+24; ashr exact 24`: IR has no extension that leaves the upper bits
+open.  The legalizer makes the `G_ZEXT` a mask.  An `unsigned short`
+argument loses it, since its `G_ASSERT_ZEXT` makes the mask known
+redundant.  A `short` arrives under `G_ASSERT_SEXT`, and only the bits
+the `G_SHL` demands show the mask is dead, the work SelectionDAG's
+`SimplifyDemandedBits` does; the GISel combiners keep it.
+
+A static scan (2026-11-09) finds an `AND` of low ones directly ahead
+of a `SHL` of the same register that shifts every cleared bit out 17
+times in the `GENERIC.DEBUG` kernel, 32 in `libc`, 32 in `libsqlite3`
+and twice in Doom.
+
+Open:
+
+- Where the fix belongs: a combine dropping `G_AND x, 2^n - 1` under a
+  `G_SHL` by at least `32 - n`, or a demanded-bits combine that also
+  covers the other users that ignore high bits.  Not investigated.
+- How often the sites run.
+
 ## Compiler: Ch()-style bit-select not folded to the masked-merge form
 
 In compiled `SHA256_Transform`, `Ch(e,f,g) = (e&f) ^ (~e&g)` emits the
