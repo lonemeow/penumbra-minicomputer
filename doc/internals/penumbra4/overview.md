@@ -44,6 +44,14 @@ On `pbench kernel` and Doom, the two together bring the 1000 issue
 cycles that 1000 instructions take down to 668–681, and to 617–635
 with a second load port and one more fusion
 ([measured](./issue-pairing.md#fusion-and-dual-issue-together)).
+Fusing an add into the load or store it addresses, the base-plus-index
+access the ISA has no encoding for, takes them to 653 and 521 behind
+gen3's TLB ([measured](./issue-pairing.md#address-and-shift-fusions)).
+
+The two reach different cycles. Fusion takes adjacent instructions
+that depend on each other, a second slot adjacent ones that do not:
+together they take 92–98 % of what each takes alone, added
+([measured](./issue-pairing.md#fusion-and-the-second-slot-add-up)).
 
 ## The shape
 
@@ -70,6 +78,7 @@ graph LR
 | **Exceptions** | Precise, as in every generation. A simple ALU op cannot fault, so the only case is the full pipeline's op faulting: the older op of the pair commits and the younger does not. |
 | **Flags** | Nearly every ALU op writes them. The flag state takes the write of the pair's youngest flag writer, a mux whose select is known at decode. |
 | **Dependencies** | A pair's younger op takes nothing the older op produces that cycle, with one exception: a constant the older op loads, known at decode. The idioms that would need more are fused instead. |
+| **Addressing** | An add fuses into the load or store it addresses: a base plus an index, and the sum written back when a load does not overwrite it. A fused op that writes two registers pairs only with one that writes none. |
 | **System instructions** | Issue alone and serialize, as in gen3. |
 
 Whether two adjacent ops may pair, and whether two adjacent
@@ -85,9 +94,13 @@ The uncore, the store buffer, the split memory stage, branch prediction
 and the pre-decoded fetch FIFO carry over. Dual issue changes what sits
 around them:
 
-- **Fetch has to supply two instructions a cycle,** and the fuser has
-  to see across fetches ([front end](./front-end.md)). Issue takes 1.5
-  to 1.6 a cycle on average.
+- **Fetch has to supply a line a cycle into a 16-entry queue,** or two
+  instructions a cycle with no bubble after a taken transfer, and the
+  fuser has to see across fetches ([front end](./front-end.md)). Issue
+  takes 1.5 to 1.9 a cycle on average.
+- **An address adder for the fused accesses,** taking two registers,
+  and the access's offset as a third input for a pre-incremented one
+  ([the address adder](./issue-pairing.md#the-address-adder)).
 - **The register file needs two write ports** and four read ports
   ([register file](./regfile.md)).
 - **Forwarding** reaches four operands from the results of two
@@ -115,6 +128,7 @@ arrives with the two-wide front end that dual issue needs anyway.
 - **Fetch after a misprediction or a miss,** when the queue is empty
   ([front end](./front-end.md#open)).
 - **The cost side:** the two-write-port register file, the forwarding
-  network and the fused compare-and-branch's path, each to be timed on
+  network, the fused compare-and-branch's path and the fused access's
+  address adder, each to be timed on
   the full top before anything is built on it, as gen3's
   [build plan](../penumbra3/overview.md#build-plan) does.

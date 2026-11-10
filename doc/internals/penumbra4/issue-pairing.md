@@ -39,8 +39,9 @@ What the figures leave out:
   [memory-performance](../penumbra3/memory-performance.md#fills-and-refills-at-gen3s-geometries)
   the refill handler is an estimated 15 % of Doom's instructions and
   25 % of `pbench kernel`'s. A third of the handler is system
-  instructions, which issue alone, so a stream behind gen3's larger TLB
-  pairs somewhat better than these.
+  instructions, which issue alone. Behind gen3's larger TLB the
+  stream pairs a little better
+  ([measured](#behind-gen3s-tlb)).
 
 A stage is written as the model's item: `dual` has slot X issue simple
 ALU ops, shifts and moves, and slot Y everything, with the older op in
@@ -205,6 +206,129 @@ The count of what could be moved looks back four instructions, never
 moves a load past a store, and cannot see a branch target between the
 two positions, so it is an upper bound.
 
+## Address and shift fusions
+
+Measured 2026-11-09 on the same windows, from the base image of that
+day, behind gen3's TLB (`+core=penumbra3`, 256×2) and behind gen2.5's
+(`+core=penumbra2_5`, 32×2) side by side. Behind gen2.5's, the stage
+the [front end](./front-end.md) measures,
+`dual+fuse:lilui:cmpbr:movop:opbr+fw:imm+flex`, takes 677 / 631, where
+it took 679 / 630 on 2026-10-04. Figures in this section are behind
+gen3's TLB unless they say otherwise.
+
+Five more fusions, each of an idiom the encoding spends two
+instructions on:
+
+- **`ext`:** `SHL Rd, #n` and `SHR` or `SAR Rd, #n`, a zero or sign
+  extension of the low 32 − n bits. The compiler emits the `SAR` form
+  for every sign extension in a register.
+- **`shadd`:** `SHL Rd, #1..3` and `ADD Rd, Rs`, an index scaled into a
+  sum.
+- **`addmem`:** `ADD Rd, Rs` and a load or store with `Rd` as its base:
+  the base-plus-index access the ISA has no encoding for. A load fuses
+  when it overwrites `Rd`.
+- **`addwb`:** the same with the load into another register, so the
+  fused load also writes its address to `Rd`.
+- **`incmem`:** `ADD` or `SUB Rd, #imm` and the access through `Rd`, a
+  pre-incremented access.
+
+Fused per 1000 instructions, each alone on one slot:
+
+| | `pbench kernel` | Doom `demo3` |
+|---|---|---|
+| `ext` | 1.1 | 0.7 |
+| `shadd` | 8.0 | 2.7 |
+| `addmem` | 5.9 | 73.2 |
+| `addwb` | 2.4 | 20.8 |
+| `incmem` | 12.4 | 3.6 |
+
+Issue cycles per 1000 instructions, added to the stage the front end
+measures:
+
+| Stage | `pbench kernel` | Doom `demo3` |
+|---|---|---|
+| `dual+fuse:lilui:cmpbr:movop:opbr+fw:imm+flex` | 674 | 616 |
+| … `+ext` | 674 | 616 |
+| … `+shadd` | 671 | 614 |
+| … `+addmem` | 668 | 543 |
+| … `+ext:shadd:addmem` | 666 | 542 |
+| … and `addwb` | 664 | 524 |
+| … and `incmem` | 654 | 539 |
+| … all five | 653 | 521 |
+| … all five, `+x:simple:ld+mem:ld2` | 582 | 505 |
+
+- **`addmem` is worth 72 on Doom,** 12 % of its issue cycles and more
+  than any of the first four fusions there. The column and span loops
+  form an address in a register and load through it. With `ext`,
+  `shadd` and `addmem`, the ops issuing alone only because the op
+  behind reads their result fall from 161 to 90 per 1000 instructions
+  as an ALU operand, and from 94 to 51 as a base. On the kernel paths
+  `addmem` is worth 6.
+- **`addwb` adds 18 on Doom and `incmem` 11 on the kernel paths,** and
+  each little on the other workload. All five take 21 and 95 from the
+  four fusions' stage: 3 % and 15 %.
+- **`ext` and `shadd` are worth 0–3.** A sign-extended byte or halfword
+  arrives from `LDBS` or `LDHS`. The extensions in a register are
+  hundreds of sites in the kernel, `libc` and Doom that seldom run, and
+  those that do run sit behind the `MOV` that copies their operand,
+  which `movop` takes first.
+- **A fused load that writes its address back writes two registers,**
+  and pairs only with an op that writes none. That alone keeps 0.2 /
+  2.8 ops per 1000 instructions from pairing.
+
+### The address adder
+
+A fused access adds the add's two inputs and its own offset, three
+inputs, and gives the `ADD`'s flags from the first two. With two
+inputs (`agu:2` in the model), only an access with no offset fuses,
+and its one sum is both the address and the flags.
+
+| Fused per 1000 instructions, alone on one slot | Any offset | No offset |
+|---|---|---|
+| `addmem` | 5.9 / 73.2 | 5.8 / 72.7 |
+| `addwb` | 2.4 / 20.8 | 1.4 / 16.9 |
+| `incmem` | 12.4 / 3.6 | 1.8 / 0.5 |
+
+- **`addmem` needs no third input:** 98–99 % of its accesses have no
+  offset.
+- **`incmem` nearly always has one.** Its shape is a prologue's: of the
+  kernel's 6,655 static sites of an `ADD` or `SUB #imm` and an access
+  through its register, 6,288 are `SUB SP, #frame` and a save, 5,538
+  of them to `[SP + k]` with k other than 0.
+- **With every fusion, two inputs cost 11 / 7:** 664 / 528 against 653 /
+  521. Without `addwb` and `incmem` they cost nothing (666 / 542 either
+  way).
+
+### Fusion and the second slot add up
+
+| Issue cycles saved per 1000 instructions | `pbench kernel` | Doom `demo3` |
+|---|---|---|
+| `single+fuse:lilui:cmpbr:movop:opbr:ext:shadd:addmem` | 172 | 251 |
+| `dual+fw:imm+flex` | 192 | 218 |
+| The two added | 365 | 469 |
+| `dual+fuse:lilui:cmpbr:movop:opbr:ext:shadd:addmem+fw:imm+flex` | 334 | 458 |
+
+Together the two take 92 % and 98 % of their sum, and 93 % and 97 %
+behind gen2.5's TLB. Fusion takes adjacent instructions that depend on
+each other and the second slot adjacent ones that do not, so they
+seldom reach for the same cycle.
+
+### Behind gen3's TLB
+
+- **The refill handler is 15 % of Doom's stream** behind gen2.5's TLB:
+  the window is 2.92 G instructions there and 2.49 G behind gen3's.
+  The kernel paths size their own runs, and keep their length.
+- **Pairing gains little from it.** The stage the front end measures
+  takes 674 / 616 against 677 / 631. Ops issuing alone beside a system
+  instruction fall from 132 to 47 per 1000 instructions on the kernel
+  paths, and from 55 to 1 on Doom.
+- **`addmem`'s fusions fall from 15 to 6 per 1000 instructions on the
+  kernel paths:** each refill runs two of its pairs, `ADD` then `LDW`
+  through the sum, for the page directory and the page table.
+- **A second load port is worth more,** with `ext`, `shadd` and
+  `addmem` added to the four fusions: 72 against 52 on the kernel
+  paths, and 17 against 15 on Doom.
+
 ## Ruled out
 
 - **Only the younger op commits flags** (`yflags`). It keeps a pair
@@ -220,27 +344,46 @@ two positions, so it is an upper bound.
   ALU op writes the flags, so the flag setter is the last ALU op ahead
   of its branch and only loads, stores and moves can sit between them
   ([above](#a-flag-setting-op-and-its-branch)).
+- **Fusing a shift pair into an extension** (`ext`): 0.7–1.1 per 1000
+  instructions alone, and 0.1 issue cycles on the stage the front end
+  measures ([measured](#address-and-shift-fusions)). Sub-word values
+  arrive extended from `LDBS` and `LDHS`.
+- **Fusing a scaled index into its add** (`shadd`): 2.7–8.0 per 1000
+  instructions, under 3 issue cycles.
 
 ## Design
 
 - **Fuse first.** The front end fuses `LLI`/`LUI`, an ALU op and the
   `Bcc` behind it, compares included, and a `MOV` with the op that
   updates its copy.
+- **Fuse an add into the access it addresses** (`addmem`, `addwb`): a
+  base-plus-index load or store, writing its address back when a load
+  does not overwrite it. A two-input address adder takes 98–99 % of
+  `addmem`'s accesses; a pre-incremented access (`incmem`) needs the
+  offset as a third input.
 - **Two slots, either order.** X issues simple ALU ops, shifts and
   moves; Y everything.
 - **One forward between the pipelines:** a constant the older op loads,
   wherever the younger reads it.
 - **The youngest flag writer's flags stand.**
 - **One memory access a pair to start with.** A second load port is the
-  next step, 16–43.
+  next step: 16–43, and 17–72 behind gen3's TLB with the address
+  fusions.
 - **Pre-decode decides.** Fusing and pairing depend only on the
   instructions, so both are settled at the fetch FIFO's enqueue.
 
 ## Open
 
-- **The stream behind a 256×2 TLB.** A report split by privilege, or
-  one that leaves the refill handler's page out, would show what the
-  handler's instructions hide.
+- **The address adder:** three inputs or two, and the `ADD`'s flags
+  beside the address, to be timed on the path from the register file
+  to the cache. Two inputs cost 11 / 7 issue cycles
+  ([the address adder](#the-address-adder)).
+- **The prologue's save at an offset.** A frame with a callee-saved
+  register's slot at `[SP + 0]` would let a two-input adder fuse the
+  frame's allocation with that save; the compiler places the slots.
+- **A fused access behind a load.** Fusing an add into its access
+  leaves a base that a load writes still waiting for the load, and the
+  load-use model fuses nothing ([load-use](./load-use.md)).
 - **Stalls.** A pair whose younger op waits on a load holds both ops,
   and the load-use distance decides how often.
 - **Greedy pairing.** With `flex`, a store ahead of a compare takes the
