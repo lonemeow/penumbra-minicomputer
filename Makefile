@@ -1609,7 +1609,7 @@ FPGA_AUDIO_TOPS = ulx3s_audio_test_top
 DEFAULT_SEED_ulx3s_penumbra1_top   := 2
 DEFAULT_SEED_ulx3s_penumbra2_top   := 5
 DEFAULT_SEED_ulx3s_penumbra2_5_top := 23
-DEFAULT_SEED_ulx3s_penumbra3_top   := 1
+DEFAULT_SEED_ulx3s_penumbra3_top   := 8
 
 # Per-top default SDRAM stack (see SDRAM_STACK above).  Which stack a
 # top closes timing under is a placement question rather than a logical
