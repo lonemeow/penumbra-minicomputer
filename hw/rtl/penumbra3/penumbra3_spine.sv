@@ -92,6 +92,9 @@ module penumbra3_spine
     output logic [31:0]           o_redirect_pc,      // to its successor
     output logic                  o_branch_taken,     // a transfer resolved taken (trace)
     output logic [31:0]           o_branch_target,
+    output logic                  o_train,            // a conditional branch's counter, stepped
+    output logic [31:0]           o_train_pc,
+    output dir_counter_t          o_train_counter,
 
     // ── Exception entry / return / WRSYS resync (to the front end) ──
     output logic                  o_fault_commit,
@@ -515,6 +518,7 @@ module penumbra3_spine
         .o_sys_wdata(ex_sys_wdata), .o_funit_stall(),
         .o_redirect(ex_redirect), .o_redirect_pc(o_redirect_pc),
         .o_branch_taken(o_branch_taken), .o_branch_target(o_branch_target),
+        .o_train(o_train), .o_train_pc(o_train_pc), .o_train_counter(o_train_counter),
         .o_mem1_bundle(exmem1_bundle), .o_mem1_payload(exmem1_payload),
         .o_mem1_store_data(exmem1_store_data), .o_mem1_valid(exmem1_valid),
         .o_mem1_bcause(exmem1_bcause)

@@ -125,6 +125,13 @@ module penumbra3_ex_stage
     output logic                  o_branch_taken,
     output logic [31:0]           o_branch_target,
 
+    // -- Direction-table training (to the front end's predictor) --
+    // A conditional branch's counter, stepped toward its outcome, as the
+    // branch leaves EX.
+    output logic                  o_train,
+    output logic [31:0]           o_train_pc,
+    output dir_counter_t          o_train_counter,
+
     // -- EX/MEM1 register (to MEM1) -------------------------------
     // The control bundle is carried unchanged; the resolved datapath travels in
     // the payload struct. store_data rides its own wire -- MEM2 consumes it, so
@@ -511,6 +518,19 @@ module penumbra3_ex_stage
         else                  ex_local_stall = 1'b0;
     end
     assign o_local_stall = ex_local_stall;
+
+    // -- Direction-table training ---------------------------------
+    // Each conditional branch steps the counter it was predicted with one
+    // place toward its outcome, saturating, once: as it leaves EX. B and BL
+    // are always taken and predicted without the table, so they train
+    // nothing.
+    logic conditional;
+    assign conditional = (i_bundle.op_class == OPC_BRANCH)
+                       & (i_bundle.cond != COND_AL) & (i_bundle.cond != COND_BL);
+
+    assign o_train    = conditional & resolves & advance;
+    assign o_train_pc = i_pc;
+    assign o_train_counter = dir_counter_step(i_prediction.counter, taken);
 
     // -- EX/MEM1 bubble cause -------------------------------------
     // Mirrors the next_valid priority. A fault flush, the WRSYS post-commit

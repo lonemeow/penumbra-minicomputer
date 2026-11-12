@@ -3,7 +3,9 @@
 // The bare pipelined core: the front end (penumbra3_if1_stage,
 // penumbra3_if2_stage) through the elastic fetch buffer onto penumbra3_spine
 // (ID->EX->MEM1->MEM2->WB + regfile + scoreboard + SPR/scratch files), plus
-// penumbra3_fetch_replay (a miss's replay) and the two exception-path units
+// penumbra3_branch_predictor (each IF2 slot's prediction, its direction
+// table trained from EX), penumbra3_fetch_replay (a miss's replay) and the two
+// exception-path units
 // -- penumbra3_vecfetch (vector-table read + handler redirect) and
 // penumbra3_irq (recognition + EX-frontier injection, and the deferred bus
 // fault). Everything memory-shaped lives outside, behind the port groups the
@@ -33,8 +35,10 @@ module penumbra3_core
     import penumbra_pkg::*;
     import penumbra3_pkg::*;
 #(
-    parameter  logic [31:0] RESET_PC = 32'hFFFF_0000,  // the hw-test --org convention
-    parameter  int          IL1_WAYS = 2               // the L1-I's ways
+    parameter  logic [31:0] RESET_PC    = 32'hFFFF_0000,  // the hw-test --org convention
+    parameter  int          IL1_WAYS    = 2,              // the L1-I's ways
+    parameter  int          DIR_ENTRIES = 1024,           // the direction table's counters
+    parameter  int          RAS_DEPTH   = 8               // the return stack's entries
 )(
     input  logic                  i_clk,
     input  logic                  i_rst,
@@ -168,6 +172,12 @@ module penumbra3_core
     logic         if2_enq_fault_pending;
     logic         if2_hold;      // IF2 -> IF1 back-pressure
 
+    // ── Branch predictor wires ───────────────────────────────────
+    prediction_t if2_prediction;     // the slot's: IF1 steers by it, it enqueues with the slot
+    logic        train;              // EX: a conditional branch's counter
+    logic [31:0] train_pc;
+    dir_counter_t train_counter;
+
     // ── Fetch replay wires ───────────────────────────────────────
     logic        frep_replay, frep_replayed, frep_deliver;
     logic [31:0] frep_replay_pc;
@@ -243,6 +253,7 @@ module penumbra3_core
     // redirect comes later, via the vector fetch (IF1's fault flush is i_flush
     // = fault_commit, wired below).
     logic        if_redirect;       // one of the four fired
+    logic        if1_redirect;      // one of the five: IF1 steers to the target
     logic [31:0] if1_redirect_pc;   // the target IF1 steers to
 
     // A fifth steers IF1 without being a flush: a miss's replay discards only
@@ -250,7 +261,8 @@ module penumbra3_core
     // older than it. Any of the four is older than the fetch that missed, so
     // the replay takes the last leg, which doubles as the (don't-care) idle
     // target.
-    assign if_redirect = ex_redirect | vecf_redirect | eret_commit | wrsys_resync;
+    assign if_redirect  = ex_redirect | vecf_redirect | eret_commit | wrsys_resync;
+    assign if1_redirect = if_redirect | frep_replay;
     always_comb begin
         if      (ex_redirect)   if1_redirect_pc = ex_redirect_pc;
         else if (vecf_redirect) if1_redirect_pc = vecf_redirect_pc;
@@ -275,7 +287,9 @@ module penumbra3_core
     penumbra3_if1_stage #(.RESET_PC(RESET_PC)) u_if1 (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_stall_in(if2_hold | i_icache_busy | vecf_active | i_sys_busy),
-        .i_redirect(if_redirect | frep_replay), .i_redirect_pc(if1_redirect_pc),
+        .i_redirect(if1_redirect), .i_redirect_pc(if1_redirect_pc),
+        .i_predict_taken(if2_prediction.taken), .i_predict_pc(if2_prediction.target),
+        .i_enq_ready(fbuf_enq_ready),           // a prediction is acted on as its slot leaves
         .i_flush(fault_commit),                 // bubble the wrong-path fetch at the fault
         .i_fetch_stop(1'b0),                    // unused: the interrupt drains at the EX frontier
         .o_fetch_addr(o_fetch_addr), .o_fetch_en(o_fetch_en),
@@ -337,16 +351,40 @@ module penumbra3_core
     );
 
     // ══════════════════════════════════════════════════════════
+    // Branch predictor -- each IF2 slot's prediction
+    // ══════════════════════════════════════════════════════════
+    // It reads IF2's slot as IF2 does, the L1-I's ways straight off the
+    // block RAM, and IF1 steers fetch by its prediction. The slot's flushes
+    // reach neither: IF1 ranks each of them above the prediction, and the
+    // slot they discard never enqueues.
+    penumbra3_branch_predictor #(
+        .WAYS        (IL1_WAYS),
+        .DIR_ENTRIES (DIR_ENTRIES),
+        .RAS_DEPTH   (RAS_DEPTH)
+    ) u_predictor (
+        .i_clk           (i_clk),
+        .i_rst           (i_rst),
+        .i_fetch_en      (o_fetch_en),
+        .i_fetch_addr    (o_fetch_addr),
+        .i_slot_pc       (if1_pc),
+        .i_way_hit       (i_icache_way_hit),
+        .i_way_word      (i_icache_way_word),
+        .i_enq_fire      (if2_enq_fire),
+        .i_enq_fault     (if2_enq_fault_pending),
+        .i_enq_bundle    (if2_enq_bundle),
+        .i_enq_next_pc   (if2_enq_next_pc),
+        .o_prediction    (if2_prediction),
+        .i_train         (train),
+        .i_train_pc      (train_pc),
+        .i_train_counter (train_counter)
+    );
+
+    // ══════════════════════════════════════════════════════════
     // Fetch buffer -- elastic IF2 -> ID decoupling (breaks the stall path)
     // ══════════════════════════════════════════════════════════
     // The back-end stall reaches only the dequeue side; IF2 back-pressures on
     // the buffer's registered o_enq_ready instead, so a back-end stall never
     // reaches o_fetch_en combinationally.
-    // Fetch predicts every slot not taken: it runs on at the next PC, and EX
-    // redirects each taken transfer.
-    prediction_t if2_prediction;
-    assign if2_prediction = '{taken: 1'b0, target: 32'b0};
-
     penumbra3_fetch_buffer #(.PAYLOAD_W(FBUF_W), .DEPTH(2)) u_fbuf (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_flush(if_flush),
@@ -399,6 +437,7 @@ module penumbra3_core
         // Branch resolution: the redirect to the front end, the outcome to the trace.
         .o_redirect(ex_redirect), .o_redirect_pc(ex_redirect_pc),
         .o_branch_taken(branch_taken), .o_branch_target(branch_target),
+        .o_train(train), .o_train_pc(train_pc), .o_train_counter(train_counter),
         // Exception entry / return / WRSYS resync -> the front end.
         .o_fault_commit(fault_commit), .o_fault_vec(fault_vec), .o_epc(epc),
         .o_eret_commit(eret_commit),
@@ -489,6 +528,18 @@ module penumbra3_core
     assert property (@(posedge i_clk) disable iff (i_rst)
         !(if2_miss && vecf_req))
         else $error("penumbra3_core: a miss and the vector read in one cycle");
+
+    // IF1 steers by a prediction exactly as its slot leaves IF2, so the slot
+    // EX verifies is the one fetch was steered behind. A steer nothing
+    // outranks belongs to a slot that enqueues ...
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (if1_valid && fbuf_enq_ready && if2_prediction.taken && !if2_flush) |-> if2_enq_fire)
+        else $error("penumbra3_core: a prediction steered fetch from a slot that did not enqueue");
+    // ... and a slot that enqueues predicted taken was steered behind: every
+    // steer IF1 ranks above the prediction also discards IF2's slot.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (if2_enq_fire && if2_prediction.taken) |-> !(if1_redirect || fault_commit))
+        else $error("penumbra3_core: a slot enqueued predicted taken under a steer that outranks it");
 
     // The front end holds no lookup across an access: the replay or a flush
     // discards the slot behind it. So the L1-I's busy ends with its done.

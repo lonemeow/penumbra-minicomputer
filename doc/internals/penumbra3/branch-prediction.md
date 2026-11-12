@@ -1,6 +1,6 @@
 # Penumbra/3 — Branch prediction: measurements and design
 
-> **Applies to:** Penumbra/3 · front end (in design).
+> **Applies to:** Penumbra/3 · front end.
 
 gen3 resolves every control transfer in EX, and the front end can
 redirect fetch earlier in two places: at fetch, from a branch target
@@ -172,6 +172,11 @@ fetch FIFO, where the back-end stall does not reach.
   redirect, a fault, `ERET`, a `WRSYS` resync, the vector fetch or a
   miss's replay discards predicts nothing, so the predicted redirect is
   the last of IF1's steers.
+- **The predictor only predicts; IF1 steers.** IF1 acts on a slot's
+  prediction in the cycle the slot leaves IF2 for the fetch buffer, never
+  while it waits there for room: the steer bubbles the IF1/IF2 register,
+  and a waiting slot is still in it. So a slot leaves predicted taken
+  exactly when fetch was steered behind it.
 - **Each slot carries its prediction** through the fetch buffer and ID
   to EX: whether the front end redirected behind it, the target it
   redirected to, and the counter it was predicted with.

@@ -10,6 +10,11 @@
 //   - a redirect while held steers PC but holds the target's launch until
 //     the hold falls, then launches from the steered PC
 //   - i_fetch_stop freezes PC at the boundary and bubbles the output
+//   - a slot predicted taken steers PC and bubbles the fetch behind it, as a
+//     redirect does, as the slot leaves: never with no valid slot in the
+//     IF1/IF2 register, never while the slot waits for room in the fetch
+//     buffer, but under a hold of another cause; a redirect in the same
+//     cycle outranks it
 
 #include <cstdio>
 #include <cstdint>
@@ -31,6 +36,7 @@ static void tick(Vpenumbra3_if1_stage* dut) {
 static void clear(Vpenumbra3_if1_stage* dut) {
     dut->i_stall_in = 0;
     dut->i_redirect = 0; dut->i_redirect_pc = 0;
+    dut->i_predict_taken = 0; dut->i_predict_pc = 0; dut->i_enq_ready = 1;
     dut->i_flush = 0; dut->i_fetch_stop = 0;
 }
 
@@ -108,6 +114,65 @@ int main(int argc, char** argv) {
     dut->i_fetch_stop = 0; dut->eval();
     tick(dut); dut->eval();
     check("fs_resume",   dut->o_pc, boundary);
+
+    // ── Predicted taken: steer + bubble, as a redirect ───────────
+    dut->i_predict_taken = 1; dut->i_predict_pc = 0x300; dut->eval();
+    check("pred_en",     dut->o_fetch_en, 1);
+    tick(dut);
+    dut->i_predict_taken = 0; dut->eval();
+    check("pred_addr",   dut->o_fetch_addr, 0x300);
+    check("pred_bub",    dut->o_valid, 0);          // the fetch behind the transfer
+    tick(dut); dut->eval();
+    check("pred_pc",     dut->o_pc, 0x300);
+    check("pred_valid",  dut->o_valid, 1);
+
+    // A redirect in the same cycle discards the transfer the prediction came
+    // from, so its target wins.
+    dut->i_predict_taken = 1; dut->i_predict_pc = 0x400;
+    dut->i_redirect = 1; dut->i_redirect_pc = 0x500; dut->eval();
+    tick(dut);
+    dut->i_predict_taken = 0; dut->i_redirect = 0; dut->eval();
+    check("pred_outranked_addr", dut->o_fetch_addr, 0x500);
+    check("pred_outranked_bub",  dut->o_valid, 0);
+
+    // With no valid slot in the register, a prediction is for a discarded
+    // fetch: the L1-I still answers for the fetch the redirect bubbled.
+    dut->i_predict_taken = 1; dut->i_predict_pc = 0x600; dut->eval();
+    tick(dut);
+    dut->i_predict_taken = 0; dut->eval();
+    check("pred_no_slot_addr",  dut->o_fetch_addr, 0x504);  // advanced, not steered
+    check("pred_no_slot_pc",    dut->o_pc, 0x500);
+    check("pred_no_slot_valid", dut->o_valid, 1);
+
+    // A slot waiting for room keeps its place (IF2 holds IF1 meanwhile), and
+    // steers fetch as it leaves.
+    dut->i_stall_in = 1; dut->i_enq_ready = 0;
+    dut->i_predict_taken = 1; dut->i_predict_pc = 0x700; dut->eval();
+    tick(dut); dut->eval();
+    check("pred_wait_addr",  dut->o_fetch_addr, 0x504);     // not steered
+    check("pred_wait_pc",    dut->o_pc, 0x500);             // the slot kept
+    check("pred_wait_valid", dut->o_valid, 1);
+    dut->i_stall_in = 0; dut->i_enq_ready = 1; dut->eval();
+    tick(dut);
+    dut->i_predict_taken = 0; dut->eval();
+    check("pred_leave_addr", dut->o_fetch_addr, 0x700);
+    check("pred_leave_bub",  dut->o_valid, 0);
+    tick(dut); dut->eval();
+    check("pred_leave_pc",   dut->o_pc, 0x700);
+
+    // Held for another cause with room, the slot leaves, so it steers; the
+    // target's launch waits for the hold, as a redirect's does.
+    dut->i_stall_in = 1;
+    dut->i_predict_taken = 1; dut->i_predict_pc = 0x800; dut->eval();
+    check("pred_held_en",    dut->o_fetch_en, 0);
+    tick(dut);
+    dut->i_predict_taken = 0; dut->eval();
+    check("pred_held_addr",  dut->o_fetch_addr, 0x800);
+    check("pred_held_bub",   dut->o_valid, 0);
+    dut->i_stall_in = 0; dut->eval();
+    tick(dut); dut->eval();
+    check("pred_held_pc",    dut->o_pc, 0x800);
+    check("pred_held_valid", dut->o_valid, 1);
 
     printf("%s: %d/%d checks passed\n",
            errors ? "FAIL" : "PASS", tests - errors, tests);

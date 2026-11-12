@@ -15,6 +15,14 @@
 //     -- but its launch follows the normal hold gate: the read fires the cycle
 //     the hold falls, from the steered PC.
 //
+//   - Predicted transfer (i_predict_taken): the branch predictor calls the
+//     slot in the IF1/IF2 register a taken transfer. As the slot leaves IF2,
+//     IF1 steers PC to the predicted target and bubbles the fetch launched
+//     behind the transfer, as a redirect does. It ranks below i_redirect:
+//     anything else that steers or flushes this cycle discards the slot the
+//     prediction belongs to. Under a fault flush PC is the vector fetch's to
+//     steer, so where the prediction sends it does not matter.
+//
 //   - Fault flush (i_flush): at the fault commit, bubbles the in-flight
 //     (wrong-path) fetch *without* steering PC -- the handler address is not
 //     known yet. The vector-fetch FSM then owns the fetch port for a couple of
@@ -52,6 +60,11 @@ module penumbra3_if1_stage #(
     input  logic        i_redirect,    // steer PC to the target + bubble this fetch
     input  logic [31:0] i_redirect_pc, // redirect target
 
+    // ── Branch prediction for the IF1/IF2 register's slot ────────
+    input  logic        i_predict_taken, // the predictor's, for whatever the L1-I last looked up
+    input  logic [31:0] i_predict_pc,
+    input  logic        i_enq_ready,     // the fetch buffer has room: IF2's slot can leave
+
     // ── Fault flush (from exception entry) ───────────────────────
     input  logic        i_flush,       // bubble the in-flight fetch without steering PC
 
@@ -80,6 +93,19 @@ module penumbra3_if1_stage #(
     assign hold      = i_stall_in;
     assign redirect  = i_redirect;
 
+    // ── Acting on a prediction ───────────────────────────────────
+    // The predictor answers for whatever the L1-I last looked up, and the
+    // L1-I keeps answering for a fetch this register discarded, so a
+    // prediction is the slot's only while the register holds a valid one.
+    // IF1 steers by it as the slot leaves for the fetch buffer, not before:
+    // the steer bubbles this register, and while the slot waits for room the
+    // register is the slot. The hold is no stand-in for the room: it has
+    // causes of its own under which the slot still leaves, and a slot that
+    // leaves predicted taken has to have steered fetch, or EX trusts a steer
+    // that never happened.
+    logic predict;
+    assign predict = o_valid && i_enq_ready && i_predict_taken;
+
     // Drive the current PC to the I-cache BRAM every cycle. The BRAM read
     // advances only when the fetch does, so under stall the registered output
     // freezes in lockstep with the IF1/IF2 register below. The launch gate is
@@ -90,15 +116,18 @@ module penumbra3_if1_stage #(
     assign o_fetch_en   = ~hold;
 
     // ── PC register ──────────────────────────────────────────────
-    // Priority: a redirect steers PC; otherwise a back-pressure hold or an
-    // interrupt-drain fetch-stop freezes it (the fetch-stop at the boundary,
-    // which the interrupt unit captures as EPC); otherwise advance sequentially.
+    // Priority: a redirect steers PC, then a prediction; otherwise a
+    // back-pressure hold or an interrupt-drain fetch-stop freezes it (the
+    // fetch-stop at the boundary, which the interrupt unit captures as EPC);
+    // otherwise advance sequentially.
     always_ff @(posedge i_clk) begin
         if (i_rst)
             pc <= RESET_PC;
         else begin
             if (redirect)
                 pc <= i_redirect_pc;
+            else if (predict)
+                pc <= i_predict_pc;
             else if (hold || i_fetch_stop)
                 pc <= pc;
             else
@@ -115,7 +144,7 @@ module penumbra3_if1_stage #(
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             o_valid <= 1'b0;
-        end else if (redirect || i_flush) begin
+        end else if (redirect || i_flush || predict) begin
             o_valid <= 1'b0;            // discard the in-flight fetch
         end else if (!hold) begin
             if (i_fetch_stop) begin
@@ -133,11 +162,17 @@ module penumbra3_if1_stage #(
     end
 
     // ── Assertions (sim-only; stripped at synth) ─────────────────
-    // A redirect or fault flush discards the in-flight fetch unconditionally --
-    // the IF1/IF2 slot is a bubble the next cycle.
+    // A redirect, a fault flush or a prediction acted on discards the
+    // in-flight fetch unconditionally -- the IF1/IF2 slot is a bubble the
+    // next cycle.
     assert property (@(posedge i_clk) disable iff (i_rst)
-        (redirect || i_flush) |=> !o_valid)
+        (redirect || i_flush || predict) |=> !o_valid)
         else $error("penumbra3_if1_stage: redirect/flush did not bubble the IF1/IF2 slot");
+    // A slot waiting for room is never discarded by its own prediction: it
+    // stays in the register until it can leave.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (o_valid && !i_enq_ready && hold && !redirect && !i_flush) |=> o_valid && $stable(o_pc))
+        else $error("penumbra3_if1_stage: a slot waiting for room was dropped");
     // An interrupt-drain fetch-stop bubbles the slot only when it is advancing
     // (~hold); under back-pressure the slot holds so its valid instruction is
     // drained, not dropped.

@@ -79,6 +79,9 @@ module penumbra3_spine_test
     output logic [31:0] o_redirect_pc,
     output logic        o_branch_taken,
     output logic [31:0] o_branch_target,
+    output logic        o_train,
+    output logic [31:0] o_train_pc,
+    output dir_counter_t o_train_counter,
     output logic        o_fault_commit,
     output logic [3:0]  o_fault_vec,
     output logic [31:0] o_epc,
@@ -187,7 +190,7 @@ module penumbra3_spine_test
     // Every slot arrives predicted not taken, as from a front end that
     // predicts nothing: each taken transfer is EX's redirect.
     prediction_t prediction;
-    assign prediction = '{taken: 1'b0, target: 32'b0};
+    assign prediction = '{taken: 1'b0, target: 32'b0, counter: '0};
 
     penumbra3_spine u_spine (
         .i_clk(i_clk), .i_rst(i_rst),
@@ -219,6 +222,7 @@ module penumbra3_spine_test
         .o_sys_wdata(o_sys_wdata),
         .o_redirect(o_redirect), .o_redirect_pc(o_redirect_pc),
         .o_branch_taken(o_branch_taken), .o_branch_target(o_branch_target),
+        .o_train(o_train), .o_train_pc(o_train_pc), .o_train_counter(o_train_counter),
         .o_fault_commit(o_fault_commit), .o_fault_vec(o_fault_vec), .o_epc(o_epc),
         .o_eret_commit(o_eret_commit),
         .o_wrsys_resync(o_wrsys_resync), .o_wrsys_resync_pc(o_wrsys_resync_pc),

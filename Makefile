@@ -401,6 +401,7 @@ MODULE_TESTS = \
     penumbra3_predecode \
     penumbra3_return_stack \
     penumbra3_direction_table \
+    penumbra3_branch_predictor_test:tb_penumbra3_branch_predictor \
     video_pattern_test \
     video_tmds_encoder \
     video_serializer \

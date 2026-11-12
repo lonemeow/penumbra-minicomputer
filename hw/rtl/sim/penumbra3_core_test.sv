@@ -61,6 +61,12 @@ module penumbra3_core_test
     output logic                o_branch_taken,
     output logic [31:0]         o_branch_target,
     output logic [31:0]         o_branch_pc,
+    // Inside the core, for the predictor's cases: EX's redirect (a
+    // mispredict, of the transfer at o_branch_pc) and IF1's steer by a
+    // prediction (of the slot at o_predict_pc), each a cycle's pulse.
+    output logic                o_mispredict,
+    output logic                o_predict,
+    output logic [31:0]         o_predict_pc,
     output logic [31:0]         o_ex_pc,
     output logic                o_ex_valid,
     output logic [31:0]         o_mem_pc,
@@ -226,5 +232,9 @@ module penumbra3_core_test
         .o_mem_valid              (o_mem_valid)
     );
     /* verilator lint_on PINCONNECTEMPTY */
+
+    assign o_mispredict = u_core.ex_redirect;
+    assign o_predict    = u_core.u_if1.predict && !u_core.if1_redirect;
+    assign o_predict_pc = u_core.if1_pc;
 
 endmodule

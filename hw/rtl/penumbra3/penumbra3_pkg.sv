@@ -192,6 +192,24 @@ package penumbra3_pkg;
     logic        priv_op;        // supervisor-only op (ID checks live mode)
   } ctrl_bundle_t;
 
+  // ── Direction counters ───────────────────────────────────────────
+  // The direction table holds saturating counters, and one in the upper half
+  // predicts taken. Its width is set here alone: the table, the prediction
+  // each slot carries and EX's training all hold a dir_counter_t, and read
+  // or step one only through these functions.
+  localparam int DIR_COUNTER_BITS = 2;
+  typedef logic [DIR_COUNTER_BITS-1:0] dir_counter_t;
+
+  function automatic logic dir_counter_taken(dir_counter_t counter);
+    return counter[DIR_COUNTER_BITS-1];
+  endfunction
+
+  // One place toward the outcome, saturating at either end.
+  function automatic dir_counter_t dir_counter_step(dir_counter_t counter, logic taken);
+    if (taken) return (counter == '1) ? counter : counter + 1'b1;
+    else       return (counter == '0) ? counter : counter - 1'b1;
+  endfunction
+
   // ── Branch prediction carried with a slot ────────────────────────
   // What the front end predicted for a slot, carried from IF2's enqueue
   // through ID to EX, which verifies it (doc/internals/penumbra3/
@@ -199,10 +217,12 @@ package penumbra3_pkg;
   // target behind the slot; a slot predicted not taken has fetch running on
   // at its next PC, and its target is don't-care. Every slot is one or the
   // other: one the predictor did not recognise is predicted not taken, as
-  // fetch ran on behind it.
+  // fetch ran on behind it. counter is the direction table's for the slot,
+  // which EX steps toward a conditional branch's outcome to train the table.
   typedef struct packed {
-    logic        taken;
-    logic [31:0] target;
+    logic         taken;
+    logic [31:0]  target;
+    dir_counter_t counter;
   } prediction_t;
 
   // ── Datapath payload ─────────────────────────────────────────────

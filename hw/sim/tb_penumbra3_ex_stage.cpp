@@ -15,6 +15,9 @@
 //     transfer's successor -- a direct transfer on its direction, a JMP on its
 //     target too -- and to that successor; a faulting or flushed slot never
 //     redirects
+//   - training: a conditional branch, as it leaves EX, steps its counter one
+//     place toward its outcome, saturating; B, BL, a held, a faulting or a
+//     flushed slot trains nothing
 //   - the divmul peer unit launches, holds EX, and latches both result halves
 //   - the handshake: i_stall_in holds EX/MEM1, i_bubble flushes it
 
@@ -29,7 +32,7 @@ enum { OPC_ALU = 0, OPC_STORE = 2, OPC_DIVMUL = 5 };
 enum { OP_R_ADD = 0, OP_R_MOV = 8, OP_R_MUL = 16, OP_R_WRSYS = 23 };
 // Format-L opcodes
 enum { OP_L_JMP = 11 };
-enum { COND_AL = 0, COND_EQ = 1 };
+enum { COND_AL = 0, COND_EQ = 1, COND_BL = 15 };
 enum { MEM_SZ_WORD = 2 };
 enum { VEC_BUS_FAULT = 0, VEC_ILLEGAL = 7, VEC_ARITH = 10 };
 
@@ -67,7 +70,7 @@ static void clear(Vpenumbra3_ex_stage_test* dut) {
     dut->i_phys_dst = 0; dut->i_phys_dst_we = 0;
     dut->i_phys_dst_aux = 0; dut->i_phys_dst_aux_we = 0;
     dut->i_pc = 0; dut->i_next_pc = 0; dut->i_valid = 0; dut->i_first_cycle = 0;
-    dut->i_pred_taken = 0; dut->i_pred_target = 0;
+    dut->i_pred_taken = 0; dut->i_pred_target = 0; dut->i_pred_counter = 0;
     dut->i_fault_pending = 0; dut->i_fault_vec = 0; dut->i_fault_status = 0;
     dut->i_phys_src_a = 0; dut->i_src_a_fwdable = 0;
     dut->i_phys_src_b = 0; dut->i_src_b_fwdable = 0;
@@ -310,6 +313,51 @@ int main(int argc, char** argv) {
     check("bp_flush_no_redirect", dut->o_redirect, 0);
     dut->i_bubble = 0; dut->i_valid = 0; dut->eval();
     check("bp_bubble_no_redirect", dut->o_redirect, 0);
+
+    // ── Training: a conditional branch steps its counter ─────────
+    // BEQ at 0x2000 with each counter, each way: one place toward the
+    // outcome, held at the ends.
+    struct { int z, counter, stepped; } steps[] = {
+        {1, 0, 1}, {1, 1, 2}, {1, 2, 3}, {1, 3, 3},
+        {0, 3, 2}, {0, 2, 1}, {0, 1, 0}, {0, 0, 0},
+    };
+    for (auto& c : steps) {
+        char n[64];
+        clear(dut);
+        dut->i_ir = enc_b(COND_EQ, 4);
+        dut->i_pc = 0x2000; dut->i_next_pc = 0x2004;
+        dut->i_op_a = 0x2000; dut->i_op_b = 0x10;
+        dut->i_mem2_flags = c.z ? 0x2 : 0x0; dut->i_mem2_writes_flags = 1;
+        dut->i_pred_counter = c.counter;
+        dut->i_valid = 1; dut->eval();
+        snprintf(n, sizeof n, "train_%s_%d", c.z ? "t" : "nt", c.counter);
+        check(n, dut->o_train, 1);
+        check(n, dut->o_train_pc, 0x2000);
+        check(n, dut->o_train_counter, c.stepped);
+    }
+
+    // B and BL never consult the table, so they train nothing.
+    clear(dut);
+    dut->i_ir = enc_b(COND_AL, 4);
+    dut->i_pc = 0x2000; dut->i_op_a = 0x2000; dut->i_op_b = 0x10;
+    dut->i_valid = 1; dut->eval();
+    check("train_b_none", dut->o_train, 0);
+    dut->i_ir = enc_b(COND_BL, 4); dut->eval();
+    check("train_bl_none", dut->o_train, 0);
+
+    // A branch held in EX trains once, as it leaves; a faulting or flushed
+    // one never does.
+    clear(dut);
+    dut->i_ir = enc_b(COND_EQ, 4);
+    dut->i_pc = 0x2000; dut->i_op_a = 0x2000; dut->i_op_b = 0x10;
+    dut->i_valid = 1; dut->i_stall_in = 1; dut->eval();
+    check("train_held_none", dut->o_train, 0);
+    dut->i_stall_in = 0; dut->eval();
+    check("train_held_leaves", dut->o_train, 1);
+    dut->i_fault_pending = 1; dut->eval();
+    check("train_fault_none", dut->o_train, 0);
+    dut->i_fault_pending = 0; dut->i_bubble = 1; dut->eval();
+    check("train_flush_none", dut->o_train, 0);
 
     // ── divmul: launch, hold, latch both halves ──────────────────
     clear(dut);

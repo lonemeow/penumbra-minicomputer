@@ -31,6 +31,7 @@ module penumbra3_ex_stage_test
     input  logic [31:0]           i_next_pc,
     input  logic                  i_pred_taken,
     input  logic [31:0]           i_pred_target,
+    input  dir_counter_t          i_pred_counter,
     input  logic                  i_valid,
     input  logic                  i_first_cycle,
     input  logic                  i_fault_pending,
@@ -75,6 +76,9 @@ module penumbra3_ex_stage_test
     output logic [31:0]           o_redirect_pc,
     output logic                  o_branch_taken,
     output logic [31:0]           o_branch_target,
+    output logic                  o_train,
+    output logic [31:0]           o_train_pc,
+    output dir_counter_t          o_train_counter,
 
     output logic [3:0]            o_mem1_op_class,
     output logic [31:0]           o_mem1_result,
@@ -109,7 +113,8 @@ module penumbra3_ex_stage_test
     );
 
     prediction_t prediction;
-    assign prediction = '{taken: i_pred_taken, target: i_pred_target};
+    assign prediction = '{taken: i_pred_taken, target: i_pred_target,
+                          counter: i_pred_counter};
 
     penumbra3_ex_stage u_ex (
         .i_clk                  (i_clk),
@@ -164,6 +169,9 @@ module penumbra3_ex_stage_test
         .o_redirect_pc          (o_redirect_pc),
         .o_branch_taken         (o_branch_taken),
         .o_branch_target        (o_branch_target),
+        .o_train                (o_train),
+        .o_train_pc             (o_train_pc),
+        .o_train_counter        (o_train_counter),
         .o_mem1_bundle          (mem1_bundle),
         .o_mem1_payload         (mem1_payload),
         .o_mem1_store_data      (o_mem1_store_data),

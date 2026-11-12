@@ -26,6 +26,13 @@
 //     registers
 //   - each line read once; the L1's counters seeing one miss per read
 //   - a slot held for FIFO room, its L1 lookup standing
+//   - a counted loop: its BNE mispredicted while its counter trains and at
+//     the exit, predicted taken between; with the L1 off nothing is
+//     predicted and EX redirects behind every taken BNE
+//   - calls and returns predicted from the word and the return stack, never
+//     mispredicted
+//   - a BNE predicted taken while it waits in IF2 for FIFO room, not
+//     discarded
 //
 // ERET and WRSYS-resync redirects share the same composition arm as the branch
 // and vector-fetch cases and are exercised at the machine + program-suite level
@@ -44,8 +51,9 @@ typedef Vpenumbra3_core_test Dut;
 enum { OP_R_ADD = 0, OP_R_RESERVED = 12, OP_R_MUL = 16, OP_R_EI = 28, OP_R_RDSPR = 31 };
 enum { SPR_EPC = 1 };
 enum { OPC_ALU = 0, OPC_EI = 11 };   // op_class_e
-enum { OP_L_LLI = 0, OP_L_ADDI = 3 };
-enum { COND_AL = 0 };
+enum { OP_L_LLI = 0, OP_L_ADDI = 3, OP_L_SUBI = 4, OP_L_JMP = 11 };
+enum { COND_AL = 0, COND_NE = 2, COND_BL = 15 };
+enum { REG_LR = 13 };
 enum { VEC_BUS_FAULT = 0, VEC_ILLEGAL = 7, VEC_EXT_IRQ = 9 };
 enum { FAULT_BUS = 4, FAULT_DEFERRED_BUS = 5, FSTAT_W = 1 << 9, FSTAT_X = 1 << 10 };
 // Cache device registers
@@ -111,6 +119,8 @@ struct Trace {
     std::vector<Branch>   branches;                  // each taken branch
     std::vector<uint32_t> retire_ops, retire_srs;    // each retirement's
     std::vector<uint32_t> dc_pcs, dc_ops;            // each drain-commit's
+    std::vector<uint32_t> predicted;      // each slot fetch was steered behind by its prediction
+    std::vector<uint32_t> mispredicted;   // each transfer EX redirected fetch behind
     uint32_t mmu_faults = 0, fault_vaddr = 0, fault_status = 0;
 };
 
@@ -188,6 +198,8 @@ static void run(Dut* dut, const Config& cfg, int max_cycles, Trace& t) {
             t.retire_ops.push_back(dut->o_retire_op_class);
             t.retire_srs.push_back(dut->o_retire_sr);
         }
+        if (dut->o_predict)    t.predicted.push_back(dut->o_predict_pc);
+        if (dut->o_mispredict) t.mispredicted.push_back(dut->o_branch_pc);
         if (dut->o_dc_commit) {
             t.dc_pcs.push_back(dut->o_dc_commit_pc);
             t.dc_ops.push_back(dut->o_dc_commit_op_class);
@@ -226,6 +238,11 @@ static uint32_t reqs_of_line(const Trace& t, uint32_t a) {
 static uint32_t reqs_of_cacheable(const Trace& t, int cacheable) {
     uint32_t n = 0;
     for (const Req& r : t.reqs) n += r.cacheable == cacheable;
+    return n;
+}
+static uint32_t count_pc(const std::vector<uint32_t>& pcs, uint32_t pc) {
+    uint32_t n = 0;
+    for (uint32_t p : pcs) n += p == pc;
     return n;
 }
 static bool committed(const Trace& t, uint32_t idx, uint32_t data) {
@@ -476,6 +493,123 @@ int main(int argc, char** argv) {
         }
         check("df_mid_stream", ran > 0 && ran < n_insns, 1);
         check("df_epc", epc, base + 4 * ran);
+    }
+
+    // ── A counted loop: the branch back predicted once trained ───
+    // SUBI sets the flags BNE reads. The direction table starts strongly
+    // not taken, so the BNE mispredicts twice while its counter climbs, is
+    // predicted taken from then on, and mispredicts once more at the exit.
+    // With the L1 off nothing hits, so nothing is predicted and EX redirects
+    // behind every taken BNE.
+    {
+        const uint32_t N = 8;
+        g_rom.clear();
+        uint32_t b = RESET_PC;
+        load(b, {
+            enc_l(OP_L_LLI,  2, N),                  // +0x00  R2 = N
+            enc_l(OP_L_LLI,  3, 0),                  // +0x04  R3 = 0
+            enc_l(OP_L_ADDI, 3, 1),                  // +0x08  loop: R3 += 1
+            enc_l(OP_L_LLI,  5, 0x55),               // +0x0C
+            enc_l(OP_L_SUBI, 2, 1),                  // +0x10  R2 -= 1, flags
+            enc_b_to(b + 0x14, b + 0x08, COND_NE),   // +0x14  BNE loop
+            enc_l(OP_L_LLI,  4, 0x44),               // +0x18  after the loop
+        });
+        const uint32_t bne = b + 0x14;
+        std::vector<Commit> exp = {{2, N}, {3, 0}};
+        for (uint32_t i = 1; i <= N; i++) {
+            exp.push_back({3, i});
+            exp.push_back({5, 0x55});
+            exp.push_back({2, N - i});
+        }
+        exp.push_back({4, 0x44});
+
+        Trace t;
+        run(dut, cached, 400, t);
+        check_commits("c_loop", t.commits, exp);
+        check("c_loop_mispredicts", count_pc(t.mispredicted, bne), 3);
+        check("c_loop_predicted",   count_pc(t.predicted, bne), N - 2);
+
+        Trace u;
+        run(dut, uncached, 1200, u);
+        check_commits("uc_loop", u.commits, exp);
+        check("uc_loop_none_predicted", (uint32_t)u.predicted.size(), 0);
+        check("uc_loop_mispredicts", count_pc(u.mispredicted, bne), N - 1);
+    }
+
+    // ── Calls and returns: predicted from the word and the stack ──
+    // BL redirects from its own word and pushes its next PC; the JMP R13 in
+    // the function returns to the top of the stack. Neither is ever
+    // mispredicted, and each return goes back behind the call it ends.
+    {
+        const uint32_t N = 4;
+        g_rom.clear();
+        uint32_t b = RESET_PC;
+        load(b, {
+            enc_l(OP_L_LLI,  2, N),                  // +0x00  R2 = N
+            enc_b_to(b + 0x04, b + 0x40, COND_BL),   // +0x04  loop: BL func
+            enc_l(OP_L_SUBI, 2, 1),                  // +0x08  R2 -= 1, flags
+            enc_b_to(b + 0x0C, b + 0x04, COND_NE),   // +0x0C  BNE loop
+            enc_l(OP_L_LLI,  4, 0x44),               // +0x10  after the loop
+        });
+        load(b + 0x40, {
+            enc_l(OP_L_LLI, 3, 0x33),                // +0x40  func
+            enc_l(OP_L_JMP, REG_LR, 0),              // +0x44  RET
+        });
+        const uint32_t bl = b + 0x04, ret = b + 0x44;
+        std::vector<Commit> exp = {{2, N}};
+        for (uint32_t i = 1; i <= N; i++) {
+            exp.push_back({REG_LR, b + 0x08});
+            exp.push_back({3, 0x33});
+            exp.push_back({2, N - i});
+        }
+        exp.push_back({4, 0x44});
+
+        Trace t;
+        run(dut, cached, 600, t);
+        check_commits("call", t.commits, exp);
+        check("call_bl_predicted",     count_pc(t.predicted, bl), N);
+        check("call_bl_mispredicts",   count_pc(t.mispredicted, bl), 0);
+        check("call_ret_predicted",    count_pc(t.predicted, ret), N);
+        check("call_ret_mispredicts",  count_pc(t.mispredicted, ret), 0);
+    }
+
+    // ── A predicted transfer waiting for FIFO room ───────────────
+    // A MUL holds EX and the fetch buffer fills behind it. Across the
+    // padding, the loop's BNE, trained by its third pass, waits in IF2 for
+    // room while predicted taken. IF1 steers by the prediction only as the
+    // BNE leaves, so the waiting BNE is never discarded.
+    for (int pad = 0; pad <= 4; pad++) {
+        const uint32_t N = 6;
+        char tag[32];
+        snprintf(tag, sizeof(tag), "held_bne_%d", pad);
+        g_rom.clear();
+        uint32_t b = RESET_PC;
+        std::vector<uint32_t> prog = {
+            enc_l(OP_L_LLI, 2, N),                   // R2 = N
+            enc_l(OP_L_LLI, 7, 5),                   // R7 = 5
+            enc_l(OP_L_LLI, 6, 3),                   // loop: R6 = 3
+            enc_r(OP_R_MUL, 6, 7, 0) | (9 << 12),    // R6 = lo = 15, R9 = hi = 0
+        };
+        for (int k = 0; k < pad; k++) prog.push_back(enc_l(OP_L_LLI, 5, 0x55));
+        prog.push_back(enc_l(OP_L_SUBI, 2, 1));      // R2 -= 1, flags
+        uint32_t bne = b + 4 * prog.size();
+        prog.push_back(enc_b_to(bne, b + 0x08, COND_NE));
+        prog.push_back(enc_l(OP_L_LLI, 4, 0x44));
+        load(b, prog);
+
+        std::vector<Commit> exp = {{2, N}, {7, 5}};
+        for (uint32_t i = 1; i <= N; i++) {
+            exp.push_back({6, 3});
+            exp.push_back({6, 15});
+            exp.push_back({9, 0});
+            for (int k = 0; k < pad; k++) exp.push_back({5, 0x55});
+            exp.push_back({2, N - i});
+        }
+        exp.push_back({4, 0x44});
+
+        Trace t;
+        run(dut, cached, 1200, t);
+        check_commits(tag, t.commits, exp);
     }
 
     printf("%s: %d/%d checks passed\n",

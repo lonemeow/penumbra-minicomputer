@@ -98,13 +98,11 @@ Open:
 The gen3 machine passes `isa/` and boots NetBSD, so phases 0, 1 and 3
 of its build plan are done (`doc/internals/penumbra3/overview.md`,
 "Build plan"); the machine landed in `0d7e47c`, its board tops in
-`94682ef` and `09e8433`. What remains is feature work, in the order
-the overview ranks it ("Levers ranked by measured benefit"): branch
-prediction (phase 2), then the store buffer (phase 4), then the staged
-levers. The prediction leaves, `penumbra3_direction_table`,
-`penumbra3_predecode` and `penumbra3_return_stack`, were written and
-unit-tested for the P0.5 probe; nothing in the core instantiates them
-yet.
+`94682ef` and `09e8433`. Branch prediction (phase 2) is in the core:
+the IF2 pre-decode, the direction table trained from EX and the return
+stack. What remains is feature work, in the order the overview ranks
+it ("Levers ranked by measured benefit"): the store buffer (phase 4),
+then the staged levers.
 
 Each lever is read against a full-top seed sweep. The current one, the
 ULX3S top with the line SDRAM stack and no floorplan, the placement

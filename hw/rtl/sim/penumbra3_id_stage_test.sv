@@ -19,6 +19,7 @@ module penumbra3_id_stage_test
     input  logic [31:0]           i_next_pc,
     input  logic                  i_pred_taken,
     input  logic [31:0]           i_pred_target,
+    input  dir_counter_t          i_pred_counter,
     input  logic                  i_valid,
     input  logic                  i_if_fault_pending,
     input  logic [3:0]            i_if_fault_vec,
@@ -66,6 +67,7 @@ module penumbra3_id_stage_test
     output logic [31:0]           o_ex_next_pc,
     output logic                  o_ex_pred_taken,
     output logic [31:0]           o_ex_pred_target,
+    output dir_counter_t          o_ex_pred_counter,
     output logic                  o_ex_valid,
     output logic                  o_ex_first_cycle,
     output logic                  o_ex_fault_pending,
@@ -87,9 +89,11 @@ module penumbra3_id_stage_test
     );
 
     prediction_t prediction, ex_prediction;
-    assign prediction = '{taken: i_pred_taken, target: i_pred_target};
-    assign o_ex_pred_taken  = ex_prediction.taken;
-    assign o_ex_pred_target = ex_prediction.target;
+    assign prediction = '{taken: i_pred_taken, target: i_pred_target,
+                          counter: i_pred_counter};
+    assign o_ex_pred_taken   = ex_prediction.taken;
+    assign o_ex_pred_target  = ex_prediction.target;
+    assign o_ex_pred_counter = ex_prediction.counter;
 
     penumbra3_id_stage u_id (
         .i_clk               (i_clk),
