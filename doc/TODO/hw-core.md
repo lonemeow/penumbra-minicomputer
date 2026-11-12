@@ -99,25 +99,24 @@ The gen3 machine passes `isa/` and boots NetBSD, so phases 0, 1 and 3
 of its build plan are done (`doc/internals/penumbra3/overview.md`,
 "Build plan"); the machine landed in `0d7e47c`, its board tops in
 `94682ef` and `09e8433`. Branch prediction (phase 2) landed in
-`e52f1d1` and `82df95c`: the IF2 pre-decode, the direction table
-trained from EX and the return stack. What remains is feature work, in
-the order the overview ranks it ("Levers ranked by measured benefit"):
-the store buffer (phase 4), then the staged levers.
+`e52f1d1`, `82df95c` and `b97050e`: the IF2 pre-decode, the direction
+table trained from EX and the return stack. What remains is feature
+work, in the order the overview ranks it ("Levers ranked by measured
+benefit"): the store buffer (phase 4), then the staged levers.
 
 Each lever is read against a full-top seed sweep. The current one, with
 branch prediction in, is of the ULX3S top with the line SDRAM stack and
 no floorplan, the placement choices taken over from gen2: 8 of 10 seeds
 close at 37.5 MHz, where all 10 closed before prediction, and the CPU
-clock is the worst domain on 9. Its critical path is MEM2's on 2 of
-them -- the D-TLB's word through the TLB match, the L1-D's tag compare
-and way select and the byte extract into MEM2's writeback payload --
-and the fetch side's on the other 8, with 58-66% of it routing: the
-L1-I data word through the way select and decode-on-enqueue into the
-fetch buffer's write (2) or into the return stack's pop (2), and the
-I-TLB's VPN word through the TLB match, the L1-I's way hit and the
-prediction into the IF1/IF2 register's load enable (4). IF1's hold is
-the worst path on none. The next lever's sweep is read against this
-one.
+clock is the worst domain on 8. Its critical path is the fetch side's
+on 5 of them -- the I-TLB's VPN word or the L1-I data word through the
+way select and decode-on-enqueue into the return stack's pop -- the D
+side's on 4 -- the D-TLB's word through the TLB match and the L1-D's
+tag compare, into MEM2's writeback payload past the way select and the
+byte extract (3) or into the L1-D's held word past the back end's hold
+(1) -- and EX's forwarding loop through the ALU on 1, with 60-73% of
+it routing. IF1's hold is the worst path on none. The next lever's
+sweep is read against this one.
 
 ## Hardware: a gen3 load's reader waits for its regfile write
 
