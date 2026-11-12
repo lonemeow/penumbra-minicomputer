@@ -154,7 +154,8 @@ fetch FIFO, where the back-end stall does not reach.
 - **A 1K-entry bimodal table** of two-bit counters, read beside IF1 and
   used in IF2. EX steps the counter a conditional branch was predicted
   with toward its outcome, and the table takes the new value a cycle
-  later, off the fetch loop.
+  later, off the fetch loop. Training never holds up a read: a fetch
+  that reads the entry in that cycle gets the new value.
 - **A plain return-stack ring,** 4–8 deep, pushed by calls and popped
   by returns as IF2 enqueues them, with no empty check. It updates a
   cycle later, off the redirect's path; a return enqueued the cycle

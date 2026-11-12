@@ -27,8 +27,9 @@
 //   - each line read once; the L1's counters seeing one miss per read
 //   - a slot held for FIFO room, its L1 lookup standing
 //   - a counted loop: its BNE mispredicted while its counter trains and at
-//     the exit, predicted taken between; with the L1 off nothing is
-//     predicted and EX redirects behind every taken BNE
+//     the exit, predicted taken between, also in a body short enough that
+//     the BNE's read meets its own training write; with the L1 off nothing
+//     is predicted and EX redirects behind every taken BNE
 //   - calls and returns predicted from the word and the return stack, never
 //     mispredicted
 //   - a BNE predicted taken while it waits in IF2 for FIFO room, not
@@ -499,41 +500,52 @@ int main(int argc, char** argv) {
     // SUBI sets the flags BNE reads. The direction table starts strongly
     // not taken, so the BNE mispredicts twice while its counter climbs, is
     // predicted taken from then on, and mispredicts once more at the exit.
-    // With the L1 off nothing hits, so nothing is predicted and EX redirects
-    // behind every taken BNE.
-    {
+    // In the three-instruction body the BNE is fetched again as its previous
+    // pass trains its entry, so its read meets that write. With the L1 off
+    // nothing hits, so nothing is predicted and EX redirects behind every
+    // taken BNE.
+    for (int len = 3; len <= 4; len++) {
         const uint32_t N = 8;
+        char tag[32];
         g_rom.clear();
         uint32_t b = RESET_PC;
-        load(b, {
-            enc_l(OP_L_LLI,  2, N),                  // +0x00  R2 = N
-            enc_l(OP_L_LLI,  3, 0),                  // +0x04  R3 = 0
-            enc_l(OP_L_ADDI, 3, 1),                  // +0x08  loop: R3 += 1
-            enc_l(OP_L_LLI,  5, 0x55),               // +0x0C
-            enc_l(OP_L_SUBI, 2, 1),                  // +0x10  R2 -= 1, flags
-            enc_b_to(b + 0x14, b + 0x08, COND_NE),   // +0x14  BNE loop
-            enc_l(OP_L_LLI,  4, 0x44),               // +0x18  after the loop
-        });
-        const uint32_t bne = b + 0x14;
+        std::vector<uint32_t> prog = {
+            enc_l(OP_L_LLI,  2, N),                  // R2 = N
+            enc_l(OP_L_LLI,  3, 0),                  // R3 = 0
+            enc_l(OP_L_ADDI, 3, 1),                  // loop: R3 += 1
+        };
+        if (len == 4) prog.push_back(enc_l(OP_L_LLI, 5, 0x55));
+        prog.push_back(enc_l(OP_L_SUBI, 2, 1));      // R2 -= 1, flags
+        const uint32_t bne = b + 4 * prog.size();
+        prog.push_back(enc_b_to(bne, b + 0x08, COND_NE));
+        prog.push_back(enc_l(OP_L_LLI, 4, 0x44));    // after the loop
+        load(b, prog);
+
         std::vector<Commit> exp = {{2, N}, {3, 0}};
         for (uint32_t i = 1; i <= N; i++) {
             exp.push_back({3, i});
-            exp.push_back({5, 0x55});
+            if (len == 4) exp.push_back({5, 0x55});
             exp.push_back({2, N - i});
         }
         exp.push_back({4, 0x44});
 
         Trace t;
         run(dut, cached, 400, t);
-        check_commits("c_loop", t.commits, exp);
-        check("c_loop_mispredicts", count_pc(t.mispredicted, bne), 3);
-        check("c_loop_predicted",   count_pc(t.predicted, bne), N - 2);
+        snprintf(tag, sizeof(tag), "c_loop%d", len);
+        check_commits(tag, t.commits, exp);
+        snprintf(tag, sizeof(tag), "c_loop%d_mispredicts", len);
+        check(tag, count_pc(t.mispredicted, bne), 3);
+        snprintf(tag, sizeof(tag), "c_loop%d_predicted", len);
+        check(tag, count_pc(t.predicted, bne), N - 2);
 
         Trace u;
         run(dut, uncached, 1200, u);
-        check_commits("uc_loop", u.commits, exp);
-        check("uc_loop_none_predicted", (uint32_t)u.predicted.size(), 0);
-        check("uc_loop_mispredicts", count_pc(u.mispredicted, bne), N - 1);
+        snprintf(tag, sizeof(tag), "uc_loop%d", len);
+        check_commits(tag, u.commits, exp);
+        snprintf(tag, sizeof(tag), "uc_loop%d_none_predicted", len);
+        check(tag, (uint32_t)u.predicted.size(), 0);
+        snprintf(tag, sizeof(tag), "uc_loop%d_mispredicts", len);
+        check(tag, count_pc(u.mispredicted, bne), N - 1);
     }
 
     // ── Calls and returns: predicted from the word and the stack ──

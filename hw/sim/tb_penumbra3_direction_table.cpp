@@ -2,8 +2,9 @@
 //
 // A trained counter reads back at every PC that indexes it, the word
 // address selecting; a read lands the cycle after its fetch launches and
-// holds while no fetch launches; a training write suppresses that cycle's
-// read, leaving the previous counter, and the next read sees the write.
+// holds while no fetch launches; a training write in the read's cycle leaves
+// a read of another entry alone and gives a read of its own entry the
+// counter it writes.
 
 #include <cstdio>
 #include <cstdint>
@@ -45,12 +46,24 @@ int main(int argc, char** argv) {
     d->i_fetch_pc = 0x00400104; tick(d); d->eval();
     check("hold", d->o_counter, 3);
 
-    // A training write suppresses the read in its cycle.
+    // A training write to another entry leaves the read in its cycle alone.
+    d->i_read_en = 1; d->i_fetch_pc = 0x00400104;
+    d->i_train_en = 1; d->i_train_index = index_of(0x00400100); d->i_train_counter = 0;
+    tick(d); d->i_read_en = 0; d->i_train_en = 0; d->eval();
+    check("train_other_read",   d->o_counter, 1);
+    check("train_other_landed", read(d, 0x00400100), 0);
+
+    // A training write to the read's own entry gives the read the counter
+    // it writes, held while no fetch launches.
     d->i_read_en = 1; d->i_fetch_pc = 0x00400104;
     d->i_train_en = 1; d->i_train_index = index_of(0x00400104); d->i_train_counter = 2;
     tick(d); d->i_read_en = 0; d->i_train_en = 0; d->eval();
-    check("train_blocks_read", d->o_counter, 3);
-    check("train_landed", read(d, 0x00400104), 2);
+    check("train_same_read", d->o_counter, 2);
+    tick(d); d->eval();
+    check("train_same_hold", d->o_counter, 2);
+    check("train_same_landed", read(d, 0x00400104), 2);
+    // The next read takes the block RAM's result again.
+    check("after_bypass", read(d, 0x00400100), 0);
 
     printf("penumbra3_direction_table: %d/%d checks passed\n", tests - errors, tests);
     if (errors) printf("  *** %d FAILED ***\n", errors);

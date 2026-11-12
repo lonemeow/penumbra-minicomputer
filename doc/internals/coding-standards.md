@@ -111,7 +111,11 @@ Prefix all module ports to distinguish them from internal signals:
       enable. Where it is by address, mark the memory `no_rw_check` and
       assert beside it, on the same enables and addresses, that no
       entry is read and written in one cycle (`penumbra3_l1_store`);
-      never for an exclusion another module keeps.
+      never for an exclusion another module keeps. Where the two may
+      meet but the read then takes the written data from a register
+      beside the block RAM, never its output, mark the memory
+      `no_rw_check` too and assert that such a read gives the written
+      data (`penumbra3_direction_table`).
     - **LUT RAM:** one write port; the read may be combinational. A
       second independent read port gets its own copy of the memory, as
       the regfile's `regs_a`/`regs_b` do.

@@ -9,10 +9,14 @@
 // The counters power up zero (strongly not-taken), as the block RAM
 // configures; a table trains within a few executions of each branch.
 //
-// A training write suppresses that cycle's read, so the RTL states the two
-// ports never meet and synthesis adds no bypass after the EBR. The read
-// output then holds, and IF2 uses the previous fetch's counter: one
-// prediction may be wrong, which EX catches like any other.
+// A training write never holds up the read. When the two meet at one entry
+// -- a short loop's branch fetched again as its previous pass trains it --
+// the read takes the counter being written, from registers beside the block
+// RAM, so the branch is predicted with what it has just learned. The block
+// RAM's own result for that read is never used, which is what lets
+// no_rw_check spare it the read-old-data emulation yosys would otherwise
+// build (a delayed write and a mux on its output); the bypass needs only the
+// written counter and a registered compare of the two indices.
 module penumbra3_direction_table
     import penumbra3_pkg::*;
 #(
@@ -25,7 +29,7 @@ module penumbra3_direction_table
     /* verilator lint_off UNUSEDSIGNAL */
     input  logic [31:0]           i_fetch_pc,    // only the index bits select
     /* verilator lint_on UNUSEDSIGNAL */
-    output dir_counter_t          o_counter,     // registered, beside IF2's word
+    output dir_counter_t          o_counter,     // beside IF2's word
 
     input  logic                  i_train_en,
     input  logic [INDEX_BITS-1:0] i_train_index,
@@ -37,13 +41,32 @@ module penumbra3_direction_table
         .MSG  ("penumbra3_direction_table: ENTRIES must be a power of two")
     ) u_check_entries ();
 
-    (* ram_style = "block" *) dir_counter_t counter_mem [ENTRIES];
+    (* ram_style = "block", no_rw_check *) dir_counter_t counter_mem [ENTRIES];
 
+    logic [INDEX_BITS-1:0] read_index;
+    assign read_index = i_fetch_pc[2 +: INDEX_BITS];
+
+    dir_counter_t ram_counter_q;
+    logic         bypass_q;            // the read met the training write at its entry
+    dir_counter_t bypass_counter_q;    // the counter that write stored
     always_ff @(posedge i_clk) begin
-        if (i_read_en && !i_train_en)
-            o_counter <= counter_mem[i_fetch_pc[2 +: INDEX_BITS]];
+        if (i_read_en) begin
+            ram_counter_q    <= counter_mem[read_index];
+            bypass_q         <= i_train_en && i_train_index == read_index;
+            bypass_counter_q <= i_train_counter;
+        end
         if (i_train_en)
             counter_mem[i_train_index] <= i_train_counter;
     end
+    assign o_counter = bypass_q ? bypass_counter_q : ram_counter_q;
+
+    // ── Assertions (sim-only; Verilator --assert) ─────────────────
+    // The invariant no_rw_check relies on: a read that met the training
+    // write at its entry gives the written counter, never the block RAM's
+    // own result.
+    assert property (@(posedge i_clk)
+        (i_read_en && i_train_en && i_train_index == read_index)
+            |=> o_counter == $past(i_train_counter))
+        else $error("penumbra3_direction_table: a read that met the write took the block RAM's result");
 
 endmodule
