@@ -41,8 +41,7 @@ Two things reach those cycles without changing the ISA:
   not depend on the first.
 
 On `pbench kernel` and Doom, the two together bring the 1000 issue
-cycles that 1000 instructions take down to 668–681, and to 617–635
-with a second load port and one more fusion
+cycles that 1000 instructions take down to 668–681
 ([measured](./issue-pairing.md#fusion-and-dual-issue-together)).
 Fusing an add into the load or store it addresses, the base-plus-index
 access the ISA has no encoding for, takes them to 653 and 521 behind
@@ -72,10 +71,10 @@ graph LR
 
 | | |
 |---|---|
-| **Slots** | X issues simple ALU ops, shifts and moves. Y is a full pipeline. A pair holds at most one branch, one MUL/DIV and, to start with, one memory access. |
+| **Slots** | X issues simple ALU ops, shifts and moves. Y is a full pipeline. A pair holds at most one branch, one MUL and one memory access; a second access would double the TLB's and the L1-D's data reads ([ruled out](./issue-pairing.md#ruled-out)). A DIV issues alone. |
 | **Order** | Either op of a pair may be the older one. Fixing the older op to X costs 44–70 issue cycles per 1000 instructions once ops are fused. |
-| **Lockstep** | Both ops move together, and a pair commits as a unit. Next to a MUL, a DIV or a miss, the other op waits; it would have waited behind it in a single-issue core too, so lockstep never loses against one. |
-| **Exceptions** | Precise, as in every generation. A simple ALU op cannot fault, so the only case is the full pipeline's op faulting: the older op of the pair commits and the younger does not. |
+| **Lockstep** | Both ops move together, and a pair commits as a unit. Next to a MUL or a miss, the other op waits; it would have waited behind it in a single-issue core too, so lockstep never loses against one. |
+| **Exceptions** | Precise, as in every generation. X's ops cannot trap, a pair holds one memory access and a DIV issues alone, so at most one op of a pair traps, and the other commits when it is the older. A fault in a fused access commits the add and saves the access's PC ([precise exceptions](./issue-pairing.md#precise-exceptions)). |
 | **Flags** | Nearly every ALU op writes them. The flag state takes the write of the pair's youngest flag writer, a mux whose select is known at decode. |
 | **Dependencies** | A pair's younger op takes nothing the older op produces that cycle, with one exception: a constant the older op loads, known at decode. The idioms that would need more are fused instead. |
 | **Addressing** | An add fuses into the load or store it addresses: a base plus an index, and the sum written back when a load does not overwrite it. A fused op that writes two registers pairs only with one that writes none. |
@@ -98,9 +97,12 @@ around them:
   instructions a cycle with no bubble after a taken transfer, and the
   fuser has to see across fetches ([front end](./front-end.md)). Issue
   takes 1.5 to 1.9 a cycle on average.
-- **An address adder for the fused accesses,** taking two registers,
+- **An address adder for the fused accesses** in EX, ahead of the
+  registered address the TLB and the cache read, taking two registers,
   and the access's offset as a third input for a pre-incremented one
   ([the address adder](./issue-pairing.md#the-address-adder)).
+- **The MMU and the L1-D keep one data port each:** a pair makes one
+  access ([ruled out](./issue-pairing.md#ruled-out)).
 - **The register file needs two write ports** and four read ports
   ([register file](./regfile.md)).
 - **Forwarding** reaches four operands from the results of two

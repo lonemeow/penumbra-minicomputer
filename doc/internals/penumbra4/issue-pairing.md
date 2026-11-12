@@ -283,6 +283,12 @@ inputs, and gives the `ADD`'s flags from the first two. With two
 inputs (`agu:2` in the model), only an access with no offset fuses,
 and its one sum is both the address and the flags.
 
+The adder sits in EX. gen3 forms an access's address there and
+registers it ahead of the TLB read and the cache index
+([memory stage](../penumbra3/mem-stage.md#stage-contract)), so an
+address fusion changes what EX adds and nothing the MMU reads. With two
+inputs the address is the sum the `ADD` forms anyway.
+
 | Fused per 1000 instructions, alone on one slot | Any offset | No offset |
 |---|---|---|
 | `addmem` | 5.9 / 73.2 | 5.8 / 72.7 |
@@ -329,6 +335,70 @@ seldom reach for the same cycle.
   `addmem` added to the four fusions: 72 against 52 on the kernel
   paths, and 17 against 15 on Doom.
 
+## Precise exceptions
+
+An exception saves the PC of the instruction that faulted, and the
+handler retries it by returning there
+([entry sequence](../../system/architecture.md#entry-sequence)): every
+instruction ahead of it has taken effect, and none from it on. A pair
+has to keep that for its two ops, and a fused op for the two
+instructions inside it.
+
+### A pair
+
+Loads and stores trap (a TLB miss, a protection or alignment fault, a
+bus fault), as do `DIV` with a zero divisor and the system instructions
+([instruction properties](../../system/instruction-set.md#instruction-properties)).
+
+- **At most one op of a pair can trap.** X issues ALU ops, shifts and
+  moves, none of which trap; a pair holds one memory access; system
+  instructions and `DIV` issue alone.
+- **The other op commits when it is the older.** gen3 settles a TLB,
+  protection or alignment fault at MEM2, before any bus transaction
+  and before an op writes anything
+  ([fault precision](../penumbra3/memory-completion.md#fault-precision)),
+  so the verdict gates the pair's register writes, its flag write and
+  its store as a mask of two bits.
+- **The flags' select stays a decode-time mux.** Loads and stores write
+  no flags, so the op that traps is never the pair's youngest flag
+  writer. `DIV` is the one op that both traps and writes the flags, and
+  issuing it alone keeps it so; a partner would save one cycle of the
+  tens it takes.
+- **A bus fault arrives with the access's completion,** after MEM2. The
+  pair holds in MEM2 while the access is pending, as gen3 holds an
+  access and everything younger
+  ([the pipe gate](../penumbra3/memory-completion.md#what-the-pipe-gate-freezes)),
+  and leaves it with the mask applied.
+
+### A fused access
+
+The address fusions are the only ones that hold an instruction that can
+trap, and it is always the second. `lilui`, `cmpbr`, `opbr` and
+`movop` hold none: `movop` takes an ALU op or a shift, never a `MUL` or
+`DIV`.
+
+- **A fault in the access commits the add.** The fused op writes what
+  the `ADD` alone would, its register and its flags, drops the load's
+  write or the store, and saves the access's PC, four past its own.
+  Stores, `addwb` and `incmem` write the sum and the flags in any case.
+  The one new path is `addmem`'s load, which overwrites the add's
+  register: on a fault that register takes the sum in place of the
+  loaded word.
+- **The handler returns to the access,** which runs unfused. The refill
+  handler takes the faulting address from the MMU, never from the
+  instruction.
+- **A fetch fault stops fusion.** An instruction whose fetch faulted
+  fuses with nothing. A fetch ends at its line, and so at its page, so
+  only a pair carried from one fetch to the next can straddle one.
+- **Interrupts come between ops,** never between the instructions of a
+  fused op, and save the next op's PC.
+
+Refetching unfused is the fallback if the overwrite costs a path: flush,
+fetch again from the add with fusion held off for one op, and let the
+access fault alone. It changes no datapath, but costs a redirect on
+every fault in a fused access. With a software-managed TLB every refill
+is one, and Doom fuses 73 accesses per 1000 instructions.
+
 ## Ruled out
 
 - **Only the younger op commits flags** (`yflags`). It keeps a pair
@@ -350,6 +420,22 @@ seldom reach for the same cycle.
   arrive extended from `LDBS` and `LDHS`.
 - **Fusing a scaled index into its add** (`shadd`): 2.7–8.0 per 1000
   instructions, under 3 issue cycles.
+- **Two memory accesses in a pair** (`x:simple:ld+mem:ld2`, a load
+  port in X), for gen4. It is worth 71 / 16 with all five address and
+  shift fusions, the largest lever left on the kernel paths, but it
+  takes a second data read of the TLB and of the L1-D. gen3 already
+  keeps the TLB as two copies written together, one for fetch and one
+  for data, and spends each L1-D column's second block-RAM port on
+  fills and stores. A third copy and a second hit-and-permission
+  verdict would sit in MEM2's verdict cone, gen3's timing-critical
+  compare ([MEM2 verdict](../penumbra3/mem-stage.md#the-mem2-verdict-cone)).
+  It is a step for after gen4, as gen2.5 followed gen2.
+- **Saving the add's PC for a fault in a fused access,** with neither
+  instruction taking effect. A retry from the add is correct, and
+  NetBSD's fault handler takes the access type and address from the
+  MMU rather than the instruction, but the saved PC would name an
+  instruction that did not fault, against the ISA's contract
+  ([precise exceptions](#a-fused-access)).
 
 ## Design
 
@@ -360,23 +446,25 @@ seldom reach for the same cycle.
   base-plus-index load or store, writing its address back when a load
   does not overwrite it. A two-input address adder takes 98–99 % of
   `addmem`'s accesses; a pre-incremented access (`incmem`) needs the
-  offset as a third input.
+  offset as a third input. A fault in the access commits the add
+  ([a fused access](#a-fused-access)).
 - **Two slots, either order.** X issues simple ALU ops, shifts and
   moves; Y everything.
 - **One forward between the pipelines:** a constant the older op loads,
   wherever the younger reads it.
 - **The youngest flag writer's flags stand.**
-- **One memory access a pair to start with.** A second load port is the
-  next step: 16–43, and 17–72 behind gen3's TLB with the address
-  fusions.
+- **One memory access a pair, in Y.** Two never pair: a second would
+  double the TLB's and the L1-D's data reads ([ruled out](#ruled-out)).
+  With X's ops unable to trap and `DIV` issuing alone, at most one op
+  of a pair traps ([precise exceptions](#precise-exceptions)).
 - **Pre-decode decides.** Fusing and pairing depend only on the
   instructions, so both are settled at the fetch FIFO's enqueue.
 
 ## Open
 
 - **The address adder:** three inputs or two, and the `ADD`'s flags
-  beside the address, to be timed on the path from the register file
-  to the cache. Two inputs cost 11 / 7 issue cycles
+  beside the address, to be timed in EX, ahead of the register the TLB
+  and the cache read. Two inputs cost 11 / 7 issue cycles
   ([the address adder](#the-address-adder)).
 - **The prologue's save at an offset.** A frame with a callee-saved
   register's slot at `[SP + 0]` would let a two-input adder fuse the
