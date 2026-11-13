@@ -196,6 +196,22 @@ the clock. The same-cycle forwards would then earn the place
 
 ## Open
 
+- **Room for the fuser without a stage.** Decode is on gen3's tightest
+  fetch path: IF2 decodes each way's word as it leaves the block RAM
+  and selects the hit's result into the fetch buffer
+  ([gen3 timing outline](../penumbra3/timing-outline.md#1-front-end--mostly-proven-in-gen25-carry-it-forward)).
+  A line a cycle needs four times the decoders, with the fuser and the
+  pair marks behind them, and a stage ahead of the queue would add to
+  every misprediction. Two places have room:
+    - **The L1-I's fill,** which could store what depends on its line
+      alone, an instruction's class and whether it fuses with the next
+      word of the line, in the four bits a 32-bit word leaves free in a
+      36-bit block-RAM row. A miss pays for it, and a hit does not.
+    - **The queue's read side,** where pairing compares registered
+      fields beside the scoreboard's compares rather than behind them.
+
+  A probe of the front end decides, and the aligned fuser is the
+  fallback.
 - **Mispredictions and misses.** Each empties the queue, and refilling
   it favours a wider fetch; neither is in the model.
 - **Waiting for a partner.** Issue here takes the op at the queue's

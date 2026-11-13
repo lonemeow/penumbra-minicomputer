@@ -71,10 +71,10 @@ graph LR
 
 | | |
 |---|---|
-| **Slots** | X issues simple ALU ops, shifts and moves. Y is a full pipeline. A pair holds at most one branch, one MUL and one memory access; a second access would double the TLB's and the L1-D's data reads ([ruled out](./issue-pairing.md#ruled-out)). A DIV issues alone. |
+| **Slots** | X issues simple ALU ops, shifts and moves. Y is a full pipeline. A pair holds at most one branch, always its younger op, one MUL and one memory access; a second access would double the TLB's and the L1-D's data reads ([ruled out](./issue-pairing.md#ruled-out)). A DIV issues alone. |
 | **Order** | Either op of a pair may be the older one. Fixing the older op to X costs 44–70 issue cycles per 1000 instructions once ops are fused. |
 | **Lockstep** | Both ops move together, and a pair commits as a unit. Next to a MUL or a miss, the other op waits; it would have waited behind it in a single-issue core too, so lockstep never loses against one. |
-| **Exceptions** | Precise, as in every generation. X's ops cannot trap, a pair holds one memory access and a DIV issues alone, so at most one op of a pair traps, and the other commits when it is the older. A fault in a fused access commits the add and saves the access's PC ([precise exceptions](./issue-pairing.md#precise-exceptions)). |
+| **Exceptions** | Precise, as in every generation. X's ops cannot trap, a pair holds one memory access and a DIV issues alone, so at most one op of a pair traps, and the other commits when it is the older. A branch is its pair's younger op, so a redirect never splits a pair ([branches last](./issue-pairing.md#branches-last-and-two-reads-an-op)). A fault in a fused access commits the add and saves the access's PC ([precise exceptions](./issue-pairing.md#precise-exceptions)). |
 | **Flags** | Nearly every ALU op writes them. The flag state takes the write of the pair's youngest flag writer, a mux whose select is known at decode. |
 | **Dependencies** | A pair's younger op takes nothing the older op produces that cycle, with one exception: a constant the older op loads, known at decode. The idioms that would need more are fused instead. |
 | **Addressing** | An add fuses into the load or store it addresses: a base plus an index, and the sum written back when a load does not overwrite it. A fused op that writes two registers pairs only with one that writes none. |
@@ -89,9 +89,11 @@ decision off the kind of combinational path that bounded gen2
 
 ## What it takes from gen3
 
-The uncore, the store buffer, the split memory stage, branch prediction
-and the pre-decoded fetch FIFO carry over. Dual issue changes what sits
-around them:
+gen4 is a new implementation, and none of gen3's RTL carries over.
+What carries over is design, where gen3 measured it: the uncore, the
+store buffer, the split memory stage, branch prediction and the
+pre-decoded fetch FIFO, each built again in gen4's own modules. Dual
+issue changes what sits around them:
 
 - **Fetch has to supply a line a cycle into a 16-entry queue,** or two
   instructions a cycle with no bubble after a taken transfer, and the
@@ -104,7 +106,9 @@ around them:
 - **The MMU and the L1-D keep one data port each:** a pair makes one
   access ([ruled out](./issue-pairing.md#ruled-out)).
 - **The register file needs two write ports** and four read ports
-  ([register file](./regfile.md)).
+  ([register file](./regfile.md)): no op reads more than two registers,
+  since an add of two fuses into no store of a third
+  ([two reads an op](./issue-pairing.md#branches-last-and-two-reads-an-op)).
 - **Forwarding** reaches four operands from the results of two
   pipelines.
 - **Branch redirects and stalls cost two slots a cycle,** so prediction

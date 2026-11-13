@@ -335,6 +335,47 @@ seldom reach for the same cycle.
   `addmem` added to the four fusions: 72 against 52 on the kernel
   paths, and 17 against 15 on Doom.
 
+## Branches last, and two reads an op
+
+Measured 2026-11-11 on the same windows and image as the
+[address fusions](#address-and-shift-fusions), behind gen3's TLB, from
+the design's stage, `dual+fuse:lilui:cmpbr:movop:opbr:addmem:addwb+fw:imm+flex`,
+which takes 666 / 525. Two rules restrict it:
+
+- **A branch is always the younger op of its pair** (`last:br`). A
+  taken transfer already ends a pair; the rule also keeps the op behind
+  a branch that is not taken out of the branch's cycle. A redirect then
+  never splits a pair: a branch that resolves wrong in EX flushes what
+  follows its pair, and its partner, the older, commits.
+- **No fused op reads three registers** (`reads:2`). No instruction
+  reads more than two, and of the fusions only an address fusion's
+  store would: an `ADD` of two registers and a store of a third through
+  the sum. Refusing that one keeps a pair to the register file's four
+  read ports ([register file](./regfile.md)). A store of the sum, or
+  of the register added into it, reads two and still fuses.
+
+| Stage | `pbench kernel` | Doom `demo3` |
+|---|---|---|
+| The design's | 666 | 525 |
+| … `+reads:2` | 667 | 525 |
+| … `+last:br` | 676 | 531 |
+| … `+reads:2+last:br` | 677 | 531 |
+| … `+last:br:ld:st` | 696 | 583 |
+| … `+fetch:4l+queue:16` | 669 | 525 |
+| … `+reads:2+last:br+fetch:4l+queue:16` | 678 | 532 |
+
+- **Branches last cost 10 / 6,** 1.5 % and 1.1 % of the issue cycles.
+  Pairs fall from 162 to 152 per 1000 instructions on the kernel paths
+  and from 206 to 200 on Doom.
+- **Two reads an op cost under 1:** 0.6 / 0.8 fused stores per 1000
+  instructions would read a third register.
+- **Together they cost 11 / 7,** and 10 / 7 behind the line fetch the
+  [front end](./front-end.md#design) designs.
+- **Accesses last as well** (`last:br:ld:st`) would leave no op of a
+  pair able to cancel the other, but cost 29 / 58: a load or store
+  with an independent op behind it is among the commonest pairs, and
+  Doom's loops are made of them ([ruled out](#ruled-out)).
+
 ## Precise exceptions
 
 An exception saves the PC of the instruction that faulted, and the
@@ -358,7 +399,11 @@ bus fault), as do `DIV` with a zero divisor and the system instructions
   and before an op writes anything
   ([fault precision](../penumbra3/memory-completion.md#fault-precision)),
   so the verdict gates the pair's register writes, its flag write and
-  its store as a mask of two bits.
+  its store as a mask of two bits. MEM2 is the one place a pair splits.
+- **A redirect never splits a pair.** A branch is always the younger
+  op of its pair ([branches last](#branches-last-and-two-reads-an-op)),
+  so the op beside a branch that resolves wrong commits, and the
+  redirect flushes only what follows.
 - **The flags' select stays a decode-time mux.** Loads and stores write
   no flags, so the op that traps is never the pair's youngest flag
   writer. `DIV` is the one op that both traps and writes the flags, and
@@ -436,6 +481,15 @@ is one, and Doom fuses 73 accesses per 1000 instructions.
   MMU rather than the instruction, but the saved PC would name an
   instruction that did not fault, against the ISA's contract
   ([precise exceptions](#a-fused-access)).
+- **An op beside a branch that is not taken,** the branch the older of
+  the two: 10 / 6 ([measured](#branches-last-and-two-reads-an-op)). The
+  op would be cancelled when the branch resolves wrong in EX, a second
+  place a pair splits beside MEM2's fault.
+- **Accesses always the younger op as well** (`last:br:ld:st`), so that
+  no op of a pair cancels the other: 29 / 58.
+- **A third register read for a fused store,** a fifth read port or a
+  rule that keeps such an op from a partner reading two: it would serve
+  0.6 / 0.8 fused stores per 1000 instructions, worth under 1.
 
 ## Design
 
@@ -448,8 +502,13 @@ is one, and Doom fuses 73 accesses per 1000 instructions.
   `addmem`'s accesses; a pre-incremented access (`incmem`) needs the
   offset as a third input. A fault in the access commits the add
   ([a fused access](#a-fused-access)).
-- **Two slots, either order.** X issues simple ALU ops, shifts and
-  moves; Y everything.
+- **Two reads an op.** An `ADD` of two registers fuses into no store of
+  a third, so no op reads more than two registers, and a pair no more
+  than the register file's four ports.
+- **Two slots, either order, a branch last.** X issues simple ALU ops,
+  shifts and moves; Y everything. Either op may be the older, but a
+  branch is always the younger
+  ([branches last](#branches-last-and-two-reads-an-op)).
 - **One forward between the pipelines:** a constant the older op loads,
   wherever the younger reads it.
 - **The youngest flag writer's flags stand.**

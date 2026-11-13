@@ -93,6 +93,15 @@ Who waits, at the 2-cycle wait:
 - **One ALU behind the memory stages.** 158–380 at the 2-cycle wait.
   The ISA has no indexed addressing, so address arithmetic is ALU ops,
   and an ALU behind the cache makes every computed address wait for it.
+- **A second ALU behind the memory stages, for gen4.** It takes back
+  about 100 of the kernel paths' 131 and 13 of Doom's 147, but it needs
+  a stage of its own behind the memory stages, and a conditional branch
+  whose flags it computes resolves there, three stages after EX. With
+  its memory stalls cut, gen3 loses a large share of its cycles to
+  branches, and a later place to resolve them adds to that. The model
+  above charges the late branches 5–6 cycles, but it sees every access
+  hit and nothing stall. It is a candidate for a later generation,
+  weighed on gen4's own counters.
 
 ## What it means for pairing
 
@@ -109,13 +118,19 @@ With a second ALU those pairs become possible, so the two measurements
 do not add: what a late ALU saves in waits and what it adds in pairs
 need one model that holds both.
 
+## Design
+
+- **One ALU in each pipeline, at EX, behind gen3's two-cycle wait.**
+  The second ALU is [ruled out](#ruled-out) for gen4.
+- **The core counts its load-use waits** by what waited: an ALU
+  operand, a base, a branch's flags or a jump's target, the needs this
+  model reports. The model sees no miss and no stall, and the counts
+  from gen4 itself are what a later generation weighs a second ALU on.
+
 ## Open
 
 - **One model for pairing and waits.** A pair whose younger op waits on
   a load holds both ops.
-- **A look at the reader's reader.** An op that feeds a base is better
-  made to wait than executed late; pre-decode sees the next
-  instruction.
 - **The compiler's share.** A schedule that moves an independent
   instruction between a load and its reader hides the same cycles, and
   the machine scheduler is not enabled
@@ -124,5 +139,3 @@ need one model that holds both.
 - **A one-cycle wait.** Worth 71–76 with one ALU, but it means the
   load's data reaching EX's operand mux a cycle sooner, the path gen3
   keeps registered.
-- **The cost side:** a second ALU with its own forwards, flags that can
-  be late, and a branch that resolves in either of two stages.
