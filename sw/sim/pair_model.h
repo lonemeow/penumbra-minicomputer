@@ -24,6 +24,9 @@
 //  - Write ports.  Two register writes a cycle, so a fused load that also
 //    writes its address (addwb, incmem) pairs only with an op that writes
 //    none.  MUL and DIV count one: they sequence their second write.
+//    Register reads are not counted a cycle: no instruction reads more
+//    than two registers, and with `reads:2` no fused op does, so a pair
+//    reads at most four.
 //  - Dependencies.  The younger takes nothing the older writes that
 //    cycle, a register or the flags, unless a configured forward
 //    carries it.
@@ -72,6 +75,13 @@
 //    (addmem, addwb, incmem) uses.  Three takes the add's two and the
 //    access's offset; two only the add's, so an access with an offset
 //    does not fuse.  Three unless given.
+//  - reads:3 | reads:2: the most registers one op reads.  Two refuses
+//    the fusions whose op would read three, which only an address
+//    fusion's store makes: an ADD of two registers and a store of a
+//    third through the sum.  Three unless given.
+//  - last:LIST: classes whose op is always the younger of its pair, as
+//    x: and y: list them: an older op of one issues with no younger op
+//    beside it ("order"), as a taken transfer does.
 //  - mem:1 | mem:ld2 | mem:2: memory accesses a cycle.
 //  - flex: either op may take either slot.
 //  - yflags: only the younger op of a pair commits flags.
@@ -160,12 +170,12 @@ enum : uint32_t {
     CAUSE_SLOT_OLDER = 1 << 0, CAUSE_SLOT_YOUNGER = 1 << 1, CAUSE_UNIT = 1 << 2,
     CAUSE_MEMORY     = 1 << 3, CAUSE_FLAGS        = 1 << 4, CAUSE_OPERAND = 1 << 5,
     CAUSE_BASE       = 1 << 6, CAUSE_DATA         = 1 << 7, CAUSE_TARGET  = 1 << 8,
-    CAUSE_PORTS      = 1 << 9,
+    CAUSE_PORTS      = 1 << 9,  CAUSE_ORDER        = 1 << 10,
 };
-static constexpr int CAUSES = 10;
+static constexpr int CAUSES = 11;
 static const char* const CAUSE_NAMES[CAUSES] =
     { "slot-older", "slot-younger", "unit", "memory", "flags", "operand", "base", "data", "target",
-      "ports" };
+      "ports", "order" };
 
 // Register writes a cycle: the register file's write ports.
 static constexpr int WRITE_PORTS = 2;
@@ -293,6 +303,8 @@ struct IssueConfig {
     uint32_t    fusions = 0;        // FUSE_* bits
     FuserReach  reach = FuserReach::Any;
     int         agu_inputs = 3;     // agu:N — the address adder's inputs in an address fusion
+    int         op_reads = 3;       // reads:N — the most registers one op reads
+    uint32_t    last = 0;           // last:LIST — classes whose op is always the younger of a pair
     MemoryLimit memory = MemoryLimit::One;
     bool        flex = false;       // the older op may take Y and the younger X
     bool        younger_commits_flags = false;  // yflags: the flag state takes only the younger op's write
@@ -442,6 +454,13 @@ private:
         return __builtin_popcount(op.writes);
     }
 
+    // Registers `op` reads, each once whatever it is read for.
+    static int registers_read(const IssueOp& op) {
+        uint16_t all = 0;
+        for (int u = 0; u < USES; u++) all |= op.reads[u];
+        return __builtin_popcount(all);
+    }
+
     // The fuser sees `first` and the instruction behind it together.
     bool in_reach(const IssueOp& first) const {
         uint32_t word = first.pc >> 2;
@@ -512,6 +531,7 @@ private:
         } else {
             return false;
         }
+        if (registers_read(fused) > cfg_.op_reads) return false;
         fused.pc = first.pc;
         fused.insns = 2;
         // What is executed after the fused op is what follows its second
@@ -611,6 +631,9 @@ private:
         if (older.cls == younger.cls
             && (older.cls == IssueClass::Branch || older.cls == IssueClass::MulDiv))
             v.causes |= CAUSE_UNIT;
+
+        if (cfg_.last & class_bit(older.cls))
+            v.causes |= CAUSE_ORDER;
 
         if (accesses_memory(older) && accesses_memory(younger)) {
             bool both_load = older.cls == IssueClass::Load && younger.cls == IssueClass::Load;
@@ -855,6 +878,9 @@ private:
             else if (part == "reach:pair")      c.reach = FuserReach::Pair;
             else if (part == "agu:3")           c.agu_inputs = 3;
             else if (part == "agu:2")           c.agu_inputs = 2;
+            else if (part == "reads:3")         c.op_reads = 3;
+            else if (part == "reads:2")         c.op_reads = 2;
+            else if (!list("last:").empty())    ok = parse_classes(list("last:"), c.last);
             else if (!list("x:").empty())       ok = parse_classes(list("x:"), c.x);
             else if (!list("y:").empty())       ok = parse_classes(list("y:"), c.y);
             else if (!list("fw:").empty())
@@ -883,7 +909,8 @@ private:
             else ok = false;
             if (!ok) {
                 err = "unknown modifier '" + part + "' (x:CLASSES, y:CLASSES, fw:FORWARDS,"
-                      " fuse:FUSIONS, reach:any|line|pair, agu:3|2, mem:1|ld2|2, flex, yflags,"
+                      " fuse:FUSIONS, reach:any|line|pair, agu:3|2, reads:3|2, last:CLASSES,"
+                      " mem:1|ld2|2, flex, yflags,"
                       " fetch:N[l], bubble:N, queue:N)";
                 return false;
             }

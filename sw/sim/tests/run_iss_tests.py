@@ -596,6 +596,36 @@ PAIR_WB = {
         alone={"system": 19, "end": 1}, one={"ports": 1, "base": 1}),
 }
 
+# pair_limits.s: 31 instructions, 11 of them DI or BREAK.
+#   single+fuse:addmem:          A B C D: three reads is the default.
+#   +reads:3:                    the same.
+#   +reads:2:                    B C D; A's store would read R5, R9 and R10.
+#                                B reads R10 once, for the add and as data.
+#   dual+fuse:cmpbr+flex:        E F G H I pair, E's fused branch, F's branch
+#                                and G's load as the older op in Y; A B D
+#                                wait for a base, C for its base and data.
+#   +last:br:                    E and F take no younger op ("order"); their
+#                                MOVs issue alone ahead of a DI.
+#   +last:br:ld:st:              G's load neither.  H and I still pair, the
+#                                branch and the load the younger op.
+PAIR_LIMITS = {
+    "pairing single+fuse:addmem": fusing(31, {"addmem": 4}),
+    "pairing single+fuse:addmem+reads:3": fusing(31, {"addmem": 4}),
+    "pairing single+fuse:addmem+reads:2": fusing(31, {"addmem": 3}),
+    "pairing dual+fuse:cmpbr+flex": pairing(
+        31, 5, fused={"cmpbr": 1}, forward={"none": 5}, younger={"mov": 3, "br": 1, "ld": 1},
+        alone={"system": 15, "end": 1}, one={"base": 3},
+        several=(1, {"base": 1, "data": 1})),
+    "pairing dual+fuse:cmpbr+flex+last:br": pairing(
+        31, 3, fused={"cmpbr": 1}, forward={"none": 3}, younger={"mov": 1, "br": 1, "ld": 1},
+        alone={"system": 17, "end": 1}, one={"base": 3, "order": 2},
+        several=(1, {"base": 1, "data": 1})),
+    "pairing dual+fuse:cmpbr+flex+last:br:ld:st": pairing(
+        31, 2, fused={"cmpbr": 1}, forward={"none": 2}, younger={"br": 1, "ld": 1},
+        alone={"system": 18, "end": 1}, one={"base": 3, "order": 3},
+        several=(1, {"base": 1, "data": 1})),
+}
+
 # pair_ext.s: 33 instructions, 12 of them DI or BREAK.
 #   single+fuse:ext:        A B C E, and H's shifts; D's distances differ,
 #                           F shifts two registers, G is an SHL and an ADD,
@@ -1020,6 +1050,7 @@ CASES = [
     pair_case("pairmodel address fusions", "pair_addr.s", PAIR_ADDR),
     pair_case("pairmodel extension fusion", "pair_ext.s", PAIR_EXT),
     pair_case("pairmodel write-back fusions and write ports", "pair_wb.s", PAIR_WB),
+    pair_case("pairmodel read limit and pair order", "pair_limits.s", PAIR_LIMITS),
     pair_case("pairmodel fuser reach", "pair_reach.s", PAIR_REACH),
     pair_case("pairmodel fetch stage", "pair_fetch.s", PAIR_FETCH),
     pair_case("pairmodel fusion behind a fetch stage", "pair_reach.s", PAIR_FETCH_FUSE),
@@ -1053,6 +1084,10 @@ CASES = [
          error=r"unknown modifier 'reach:far'"),
     Case("pairmodel unknown agu", "pair_addr.s", ["+pairmodel=dual+agu:4"],
          error=r"unknown modifier 'agu:4'"),
+    Case("pairmodel unknown reads", "pair_limits.s", ["+pairmodel=dual+reads:4"],
+         error=r"unknown modifier 'reads:4'"),
+    Case("pairmodel unknown last class", "pair_limits.s", ["+pairmodel=dual+last:br:fpu"],
+         error=r"unknown modifier 'last:br:fpu'"),
     Case("pairmodel fetch of nothing", "pair_fetch.s", ["+pairmodel=dual+fetch:0"],
          error=r"unknown modifier 'fetch:0'"),
     Case("pairmodel queue with no fetch stage", "pair_fetch.s", ["+pairmodel=dual+queue:16"],
