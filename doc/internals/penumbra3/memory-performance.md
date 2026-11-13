@@ -518,13 +518,13 @@ A small FIFO of cacheable stores between the L1-D and the uncore. A
 cacheable store completes when it enters the buffer instead of when its
 write-through is acknowledged; the buffer drains through the uncore in
 the background. Its shape comes from the
-[store-buffer model](#the-store-buffer-in-the-model): eight line
-entries, a fill that waits only for the entries up to its own line, and
-an L2 that posts its write-through.
+[store-buffer model](#the-store-buffer-in-the-model): sixteen word
+entries, a fill that waits only for the entries up to the youngest
+holding its line, and an L2 that posts its write-through.
 
 ```mermaid
 graph LR
-    M2["L1-D"] -->|cacheable store| SB["store buffer<br/>(8 line entries)"]
+    M2["L1-D"] -->|cacheable store| SB["store buffer<br/>(16 word entries)"]
     M2 -->|"fill (waits for entries<br/>up to its line)"| UC
     M2 -->|"uncached access<br/>(waits for SB empty)"| UC
     SB -->|drain| UC["uncore<br/>(L2 + I/D select + fill)"]
@@ -535,21 +535,27 @@ graph LR
 - **Placement.** It must sit in front of the arbiter to hide the whole
   on-chip path. A buffer after L2 would hide only the SDRAM leg, which
   the adapter already posts.
-- **Entries are lines.** Each holds a line and a byte mask, and stores
-  to its line merge into it until it starts draining. A kernel frame
-  save of about 21 words fits in eight entries where it would overflow
-  eight words ([store streams](#store-streams)). An entry drains as one
-  bus burst, over the words from the first it wrote to the last.
+- **Entries are words.** Each holds one store: its word's physical
+  address, its data and its byte lanes. It drains as one single-beat
+  write: the uncore's cacheable write and the bus master's single
+  beat, with no new transfer shape. Line entries, which merge a line's
+  stores and drain them as one burst, wait about 4 cycles per 1000
+  instructions less at CPI 2, and 15–37 less at CPI 1 on the kernel
+  paths, where a frame save's burst overflows word entries
+  ([line or word entries](#line-or-word-entries)). They need a merge at
+  enqueue, a bus burst over a run of words each with its own lanes, and
+  line-wide writes into L2; drained a word at a time instead, they
+  wait more than word entries do.
 - **A fill searches the buffer by line; a load hit never does.** L1-D
   is updated in place at commit on a hit, so a load that hits L1
   already sees every older store. A fill — an I-fill or a D-fill —
   waits for the entries up to the youngest holding its line, so L2 is
   current for that line when the fill reads it. The search compares the
-  entries' line tags against the registered miss address in the
-  uncore, off the core's cones. Uncached loads and stores wait until
-  the buffer has drained. Draining everything before every fill instead
-  keeps 60–82 % of what the buffer saves on the measured workloads,
-  against 92–98 % with the search and posting below. This replaces the
+  lines of the entries' addresses against the registered miss address
+  in the uncore, off the core's cones. Uncached loads and stores wait
+  until the buffer has drained. Waiting for every entry before every
+  fill instead costs word entries 3–8 more cycles per 1000
+  instructions at CPI 2 and 14–31 at CPI 1. This replaces the
   disambiguation search that made the gen2.5 store-buffer plan its most
   structural feature: the compare runs on misses, never in the load-hit
   path.
@@ -582,18 +588,22 @@ graph LR
 - **Timing.** The core sees only registered signals: `full` joins the
   launch-side freeze, and the line compare and `empty` gate accesses at
   the uncore. No new combinational cone reaches issue or the MMU.
-- **Depth.** Eight line entries. Four lose up to 3 cycles per 1000
-  instructions at CPI 1, and sixteen gain nothing.
+- **Depth.** Sixteen word entries. Eight wait 16–43 cycles per 1000
+  instructions more at CPI 1 on the kernel paths, where bursts
+  overflow them, and up to 5 more at CPI 2. Thirty-two gain under 1 at
+  CPI 2.
 - **Merging from the buffer: measured, not worth it.** A fill could
   take its line's buffered bytes instead of waiting for them, at the
   cost of an entry read and a byte merge on the fill path. Over the
   line search it saves under 0.5 cycles per 1000 instructions on every
   workload measured: a fill whose line is still buffered is rare, and
   its entry has usually started draining.
-- **Write combining** in the SDRAM adapter drains an entry's burst as
-  one controller request
-  ([write combining](#sdram-side-write-combining)): 4–6 cycles per 1000
-  on the kernel paths once L2 posts, 12–14 without; 1–7 on Doom.
+- **Write combining** in the SDRAM adapter
+  ([write combining](#sdram-side-write-combining)) takes a burst's
+  words as one controller request, so it has nothing to combine in
+  word entries' single-beat drains. With line entries it saves 4–6
+  cycles per 1000 on the kernel paths once L2 posts, 12–14 without;
+  1–7 on Doom.
 
 #### The store buffer in the model
 
@@ -645,6 +655,46 @@ costing gen2.5's 5 stall cycles would cost 415, 585 and 380 per 1000:
   search.
 - `pbench kernel` sizes its iterations from timing, and its runs
   differ by up to 4 %. L2's 2-cycle posted write is an assumption.
+
+#### Line or word entries
+
+Measured 2026-11-11 with `+sbmodel` under `+core=penumbra3`, over
+gen3's own caches and TLB (8 KiB 2-way L1s, a 64 KiB 4-way L2, the
+256×2 TLB), on the same three workloads. Every buffer posts its
+write-through and drains at the `bus` costs, 5, 7, 11 and 13 cycles
+for one to four words, unless stated; a word entry drains in 5.
+
+Cycles per 1000 instructions the core waits on the buffer, CPI 1 /
+CPI 2:
+
+| Entries and fill rule | shell loop | `pbench kernel` | Doom `demo3` |
+|---|---|---|---|
+| 8 line, entries up to the fill's line | 60.9 / 36.1 | 35.8 / 21.9 | 19.4 / 5.1 |
+| … drained a word at a time (5, 10, 15, 20) | 98.9 / 62.6 | 98.1 / 38.1 | 50.1 / 8.0 |
+| … the adapter combining writes | 53.2 / 32.5 | 31.6 / 19.2 | 11.1 / 4.5 |
+| 8 word, entries up to the fill's line | 92.2 / 41.7 | 116.1 / 30.5 | 25.4 / 9.6 |
+| 16 word, entries up to the fill's line | 75.7 / 40.0 | 72.9 / 25.4 | 24.4 / 9.2 |
+| 32 word, entries up to the fill's line | 69.7 / 39.3 | 42.5 / 25.1 | 23.6 / 8.7 |
+| 8 line, every entry | 122.4 / 101.5 | 83.5 / 72.2 | 67.4 / 60.8 |
+| 8 word, every entry | 121.9 / 48.9 | 137.1 / 34.2 | 39.2 / 12.1 |
+| 16 word, every entry | 107.0 / 47.5 | 94.6 / 29.3 | 38.7 / 11.8 |
+
+- **Line entries win only with their burst.** Drained a word at a
+  time, they wait more than sixteen word entries on every row but
+  Doom's at CPI 2: a fill waits for the whole entry holding its line,
+  and a four-word drain holds the bus for 20 cycles where a word entry
+  holds it for 5.
+- **With the burst, the gap is the bursts of stores.** At CPI 1,
+  sixteen word entries spend 32 and 42 cycles per 1000 waiting for
+  room on the kernel paths, against line entries' 13 and 5: a frame
+  save fills them. At CPI 2 a burst arrives slowly enough to drain, and
+  the gap closes to about 4 cycles.
+- **Waiting for every entry costs line entries far more.** A line
+  entry stays open while stores merge into it and drains for longer,
+  so a fill waits behind more. Word entries without the search come
+  within 3–8 cycles per 1000 of their search at CPI 2.
+- **Doom's remaining waits are D fills** in every configuration: 5.5
+  of sixteen word entries' 9.2 at CPI 2.
 
 ### Write-back L2: what it does and does not buy
 

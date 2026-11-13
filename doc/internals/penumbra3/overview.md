@@ -240,19 +240,19 @@ That sets the order:
   updated in place at commit on a hit, so only a fill searches the
   buffer, waiting for the entries up to the youngest holding its line,
   and every uncached access waits for the buffer to drain. L2 posts its
-  write-through, so a fill L2 serves never waits for the bus. Draining
-  everything before every fill instead would give back up to 40 % of
-  the buffer's win
-  ([measured](./memory-performance.md#the-store-buffer-in-the-model)).
+  write-through, so a fill L2 serves never waits for the bus. Waiting
+  for every entry before every fill instead would cost 3–8 cycles per
+  1000 instructions at CPI 2 and 14–31 at CPI 1
+  ([measured](./memory-performance.md#line-or-word-entries)).
   It meets the core only through registered signals
   (`full` into the freeze), so it lives outside the core timing cones and
   is *safe to defer* (see the [deferral principle](#build-plan)). Its
-  entries are lines with a byte mask: stores to one line merge, a
-  kernel frame save of about 21 words fits in eight entries where it
-  would overflow eight words, and an entry drains as one bus burst
-  that the SDRAM adapter can write as a single line
-  ([store streams](./memory-performance.md#store-streams),
-  [write combining](./memory-performance.md#sdram-side-write-combining)).
+  sixteen entries are words, one store each, drained as single-beat
+  writes. Line entries, which merge a line's stores and drain them as
+  one burst, wait about 4 cycles per 1000 instructions less at CPI 2,
+  and need a merge, a bus burst over a run of words and line-wide
+  writes into L2 to do it
+  ([line or word entries](./memory-performance.md#line-or-word-entries)).
 - **Write-back L2 is a measure-driven option, not a plan item.** A
   write-back hit completes at the L2 tag verdict, about as late as the
   posted write-through it replaces, so it does little for store latency.
@@ -282,7 +282,7 @@ Cycles saved per 1000 instructions on the shell loop / `pbench kernel`
 / Doom `demo3`. The counts come from the ISS's shadow models at gen3's
 geometries
 ([fills and refills](./memory-performance.md#fills-and-refills-at-gen3s-geometries),
-[store buffer](./memory-performance.md#the-store-buffer-in-the-model));
+[store buffer](./memory-performance.md#line-or-word-entries));
 the costs they are priced at are listed below the table. The levers
 overlap, so they do not add.
 
@@ -290,7 +290,7 @@ overlap, so they do not add.
 |---|---|---|---|
 | Main TLB 32×2 → 256×2 | 810–1000 / 570–700 / 350–440 | no block RAM; invalidation in the MMU; `MMU_CONFIG` version 2 | shape |
 | Line-wide L2→L1 transfer, fill-through, one uncore pipeline | ~750 / ~700 / ~230 | block RAM as word-wide; a 128-bit fill path in place of the word walk | shape |
-| Store buffer: line entries, line search, L2 posting | ~380 / ~560 / ~370 | ~1.4 kbit of entries, 8 line-tag compares; outside the core cones | staged 1; posting is an L2 shape |
+| Store buffer: word entries, line search, L2 posting | ~340 / ~510 / ~355 | ~1.1 kbit of entries, 16 line compares; outside the core cones | staged 1; posting is an L2 shape |
 | Branch prediction: IF2 pre-decode, 1K bimodal table, 4–8-deep return ring | ~205 / ~205 / ~200 | a block RAM for the table, a ring of return addresses, the IF2 redirect into the next PC | Phase 2 |
 | L1 4 KB → 8 KB 2-way | ~140 / ~110 / ~40 | none in the line-wide shape | shape |
 | L1 8 KB → 16 KB 4-way | ~135 / ~155 / ~30 | ~10 more block RAMs; two more tag compares in IF2 | Artix-7 |
@@ -433,7 +433,7 @@ correctness-validated against a real OS before perf work begins.
 The primary store-traffic optimization: a cacheable-only store buffer
 between the L1-D and the uncore
 ([design](./memory-performance.md#store-buffer-at-the-core-boundary)),
-its entries a line wide with a byte mask. It meets the core only through
+its entries a word wide, one store each. It meets the core only through
 registered signals, so it lands here, late, with no risk to the core
 fmax proven in Phase 0. Write-back / write-allocate L2 follows *only* if
 profiling after this shows stores throughput-bound. L1-D write-allocate
