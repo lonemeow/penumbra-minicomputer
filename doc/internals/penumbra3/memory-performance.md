@@ -206,6 +206,94 @@ same. CPU cycles; the middle column runs the clocks at the hardware's
 - **Posted writes barely delay a read.** The CDC holds at most two,
   and the controller finishes them while the read is crossing.
 
+## Transfer rates by block size, on hardware
+
+`benchmark/memspeed` reads, writes and copies one block over and over,
+for blocks from 512 B to 4 MiB, and reports CPU cycles per 32-bit
+word. Its loops are written by hand: 32 accesses an iteration, no
+loaded value ever read, a write storing one unchanging register, and a
+copy loading a line's four words before it stores them, so no access
+waits on another. Three runs:
+
+| Run | Board | CPU clock | Memory |
+|---|---|---|---|
+| gen2.5 | Nexys Video | 60 MHz | DDR3-667 |
+| gen3 at `3539275` | Nexys Video | 60 MHz | DDR3-667 |
+| gen3 at `3539275` | ULX3S | 37.5 MHz | SDR SDRAM at 100 MHz, line stack |
+
+Each has 2-way L1s and a 64 KiB 4-way L2. gen2.5's L1-D is 4 KiB and
+its TLB 32×2; gen3's are 8 KiB and 256×2. Cycles per word, at the
+largest block each cache holds and at 128 KiB for memory:
+
+| Run | Level | Read | Write | Copy |
+|---|---|--:|--:|--:|
+| gen2.5, Nexys | L1 (4 KiB) | 2.13 | 6.39 | 8.41 |
+| | L2 (64 KiB) | 6.12 | 6.37 | 12.36 |
+| | memory | 12.36 | 6.37 | 18.57 |
+| gen3, Nexys | L1 (8 KiB) | 1.12 | 5.31 | 5.31 |
+| | L2 (64 KiB) | 2.12 | 5.31 | 5.31 |
+| | memory | 8.18 | 5.31 | 13.74 |
+| gen3, ULX3S | L1 (8 KiB) | 1.12 | 5.00 | 5.00 |
+| | L2 (64 KiB) | 2.12 | 5.00 | 5.00 |
+| | memory | 7.15 | 5.00 | 13.01 |
+
+What a fill adds to a line's four reads, over four L1 hits:
+
+| Fill | gen2.5, Nexys | gen3, Nexys | gen3, ULX3S | Estimated |
+|---|--:|--:|--:|---|
+| From L2 | 16.0 | 4.0 | 4.0 | 16 → ~5 ([line-wide transfer](#the-line-wide-transfer)) |
+| From memory | 40.9 | 28.2 | 24.1 | 37 → ~24; 20–25 the [target](#design-target-memory-latency-in-cpu-cycles) |
+
+- **The line-wide transfer meets its estimates.** An L2 fill costs 4
+  cycles on both boards, which run the same core and uncore cycle for
+  cycle with L2 on chip. A memory fill saves 12.7 cycles on the Nexys,
+  the 13 estimated, and costs 24.1 on the ULX3S against gen2.5's 38
+  there: the target's floor of about 19 cycles on the bus, plus about
+  5 in the uncore. In time the DDR3 fill is the faster, 470 ns against
+  643, at more cycles.
+- **A write stream runs at the drain.** Both caches write through, so
+  every store becomes a bus write and the write rate is the same at
+  every block size. The store buffer's sixteen entries absorb a burst;
+  a longer stream runs at the rate the buffer drains. On the ULX3S
+  that is the bus master's single-beat floor exactly, 5.00 cycles a
+  store ([sustained writes](#sustained-writes-on-the-sdram-stack)),
+  with the loop's own instructions hidden under it. The Nexys's DDR3
+  stack answers later than the floor now and then, for 5.31. gen2.5's
+  6.4 is its blocking store, about 3 cycles of which are below its
+  arbiter ([store latency](#store-latency-below-the-arbiter-chain-b)).
+  With the strobe held across writes the SDRAM stack takes a word every
+  2.5–3.6 cycles, which bounds what a drain keeping the strobe up
+  between consecutive posted stores could reach.
+- **A copy from a cache costs its writes alone on gen3.** Its loads and
+  its L2 fills need no bus, so they run under the drain. gen2.5's
+  blocking stores make every copy cost its reads plus its writes.
+- **A copy from memory costs its reads plus its writes on gen3.** The
+  bus carries both and runs one transaction at a time: a line read
+  that takes the bus waits until no store is posted, and a post
+  completes only while no transaction is in flight
+  ([the store buffer](./uncore.md#the-store-buffer)). On the Nexys it
+  costs 13.74, the sum of 13.49 and about a cycle a line.
+- **The ULX3S also pays for switching rows.** Its copy from memory
+  costs 13.01 against a sum of 12.15, about 3.4 cycles a line more.
+  The SDRAM controller keeps one row open for the whole chip, and a
+  copy's source and destination lie in different rows, so each line
+  switches twice: the read after the writes waits out `T_WR`, then
+  precharges and activates, and the first write after the read
+  precharges and activates again. At 2 SDRAM clocks each for `T_WR`,
+  `T_RP` and `T_RCD`, that is about 10 SDRAM clocks a line, 3.7 CPU
+  cycles. The read and write sweeps each stay in one row for 64 lines
+  and never show it. The Nexys's controller keeps a row open in each
+  bank.
+- **Past the TLB's reach the rates rise:** from 192 KiB on gen2.5,
+  from 1.5 MiB on gen3. If every page past the reach missed once a
+  pass, gen2.5's rise of 0.14 cycles a word at 4 MiB would be 143
+  cycles a refill, inside the ~137–170 the
+  [refill](#tlb-sets-and-a-cheaper-refill) is measured at, and gen3's
+  0.09 on the Nexys and 0.08 on the ULX3S about 90 and 80. With a
+  victim picked by counter some of gen3's pages still hit at 4 MiB, so
+  its refills cost somewhat more than that. The refill is the
+  benchmark's own handler's, not the kernel's.
+
 ## Workload profiles (gen2.5 hardware, 37.5 MHz)
 
 Measured 2026-09-21. Cycles equal instructions retired plus stall cycles
@@ -1267,7 +1355,9 @@ nanoseconds.
 - **Refill cost on hardware.** The ~137–170 cycles come from the machine
   trace with a replica handler. Nothing counts refills on hardware yet
   ("Kernel: count TLB refills" in `doc/TODO/kernel.md`); a counter would
-  also confirm the per-frame rate the shadow model reports.
+  also confirm the per-frame rate the shadow model reports. Transfer
+  rates past the TLB's reach bound a bare-metal handler's refill on
+  both generations ([transfer rates](#transfer-rates-by-block-size-on-hardware)).
 - **Hardware cache counts.** The benchmark report prints combined hit
   rates; printing the four raw counts per cache would give the
   fills-by-kind split on hardware directly
