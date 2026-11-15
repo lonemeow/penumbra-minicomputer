@@ -334,9 +334,9 @@ penumbra_init(void)
 	/* Initialize the console so we can printf */
 	consinit();
 
-	/* Start the hardware timer for delay() — must happen before
-	 * autoconf, which calls delay() during device probing.
-	 * cpu_initclocks() reconfigures for periodic interrupts later. */
+	/* Start the hardware timer at the hardclock period — before
+	 * autoconf, whose device probes call delay().  cpu_initclocks()
+	 * attaches the clock interrupt to it. */
 	timer_early_init();
 
 	printf("NetBSD/penumbra booting\n");

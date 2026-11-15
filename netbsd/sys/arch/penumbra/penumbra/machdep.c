@@ -168,17 +168,34 @@ cpu_reboot(int howto, char *bootstr)
 }
 
 /*
+ * Timer sysreg access.  RDSYS and WRSYS take the register as an
+ * immediate.  A write is a compiler barrier, so state the clock
+ * interrupt's handler reads is stored before a write enables it.
+ */
+#define TIMER_READ(reg) __extension__ ({				\
+	uint32_t __v;							\
+	__asm __volatile("RDSYS %0, %1, %2"				\
+	    : "=r"(__v) : "i"(SYSDEV_TIMER), "i"(reg));		\
+	__v;								\
+})
+#define TIMER_WRITE(reg, val) do {					\
+	uint32_t __v = (val);						\
+	__asm __volatile("WRSYS %0, %1, %2"				\
+	    : : "r"(__v), "i"(SYSDEV_TIMER), "i"(reg) : "memory");	\
+} while (0)
+
+/*
  * Timecounter — synthesises a monotonic 32-bit counter from the
  * hardware timer's 16-bit countdown register.
  *
  * The MI timecounter API requires the counter to wrap at a power-of-2
  * matching tc_counter_mask.  Our hardware timer wraps at (reload+1)
- * which is 10000 for 100 Hz — not a power of 2.
+ * which is 10000 for 100 Hz at a 1 MHz tick — not a power of 2.
  *
  * Solution: accumulate a base counter in the hardclock handler
  * (bumped by reload+1 each interrupt), and add the current sub-tick
- * offset.  The result is a continuous 32-bit value at 1 MHz, wrapping
- * naturally at 2^32 (~71 minutes).
+ * offset.  The result is a continuous 32-bit value at the tick rate,
+ * wrapping naturally at 2^32 (~71 minutes at 1 MHz).
  *
  * Monotonicity: hardware autoloads `count` and latches TM_STATUS.UDF
  * at the underflow cycle, but `timer_tc_base` is only bumped when
@@ -210,18 +227,9 @@ timer_get_timecount(struct timecounter *tc)
 
 	for (;;) {
 		base_a = timer_tc_base;
-		__asm __volatile(
-		    "RDSYS %0, %1, %2" : "=r"(status_a)
-		    : "i"(SYSDEV_TIMER), "i"(TM_STATUS)
-		);
-		__asm __volatile(
-		    "RDSYS %0, %1, %2" : "=r"(count)
-		    : "i"(SYSDEV_TIMER), "i"(TM_COUNT)
-		);
-		__asm __volatile(
-		    "RDSYS %0, %1, %2" : "=r"(status_b)
-		    : "i"(SYSDEV_TIMER), "i"(TM_STATUS)
-		);
+		status_a = TIMER_READ(TM_STATUS);
+		count = TIMER_READ(TM_COUNT);
+		status_b = TIMER_READ(TM_STATUS);
 		base_b = timer_tc_base;
 
 		if (base_a == base_b && status_a == status_b)
@@ -265,52 +273,41 @@ static struct timecounter timer_timecounter = {
 struct evcnt timer_evcnt;
 
 /*
- * Clock initialization — program the hardware timer for periodic
- * interrupts at hz (default 100) ticks per second, and register
- * the timecounter for sub-tick timestamp resolution.
+ * Clock initialization — attach the hardclock interrupt and the
+ * timecounter to the counter timer_early_init() left running at the
+ * hardclock period.  The counter is not reprogrammed: its period is
+ * read back, and the interrupt is enabled once everything its handler
+ * uses is set.
  */
 void
 cpu_initclocks(void)
 {
-	uint32_t freq;
-	uint32_t reload;
+	uint32_t freq = TIMER_READ(TM_FREQ);
 
-	/* Read timer tick frequency from hardware */
-	__asm __volatile(
-	    "RDSYS %0, %1, %2"
-	    : "=r"(freq) : "i"(SYSDEV_TIMER), "i"(TM_FREQ)
-	);
-
-	/* Compute reload value: period = (reload + 1) ticks */
-	reload = freq / hz - 1;
+	timer_reload_val = TIMER_READ(TM_RELOAD);
+	KASSERT(timer_reload_val == freq / (uint32_t)hz - 1);
 
 	printf("timer: %u Hz tick, reload %u for %d Hz hardclock\n",
-	    freq, reload, hz);
+	    freq, timer_reload_val, hz);
 
-	/* Set reload and initial count */
-	__asm __volatile(
-	    "WRSYS %0, %1, %2"
-	    : : "r"(reload), "i"(SYSDEV_TIMER), "i"(TM_RELOAD)
-	);
-	__asm __volatile(
-	    "WRSYS %0, %1, %2"
-	    : : "r"(reload), "i"(SYSDEV_TIMER), "i"(TM_COUNT)
-	);
-
-	/* Enable: TICK_EN | IRQ_EN | AUTOLOAD */
-	uint32_t cr = TMCR_TICK_EN | TMCR_IRQ_EN | TMCR_AUTOLOAD;
-	__asm __volatile(
-	    "WRSYS %0, %1, %2"
-	    : : "r"(cr), "i"(SYSDEV_TIMER), "i"(TM_CR)
-	);
-
-	/* Register timecounter for sub-tick timestamp resolution */
-	timer_reload_val = reload;
 	timer_timecounter.tc_frequency = freq;
-	tc_init(&timer_timecounter);
-
 	evcnt_attach_dynamic(&timer_evcnt, EVCNT_TYPE_INTR, NULL,
 	    "timer", "tick");
+
+	/*
+	 * UDF has been set since the counter's first underflow, with no
+	 * handler to clear it.  Cleared, the first interrupt marks a
+	 * real period boundary.
+	 */
+	TIMER_WRITE(TM_STATUS, TMST_UDF);
+	TIMER_WRITE(TM_CR, TMCR_TICK_EN | TMCR_IRQ_EN | TMCR_AUTOLOAD);
+
+	/*
+	 * Registered only once the interrupt counts periods: a reading
+	 * makes up for one period the handler has not counted yet,
+	 * never more.
+	 */
+	tc_init(&timer_timecounter);
 }
 
 void
@@ -320,62 +317,53 @@ setstatclockrate(int rate)
 }
 
 /*
- * Start the timer as a free-running counter for delay().
- *
- * Called early from penumbra_init(), before autoconf.  Sets up
- * the timer with max reload and TICK_EN + AUTOLOAD but no IRQ,
- * so delay() has a working 1 MHz counter from the start.
- * cpu_initclocks() later reconfigures for periodic interrupts.
+ * Start the timer counting at the hardclock period, auto-reloading,
+ * with no interrupt yet, so delay() works from the first driver
+ * probe.  This is the only code that writes TMRELOAD or TMCOUNT, and
+ * it writes them with the timer stopped; cpu_initclocks() attaches
+ * to the running counter.  hz is fixed at build time, so the period
+ * set here is the one hardclock needs.
  */
 void
 timer_early_init(void)
 {
-	uint32_t reload = 0xFFFF;	/* max 16-bit countdown */
-	uint32_t cr = TMCR_TICK_EN | TMCR_AUTOLOAD;
+	uint32_t freq = TIMER_READ(TM_FREQ);
+	uint32_t reload = freq / (uint32_t)hz - 1;
 
-	__asm __volatile(
-	    "WRSYS %0, %1, %2"
-	    : : "r"(reload), "i"(SYSDEV_TIMER), "i"(TM_RELOAD)
-	);
-	__asm __volatile(
-	    "WRSYS %0, %1, %2"
-	    : : "r"(reload), "i"(SYSDEV_TIMER), "i"(TM_COUNT)
-	);
-	__asm __volatile(
-	    "WRSYS %0, %1, %2"
-	    : : "r"(cr), "i"(SYSDEV_TIMER), "i"(TM_CR)
-	);
+	if (reload > 0xFFFF)
+		panic("timer: no 16-bit period divides a %u Hz tick to %d Hz",
+		    freq, hz);
+
+	TIMER_WRITE(TM_CR, 0);
+	TIMER_WRITE(TM_RELOAD, reload);
+	TIMER_WRITE(TM_COUNT, reload);
+	TIMER_WRITE(TM_CR, TMCR_TICK_EN | TMCR_AUTOLOAD);
 }
 
 /*
- * Microsecond delay — busy-wait using the hardware timer counter.
- *
- * The timer ticks at 1 MHz (1 tick = 1 µs), counting down with
- * auto-reload.  We accumulate elapsed ticks by reading TMCOUNT
- * snapshots, handling the reload wrap.
- *
- * timer_early_init() ensures the counter is running before
- * autoconf, so delay() works from the very first driver probe.
+ * Microsecond delay — busy-wait on the hardware timer counter, which
+ * timer_early_init() starts before autoconf.  The wait is `us' in
+ * ticks at TMFREQ, rounded up, summed from the counter's decrements
+ * between readings.  A reading above the last one means one reload in
+ * between; readings a whole period apart miss periods and wait longer,
+ * never shorter.
  */
 void
 delay(unsigned int us)
 {
-	uint32_t prev, now, elapsed = 0;
+	uint32_t freq = TIMER_READ(TM_FREQ);
+	uint32_t reload = TIMER_READ(TM_RELOAD);
+	uint64_t ticks = ((uint64_t)us * freq + 999999) / 1000000;
+	uint64_t elapsed = 0;
+	uint32_t prev = TIMER_READ(TM_COUNT);
 
-	__asm __volatile(
-	    "RDSYS %0, %1, %2" : "=r"(prev)
-	    : "i"(SYSDEV_TIMER), "i"(TM_COUNT)
-	);
+	while (elapsed < ticks) {
+		uint32_t now = TIMER_READ(TM_COUNT);
 
-	while (elapsed < us) {
-		__asm __volatile(
-		    "RDSYS %0, %1, %2" : "=r"(now)
-		    : "i"(SYSDEV_TIMER), "i"(TM_COUNT)
-		);
 		if (now <= prev)
 			elapsed += prev - now;
 		else
-			elapsed += prev + 1;	/* wrapped past zero */
+			elapsed += prev + 1 + (reload - now);
 		prev = now;
 	}
 }
