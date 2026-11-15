@@ -38,13 +38,13 @@ BUILDDIR := $(PROJROOT)/build/benchmark
 
 # ── Targets ────────────────────────────────────────────────────
 
-.PHONY: all dhrystone coremark memtest membench strtest fbtest audiotest ps2test clean
+.PHONY: all dhrystone coremark memtest membench memspeed strtest fbtest audiotest ps2test clean
 
 # fbtest, audiotest and ps2test ship with the others so they are on the
 # SD image ready to run on hardware; they stay out of BENCH_ELFS in the
 # root Makefile, which is the list the automated ISS/RTL benchmark loop
 # runs, because each needs a real device and a human to judge it.
-all: dhrystone coremark memtest membench fbtest audiotest ps2test
+all: dhrystone coremark memtest membench memspeed fbtest audiotest ps2test
 
 # ── Common harness objects ─────────────────────────────────────
 
@@ -319,6 +319,28 @@ membench: $(BUILDDIR)/MEMBENCH.ELF
 
 $(BUILDDIR)/MEMBENCH.ELF: $(CRT0_OBJ) $(MEMBENCH_OBJ) $(COMMON_OBJ) $(HARNESS_LIBS) common/bench.ld
 	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(MEMBENCH_OBJ) $(COMMON_OBJ) $(HARNESS_LIBS) -o $@
+
+# ── memspeed ─────────────────────────────────────────────────
+#
+# Transfer rate against block size: read, write and copy, from inside
+# the L1 to well past the outermost cache, one table row per size.
+#
+# Build: make memspeed
+# Output: build/benchmark/MEMSPEED.ELF (load via boot sd:0,0/MEMSPEED.ELF)
+
+# The transfer loops are hand-written — see memspeed/loops.S.
+MEMSPEED_OBJ := $(BUILDDIR)/memspeed_entry.o $(BUILDDIR)/memspeed_loops.o
+
+$(BUILDDIR)/memspeed_entry.o: memspeed/entry.c common/bench.h common/mmu.h | $(BUILDDIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILDDIR)/memspeed_loops.o: memspeed/loops.S | $(BUILDDIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+memspeed: $(BUILDDIR)/MEMSPEED.ELF
+
+$(BUILDDIR)/MEMSPEED.ELF: $(CRT0_OBJ) $(MEMSPEED_OBJ) $(COMMON_OBJ) $(HARNESS_LIBS) common/bench.ld
+	$(LD) $(LDFLAGS) $(CRT0_OBJ) $(MEMSPEED_OBJ) $(COMMON_OBJ) $(HARNESS_LIBS) -o $@
 
 # ── strtest ──────────────────────────────────────────────────
 #

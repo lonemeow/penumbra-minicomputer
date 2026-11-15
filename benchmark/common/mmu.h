@@ -63,6 +63,12 @@ void bench_tlb_pin(unsigned slot, uint32_t va, uint32_t pte);
 uint32_t bench_tlb_lookup(uint32_t va);
 
 /*
+ * The main TLB's geometry: `sets` sets of `ways` entries each, a page's
+ * set being its VPN modulo `sets`.  The pinned TLB is not counted.
+ */
+void bench_tlb_geom(uint32_t *sets, uint32_t *ways);
+
+/*
  * Map [base, limit) cached even where it falls in the device range the
  * miss handler otherwise maps uncached.  For a device aperture that
  * behaves as plain memory — a framebuffer whose only writer is the CPU

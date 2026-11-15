@@ -525,8 +525,8 @@ Hex files are gitignored; the Makefile builds them from sources.
 
 ## Benchmarks
 
-Bare-metal benchmarks (Dhrystone 2.1, CoreMark 1.0, memtest, membench)
-under `benchmark/`; built as ELFs loaded from FAT32 via
+Bare-metal benchmarks (Dhrystone 2.1, CoreMark 1.0, memtest, membench,
+memspeed) under `benchmark/`; built as ELFs loaded from FAT32 via
 `boot sd:0,0/DHRYSTON.ELF` etc. — PIE, except Dhrystone and CoreMark,
 which link statically as the builds published scores come from do.
 NetBSD-hosted microbenchmark suite (`pbench`, syscalls + libc hot

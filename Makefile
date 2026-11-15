@@ -1098,8 +1098,10 @@ BENCH_ELFS := DHRYSTON.ELF MEMTEST.ELF MEMBENCH.ELF
 
 # COREMARK sizes its own runs to the ten seconds its run rules ask for:
 # seconds of ISS time, where it checks its results against known CRCs,
-# and hours of RTL simulation, so only the ISS loop runs it.
-BENCH_ELFS_ISS := $(BENCH_ELFS) COREMARK.ELF
+# and hours of RTL simulation, so only the ISS loop runs it.  MEMSPEED
+# times some eighty windows of 50 ms each, the same shape of cost; on
+# the ISS it checks its transfer loops before it measures anything.
+BENCH_ELFS_ISS := $(BENCH_ELFS) COREMARK.ELF MEMSPEED.ELF
 
 .PHONY: benchmark
 benchmark: sdimage-bench $(ISS)

@@ -210,6 +210,8 @@ Two benchmark families live under `benchmark/`:
   describe gets no per-MHz line: add its memory to `machine_memory[]`
   in `benchmark/common/bench.c`.
 - `MEMBENCH.ELF` — cached + uncached memory throughput / latency at W/H/B sizes.
+- `MEMSPEED.ELF` — read, write and copy rates against block size, from
+  inside the L1 to well past the outermost cache, one table row per size.
 - `MEMTEST.ELF` — SDRAM correctness walk (six patterns; round-trip / walking-1 / etc.).
 
 ```sh

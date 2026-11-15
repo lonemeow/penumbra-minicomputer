@@ -113,7 +113,7 @@ instruction-level simulator and in cycle-accurate Verilator.
 - `llvm/` — Penumbra backend for the LLVM compiler infrastructure.
 - `doc/` — Comprehensive architecture and system documentation.
 - `netbsd/` — NetBSD kernel and userland source tree.
-- `benchmark/` — Bare-metal benchmarks (Dhrystone, membench, memtest) and the NetBSD-hosted `pbench` microbenchmark suite.
+- `benchmark/` — Bare-metal benchmarks (Dhrystone, membench, memspeed, memtest) and the NetBSD-hosted `pbench` microbenchmark suite.
 
 ---
 

@@ -91,6 +91,12 @@ uint32_t bench_tlb_lookup(uint32_t va)
     return 0;
 }
 
+void bench_tlb_geom(uint32_t *sets, uint32_t *ways)
+{
+    *sets = *COPY(_rmh_set_mask) + 1u;
+    *ways = *COPY(_rmh_main_slots) / *sets;
+}
+
 void bench_map_cached(uint32_t base, uint32_t limit)
 {
     volatile uint32_t *range = COPY(_rmh_cached_base);
