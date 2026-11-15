@@ -143,11 +143,22 @@ The ISS's load-use model puts the 2-cycle wait at 131–147 cycles per
 (`doc/internals/penumbra4/load-use.md`); the third cycle has not been
 counted.
 
+Releasing the reader while the load is in MEM2 bets that the load
+hits; when it parks instead, the released reader waits in EX and takes
+the word from the completion, forwarded in MEM2/WB's place
+(`memory-completion.md`, "Load hit" and "Load miss"). Modelled on
+libc's `memcpy` word loop, the release and the forward take a copy from
+L2 from 7.00 to 6.00 cycles a word, and one from memory on the Nexys
+from 14.20 to 13.61. The forward is a quarter cycle a word of that, a
+cycle a line: a copy that misses spends most of its time with a fill and
+the store drain taking turns on the bus, and the miss's cycle comes
+right after the fill.
+
 Open:
 
-- The spine drives `i_fwd*` to release a pending load or sysreg read
-  at the cycle its value reaches MEM2/WB, gated on the registered
-  `mem_pending`, never on a live verdict.
+- Build the release and the completion's forward as
+  `memory-completion.md` specifies, and read a seed sweep for the
+  sub-word extract on the forward leg.
 - The divmul's low half leaves the late-writer list.
 - What the third cycle costs: `+loadusemodel=ex+wait:3` beside `ex`.
 

@@ -40,27 +40,26 @@ A load that hits needs no pipe stall; it creates only a load-use hazard for
 a dependent issued too close behind. That hazard is resolved against
 **registered** state:
 
-- A load is a *late writer* from its issue until it leaves MEM2: the
-  scoreboard finds it in whichever pipeline register holds it.
+- A load is a *late writer* from its issue until it reaches MEM2: the
+  scoreboard finds it in EX or MEM1, whichever pipeline register holds
+  it.
 - A dependent compares its sources against the late writers in flight at
   issue, and stalls while one writes a source — comparing registered
   destinations, never the cache verdict.
-- A hit stops counting as it reaches WB, which writes the regfile in that
-  cycle, and the regfile's reads are write-first.
+- **A load in MEM2 releases its readers.** A reader that issues with the
+  load in MEM2 reaches EX as the load reaches MEM2/WB, the first register
+  its value forwards from. The release reads the MEM2 pipeline register
+  alone, never whether the load hit.
 - A parked load is in no pipeline register, and the scoreboard does not
   see it. Nothing issues while it is parked: the back end's hold
   ([what the pipe gate freezes](#what-the-pipe-gate-freezes)) keeps every
-  instruction in ID until its completion has written the regfile.
-
-The scoreboard keeps no state of its own, so two late writers of one
-register never confuse it: the register stays pending until the younger
-has written it. A divmul's second result is a late write of the same kind,
-seen in EX, MEM1 and MEM2. WB writes it a cycle after the first, and holds
-issue until it does.
+  instruction still in ID there until its completion has written the
+  regfile.
 
 A load's value forwards from the MEM2/WB register, so a dependent issued
-directly behind it waits 2 cycles. MEM2 forwards only results computed
-before it: a load's word resolves during MEM2, behind the TLB and cache
+directly behind it waits 2 cycles, one with an instruction between them,
+and none further back. MEM2 forwards only results computed before
+it: a load's word resolves during MEM2, behind the TLB and cache
 block RAM reads and the tag compare, and forwarding it from there would
 carry that cone on through EX's operand mux and ALU in the same cycle.
 Sysreg reads, which resolve in MEM2 the same way, forward from MEM2/WB
@@ -69,6 +68,21 @@ state as well. The faults MEM2 raises (alignment, a TLB miss,
 protection) come only with loads and stores, and neither forwards from
 MEM2, so the choice depends on the fault an instruction brought into
 MEM2 and never on the translate's verdict.
+
+**A release is a bet that the load hits.** A load released in MEM2 may
+park there instead of reaching MEM2/WB. The reader released with it is
+then in EX, which only one instruction occupies, and the back end's hold
+freezes it there until the completion forwards the load's word to it
+([load miss](#load-miss--hold-and-complete)). It leaves EX in the cycle
+the launch side resumes, a cycle before a dependent that waited in ID
+could reach EX. A sysreg read never parks, so its release always lands.
+
+The scoreboard keeps no state of its own, so two late writers of one
+register never confuse it: the register stays pending until the younger
+has reached MEM2, and EX takes the younger's value, searching its forward
+legs youngest first. A divmul is not released. Its two results are late
+writes seen in EX, MEM1 and MEM2, and WB writes the second a cycle after
+the first, holding issue until it does.
 
 ## Load miss — hold-and-complete
 
@@ -110,12 +124,31 @@ graph LR
 - **Completion is the L1-D's registered `done`,** in the cycle after the
   read completes. The completion unit delivers the word to the held load's
   register, or takes the [bus fault](#fault-precision), and retires the
-  instruction.
+  instruction. A reader released before the park takes the word from the
+  completion's forward, below.
 - **The launch side resumes when `mem_pending` drops:** with completion,
   or a cycle later when the load or store held in MEM2 behind the miss has
   its lookup in the set the line went into, which the L1 shows it a cycle
   late. The L1-D folds that cycle into its busy, so the completion unit
   sees only busy and `done`.
+
+**The completion forwards in MEM2/WB's place.** While a load is parked,
+MEM2/WB carries only bubbles, so the completion shares that register's
+forward leg: the parked load's destination, and its word extracted as a
+hit's is. Both stay put until EX advances: the L1-D keeps the word until
+its next `done`, and the completion unit keeps the descriptor until the
+launch side resumes. The completion is on the leg from its own cycle
+until EX next advances, in that cycle or the one after when the launch
+side resumes late, and leaves it then. Nothing younger can write the
+register in between, since the pipe stays frozen from the park until EX
+advances, so the leg never shadows a newer value. A completion that
+faults forwards nothing: its fault flushes the reader.
+
+The extract sits ahead of EX's operand mux on this leg alone; the other
+legs start at their registers. If a seed sweep shows that path does not
+fit the period, the release covers word loads alone, which need no
+extract, and a sub-word load's readers wait in ID until it has left
+MEM2.
 
 ## Stores — write-through, write-no-allocate
 
@@ -202,7 +235,8 @@ Both sources are registers: the L1-D's busy and the buffer's full.
 - **Held while an access is pending:** MEM1, the MEM1/MEM2 register, the
   [address-translation launch](./mem-stage.md), and issue: nothing issues,
   so a parked load's dependents need no scoreboard entry
-  ([the issue gate](#the-issue-gate)). The pending
+  ([the issue gate](#the-issue-gate)), and a reader released before the
+  park waits in EX for the completion's forward. The pending
   access and every younger instruction hold in place. The instruction held
   in MEM2 keeps its verdict and does nothing with it: its commit, a store's
   cache write and a miss of its own all happen in the one cycle it leaves
@@ -375,8 +409,9 @@ the write case comes along on the one qualifier above.
 
 Issue computes `can_issue` from registered inputs only: the decoded source
 register numbers (registered out of the pre-decode FIFO) compared against
-the destinations of the late writers in the EX, MEM1 and MEM2 pipeline
-registers, qualified by what the forwarding network can supply this cycle.
+the destinations of the late writers short of the register their value
+forwards from: a load or sysreg read in EX or MEM1, a divmul through MEM2
+([load hit](#load-hit--a-registered-load-use-hazard)).
 This compare is reg#-equality on already-registered fields — 1–2 LUT
 levels and an OR across the writers, the shape every surveyed core uses,
 never a long path. It is the cone P0.1 and P0.2 share, and the natural place
