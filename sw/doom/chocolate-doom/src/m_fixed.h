@@ -22,7 +22,6 @@
 
 #include <stdint.h>
 
-#include "r_phase.h"
 
 
 //
@@ -43,7 +42,6 @@ typedef int fixed_t;
 //
 static inline fixed_t FixedMul(fixed_t a, fixed_t b)
 {
-    R_COUNT_FIXEDMUL();
     return (fixed_t) (((int64_t) a * (int64_t) b) >> FRACBITS);
 }
 

@@ -19,14 +19,10 @@
 #include "config.h"
 #include "doomtype.h"
 #include "i_input_netbsd.h"
-#include "doomstat.h"
 #include "i_system.h"
 #include "i_video.h"
 #include "m_argv.h"
 #include "m_config.h"
-#ifdef PENUMBRA_PERFCTR
-#include "perfctr.h"
-#endif
 #include "tables.h"
 #include "v_video.h"
 #include "z_zone.h"
@@ -168,7 +164,6 @@ I_InitGraphics(void)
     //
     noblit = M_CheckParm("-noblit") > 0;
 
-
     // Nothing else restores the console: without this the display stays
     // in DUMBFB and the keyboard in raw mode after the game exits.
     I_AtExit(I_ShutdownGraphics, true);
@@ -282,27 +277,9 @@ I_ReadScreen(pixel_t *scr)
 // graphics mode by the time this runs.
 void I_Endoom(byte *endoom_data) { (void) endoom_data; }
 
-#ifdef PENUMBRA_PERFCTR
-// demoplayback goes true at the end of G_DoPlayDemo, immediately after it
-// records the timedemo's own start time, so sampling from here brackets
-// the same work the reported tally covers -- level loading excluded.
-void
-I_StartFrame(void)
-{
-    static int counting;
-
-    if (!counting && demoplayback)
-    {
-        counting = 1;
-        perf_demo_track();
-    }
-}
-#else
-void I_StartFrame(void) {}
-#endif
-
 void I_UpdateNoBlit(void) {}
 void I_BeginRead(void) {}
+void I_StartFrame(void) {}
 void I_GraphicsCheckCommandLine(void) {}
 void I_CheckIsScreensaver(void) {}
 void I_InitWindowTitle(void) {}

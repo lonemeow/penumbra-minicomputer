@@ -66,16 +66,6 @@ PORT_SRCS    := $(HERE)m_fixed_penumbra.c \
                 $(HERE)net_launch_headless.c \
                 $(HERE)i_main_netbsd.c
 
-# PERFCTR=1 links the hardware counter reader shared with pbench and dumps
-# the stall and cache breakdown at exit.  Off by default: it is a
-# profiling aid, not part of the game.
-ifeq ($(PERFCTR),1)
-BENCHDIR     := $(PROJROOT)/benchmark/netbsd-bench
-PORT_SRCS    += $(BENCHDIR)/perfctr.c $(HERE)r_phase.c
-PERFCTR_INC  := -I$(BENCHDIR)
-PERFCTR_DEF  := -DPENUMBRA_PERFCTR=1
-endif
-
 SRCS         := $(DOOM_SRCS) $(COMMON_SRCS) $(PORT_SRCS)
 OBJS         := $(patsubst %.c,$(OBJDIR)/%.o,$(notdir $(SRCS)))
 
@@ -84,13 +74,11 @@ OBJS         := $(patsubst %.c,$(OBJDIR)/%.o,$(notdir $(SRCS)))
 # config.h and sdl_compat.h come from here; sdl-compat/ answers
 # upstream's `#include "SDL*.h"' lines.
 INCLUDES     := -I$(HERE) -I$(HERE)sdl-compat -I$(CD)/src -I$(CD)/src/doom \
-                -I$(CD)/textscreen -I$(CD)/opl -I$(CD)/pcsound \
-                $(PERFCTR_INC)
+                -I$(CD)/textscreen -I$(CD)/opl -I$(CD)/pcsound
 
 # net_sdl.c still defines net_sdl_module under DISABLE_SDL2NET, so the
 # multiplayer code links — d_loop.c reaches the net layer single-player.
-DEFINES      := -DDISABLE_SDL2MIXER=1 -DDISABLE_SDL2NET=1 $(PERFCTR_DEF)
-
+DEFINES      := -DDISABLE_SDL2MIXER=1 -DDISABLE_SDL2NET=1
 
 CFLAGS       := --target=$(TARGET) --sysroot=$(DESTDIR) $(COPT) \
                 -std=c99 -Wall -Wdeclaration-after-statement \
@@ -102,7 +90,7 @@ LDLIBS       := -lm
 # "is the source newer?" when the question is "was this built the way I am
 # building now?".  Two things close that gap: the compiler reports the
 # headers it actually read, and the flags are stamped into a file every
-# object depends on.  Without the stamp, changing PERFCTR reuses objects
+# object depends on.  Without the stamp, changing COPT reuses objects
 # from the other setting and links two configurations into one binary.
 DEPFLAGS     := -MMD -MP
 CONFIG_STAMP := $(OBJDIR)/build-config
@@ -114,7 +102,7 @@ $(BUILDDIR)/doom: $(OBJS) $(CONFIG_STAMP) | $(BUILDDIR)
 	$(CC) $(LDFLAGS) $(OBJS) $(LDLIBS) -o $@
 
 # No basename collisions across the three source directories.
-vpath %.c $(CD)/src $(CD)/src/doom $(HERE) $(BENCHDIR)
+vpath %.c $(CD)/src $(CD)/src/doom $(HERE)
 
 $(OBJDIR)/%.o: %.c $(CONFIG_STAMP) | $(OBJDIR)
 	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@

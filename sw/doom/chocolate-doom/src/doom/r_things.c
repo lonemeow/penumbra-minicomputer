@@ -32,7 +32,6 @@
 #include "w_wad.h"
 
 #include "r_local.h"
-#include "r_phase.h"
 
 #include "doomstat.h"
 
@@ -482,7 +481,6 @@ void R_ProjectSprite (mobj_t* thing)
     
     angle_t		ang;
     fixed_t		iscale;
-    R_COUNT(R_CNT_PROJSPRITE);
     
     // transform the origin point
     tr_x = thing->x - viewx;

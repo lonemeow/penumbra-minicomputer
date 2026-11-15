@@ -29,8 +29,6 @@
 #include "m_fixed.h"
 #endif
 
-#include "r_phase.h"
-
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -39,8 +37,6 @@ FixedDiv(fixed_t a, fixed_t b)
 {
     uint32_t num, den, quot;
     uint32_t q, rem, frac;
-
-    R_COUNT_FIXEDDIV();
 
     if ((abs(a) >> 14) >= abs(b))
     {

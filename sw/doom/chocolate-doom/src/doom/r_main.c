@@ -34,7 +34,6 @@
 
 #include "r_local.h"
 #include "r_sky.h"
-#include "r_phase.h"
 
 
 
@@ -276,8 +275,7 @@ angle_t
 R_PointToAngle
 ( fixed_t	x,
   fixed_t	y )
-{
-    R_COUNT(R_CNT_POINTTOANGLE);	
+{	
     x -= viewx;
     y -= viewy;
     
@@ -863,8 +861,6 @@ void R_SetupFrame (player_t* player)
 //
 void R_RenderPlayerView (player_t* player)
 {	
-    R_PhaseMark(R_PHASE_SETUP);
-
     R_SetupFrame (player);
 
     // Clear buffers.
@@ -877,23 +873,18 @@ void R_RenderPlayerView (player_t* player)
     NetUpdate ();
 
     // The head node is the last node output.
-    R_PhaseMark(R_PHASE_BSP);
     R_RenderBSPNode (numnodes-1);
     
     // Check for new console commands.
     NetUpdate ();
     
-    R_PhaseMark(R_PHASE_PLANES);
     R_DrawPlanes ();
     
     // Check for new console commands.
     NetUpdate ();
     
-    R_PhaseMark(R_PHASE_MASKED);
     R_DrawMasked ();
 
     // Check for new console commands.
     NetUpdate ();				
-
-    R_PhaseMark(R_PHASE_REST);
 }

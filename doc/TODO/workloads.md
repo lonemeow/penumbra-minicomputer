@@ -90,7 +90,7 @@ a Doom rebuild, all from the same compiler at the default tuning.
 Doom's hot functions came out the same under `-mcpu=penumbra1` apart
 from constant multiplies.  All counts are static disassembly scans by
 throwaway scripts.  Nothing is weighted by execution frequency yet;
-for Doom, the renderer counters of a `PERFCTR=1` run supply the
+for Doom, an ISS `+pcprof` profile of a timedemo supplies the
 weights.
 
 Compiler causes, widest reach first, each with its own entry:
@@ -309,20 +309,6 @@ Two consequences:
   footing as the drawer work.  The kernel-side version was tried and
   declined — see "Ruled out" in [kernel.md](kernel.md) — on evidence
   that may carry over: the layout noise swamped the effect.
-
-`r_phase` gaps:
-
-- Every mark is a `sysctl` call.  A sampled wall call carries two, and
-  the scaled `wall` estimate (7.8M cycles) exceeds the whole bsp+wall
-  bucket (6.9M), so a mark pair costs at least ~15k cycles.  Calibrate
-  it with a back-to-back pair and subtract before trusting the
-  bsp/wall split.
-- Only cycles and instructions are kept per phase, although `read_cpu`
-  fetches all eight counters.  Per-phase stall buckets would say which
-  phases are load- or store-bound.
-- The whole-run `perf_report` line subtracts a single snapshot pair of
-  32-bit counters, so it is meaningless past 2^32 cycles (~115 s at
-  37.5 MHz).  `BENCH.lmp` runs ~60 s.
 
 ## Doom: renderer source-level costs
 

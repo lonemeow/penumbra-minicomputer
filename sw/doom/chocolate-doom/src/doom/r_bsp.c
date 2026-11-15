@@ -34,7 +34,6 @@
 #include "r_state.h"
 
 //#include "r_local.h"
-#include "r_phase.h"
 
 
 
@@ -107,13 +106,12 @@ R_ClipSolidWallSegment
 {
     cliprange_t*	next;
     cliprange_t*	start;
-    R_COUNT(R_CNT_CLIPSOLID);
 
     // Find the first range that touches the range
     //  (adjacent pixels are touching).
     start = solidsegs;
     while (start->last < first-1)
-	{ R_COUNT(R_CNT_SOLIDSEG_SCAN); start++; }
+	start++;
 
     if (first < start->first)
     {
@@ -127,7 +125,6 @@ R_ClipSolidWallSegment
 	    
 	    while (next != start)
 	    {
-		R_COUNT(R_CNT_SOLIDSEG_MOVE);
 		*next = *(next-1);
 		next--;
 	    }
@@ -201,13 +198,12 @@ R_ClipPassWallSegment
   int	last )
 {
     cliprange_t*	start;
-    R_COUNT(R_CNT_CLIPPASS);
 
     // Find the first range that touches the range
     //  (adjacent pixels are touching).
     start = solidsegs;
     while (start->last < first-1)
-	{ R_COUNT(R_CNT_SOLIDSEG_SCAN); start++; }
+	start++;
 
     if (first < start->first)
     {
@@ -267,7 +263,6 @@ void R_AddLine (seg_t*	line)
     angle_t		angle2;
     angle_t		span;
     angle_t		tspan;
-    R_COUNT(R_CNT_ADDLINE);
     
     curline = line;
 
@@ -402,7 +397,6 @@ boolean R_CheckBBox (fixed_t*	bspcoord)
 
     int			sx1;
     int			sx2;
-    R_COUNT(R_CNT_CHECKBBOX);
     
     // Find the corners of the box
     // that define the edges from current viewpoint.
@@ -479,7 +473,7 @@ boolean R_CheckBBox (fixed_t*	bspcoord)
 	
     start = solidsegs;
     while (start->last < sx2)
-	{ R_COUNT(R_CNT_SOLIDSEG_SCAN); start++; }
+	start++;
     
     if (sx1 >= start->first
 	&& sx2 <= start->last)
@@ -504,7 +498,6 @@ void R_Subsector (int num)
     int			count;
     seg_t*		line;
     subsector_t*	sub;
-    R_COUNT(R_CNT_SUBSECTOR);
 	
 #ifdef RANGECHECK
     if (num>=numsubsectors)
@@ -563,7 +556,6 @@ void R_RenderBSPNode (int bspnum)
 {
     node_t*	bsp;
     int		side;
-    R_COUNT(R_CNT_BSPNODE);
 
     // Found a subsector?
     if (bspnum & NF_SUBSECTOR)
