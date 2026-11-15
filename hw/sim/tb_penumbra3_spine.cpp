@@ -9,7 +9,8 @@
 //
 // Loads and stores run against a model of the translation and the uncore: the
 // mapping is identity, the L1 never hits, and each request on the port answers
-// a set number of cycles after it rises. The address decides the rest:
+// a set number of cycles after it rises. A cacheable store goes to the store
+// buffer instead, which always has room. The address decides the rest:
 //   below 0x4000             cacheable
 //   0x4000 and up            uncacheable
 //   0x6000..0x6FFF           no device: the access completes with a bus fault
@@ -78,6 +79,7 @@ struct Trace {
     std::vector<uint32_t> done_cycles;
     uint32_t mmu_faults = 0, fault_vaddr = 0, fault_status = 0, epc = 0;
     uint32_t requests = 0;
+    uint32_t enqueues = 0, enq_addr = 0, enq_wdata = 0;   // stores into the buffer
     uint32_t retire_with_dc = 0;   // cycles a retire and a drain-commit share
 };
 
@@ -94,6 +96,7 @@ static void clear_inputs(Vpenumbra3_spine_test* dut) {
     dut->i_sys_rdata = 0;
     dut->i_drsp_done = 0; dut->i_rsp_fault = 0;
     for (int k = 0; k < 4; k++) dut->i_rsp_line[k] = 0;
+    dut->i_store_full = 0;
     dut->i_irq_inject = 0; dut->i_irq_vec = 0;
     dut->i_deferred_inject = 0; dut->i_deferred_addr = 0;
 }
@@ -153,6 +156,11 @@ static void run_mem(Vpenumbra3_spine_test* dut, const std::vector<uint32_t>& pro
         }
         dut->eval();
 
+        if (dut->o_store_enq) {
+            t.enqueues++;
+            t.enq_addr = dut->o_store_addr;
+            t.enq_wdata = dut->o_dcache_wdata;
+        }
         if (dut->o_commit_we)
             t.commits.push_back({dut->o_commit_idx, dut->o_commit_data});
         if (dut->o_insn_committed) {
@@ -475,7 +483,7 @@ int main(int argc, char** argv) {
                       {{10, 0x1000}, {1, 4}, {1, 0x1004}, {1, w}, {1, w + 0x1000}});
     }
 
-    // ── A cacheable store retires once, ahead of its write ───────
+    // ── A cacheable store retires once, into the store buffer ────
     {
         Trace t;
         run_mem(dut, {enc_l(OP_L_LLI, 5, 0x1000), stw(5, 5, 4), enc_l(OP_L_LLI, 7, 7)},
@@ -483,10 +491,10 @@ int main(int argc, char** argv) {
         check_commits("c_store", t.commits, {{5, 0x1000}, {7, 7}});
         check_retires("c_store", t, {0, 4, 8});
         check_trace("c_store", t, {OPC_ALU, OPC_STORE, OPC_ALU});
-        check("c_store_requests", t.requests, 1);
-        if (t.retire_cycles.size() > 1 && !t.done_cycles.empty())
-            check("c_store_retires_before_done",
-                  t.retire_cycles[1] < t.done_cycles[0], 1);
+        check("c_store_requests", t.requests, 0);
+        check("c_store_enqueues", t.enqueues, 1);
+        check("c_store_enq_addr", t.enq_addr, 0x1004);
+        check("c_store_enq_data", t.enq_wdata, 0x1000);
     }
 
     // ── An uncached store retires with its completion ────────────
@@ -565,11 +573,21 @@ int main(int argc, char** argv) {
     }
     {
         Trace t;
-        run_mem(dut, {enc_l(OP_L_LLI, 5, 0x1000), stw(5, 5, 0), enc_r(OP_R_DI, 0, 0, 0)},
+        run_mem(dut, {enc_l(OP_L_LLI, 5, 0x4000), stw(5, 5, 0), enc_r(OP_R_DI, 0, 0, 0)},
                 {}, 40, t, 8);
         check("dc_store_commits", (uint32_t)t.dc_cycles.size(), 1);
         if (!t.dc_cycles.empty() && !t.done_cycles.empty())
             check("dc_store_after_done", t.dc_cycles[0] > t.done_cycles[0], 1);
+    }
+    // A cacheable store parks nothing: the drain-commit behind it waits for
+    // no write, which the store buffer orders on its own.
+    {
+        Trace t;
+        run_mem(dut, {enc_l(OP_L_LLI, 5, 0x1000), stw(5, 5, 0), enc_r(OP_R_DI, 0, 0, 0)},
+                {}, 40, t, 8);
+        check("dc_cstore_commits", (uint32_t)t.dc_cycles.size(), 1);
+        check("dc_cstore_no_request", t.requests, 0);
+        check("dc_cstore_enqueued", t.enqueues, 1);
     }
 
     // ── A faulting access takes the drain-commit behind it with it ──

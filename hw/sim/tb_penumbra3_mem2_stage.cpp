@@ -2,7 +2,9 @@
 // (penumbra3_mem2_stage_test): MEM1, the TLB's D-copy, a real L1 and MEM2
 // with its completion unit. The testbench is the uncore: it answers the
 // requests the L1 raises, from a memory whose content is a function of the
-// address. What the L1 installed shows as what later accesses hit.
+// address. It is the store buffer too, which applies each store entering it
+// to that memory at once. What the L1 installed shows as what later
+// accesses hit.
 //
 // Timing: an access driven in cycle A is in MEM1; one tick later it is in
 // MEM2 with the translation and the L1 verdict resolved; it leaves MEM2 at
@@ -11,9 +13,10 @@
 // Covers: a load with the L1 disabled; a miss, its request and the
 // completion, cycle by cycle; hits on the installed line
 // (+ sub-word); an uncached load as a word read; a faulted line read;
-// stores -- a hit and a miss written through, a sub-word store's lane, an
-// uncached store retiring with its completion, a faulted one, the launch
-// side held until the write completes; the L1's counters; a TLB miss
+// stores -- a hit and a miss entering the store buffer as they retire, a
+// sub-word store's lane, the instruction behind a store never held, a full
+// buffer holding the launch side, an uncached store retiring with its
+// completion, a faulted one; the L1's counters; a TLB miss
 // retiring with its fault; the MEM2->EX forward; a slot held in MEM2 taking
 // effect only as it leaves (behind a parked access, under WB
 // back-pressure, squashed by a fault commit); and the slot behind a parked
@@ -96,11 +99,13 @@ static void uncore_idle(Dut* d) {
 static struct {
     int      cycle;
     int      requests, completions, store_strobes, req_changed;
+    int      enqueues, pending_cycles;
+    uint32_t enq_addr, enq_wdata; int enq_byte_en;
     uint32_t req_addr;  int req_cacheable, req_byte_en, req_we;
     uint32_t req_wdata;
-    uint32_t cpl_value; int cpl_dest, cpl_fault, cpl_we, cpl_retires;
+    uint32_t cpl_value; int cpl_dest, cpl_fault, cpl_we;
     uint32_t cpl_pc, cpl_vaddr, cpl_status;
-    int      strays;    // cycles a completion's pulse rose without o_complete
+    int      strays;    // cycles a completion's fault rose without o_complete
     int      wb_n[32];  uint32_t wb_value[32];
     // Cycles from a done to the first cycle o_mem_pending is low after it.
     int      done_at, release_lag;
@@ -140,13 +145,24 @@ static void tick(Dut* d) {
         m.completions++;
         m.cpl_value = d->o_complete_value; m.cpl_dest = d->o_complete_dest;
         m.cpl_fault = d->o_complete_fault; m.cpl_we = d->o_complete_we;
-        m.cpl_retires = d->o_complete_retires;
         m.cpl_pc = d->o_complete_pc; m.cpl_vaddr = d->o_complete_vaddr;
         m.cpl_status = d->o_complete_status;
     } else {
-        m.strays += d->o_complete_fault | d->o_complete_retires;
+        m.strays += d->o_complete_fault;
     }
     m.store_strobes += d->o_dcache_we;
+    m.pending_cycles += d->o_mem_pending;
+    // The store buffer: a store entering it reaches memory at once.
+    if (d->o_store_enq) {
+        m.enqueues++;
+        m.enq_addr = d->o_store_addr; m.enq_wdata = d->o_dcache_wdata;
+        m.enq_byte_en = d->o_dcache_byte_en;
+        uint32_t lanes = 0;
+        for (int b = 0; b < 4; b++)
+            if (d->o_dcache_byte_en >> b & 1) lanes |= 0xFFu << 8 * b;
+        written[d->o_store_addr & ~3u] = (mem_word(d->o_store_addr) & ~lanes)
+                                       | (d->o_dcache_wdata & lanes);
+    }
     if (d->o_wb_valid) {
         m.wb_n[d->o_wb_phys_dst]++;
         m.wb_value[d->o_wb_phys_dst] = d->o_wb_value;
@@ -246,7 +262,7 @@ int main(int argc, char** argv) {
 
     drive_none(d);
     d->i_user_mode = 0; d->i_asid = 0;
-    d->i_tlb_wr_en = 0; d->i_ext_stall = 0; d->i_bubble = 0;
+    d->i_tlb_wr_en = 0; d->i_ext_stall = 0; d->i_bubble = 0; d->i_store_full = 0;
     d->i_l1_sys_reg = 0; d->i_l1_sys_wdata = 0; d->i_l1_sys_we = 0; d->i_l1_sys_re = 0;
     uncore_idle(d);
     d->i_rst = 1; tick(d); tick(d); d->i_rst = 0; d->eval();
@@ -302,7 +318,6 @@ int main(int argc, char** argv) {
     check("miss_one_request",      m.requests, 1);
     check("miss_request_stable",   m.req_changed, 0);
     check("miss_one_completion",   m.completions, 1);
-    check("miss_completion_retires", m.cpl_retires, 1);
     uc.automatic = true;
 
     // ── Hits on the installed line ──
@@ -343,7 +358,6 @@ int main(int argc, char** argv) {
     run(d, ld(MEM_SZ_WORD, 0, 5), 0x1040, 5, 1);
     check("fault_completes",  m.completions, 1);
     check("fault_reported",   m.cpl_fault, 1);
-    check("fault_retires",    m.cpl_retires, 1);           // a fault completes it
     check("fault_pc",         m.cpl_pc, pc_of(0x1040));
     check("fault_vaddr",      m.cpl_vaddr, 0x1040);        // the page's, not 0x2040
     check("fault_status",     m.cpl_status, FAULT_BUS | FSTAT_R);
@@ -352,68 +366,80 @@ int main(int argc, char** argv) {
     check("fault_asks_again", m.requests, 2);
     check("fault_then_value", m.cpl_value, mem_word(0x2040));
 
-    // ── A cacheable store that hits writes the L1 and writes through ──
+    // ── A cacheable store that hits writes the L1 and enters the buffer ──
     watch_reset();
     run(d, st(MEM_SZ_WORD), 0x1008, 0, 0, 0xAABBCCDD);
     check("store_strobe_once",    m.store_strobes, 1);
-    check("store_request",        m.requests, 1);
-    check("store_req_we",         m.req_we, 1);
-    check("store_req_cacheable",  m.req_cacheable, 1);
-    check("store_req_addr",       m.req_addr, 0x2008);
-    check("store_req_byte_en",    m.req_byte_en, 0xF);
-    check("store_req_wdata",      m.req_wdata, 0xAABBCCDD);
-    check("store_req_stable",     m.req_changed, 0);
+    check("store_enqueued_once",  m.enqueues, 1);
+    check("store_enq_addr",       m.enq_addr, 0x2008);
+    check("store_enq_byte_en",    m.enq_byte_en, 0xF);
+    check("store_enq_wdata",      m.enq_wdata, 0xAABBCCDD);
+    check("store_no_request",     m.requests, 0);
     check("store_retired",        m.wb_n[0], 1);         // its fault is asynchronous
-    check("store_completes",      m.completions, 1);
-    check("store_retires_once",   m.cpl_retires, 0);     // it left through WB
-    check("store_writes_no_reg",  m.cpl_we, 0);
-    check("store_release_lag",    m.release_lag, 1);
-    check("store_in_memory",      mem_word(0x2008), 0xAABBCCDD);
+    check("store_no_completion",  m.completions, 0);
+    check("store_never_pending",  m.pending_cycles, 0);
     run(d, ld(MEM_SZ_WORD, 0, 6), 0x1008, 6, 1);
     check("store_read_back",      m.wb_value[6], 0xAABBCCDD);
-    check("store_read_back_hits", m.requests, 1);        // the store's write and no other
+    check("store_read_back_hits", m.requests, 0);
 
-    // ── A store holds the launch side until its write completes ──
-    uc.automatic = false;
+    // ── The instruction behind a store goes straight on ──
     watch_reset();
     drive(d, st(MEM_SZ_WORD), 0x1010, 0, 0, 0x11223344);
     tick(d);                                   // the store is in MEM2
     drive(d, enc_r(0 /* ADD */, 4), 0x44440000, 4, 1);
-    tick(d);                                   // p+1: parked; the ADD waits in MEM2
+    tick(d);                                   // the store retires; the ADD is in MEM2
     drive_none(d);
-    check("store_hold_pending",   d->o_mem_pending, 1);
-    check("store_hold_request",   d->o_dreq_valid, 1);
-    check("store_hold_we",        d->o_dreq_we, 1);
-    check("store_hold_retired",   d->o_wb_valid, 1);     // the store, as it left MEM2
-    tick(d);                                   // p+2
-    check("store_hold_bubble",    d->o_wb_valid, 0);
-    check("store_hold_bcause",    d->o_wb_bcause, BCAUSE_STORE);
+    check("store_behind_not_pending", d->o_mem_pending, 0);
+    check("store_behind_retired",     d->o_wb_valid, 1);  // the store
     tick(d);
-    uncore_answer(d, false);                   // r
-    tick(d);                                   // r+1
-    uncore_idle(d);
-    check("store_hold_complete",  d->o_complete, 1);
-    check("store_hold_no_reg",    d->o_complete_we, 0);
-    check("store_hold_released",  d->o_mem_pending, 0);
+    check("store_behind_add_next",    d->o_wb_valid, 1);  // the ADD, the next cycle
     drain(d);
-    check("store_hold_add_once",  m.wb_n[4], 1);
-    uc.automatic = true;
+    check("store_behind_add_once",    m.wb_n[4], 1);
+    check("store_behind_enqueued",    m.enqueues, 1);
+
+    // ── A full buffer holds the launch side; the store enters once ──
+    // The buffer fills as an earlier store enters it, so full rises with
+    // the next store already in MEM2.
+    watch_reset();
+    drive(d, st(MEM_SZ_WORD), 0x1018, 0, 0, 0x99887766);
+    tick(d);                                   // the store is in MEM2
+    d->i_store_full = 1; d->eval();            // held
+    drive(d, enc_r(0 /* ADD */, 4), 0x44440004, 4, 1);
+    check("full_pending",         d->o_mem_pending, 1);
+    check("full_no_enq",          d->o_store_enq, 0);
+    tick(d);
+    tick(d);
+    check("full_bubble",          d->o_wb_valid, 0);
+    check("full_bcause",          d->o_wb_bcause, BCAUSE_STORE);
+    check("full_still_waiting",   m.enqueues, 0);
+    d->i_store_full = 0; d->eval();
+    check("full_released",        d->o_mem_pending, 0);
+    check("full_enq_on_release",  d->o_store_enq, 1);
+    tick(d);                                   // the store leaves; the ADD enters MEM2
+    drive_none(d);
+    drain(d);
+    check("full_enqueued_once",   m.enqueues, 1);
+    check("full_enq_addr",        m.enq_addr, 0x2018);
+    check("full_store_retired",   m.wb_n[0], 1);
+    check("full_add_once",        m.wb_n[4], 1);
+    check("full_add_value",       m.wb_value[4], 0x44440004);
 
     // ── A byte store writes its one lane ──
     watch_reset();
     run(d, st(MEM_SZ_BYTE), 0x100A, 0, 0, 0xEE);         // byte 2 of the word above
-    check("store_byte_byte_en",   m.req_byte_en, 0x4);
-    check("store_byte_lane",      (m.req_wdata >> 16) & 0xFF, 0xEE);
+    check("store_byte_byte_en",   m.enq_byte_en, 0x4);
+    check("store_byte_lane",      (m.enq_wdata >> 16) & 0xFF, 0xEE);
     check("store_byte_memory",    mem_word(0x2008), 0xAAEECCDD);
     run(d, ld(MEM_SZ_WORD, 0, 6), 0x1008, 6, 1);
     check("store_byte_read_back", m.wb_value[6], 0xAAEECCDD);
 
-    // ── A cacheable store miss writes through and allocates nothing ──
+    // ── A cacheable store miss enters the buffer and allocates nothing ──
     watch_reset();
     run(d, st(MEM_SZ_WORD), 0x10A4, 0, 0, 0x0BADF00D);   // a line the L1 does not hold
-    check("store_miss_request",    m.requests, 1);
+    check("store_miss_enqueued",   m.enqueues, 1);
+    check("store_miss_no_request", m.requests, 0);
     run(d, ld(MEM_SZ_WORD, 0, 6), 0x10A4, 6, 1);
-    check("store_miss_load_misses", m.requests, 2);      // nothing was allocated
+    check("store_miss_load_misses", m.requests, 1);      // nothing was allocated
     check("store_miss_read_back",  m.cpl_value, 0x0BADF00D);
 
     // ── An uncached store: a word write, retired by its completion ──
@@ -425,7 +451,6 @@ int main(int argc, char** argv) {
     check("uc_store_byte_en",       m.req_byte_en, 0xC);
     check("uc_store_not_retired",   m.wb_n[0], 0);        // a fault on it is precise
     check("uc_store_completes",     m.completions, 1);
-    check("uc_store_retires",       m.cpl_retires, 1);
     check("uc_store_writes_no_reg", m.cpl_we, 0);
     check("uc_store_memory",        mem_word(0x4004) >> 16, 0xBEEF);
     run(d, ld(MEM_SZ_HALF, 0, 6), 0x3006, 6, 1);
@@ -439,7 +464,6 @@ int main(int argc, char** argv) {
     check("uc_store_fault_completes", m.completions, 1);
     check("uc_store_fault_reported",  m.cpl_fault, 1);
     check("uc_store_fault_no_write",  (uint32_t)written.count(0x4010), 0);
-    check("uc_store_fault_retires",   m.cpl_retires, 1);
     check("uc_store_fault_status",    m.cpl_status, FAULT_BUS | FSTAT_W);
 
     // ── A user's bus fault says so ──
@@ -522,7 +546,8 @@ int main(int argc, char** argv) {
     run2(d, ld(MEM_SZ_WORD, 0, 5), 0x11C0, 5,
             st(MEM_SZ_WORD), 0x100C, 0, 0, 0x55AA55AA);
     check("behind_store_writes_once", m.store_strobes, 1);
-    check("behind_store_requests",    m.requests, 2);   // the line, then the write
+    check("behind_store_requests",    m.requests, 1);   // the line
+    check("behind_store_enqueued",    m.enqueues, 1);
     run(d, ld(MEM_SZ_WORD, 0, 6), 0x100C, 6, 1);
     check("behind_store_read_back",   m.wb_value[6], 0x55AA55AA);
 
@@ -579,12 +604,12 @@ int main(int argc, char** argv) {
             st(MEM_SZ_WORD), 0x12C4, 0, 0, 0xFEEDFACE);
     check("evicted_store_written",   mem_word(0x22C4), 0xFEEDFACE);
     run(d, ld(MEM_SZ_WORD, 0, 6), 0x72C4, 6, 1);
-    check("evicted_store_line_hits", m.requests, 2);       // the fill and the write
+    check("evicted_store_line_hits", m.requests, 1);       // the fill
     check("evicted_store_line_kept", m.wb_value[6], mem_word(0x82C4));
     run(d, ld(MEM_SZ_WORD, 0, 6), 0x52C4, 6, 1);
-    check("evicted_store_other_kept", m.requests, 2);      // way 1's line stayed
+    check("evicted_store_other_kept", m.requests, 1);      // way 1's line stayed
     run(d, ld(MEM_SZ_WORD, 0, 6), 0x12C4, 6, 1);
-    check("evicted_store_victim_gone", m.requests, 3);     // the fill took way 0
+    check("evicted_store_victim_gone", m.requests, 2);     // the fill took way 0
     check("evicted_store_victim_value", m.cpl_value, 0xFEEDFACE);
 
     // ── A load of another set, behind a load that fills ──
@@ -595,24 +620,24 @@ int main(int argc, char** argv) {
     check("other_set_behind_value",       m.wb_value[6], mem_word(0x2024));
     check("other_set_behind_release_lag", m.release_lag, 1);  // its set is as it was
 
-    // ── A load behind a store reads what the store wrote ──
-    // The store installs nothing, so the load resumes with the completion
-    // and hits the word the store wrote into the L1.
+    // ── A load directly behind a store reads what the store wrote ──
+    // The L1 gives the load the word its store hit wrote, from the cycle of
+    // the write on, so the load needs no hold.
     watch_reset();
     run2(d, st(MEM_SZ_WORD), 0x100C, 0,
             ld(MEM_SZ_WORD, 0, 6), 0x100C, 6, 1, 0, 0x5EED5EED);
     check("load_behind_store_value",       m.wb_value[6], 0x5EED5EED);
-    check("load_behind_store_one_request", m.requests, 1);   // the write
-    check("load_behind_store_release_lag", m.release_lag, 1);
+    check("load_behind_store_no_request",  m.requests, 0);
+    check("load_behind_store_never_held",  m.pending_cycles, 0);
 
     // ── A load behind a store that missed reads it from memory ──
     watch_reset();
     run2(d, st(MEM_SZ_WORD), 0x10E4, 0,
             ld(MEM_SZ_WORD, 0, 6), 0x10E4, 6, 1, 0, 0x7E57DA7A);
-    check("load_behind_store_miss_requests", m.requests, 2);  // the write, then the line
+    check("load_behind_store_miss_requests", m.requests, 1);  // the line
     check("load_behind_store_miss_value",    m.cpl_value, 0x7E57DA7A);
 
-    // Faults and retires are pulses, never left high between completions.
+    // A fault is a pulse, never left high between completions.
     check("no_stray_pulses", m.strays, 0);
 
     printf("%s: %d/%d checks passed\n", errors ? "FAIL" : "PASS", tests - errors, tests);

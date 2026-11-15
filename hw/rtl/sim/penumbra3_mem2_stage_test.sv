@@ -3,7 +3,8 @@
 // D-copy) and a real penumbra3_l1 resolve a cycle later into MEM2; MEM2
 // resolves the access, and the L1 carries what it had no word for to the
 // uncore. The testbench plays the uncore at the port's request and response
-// (doc/internals/penumbra3/uncore-port.md).
+// (doc/internals/penumbra3/uncore-port.md), and the store buffer at MEM2's
+// store port.
 //
 // The freeze is wired the way the spine wires it: hold = mem_pending |
 // external stall goes to MEM1, the translate, the L1's launch and MEM2's
@@ -56,6 +57,11 @@ module penumbra3_mem2_stage_test
     input  logic        i_rsp_fault,
     input  logic [UNCORE_LINE_WORDS-1:0][31:0] i_rsp_line,
 
+    // Store buffer: the testbench is the buffer
+    output logic        o_store_enq,
+    output logic [31:0] o_store_addr,
+    input  logic        i_store_full,
+
     // External stall (WB back-pressure) + flush
     input  logic        i_ext_stall,
     input  logic        i_bubble,
@@ -72,7 +78,6 @@ module penumbra3_mem2_stage_test
     output logic        o_mem_pending,
     output logic        o_complete,
     output logic        o_complete_we,
-    output logic        o_complete_retires,
     output logic [SB_IDX_W-1:0] o_complete_dest,
     output logic [31:0] o_complete_value,
     output logic        o_complete_fault,
@@ -85,9 +90,11 @@ module penumbra3_mem2_stage_test
     output logic [SB_IDX_W-1:0] o_fwd_dst,
     output logic        o_fwd_we,
 
-    // L1-D store strobe, as MEM2 drives it
+    // L1-D store strobe, as MEM2 drives it; a store entering the buffer
+    // takes the same data and lanes
     output logic        o_dcache_we,
-    output logic [31:0] o_dcache_wdata
+    output logic [31:0] o_dcache_wdata,
+    output logic [3:0]  o_dcache_byte_en
 );
 
     localparam int D_WAYS   = 2;
@@ -302,11 +309,13 @@ module penumbra3_mem2_stage_test
         .i_dcache_access_done   (dl1_done),
         .i_dcache_access_word   (dl1_access_word),
         .i_dcache_access_fault  (dl1_fault),
+        .o_store_enq            (o_store_enq),
+        .o_store_addr           (o_store_addr),
+        .i_store_full           (i_store_full),
         .i_sys_rdata            (32'b0),
         .o_mem_pending          (o_mem_pending),
         .o_complete             (o_complete),
         .o_complete_we          (o_complete_we),
-        .o_complete_retires     (o_complete_retires),
         .o_complete_dest        (o_complete_dest),
         .o_complete_value       (o_complete_value),
         .o_complete_fault       (o_complete_fault),
@@ -326,6 +335,7 @@ module penumbra3_mem2_stage_test
         .o_wb_bcause            (o_wb_bcause)
     );
 
+    assign o_dcache_byte_en   = dcache_byte_en;
     assign o_wb_op_class      = wb_bundle.op_class;
     assign o_wb_value         = wb_payload.value;
     assign o_wb_phys_dst      = wb_payload.phys_dst;

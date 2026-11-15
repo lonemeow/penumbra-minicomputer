@@ -18,8 +18,8 @@
 // penumbra3_mem1_stage and penumbra3_mem2_stage, penumbra3_if2_stage,
 // penumbra3_fetch_replay and penumbra3_fetch_buffer, and the predictor
 // pieces. What the probe models is the stimulus (an LFSR standing in for
-// EX, ID, the bus and the sysreg writes), the fetch PC and the predictor's
-// place beside IF2.
+// EX, ID, the bus, the store buffer's full and the sysreg writes), the
+// fetch PC and the predictor's place beside IF2.
 //
 // The fetch follows the replay contract (doc/internals/penumbra3/
 // l1-cache.md, "The fetch side"): an I-cache miss is the L1-I's access,
@@ -311,8 +311,9 @@ module ulx3s_penumbra3_probe_l1tag_top (
     // ── MEM2: resolve, completion unit, MEM2/WB register ─────────
     logic           mem_pending, complete, complete_we, complete_fault;
     logic [31:0]    complete_value, complete_pc, complete_vaddr, complete_status;
-    logic           complete_retires;
     logic [SB_IDX_W-1:0] complete_dest;
+    logic           store_enq, store_full_q;
+    logic [31:0]    store_addr;
     ctrl_bundle_t   wb_bundle;
     dpath_payload_t wb_payload;
     logic           wb_valid;
@@ -349,11 +350,13 @@ module ulx3s_penumbra3_probe_l1tag_top (
         .i_dcache_access_done   (dl1_done),
         .i_dcache_access_word   (dl1_access_word),
         .i_dcache_access_fault  (dl1_fault),
+        .o_store_enq            (store_enq),
+        .o_store_addr           (store_addr),
+        .i_store_full           (store_full_q),
         .i_sys_rdata            (sys_rdata),
         .o_mem_pending          (mem_pending),
         .o_complete             (complete),
         .o_complete_we          (complete_we),
-        .o_complete_retires     (complete_retires),
         .o_complete_dest        (complete_dest),
         .o_complete_value       (complete_value),
         .o_complete_fault       (complete_fault),
@@ -374,6 +377,12 @@ module ulx3s_penumbra3_probe_l1tag_top (
     );
 
     assign d_hold = mem_pending;
+
+    // ── The store buffer, modeled: full an LFSR-timed register ───
+    always_ff @(posedge clk) begin
+        if (rst) store_full_q <= 1'b0;
+        else     store_full_q <= lfsr_q[7] && lfsr_q[19] && lfsr_q[35];
+    end
 
     // ── The uncore, modeled: done an LFSR-timed wait into the request ──
     // A registered one-cycle done, never in the cycle the request rises.
@@ -642,10 +651,10 @@ module ulx3s_penumbra3_probe_l1tag_top (
         fold_q[0] <= fbuf_deq_valid ^ (^fbuf_deq_data);
         fold_q[1] <= wb_valid ^ (^wb_payload) ^ (^wb_bundle) ^ (^wb_bcause);
         fold_q[2] <= complete ^ complete_we ^ complete_fault ^ (^complete_dest)
-                  ^ (^complete_value) ^ complete_retires ^ (^complete_pc)
+                  ^ (^complete_value) ^ (^complete_pc)
                   ^ (^complete_vaddr) ^ (^complete_status);
         fold_q[3] <= dreq_valid ^ dreq_cacheable ^ dreq_we ^ (^dreq_addr)
-                  ^ (^dreq_byte_en) ^ (^dreq_wdata);
+                  ^ (^dreq_byte_en) ^ (^dreq_wdata) ^ store_enq ^ (^store_addr);
         fold_q[4] <= ^pc_q;
         fold_q[5] <= ^ras_top;
         fold_q[6] <= ^{dl1_sys_rdata, il1_sys_rdata};

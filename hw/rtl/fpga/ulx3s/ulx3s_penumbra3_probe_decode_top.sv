@@ -83,7 +83,6 @@ module ulx3s_penumbra3_probe_decode_top (
     logic                mem_pending, complete, complete_fault;
     logic [IDX_BITS-1:0] complete_dest;
     logic [31:0]         complete_data;
-    logic                complete_retires;
     logic [31:0]         complete_pc, complete_vaddr, complete_status;
     logic                can_issue;
 
@@ -135,7 +134,6 @@ module ulx3s_penumbra3_probe_decode_top (
         .i_access_pc        ({lfsr_q[15:0], lfsr_q[31:16]}),
         .i_access_vaddr     ({lfsr_q[7:0], lfsr_q[31:8]}),
         .i_access_user      (lfsr_q[12]),
-        .i_access_cacheable (lfsr_q[5]),
         .i_load_dest        (lfsr_q[21 +: IDX_BITS]),
         .i_load_size        (lfsr_q[1:0]),
         .i_load_sign        (lfsr_q[2]),
@@ -144,7 +142,6 @@ module ulx3s_penumbra3_probe_decode_top (
         .i_l1_word          (l1_word_q),
         .i_l1_fault         (l1_fault_q),
         .o_complete         (complete),
-        .o_complete_retires (complete_retires),
         .o_complete_dest    (complete_dest),
         .o_complete_data    (complete_data),
         .o_complete_fault   (complete_fault),
@@ -175,7 +172,7 @@ module ulx3s_penumbra3_probe_decode_top (
         led_q <= {7'b0,
                   can_issue_q
                   ^ mem_pending ^ l1_done_q ^ complete ^ complete_fault
-                  ^ (^complete_dest) ^ (^complete_data) ^ complete_retires
+                  ^ (^complete_dest) ^ (^complete_data)
                   ^ (^complete_pc) ^ (^complete_vaddr) ^ (^complete_status)};
     end
     assign led = led_q;

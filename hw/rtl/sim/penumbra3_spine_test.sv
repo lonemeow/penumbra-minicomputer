@@ -7,9 +7,11 @@
 // them on the right cycle. Commit/retire/branch/fault observability is
 // fanned out flat.
 //
-// The L1-D is a real penumbra3_l1, left disabled: every lookup misses and
-// every load and store goes to the uncore, which the testbench plays at the
-// L1's port. The translation's frame is the L1's one candidate.
+// The L1-D is a real penumbra3_l1, left disabled: every lookup misses, and
+// every load and uncached store goes to the uncore, which the testbench
+// plays at the L1's port. A cacheable store goes to the store buffer, which
+// the testbench plays at the spine's store port. The translation's frame is
+// the L1's one candidate.
 //
 // This exercises the spine as a whole: issue, forwarding, the scoreboard
 // interlock, the freeze distribution, and commit -- without the real MMU
@@ -73,6 +75,12 @@ module penumbra3_spine_test
     input  logic        i_drsp_done,
     input  logic        i_rsp_fault,
     input  logic [UNCORE_LINE_WORDS-1:0][31:0] i_rsp_line,
+
+    // Store buffer: a cacheable store retiring (data and lanes on the L1-D
+    // store strobe)
+    output logic        o_store_enq,
+    output logic [31:0] o_store_addr,
+    input  logic        i_store_full,
 
     // Branch / exception / interrupt
     output logic        o_redirect,
@@ -216,6 +224,8 @@ module penumbra3_spine_test
         .o_dcache_access_cacheable(dcache_access_cacheable),
         .i_dcache_busy(dl1_busy), .i_dcache_access_done(dl1_done),
         .i_dcache_access_word(dl1_access_word), .i_dcache_access_fault(dl1_fault),
+        .o_store_enq(o_store_enq), .o_store_addr(o_store_addr),
+        .i_store_full(i_store_full),
         .o_sys_re(o_sys_re), .o_sys_dev(o_sys_dev), .o_sys_reg(o_sys_reg),
         .i_sys_rdata(i_sys_rdata),
         .o_sys_we(o_sys_we), .o_sys_wr_dev(o_sys_wr_dev), .o_sys_wr_reg(o_sys_wr_reg),

@@ -117,6 +117,8 @@ module machine_penumbra3
     logic                            dl1_busy, dl1_access_done, dl1_access_fault;
     logic                            store_fault;
     logic [31:0]                     store_fault_addr;
+    logic                            store_enq, store_full;
+    logic [31:0]                     store_addr;
 
     // ── MMU fault-register commit ────────────────────────────────
     logic                            mmu_fault_commit;
@@ -195,6 +197,9 @@ module machine_penumbra3
         .i_dcache_access_fault     (dl1_access_fault),
         .i_dcache_store_fault      (store_fault),
         .i_dcache_store_fault_addr (store_fault_addr),
+        .o_store_enq               (store_enq),
+        .o_store_addr              (store_addr),
+        .i_store_full              (store_full),
         .o_sys_re                  (sys_re),
         .o_sys_dev                 (sys_dev),
         .o_sys_reg                 (sys_reg),
@@ -425,6 +430,11 @@ module machine_penumbra3
         .i_dreq_byte_en     (dreq_byte_en),
         .i_dreq_wdata       (dreq_wdata),
         .o_drsp_done        (drsp_done),
+        .i_store_enq        (store_enq),
+        .i_store_addr       (store_addr),
+        .i_store_wdata      (dl1_wdata),
+        .i_store_byte_en    (dl1_byte_en),
+        .o_store_full       (store_full),
         .o_rsp_fault        (rsp_fault),
         .o_rsp_line         (rsp_line),
         .o_store_fault      (rsp_store_fault),

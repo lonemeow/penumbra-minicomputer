@@ -77,6 +77,12 @@ module penumbra3_spine
     input  logic [31:0]           i_dcache_access_word,
     input  logic                  i_dcache_access_fault,
 
+    // ── Store buffer: a cacheable store retiring from MEM2 ──
+    // Its data and lanes are the L1-D store strobe's.
+    output logic                  o_store_enq,
+    output logic [31:0]           o_store_addr,
+    input  logic                  i_store_full,
+
     // ── Sysreg read (MEM1 launch) + write (WRSYS drain-commit) ──
     output logic                  o_sys_re,
     output logic [3:0]            o_sys_dev,
@@ -193,7 +199,7 @@ module penumbra3_spine
     logic [31:0]         mem2_fwd_result;
     logic [SB_IDX_W-1:0] mem2_fwd_dst;
     logic                mem2_fwd_we, mem2_fwd_valid;
-    logic                mc_complete, mc_complete_we, mc_complete_retires;
+    logic                mc_complete, mc_complete_we;
     logic [SB_IDX_W-1:0] mc_complete_dest;
     logic [31:0]         mc_complete_value;
     logic                mc_complete_fault;
@@ -224,8 +230,9 @@ module penumbra3_spine
     // The local stalls each stage exposes (downstream-independent), plus the
     // registered back-end hold. These three are the only inputs the freeze
     // composition needs; everything below is derived from them.
-    //   - mem_pending   : the L1-D's registered busy, through MEM2, never a
-    //                     live cache/TLB verdict.
+    //   - mem_pending   : the L1-D's registered busy and the store buffer's
+    //                     registered full, through MEM2, never a live
+    //                     cache/TLB verdict.
     //   - wb_local_stall: WB's dual-write hold (flop-shallow).
     //   - ex_local_stall: EX's divmul / drain-commit hold (flop-shallow).
 
@@ -569,10 +576,11 @@ module penumbra3_spine
         .i_dcache_busy(i_dcache_busy), .i_dcache_access_done(i_dcache_access_done),
         .i_dcache_access_word(i_dcache_access_word),
         .i_dcache_access_fault(i_dcache_access_fault),
+        .o_store_enq(o_store_enq), .o_store_addr(o_store_addr),
+        .i_store_full(i_store_full),
         .i_sys_rdata(i_sys_rdata),
         .o_mem_pending(mem_pending),
         .o_complete(mc_complete), .o_complete_we(mc_complete_we),
-        .o_complete_retires(mc_complete_retires),
         .o_complete_dest(mc_complete_dest), .o_complete_value(mc_complete_value),
         .o_complete_fault(mc_complete_fault), .o_complete_pc(mc_complete_pc),
         .o_complete_vaddr(mc_complete_vaddr), .o_complete_status(mc_complete_status),
@@ -620,18 +628,18 @@ module penumbra3_spine
 
     // An instruction retires at WB, or with its parked access's completion. A
     // pending access drains WB to bubbles, so the two never share a cycle.
-    assign o_insn_committed = wb_insn_committed | mc_complete_retires;
-    assign o_retire_valid   = mem2wb_valid | mc_complete_retires;
-    assign o_retire_pc      = mc_complete_retires ? mc_complete_pc : mem2wb_payload.pc;
+    assign o_insn_committed = wb_insn_committed | mc_complete;
+    assign o_retire_valid   = mem2wb_valid | mc_complete;
+    assign o_retire_pc      = mc_complete ? mc_complete_pc : mem2wb_payload.pc;
     assign o_retire_sr      = sr_committed;
     assign o_commit_idx     = rf_wr_idx;
     assign o_commit_data    = rf_wr_data;
     assign o_commit_we      = rf_wr_en;
 
-    // A completion that retires is a load's or an uncached store's.
+    // A completion is a load's or an uncached store's.
     always_comb begin
-        if (mc_complete_retires) o_retire_op_class = mc_complete_we ? OPC_LOAD : OPC_STORE;
-        else                     o_retire_op_class = mem2wb_bundle.op_class;
+        if (mc_complete) o_retire_op_class = mc_complete_we ? OPC_LOAD : OPC_STORE;
+        else             o_retire_op_class = mem2wb_bundle.op_class;
     end
 
     assign o_dc_commit_pc       = idex_pc;

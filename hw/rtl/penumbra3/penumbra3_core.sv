@@ -109,6 +109,12 @@ module penumbra3_core
     input  logic                  i_dcache_store_fault,      // an earlier write faulted
     input  logic [31:0]           i_dcache_store_fault_addr, // its physical address
 
+    // ── Store buffer: a cacheable store retiring from MEM2 ───────
+    // Its data and lanes are the L1-D store strobe's.
+    output logic                  o_store_enq,
+    output logic [31:0]           o_store_addr,
+    input  logic                  i_store_full,
+
     // ── Sysreg sideband (RDSYS read; WRSYS write committed from EX) ─
     output logic                  o_sys_re,
     output logic [3:0]            o_sys_dev,
@@ -429,6 +435,9 @@ module penumbra3_core
         .i_dcache_busy(i_dcache_busy), .i_dcache_access_done(i_dcache_access_done),
         .i_dcache_access_word(i_dcache_access_word),
         .i_dcache_access_fault(i_dcache_access_fault),
+        // Store buffer.
+        .o_store_enq(o_store_enq), .o_store_addr(o_store_addr),
+        .i_store_full(i_store_full),
         // Sysreg.
         .o_sys_re(o_sys_re), .o_sys_dev(o_sys_dev), .o_sys_reg(o_sys_reg),
         .i_sys_rdata(i_sys_rdata),

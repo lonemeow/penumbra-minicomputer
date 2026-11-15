@@ -100,23 +100,24 @@ of its build plan are done (`doc/internals/penumbra3/overview.md`,
 "Build plan"); the machine landed in `0d7e47c`, its board tops in
 `94682ef` and `09e8433`. Branch prediction (phase 2) landed in
 `e52f1d1`, `82df95c` and `b97050e`: the IF2 pre-decode, the direction
-table trained from EX and the return stack. What remains is feature
-work, in the order the overview ranks it ("Levers ranked by measured
-benefit"): the store buffer (phase 4), then the staged levers.
+table trained from EX and the return stack. The store buffer (phase 4)
+landed in `dd116d6` and the commit after it, which retires cacheable
+stores into it. What remains is the staged levers, in the order the
+overview ranks them ("Levers ranked by measured benefit").
 
 Each lever is read against a full-top seed sweep. The current one, with
-branch prediction in, is of the ULX3S top with the line SDRAM stack and
-no floorplan, the placement choices taken over from gen2: 8 of 10 seeds
-close at 37.5 MHz, where all 10 closed before prediction, and the CPU
-clock is the worst domain on 8. Its critical path is the fetch side's
-on 5 of them -- the I-TLB's VPN word or the L1-I data word through the
-way select and decode-on-enqueue into the return stack's pop -- the D
-side's on 4 -- the D-TLB's word through the TLB match and the L1-D's
-tag compare, into MEM2's writeback payload past the way select and the
-byte extract (3) or into the L1-D's held word past the back end's hold
-(1) -- and EX's forwarding loop through the ALU on 1, with 60-73% of
-it routing. IF1's hold is the worst path on none. The next lever's
-sweep is read against this one.
+the store buffer in, is of the ULX3S top with the line SDRAM stack and
+no floorplan, the placement choices taken over from gen2: 9 of 10 seeds
+close the CPU clock at 37.5 MHz, and 8 of those every domain; the ninth
+misses the USB clock's 60 MHz. The CPU clock is the worst domain on 8.
+Its critical path is the fetch side's on 6 of them -- the L1-I data
+word through the pre-decode and IF2's way select into the return
+stack's push or pop (3) or the fetch buffer (2), or the I-TLB's VPN
+word through the way hit into the fetch buffer (1) -- and the D side's
+on 4: the D-TLB's word through the TLB match and the L1-D's tag
+compare, into MEM2's writeback payload past the way select and the
+byte extract. 60-64% of it is routing. The store buffer is the worst
+path on none. The next lever's sweep is read against this one.
 
 ## Hardware: a gen3 load's reader waits for its regfile write
 

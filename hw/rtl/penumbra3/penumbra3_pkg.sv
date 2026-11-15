@@ -37,6 +37,12 @@ package penumbra3_pkg;
   // level stores (doc/internals/penumbra3/uncore-port.md).
   localparam int UNCORE_LINE_WORDS = 4;
 
+  // ── The store buffer's depth ─────────────────────────────────────
+  // Cacheable stores held between MEM2 and memory, a word each
+  // (doc/internals/penumbra3/memory-performance.md, "Store buffer at the
+  // core boundary").
+  localparam int STORE_BUFFER_ENTRIES = 16;
+
   // ── ALU function ─────────────────────────────────────────────────
   // The EX-stage ALU select the decode hands forward. The enumerators take
   // values 0..11 in declaration order, which equals the ISA Format-R op[3:0]

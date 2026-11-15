@@ -2,16 +2,26 @@
 // onto the external bus.
 //
 // doc/internals/penumbra3/uncore.md specifies it: the select, the L2's
-// lookup and penumbra3_bus_master as one pipeline, with one posted write
-// beside it. The arrays are penumbra3_l2_store's; this module is the
-// pipeline's control, the posted write, the record of the bus transaction,
-// the L2's cache device (sysreg device 9) and its counters.
+// lookup and penumbra3_bus_master as one pipeline. The arrays are
+// penumbra3_l2_store's; this module is the pipeline's control, the record
+// of the bus transaction, the L2's cache device (sysreg device 9) and its
+// counters.
+//
+// Cacheable stores reach it through penumbra3_store_buffer, not a side's
+// request: a store completes as it enters the buffer, and the buffer is
+// the select's third requester. Its oldest queued store issues as a post,
+// which writes its bytes into the L2 on a hit and leaves the store owing
+// its bus write; the bus master takes the posted stores, oldest first,
+// ahead of any bus transaction. The sides' operations keep the buffer's
+// order at the verdict: a line read waits while a queued store holds its
+// line, a word access until the buffer is empty, and either reaches the
+// bus only once no posted store is left.
 //
 // For an operation issuing in cycle i:
 //
 //   i     issue    the select takes a request; a lookup reads its set
 //   i+1   verdict  the tag compare; the operation completes, posts, takes
-//                  the bus, or is dropped and its side issues it again
+//                  the bus, or is dropped and its requester issues it again
 //   i+2   update   the requester's done; a write hit's word and the
 //                  replacement touch, from registers
 //
@@ -51,10 +61,17 @@ module penumbra3_uncore
     input  logic [31:0]                  i_dreq_wdata,
     output logic                         o_drsp_done,
 
+    // -- Store side: a cacheable store leaving MEM2 ----------------
+    input  logic                         i_store_enq,        // never while o_store_full
+    input  logic [31:0]                  i_store_addr,       // physical
+    input  logic [31:0]                  i_store_wdata,      // each byte in its lane
+    input  logic [3:0]                   i_store_byte_en,
+    output logic                         o_store_full,       // registered
+
     // -- The response both sides share -----------------------------
     output logic                         o_rsp_fault,        // valid with either done
     output logic [LINE_WORDS-1:0][31:0]  o_rsp_line,         // valid with a read's done
-    output logic                         o_store_fault,      // the posted write faulted
+    output logic                         o_store_fault,      // a posted store's write faulted
     output logic [31:0]                  o_store_fault_addr, // its address
 
     // -- The L2's cache device (sysreg device 9) -------------------
@@ -134,20 +151,49 @@ module penumbra3_uncore
     logic bt_busy_q;               // a bus transaction is in flight
     logic upd_write_q;             // the update stage writes a write hit's word
     logic enable_q, inval_pending_q, walking_q;
+    logic yield_q;                 // a side waits on the buffer's order: posts go first
 
-    logic can_issue, data_ready, fetch_ready, issue, issue_data;
-    assign can_issue   = !bt_busy_q && !upd_write_q && !inval_pending_q;
+    // The store buffer's ports; it sits with the bus master, below.
+    logic        sb_post_valid, sb_bus_valid, sb_bus_taken, sb_posted;
+    logic        sb_line_queued, sb_empty;
+    logic [31:0] sb_post_addr, sb_post_wdata, sb_bus_addr, sb_bus_wdata;
+    logic [3:0]  sb_post_byte_en, sb_bus_byte_en;
+
+    // The verdict stage's operation, its source: a side's, or a post.
+    logic s1_valid_q, s1_dside_q, s1_post_q;
+
+    // Nothing issues while a post is at the verdict: an operation issued
+    // then reads the L2 before the post's bytes reach it at the update
+    // stage, and finds the store no longer queued.
+    logic can_issue, data_ready, fetch_ready, post_ready, issue;
+    assign can_issue   = !bt_busy_q && !upd_write_q && !inval_pending_q
+                      && !(s1_valid_q && s1_post_q);
     assign data_ready  = i_dreq_valid && !data_inpipe_q;
     assign fetch_ready = i_ireq_valid && !fetch_inpipe_q;
-    assign issue       = can_issue && (data_ready || fetch_ready);
-    assign issue_data  = can_issue && data_ready;          // the data side first
+    assign post_ready  = sb_post_valid;
+    assign issue       = can_issue && (data_ready || fetch_ready || post_ready);
+
+    // The data side first, then the fetch side, then the buffer's oldest
+    // queued store; the store first while a side waits on the buffer's
+    // order, which only posting the stores ahead of it ends.
+    logic sel_post, sel_data, issue_data, issue_fetch;
+    assign sel_post    = post_ready && (yield_q || !(data_ready || fetch_ready));
+    assign sel_data    = !sel_post && data_ready;
+    assign issue_data  = issue && sel_data;
+    assign issue_fetch = issue && !sel_post && !sel_data;
 
     // The chosen request. A fetch reads whole words.
     logic        req_cacheable, req_we, req_lookup;
     logic [31:0] req_addr, req_wdata;
     logic [3:0]  req_byte_en;
     always_comb begin
-        if (data_ready) begin
+        if (sel_post) begin
+            req_cacheable = 1'b1;
+            req_we        = 1'b1;
+            req_addr      = sb_post_addr;
+            req_byte_en   = sb_post_byte_en;
+            req_wdata     = sb_post_wdata;
+        end else if (sel_data) begin
             req_cacheable = i_dreq_cacheable;
             req_we        = i_dreq_we;
             req_addr      = i_dreq_addr;
@@ -164,7 +210,7 @@ module penumbra3_uncore
     end
 
     // ── The verdict stage's operation ────────────────────────────
-    logic        s1_valid_q, s1_dside_q, s1_cacheable_q, s1_we_q, s1_lookup_q;
+    logic        s1_cacheable_q, s1_we_q, s1_lookup_q;
     logic [31:0] s1_addr_q, s1_wdata_q;
     logic [3:0]  s1_byte_en_q;
 
@@ -175,7 +221,8 @@ module penumbra3_uncore
 
     always_ff @(posedge i_clk)
         if (issue) begin
-            s1_dside_q     <= issue_data;
+            s1_post_q      <= sel_post;
+            s1_dside_q     <= sel_data;
             s1_cacheable_q <= req_cacheable;
             s1_we_q        <= req_we;
             s1_lookup_q    <= req_lookup;
@@ -266,34 +313,51 @@ module penumbra3_uncore
     end
 
     // A line read the L2 does not serve, and every word access, take the
-    // bus; a cacheable write posts.
-    logic s1_line_read, s1_cwrite, s1_bus_op;
+    // bus; a post never does.
+    logic s1_line_read, s1_fside, s1_bus_op;
     assign s1_line_read = s1_cacheable_q && !s1_we_q;
-    assign s1_cwrite    = s1_cacheable_q &&  s1_we_q;
-    assign s1_bus_op    = !s1_cwrite && !(s1_line_read && hit);
+    assign s1_fside     = !s1_dside_q && !s1_post_q;
+    assign s1_bus_op    = !s1_post_q && !(s1_line_read && hit);
+
+    // The buffer's order: a line read waits while a queued store holds its
+    // line, so the L2 has every older store to it; a word access waits for
+    // the buffer to empty. Either takes the bus only with no posted store
+    // left, which the bus master would otherwise take after it.
+    logic s1_ordered;
+    assign s1_ordered = s1_line_read ? !sb_line_queued : sb_empty;
 
     // Nothing at the verdict acts while a bus transaction is in flight.
-    logic post_valid_q, bm_ready;
+    logic bm_ready;
     logic s1_live, s1_read_hit, s1_post, s1_take_bus, s1_complete, s1_drop;
     assign s1_live     = s1_valid_q && !bt_busy_q;
-    assign s1_read_hit = s1_live && s1_line_read && hit;
-    assign s1_post     = s1_live && s1_cwrite && !post_valid_q;
-    assign s1_take_bus = s1_live && s1_bus_op && !post_valid_q && bm_ready;
+    assign s1_read_hit = s1_live && s1_line_read && hit && s1_ordered;
+    assign s1_post     = s1_live && s1_post_q;
+    assign s1_take_bus = s1_live && s1_bus_op && s1_ordered && !sb_posted && bm_ready;
     assign s1_complete = s1_read_hit || s1_post;
     assign s1_drop     = s1_valid_q && !s1_complete && !s1_take_bus;
 
     // ── In the pipeline: from issue through the done, or to a drop ─
+    // A post is in the pipeline only at the verdict, where it blocks issue.
     logic ddone_q, idone_q;
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             data_inpipe_q  <= 1'b0;
             fetch_inpipe_q <= 1'b0;
         end else begin
-            if (issue_data)                               data_inpipe_q  <= 1'b1;
-            else if (ddone_q || (s1_drop && s1_dside_q))  data_inpipe_q  <= 1'b0;
-            if (issue && !issue_data)                     fetch_inpipe_q <= 1'b1;
-            else if (idone_q || (s1_drop && !s1_dside_q)) fetch_inpipe_q <= 1'b0;
+            if (issue_data)                              data_inpipe_q  <= 1'b1;
+            else if (ddone_q || (s1_drop && s1_dside_q)) data_inpipe_q  <= 1'b0;
+            if (issue_fetch)                             fetch_inpipe_q <= 1'b1;
+            else if (idone_q || (s1_drop && s1_fside))   fetch_inpipe_q <= 1'b0;
         end
+    end
+
+    // ── Yield: a side the buffer's order dropped lets a post go first ─
+    // Until a post completes, so a side never takes the slots the stores
+    // ahead of it need, and a post never waits on a side that can go.
+    always_ff @(posedge i_clk) begin
+        if (i_rst)                                     yield_q <= 1'b0;
+        else if (s1_post)                              yield_q <= 1'b0;
+        else if (s1_drop && !s1_post_q && !s1_ordered) yield_q <= 1'b1;
     end
 
     // ══════════════════════════════════════════════════════════
@@ -330,16 +394,39 @@ module penumbra3_uncore
     end
 
     // ══════════════════════════════════════════════════════════
-    // The posted write and the bus master
+    // The store buffer and the bus master
     // ══════════════════════════════════════════════════════════
-    logic        post_sent_q;      // the bus master has taken the posted write
-    logic [31:0] post_addr_q, post_wdata_q;
-    logic [3:0]  post_byte_en_q;
-    logic        post_req;
-    assign post_req = post_valid_q && !post_sent_q;
+    logic bt_done, post_done;
 
-    // The posted write goes first: it is older than the verdict's
-    // operation, which waits for it.
+    penumbra3_store_buffer #(
+        .ENTRIES (STORE_BUFFER_ENTRIES)
+    ) u_store_buffer (
+        .i_clk          (i_clk),
+        .i_rst          (i_rst),
+        .i_enq          (i_store_enq),
+        .i_enq_addr     (i_store_addr),
+        .i_enq_wdata    (i_store_wdata),
+        .i_enq_byte_en  (i_store_byte_en),
+        .o_full         (o_store_full),
+        .o_post_valid   (sb_post_valid),
+        .o_post_addr    (sb_post_addr),
+        .o_post_wdata   (sb_post_wdata),
+        .o_post_byte_en (sb_post_byte_en),
+        .i_posted       (s1_post),
+        .o_bus_valid    (sb_bus_valid),
+        .o_bus_addr     (sb_bus_addr),
+        .o_bus_wdata    (sb_bus_wdata),
+        .o_bus_byte_en  (sb_bus_byte_en),
+        .i_bus_taken    (sb_bus_taken),
+        .i_bus_done     (post_done),
+        .o_posted       (sb_posted),
+        .i_line         (s1_addr_q[31:4]),
+        .o_line_queued  (sb_line_queued),
+        .o_empty        (sb_empty)
+    );
+
+    // A posted store goes first: it is older than the verdict's operation,
+    // which waits for it.
     logic                        bm_req_valid, bm_we, bm_line_req, bm_done, bm_fault;
     logic [31:0]                 bm_addr;
     logic [3:0]                  bm_byte_en;
@@ -347,13 +434,13 @@ module penumbra3_uncore
     line_t                       bm_line;
     always_comb begin
         bm_wline = '0;
-        if (post_req) begin
+        if (sb_bus_valid) begin
             bm_req_valid = bm_ready;
             bm_we        = 1'b1;
             bm_line_req  = 1'b0;
-            bm_addr      = post_addr_q;
-            bm_byte_en   = post_byte_en_q;
-            bm_wline[0]  = post_wdata_q;
+            bm_addr      = sb_bus_addr;
+            bm_byte_en   = sb_bus_byte_en;
+            bm_wline[0]  = sb_bus_wdata;
         end else begin
             bm_req_valid = s1_take_bus;
             bm_we        = s1_we_q;
@@ -390,38 +477,20 @@ module penumbra3_uncore
         .i_bus_fault   (i_bus_fault)
     );
 
-    // The bus master runs the posted write and a bus transaction never at
-    // once, so its completion is the transaction's while one is in flight.
-    logic bt_done, post_done;
-    assign bt_done   = bm_done &&  bt_busy_q;
-    assign post_done = bm_done && !bt_busy_q;
+    // The bus master runs a posted store's write and a bus transaction
+    // never at once, so its completion is the transaction's while one is in
+    // flight. The buffer's bus port holds the store being written until its
+    // write completes, so a fault takes the store's address from there.
+    assign sb_bus_taken = sb_bus_valid && bm_ready;
+    assign bt_done      = bm_done &&  bt_busy_q;
+    assign post_done    = bm_done && !bt_busy_q;
 
     logic store_fault_q;
     logic [31:0] store_fault_addr_q;
     always_ff @(posedge i_clk) begin
-        if (i_rst) begin
-            post_valid_q  <= 1'b0;
-            post_sent_q   <= 1'b0;
-            store_fault_q <= 1'b0;
-        end else begin
-            if (s1_post) begin
-                post_valid_q <= 1'b1;
-                post_sent_q  <= 1'b0;
-            end else begin
-                if (post_done)                 post_valid_q <= 1'b0;
-                if (post_req && bm_req_valid)  post_sent_q  <= 1'b1;
-            end
-            store_fault_q <= post_done && bm_fault;
-        end
-    end
-
-    always_ff @(posedge i_clk) begin
-        if (s1_post) begin
-            post_addr_q    <= s1_addr_q;
-            post_wdata_q   <= s1_wdata_q;
-            post_byte_en_q <= s1_byte_en_q;
-        end
-        if (post_done) store_fault_addr_q <= post_addr_q;
+        if (i_rst) store_fault_q <= 1'b0;
+        else       store_fault_q <= post_done && bm_fault;
+        if (post_done) store_fault_addr_q <= sb_bus_addr;
     end
 
     // ══════════════════════════════════════════════════════════
@@ -495,8 +564,8 @@ module penumbra3_uncore
             ddone_q <= 1'b0;
             idone_q <= 1'b0;
         end else begin
-            ddone_q <= (s1_complete && s1_dside_q)  || (bt_done && bt_dside_q);
-            idone_q <= (s1_complete && !s1_dside_q) || (bt_done && !bt_dside_q);
+            ddone_q <= (s1_read_hit && s1_dside_q) || (bt_done &&  bt_dside_q);
+            idone_q <= (s1_read_hit && s1_fside)   || (bt_done && !bt_dside_q);
         end
     end
 
@@ -626,7 +695,18 @@ module penumbra3_uncore
         else $error("penumbra3_uncore: an install met the walk or the update stage");
 
     assert property (@(posedge i_clk) disable iff (i_rst)
-        !(s1_take_bus && (post_valid_q || !bm_ready)))
-        else $error("penumbra3_uncore: a bus transaction ahead of the posted write");
+        !(s1_take_bus && (sb_posted || !bm_ready)))
+        else $error("penumbra3_uncore: a bus transaction ahead of a posted store");
+
+    // A posted store comes only from a post, which never completes while a
+    // bus transaction is in flight, so post_done is a posted store's.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        !(bt_busy_q && sb_posted))
+        else $error("penumbra3_uncore: a posted store while a bus transaction is in flight");
+
+    // Cacheable writes come only from the store buffer.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        !(i_dreq_valid && i_dreq_cacheable && i_dreq_we))
+        else $error("penumbra3_uncore: the data side requested a cacheable write");
 
 endmodule
