@@ -676,9 +676,14 @@ rate rounds to the nearest period instead.
 ### TMCOUNT (reg 2) and TMRELOAD (reg 3)
 
 Both 16-bit fields in a 32-bit register. Upper 16 bits read as zero;
-writes are masked. Writing `TMCOUNT` while the timer runs updates the
-counter immediately — the next tick decrements from the new value.
-Writing `TMRELOAD` does not affect the running count.
+writes are masked. Software writes `TMCOUNT` only while `TICK_EN` is
+clear; once counting is enabled, the first tick decrements from the
+written value. A write while the timer counts can coincide with a
+tick, and then the counter may keep the written value or take that
+tick's decrement or reload instead. Software that wants a time
+reference while the timer runs reads `TMCOUNT` and never writes it.
+Writing `TMCOUNT` leaves `UDF` as it was. Writing `TMRELOAD` does not
+affect the running count.
 
 ### TMSTATUS (reg 4)
 

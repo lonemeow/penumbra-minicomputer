@@ -1,14 +1,18 @@
 /*
  * bench.c — Penumbra bare-metal benchmark harness implementation
  *
- * Timer measurement uses the hardware timer (sysreg device 7) in
- * free-running autoload mode with TMRELOAD = 0xFFFE (period = 0xFFFF
- * ticks).  The IRQ handler (installed by crt0.S) accumulates raw
- * ticks at address 0x38 on each underflow (adds 0xFFFF per wrap).
- * The readback function adds the partial count.  Conversion to µs
- * uses the actual TMFREQ value with a 64-bit product, so the result
- * is exact even when TMFREQ isn't an integer multiple of 1 MHz
- * (e.g. 1041666 Hz at 12.5 MHz, 961538 Hz at 25 MHz).
+ * Timer measurement uses the hardware timer (sysreg device 7) as a
+ * free-running clock: autoload mode with TMRELOAD = 0xFFFE (period =
+ * 0xFFFF ticks), and the IRQ handler (mmu.S) adding one period to the
+ * tick count at address 0x38 on each underflow.  The time is that
+ * count plus the partial count of the current period.
+ *
+ * A measurement starts by reading the clock, never by resetting the
+ * counter: TMCOUNT is written only while the timer is stopped, so
+ * bench_init is the only writer.  Conversion to µs uses the actual
+ * TMFREQ value with a 64-bit product, so the result is exact even when
+ * TMFREQ isn't an integer multiple of 1 MHz (e.g. 1041666 Hz at
+ * 12.5 MHz, 961538 Hz at 25 MHz).
  */
 
 #include "bench.h"
@@ -34,6 +38,9 @@
 
 /* Timer tick frequency in Hz, latched from TMFREQ at bench_init() */
 static uint32_t timer_freq;
+
+/* The clock's reading at the last bench_timer_start() */
+static uint32_t timer_start_ticks;
 
 /* ── Timer sysregs (device 7) ──────────────────────────────────── */
 #define SYSDEV_TIMER   7
@@ -114,7 +121,10 @@ void bench_init(void) {
     if (timer_freq == 0)
         timer_freq = 1000000;       /* fallback if hardware misreports */
 
-    /* Set up timer: free-running countdown, period = 0xFFFF ticks */
+    /* Set up timer: free-running countdown, period = 0xFFFF ticks.
+     * Stopped first, since a program loaded after another may find it
+     * running, and TMCOUNT is written only while it is stopped. */
+    write_sysreg(SYSDEV_TIMER, TM_CR, 0);
     timer_base_ticks = 0;
     write_sysreg(SYSDEV_TIMER, TM_RELOAD, TIMER_RELOAD);
     write_sysreg(SYSDEV_TIMER, TM_COUNT,  TIMER_RELOAD);
@@ -124,16 +134,10 @@ void bench_init(void) {
     enable_interrupts();
 }
 
-void bench_timer_start(void) {
-    disable_interrupts();
-    timer_base_ticks = 0;
-    write_sysreg(SYSDEV_TIMER, TM_COUNT,  TIMER_RELOAD);
-    write_sysreg(SYSDEV_TIMER, TM_STATUS, TMST_UDF);   /* clear UDF */
-    enable_interrupts();
-}
-
-/* Fast tick readback + µs conversion wrapper. */
-uint32_t bench_timer_elapsed_ticks(void) {
+/* Ticks since bench_init: the periods the IRQ handler has counted,
+ * plus the current period's partial count.  Wraps after 2^32 ticks,
+ * which differences of two readings absorb. */
+static uint32_t timer_now(void) {
     disable_interrupts();
     uint32_t count = read_sysreg(SYSDEV_TIMER, TM_COUNT);
     uint32_t base = timer_base_ticks;
@@ -145,6 +149,14 @@ uint32_t bench_timer_elapsed_ticks(void) {
     }
     enable_interrupts();
     return base + (TIMER_RELOAD - count);
+}
+
+void bench_timer_start(void) {
+    timer_start_ticks = timer_now();
+}
+
+uint32_t bench_timer_elapsed_ticks(void) {
+    return timer_now() - timer_start_ticks;
 }
 
 uint32_t bench_us_to_ticks(uint32_t us) {

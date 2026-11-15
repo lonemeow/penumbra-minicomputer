@@ -20,14 +20,14 @@
 void bench_init(void);
 
 /*
- * Reset the timer for a new measurement.
- * Clears the overflow counter and restarts the 16-bit countdown.
+ * Start a measurement: record the time now.  The timer itself keeps
+ * running untouched.
  */
 void bench_timer_start(void);
 
 /*
  * Return elapsed raw ticks since the last bench_timer_start().
- * Cheap: one add + one subtract, no multiply or divide.
+ * Cheap: a few adds and subtracts, no multiply or divide.
  * Use this in hot loops; convert to µs once at the end.
  */
 uint32_t bench_timer_elapsed_ticks(void);
