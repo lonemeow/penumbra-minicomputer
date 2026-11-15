@@ -279,7 +279,6 @@ void I_Endoom(byte *endoom_data) { (void) endoom_data; }
 
 void I_UpdateNoBlit(void) {}
 void I_BeginRead(void) {}
-void I_StartFrame(void) {}
 void I_GraphicsCheckCommandLine(void) {}
 void I_CheckIsScreensaver(void) {}
 void I_InitWindowTitle(void) {}

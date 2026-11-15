@@ -64,7 +64,8 @@ PORT_SRCS    := $(HERE)m_fixed_penumbra.c \
                 $(HERE)i_joystick_null.c \
                 $(HERE)i_sound_null.c \
                 $(HERE)net_launch_headless.c \
-                $(HERE)i_main_netbsd.c
+                $(HERE)i_main_netbsd.c \
+                $(HERE)i_perfctr_penumbra.c
 
 SRCS         := $(DOOM_SRCS) $(COMMON_SRCS) $(PORT_SRCS)
 OBJS         := $(patsubst %.c,$(OBJDIR)/%.o,$(notdir $(SRCS)))
