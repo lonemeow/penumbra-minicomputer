@@ -7,8 +7,9 @@ stall that gates issue on a **registered** completion bit instead of the
 live cache `busy`, and the path each access takes to its architectural
 effect: a load to its register result, a store to memory. The registered
 load-completion back-end is the single highest-value change in the gen3
-plan (it deletes gen2's fmax floor); stores ride the same single-outstanding
-machinery, so they are specified here too.
+plan (it deletes gen2's fmax floor). Uncached stores ride the same
+single-outstanding machinery and cacheable stores retire into the store
+buffer, so stores are specified here too.
 
 It builds on the [timing outline](./timing-outline.md) (the back-end stall
 section), the [MEM1/MEM2 stage](./mem-stage.md) (which produces the verdict
@@ -133,9 +134,9 @@ The write policy is **write-through, write-no-allocate (WnA)**:
   it, so a load directly behind a store reads it without a stall.
 - **Cacheable store, L1 miss** — WnA: L1 is left untouched (no allocate); the
   datum is written through to the bus side only. A later load to that line
-  misses L1 and fills from L2/memory, which already holds the completed store
-  — so **no store-to-load forwarding is needed**, a direct consequence of the
-  single-outstanding hold-and-complete drain below.
+  misses L1, and its fill waits until L2 or memory holds every older store to
+  the line ([the store buffer](./uncore.md#the-store-buffer)) — so **no
+  store-to-load forwarding is needed**.
 - **Uncached store** — written through to the bus side. It finds no line
   in L1: software invalidates the caches before it makes a cached page
   uncacheable ([MMU, "Uncached Access"](../../system/mmu.md#uncached-access)),
@@ -146,53 +147,57 @@ Every store therefore produces one off-core write transaction: a bus-master
 only its lanes. The line-write transaction is reserved for whole-line
 write-back evictions, never write-through.
 
-The write rides the **same single-outstanding hold-and-complete path** as a
-load miss: the store parks, the L1-D takes its write as one access, the
-launch side freezes on `mem_pending`, and the L1-D's `done` releases it. A
-store writes back no register — completion only releases the freeze and
-resolves the fault (below).
+An uncached store's write rides the **same single-outstanding
+hold-and-complete path** as a load miss: the store parks, the L1-D takes its
+write as one access, the launch side freezes on `mem_pending`, and the
+L1-D's `done` releases it. A store writes back no register — completion only
+releases the freeze and resolves the fault (below). The store retires with
+its completion, as a missed load does.
 
-What parks is the access, and its instruction need not wait with it. A
-cacheable store retires as its write parks, because nothing the write can
-report comes back to the instruction
-([fault precision](#fault-precision)). An uncached store retires with its
-completion, as a missed load does.
+A cacheable store's write never parks. It leaves MEM2 for the store buffer
+as the store retires, and the buffer takes it in that cycle
+([the store side](./uncore-port.md#the-store-side)): nothing the write can
+report comes back to the instruction ([fault precision](#fault-precision)).
+The launch side freezes only while the buffer is full, and the buffer drains
+through the uncore in the background
+([the store buffer](./uncore.md#the-store-buffer)).
 
-Decoupling the pipe from the store drain — a store/write buffer, or absorbing
-stores in a write-back L2 so only evictions reach memory — is an orthogonal
-throughput layer, described in the
-[store-traffic strategy](./overview.md#store-traffic-strategy--store-buffer-first-write-back-l2-only-if-it-earns-it).
-It does not change this completion contract.
+Absorbing stores in a write-back L2, so only evictions reach memory, is the
+further throughput layer the
+[store-traffic strategy](./overview.md#store-traffic-strategy--store-buffer-first-write-back-l2-only-if-it-earns-it)
+keeps open. It would not change this completion contract.
 
-## One completion unit, four access shapes
+## One completion unit, three access shapes
 
-A single single-outstanding unit parks any access that does **not** resolve
-as a cache hit in MEM2 and completes it when the L1-D's access is done (a
-cacheable hit — **including a sub-word hit** — is served in MEM2 by byte
-extraction and never enters this unit). Single-outstanding falls out of
-the L1-D's one access at a time; the launch-side freeze serializes the next
-memory op behind the in-flight one, so the bus master never sees two
-transactions and no cross-unit interlock is needed. Per-access behaviour
-reduces to three orthogonal choices — transaction shape, writeback, and
-fault precision:
+A single single-outstanding unit parks any load that does **not** resolve
+as a cache hit in MEM2, and any uncached store, and completes it when the
+L1-D's access is done (a cacheable hit — **including a sub-word hit** — is
+served in MEM2 by byte extraction and never enters this unit, nor does a
+cacheable store). Single-outstanding falls out of the L1-D's one access at
+a time; the launch-side freeze serializes the next memory op behind the
+in-flight one, so the L1-D never has two accesses up and no cross-unit
+interlock is needed. Per-access behaviour reduces to three orthogonal
+choices — transaction shape, writeback, and fault precision:
 
 | Access | Bus transaction | Writeback | Fault |
 |---|---|---|---|
 | Cacheable load miss | line read | value (sub-word extract) | precise |
 | Uncached load | single read | value | precise |
 | Uncached store | single write (+byte-en) | none | **precise** |
-| Cacheable store write-through | single write (+byte-en) | none | **deferred** |
 
 Each row is one transaction of the
-[core-to-uncore port](./uncore-port.md#the-four-transactions): the line
-read, the word read, the word write and the cacheable write.
+[core-to-uncore port](./uncore-port.md#the-three-transactions): the line
+read, the word read and the word write. A cacheable store's write is a
+single write (+byte-en) from the store buffer, and its fault is
+**deferred**.
 
 ## What the pipe gate freezes
 
 `mem_pending` is back-pressure with a boundary, not a global freeze: it holds
 the launch side and lets the commit side drain. It is set by an outstanding
-load *or* store; a store pends identically to a load (only its completion
-differs — no register writeback).
+load *or* uncached store, and by a full store buffer; an uncached store pends
+identically to a load (only its completion differs — no register writeback).
+Both sources are registers: the L1-D's busy and the buffer's full.
 
 - **Held while an access is pending:** MEM1, the MEM1/MEM2 register, the
   [address-translation launch](./mem-stage.md), and issue: nothing issues,
@@ -209,7 +214,7 @@ differs — no register writeback).
   and a held load reaches a register through the completion path above,
   never through MEM2/WB, so draining the register is always correct. (A
   store reaches no register at all; a cacheable store passes through this
-  one as it parks, ahead of its write.)
+  one as it enters the store buffer, ahead of its write.)
 
 The MEM2/WB register's only back-pressure is a genuine downstream stall: the
 commit stage holding for a multi-cycle writeback (the divmul dual-register
@@ -223,8 +228,10 @@ end, so the freeze alone does not order it: EX holds one until nothing older
 is unfinished. That covers MEM2, WB, a pending access, and that access's
 completion cycle, which retires an instruction of its own. A pending access
 may yet fault, and nothing younger may have taken effect by then. A cacheable
-store's write counts as well, though its instruction has retired, so a
-sysreg write stays ordered behind it.
+store's write in the store buffer does not count: the buffer holds physical
+addresses, so no MMU or cache-maintenance write changes where it goes, and a
+sysreg write is not ordered behind it
+([store buffer](./memory-performance.md#store-buffer-at-the-core-boundary)).
 
 A WRSYS writes its register's value as the WRSYS reaches EX. The forward
 legs supply it then, from wherever its producer is, and the WRSYS keeps it
@@ -251,14 +258,9 @@ A memory fault is taken on the held, oldest-in-flight access. Whether it is
   *weakest* guarantee the cache is allowed to make is what keeps a
   write-back L2 a transparent throughput upgrade rather than an ABI change.
 
-The whole carve-out is one qualifier, registered with the parked access:
-
-```
-fault_precise = ~(is_store & cacheable)
-```
-
-The same qualifier says where the instruction retires: a cacheable store as
-its write parks, every other parked access with its completion.
+The whole carve-out is the cacheable store's path. It retires into the store
+buffer and never parks, so every access the completion unit parks faults
+precisely, and only the buffer's writes fault deferred.
 
 Both kinds take the bus-fault vector and report through `FADDR`/`FSTAT`.
 
@@ -272,7 +274,7 @@ scoreboard, which keeps no state, stops seeing each squashed late writer as
 the flush empties its pipeline register.
 
 A deferred bus fault plays no part in completion. The uncore reports it
-with a `store_fault` pulse and the write's physical address, in whatever
+with a `store_fault` pulse and the store's physical address, in whatever
 cycle the bus faults the write, and the L1-D passes both to the core. The
 core holds one such fault and takes it at the next instruction boundary,
 where it takes an interrupt: ahead of any interrupt, whatever `SR.I` says,
@@ -284,8 +286,9 @@ Two invariants hold by construction and are asserted (Verilator `--assert`):
 
 - a completion that delivers a **precise** fault is the oldest in flight (the
   single-outstanding invariant), so the squash/redirect is precise;
-- `is_store & cacheable` is the **only** access class whose fault is
-  deferred — every other completion is precise.
+- the data side never requests a cacheable write, so no completion is a
+  cacheable store's, and the store buffer's writes are the **only**
+  accesses whose fault is deferred.
 
 A faulting line fill installs nothing (the line stays invalid); the fault
 rides the completion, transient, not cached.
@@ -343,15 +346,16 @@ this section specifies the seam it plugs into.
 ## Single-beat transactions — the same completion path
 
 A transaction that is not a cacheable line read is a single beat on the bus
-master's non-line path, and it rides the same hold-and-complete machinery as a
-line fill — held, oldest, waiting for `{data | fault}` (a read) or the write
-acknowledgement (a write). Two access classes use it:
+master's non-line path. Two access classes use it:
 
 - **Uncached accesses** (load or store) — no line, no caching; transactional
-  delivery of the one word.
-- **Cacheable store write-throughs** — the write reaches memory as a single
-  beat carrying the byte-enable mask (so a sub-word store writes only its
-  lanes), while the L1 copy is updated in place on a hit.
+  delivery of the one word. They ride the same hold-and-complete machinery
+  as a line fill — held, oldest, waiting for `{data | fault}` (a read) or the
+  write acknowledgement (a write).
+- **Cacheable store write-throughs** — the store buffer's writes, each
+  reaching memory as a single beat carrying the byte-enable mask (so a
+  sub-word store writes only its lanes), while the L1 copy is updated in
+  place on a hit.
 
 **Sub-word is orthogonal to this — it is not a cache bypass.** A cacheable
 sub-word **load** is served from L1 on a hit (the cache returns the full word
@@ -386,11 +390,12 @@ late writers. Stores are not — they produce no register result.
 
 The correctness of the whole scheme rests on one assertion-by-construction,
 which P0.1 verifies: **no combinational arc from a cache `busy`/hit input to
-any issue-enable or MMU output**. The hit feeds only the L1-D's request
-register and the completion unit's park, and the gate is the L1-D's
-registered busy, `mem_pending`. The probe confirms the longest path into
-the issue enable originates at a flop, and a Verilator assertion guards
-the wiring.
+any issue-enable or MMU output**. The hit and the translation verdict feed
+only the L1-D's request register, the completion unit's park and the store
+buffer's input register and counts, and the gate, `mem_pending`, is the
+L1-D's registered busy or the buffer's registered full. The probe confirms
+the longest path into the issue enable originates at a flop, and a
+Verilator assertion guards the wiring.
 
 ## What P0.1 proves
 

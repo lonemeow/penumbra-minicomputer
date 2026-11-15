@@ -3,12 +3,13 @@
 > **Applies to:** Penumbra/3 · pipelined core.
 
 Each side of the core has one L1: the L1-I serves the fetch stages and
-the L1-D the memory stages. An L1 is the only way its side reaches
-memory. It answers lookups from its arrays, takes a store's write on a
-hit, and carries everything that goes past it to the uncore: each L1
-is its side's requester on the
-[core-to-uncore port](./uncore-port.md). This document specifies what
-an L1 offers its **client** and what stays inside it.
+the L1-D the memory stages. An L1 answers lookups from its arrays,
+takes a store's write on a hit, and carries what goes past it to the
+uncore: each L1 is its side's requester on the
+[core-to-uncore port](./uncore-port.md). The one thing that reaches
+memory without an L1 carrying it is a cacheable store's write, which
+leaves MEM2 on the port's store side. This document specifies what an
+L1 offers its **client** and what stays inside it.
 
 Four terms:
 
@@ -17,7 +18,7 @@ Four terms:
 - The **current lookup** is the last one launched. The L1's verdict
   belongs to it until the next launch.
 - An **access** is what goes past the L1: a load or fetch the L1 had
-  no word for, and every store's write to memory.
+  no word for, and an uncacheable store's write.
 - The **client** launches lookups and requests accesses: IF1 and IF2
   with the fetch replay on the fetch side, MEM1 and MEM2 with the
   completion unit on the data side.
@@ -82,8 +83,11 @@ lookup of that word directly behind the store is given it ahead of the
 block RAM, so a load behind a store needs no stall. On a miss the L1
 writes nothing (write-no-allocate).
 
-The store's write to memory is not part of this: it is an access of
-its own, which every store requests ([accesses](#accesses)).
+The store's write to memory is not part of this. An uncacheable
+store's is an access of its own ([accesses](#accesses)). A cacheable
+store's leaves MEM2 on the port's
+[store side](./uncore-port.md#the-store-side), with the data and byte
+enables `store` gave the L1.
 
 ## Accesses
 
@@ -101,7 +105,7 @@ never requests one while the L1 is busy. The access's fields:
 
 The L1 carries the access as the port transaction its `we` and
 `cacheable` name
-([the four transactions](./uncore-port.md#the-four-transactions)):
+([the three transactions](./uncore-port.md#the-three-transactions)):
 
 - **A read of a cacheable page** is a line read. The L1 installs the
   line as the read completes, into the way its replacement named when
@@ -110,13 +114,8 @@ The L1 carries the access as the port transaction its `we` and
   below it still serves the access.
 - **A read of an uncacheable page** is a word read and installs
   nothing.
-- **A write** is one write to memory, cacheable or not. A store that
-  hit has already written the L1.
-
-A store buffer, where the core has one, takes a cacheable write in the
-L1-D's place: the L1-D's `done` comes when the buffer has taken the
-write, and the buffer writes memory itself
-([what stays off the port](./uncore-port.md#what-stays-off-the-port)).
+- **A write** is a word write, an uncacheable store's. The client
+  requests no cacheable write.
 
 The client takes the access's word whatever the L1 did with the line.
 Nothing the client does depends on whether the line went in.
@@ -159,13 +158,12 @@ launched in the request's cycle can be.
   size, as it does from a word the L1 hit. A write returns none.
 - **`fault`** says the bus faulted the access: any of a line read's
   four words, or a word access's one. A faulted line read installs
-  nothing. A cacheable write's `done` never faults; its bus fault
-  comes later, on `store_fault`.
-- **`store_fault`** says the bus faulted a cacheable write an earlier
-  `done` completed, and `store_fault_addr` holds that write's physical
-  byte address. The L1-D passes both from the port for one cycle, in
-  any cycle, a `done`'s included, and its client takes them as a
-  deferred bus fault
+  nothing.
+- **`store_fault`** says the bus faulted a cacheable store's write,
+  which the store side carried, and `store_fault_addr` holds that
+  store's physical byte address. The L1-D passes both from the port
+  for one cycle, in any cycle, a `done`'s included, and its client
+  takes them as a deferred bus fault
   ([fault precision](./memory-completion.md#fault-precision)).
 
 `busy`, `done`, `word`, `fault`, `store_fault` and `store_fault_addr`
@@ -198,13 +196,15 @@ access is in flight, its word taken at `done`.
 ## The data side
 
 MEM1 launches a lookup for a load or a store, and MEM2 resolves it.
-A load that missed and every store leave MEM2 into the completion
-unit, and the L1-D takes the access in the same cycle. The unit keeps
-what the instruction needs when the access completes, and the launch
-side freezes while the L1-D is busy, so a load or store held in MEM2
-behind the access keeps its lookup. At `done` the unit completes the
-access: a load's word to its register, a bus fault taken precisely
-([memory completion](./memory-completion.md)).
+A load that missed and an uncacheable store leave MEM2 into the
+completion unit, and the L1-D takes the access in the same cycle. The
+unit keeps what the instruction needs when the access completes, and
+the launch side freezes while the L1-D is busy, so a load or store
+held in MEM2 behind the access keeps its lookup. At `done` the unit
+completes the access: a load's word to its register, a bus fault taken
+precisely ([memory completion](./memory-completion.md)). A cacheable
+store retires from MEM2 onto the store side instead, and the launch
+side freezes the same way while `store_full` is high.
 
 The data side discards nothing: a load or store frozen in MEM2 holds
 its lookup, and a flush during an access costs at most the cycle a

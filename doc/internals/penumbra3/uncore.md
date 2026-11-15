@@ -2,16 +2,16 @@
 
 > **Applies to:** Penumbra/3 · pipelined core.
 
-The uncore serves both L1s on the
+The uncore serves both L1s and the store side on the
 [core-to-uncore port](./uncore-port.md) and drives the external bus.
-It is one pipeline: the choice between the two sides' requests, the
-L2's lookup, and the
-[bus master](./overview.md#fork-boundary), with one posted write
+It is one pipeline: the choice between the two sides' requests and
+the store buffer's, the L2's lookup, and the
+[bus master](./overview.md#fork-boundary), with the store buffer
 beside it. This document specifies the L2 and the pipeline around it:
 the geometry and storage, what each stage does, what each transaction
-does, posting, replacement, and the L2's cache device.
+does, the store buffer, replacement, and the L2's cache device.
 
-Four terms:
+Five terms:
 
 - An **operation** is a request the uncore has taken into its
   pipeline. It **issues** in the cycle the uncore takes it.
@@ -20,22 +20,28 @@ Four terms:
   other operation **passes through**: it reads nothing and installs
   nothing.
 - The **bus transaction** is the one the uncore runs on the bus at a
-  time on an operation's behalf: a line read the L2 could not serve,
-  or a word read or word write. It is **in flight** from the cycle
-  after the bus master takes it through its `done`.
-- The **posted write** is a cacheable write the uncore has completed
-  on the port and has yet to write to the bus.
+  time on a side's behalf: a line read the L2 could not serve, or a
+  word read or word write. It is **in flight** from the cycle after
+  the bus master takes it through its `done`.
+- The **store buffer** holds the cacheable stores that have entered on
+  the store side, from their entry until the bus master has written
+  them.
+- A **post** is the operation that issues for the store buffer's
+  oldest queued store. It writes the store's bytes into the L2 on a
+  hit, a **write hit**, and leaves the store owing its bus write.
 
 ```mermaid
 graph LR
     DL1["L1-D"] -->|request| SEL
     IL1["L1-I"] -->|request| SEL
-    SEL["select<br/>(data first)"] --> L2["L2 lookup<br/>tags, data"]
+    ST["store side"] --> SB["store buffer"]
+    SB -->|"oldest queued"| SEL
+    SEL["select"] --> L2["L2 lookup<br/>tags, data"]
     L2 --> V["verdict"]
     V -->|"done, line"| BOTH["the L1s"]
-    V -->|"post"| PW["posted write"]
+    V -->|"post"| SB
     V -->|"bus transaction"| BM["bus master"]
-    PW --> BM
+    SB -->|"oldest posted"| BM
     BM --- BUS["external bus"]
     BM -->|"line, fault"| BOTH
 ```
@@ -76,36 +82,48 @@ An operation passes three stages:
 | Cycle | Stage | What happens |
 |---|---|---|
 | i | issue | the select takes one request; a lookup reads its set in every array but the replacement bits |
-| i+1 | verdict | a lookup compares the tags: hit, and the hit way. The operation completes, posts, takes the bus, or is dropped |
-| i+2 | update | the requester sees `done`. The arrays take what the verdict decided: a write hit's bytes, the replacement touch |
+| i+1 | verdict | a lookup compares the tags: hit, and the hit way. The operation completes, takes the bus, or is dropped |
+| i+2 | update | a side's requester sees `done`. The arrays take what the verdict decided: a write hit's bytes, the replacement touch |
 
-A request can issue every cycle. With both sides' requests up, they
-issue in consecutive cycles and, when neither needs the bus, complete
-in consecutive cycles, one `done` a cycle.
+A side's request can issue every cycle. With both sides' requests up,
+they issue in consecutive cycles and, when neither needs the bus,
+complete in consecutive cycles, one `done` a cycle. A post holds issue
+in the cycle it is at the verdict, and a write hit's update holds it a
+cycle more: posts that miss issue at most every other cycle, and posts
+that hit every third.
 
 ### Issue
 
-A request issues when all of these hold:
+There are three requesters: the two sides, and the store buffer, whose
+request is up while it holds a queued store. A request issues when all
+of these hold:
 
 - it is up and not already in the pipeline: a side's request is in
   the pipeline from its issue through its `done`, or until it is
-  dropped;
+  dropped, and a post only at its verdict;
 - no bus transaction is in flight, so no install writes the arrays;
 - the update stage writes no write hit's bytes in this cycle;
+- no post is at the verdict: an operation issued then would read the
+  L2 before the post's bytes reach it, and find the store no longer
+  queued ([the store buffer](#the-store-buffer));
 - no invalidation waits to start.
 
-When both sides' requests can issue, the data side's does, as the port
-requires. The enable is taken at issue: a `CTRL` write changes the
-operations that issue after it, never one in the pipeline.
+The select takes the data side's request first, as the port requires,
+then the fetch side's, then the post. The post goes first instead
+while a side **yields**: from the cycle a side's operation is dropped
+for the store buffer's order until a post completes. Without it, a
+side that keeps issuing and being dropped would take every slot the
+stores ahead of it need. The enable is taken at issue: a `CTRL` write
+changes the operations that issue after it, never one in the pipeline.
 
 ### The verdict
 
 | Operation | Outcome | When it can |
 |---|---|---|
-| Line read that hits | completes with the hit way's line | always |
-| Cacheable write | posted, and completes; on a hit the update stage writes its bytes into the line | the posted write is free |
-| Line read that misses, or passes through | takes the bus | the bus master is idle and the posted write free |
-| Word read, word write | takes the bus | likewise |
+| Post | completes; on a hit the update stage writes its bytes into the line | always |
+| Line read that hits | completes with the hit way's line | no queued store holds its line |
+| Line read that misses, or passes through | takes the bus | no queued store holds its line, no store is posted, and the bus master is idle |
+| Word read, word write | takes the bus | the store buffer is empty and the bus master idle |
 
 An operation that cannot is **dropped**: its request stays up, and it
 issues again. Every operation at the verdict is also dropped while a
@@ -115,7 +133,7 @@ only one in its cycle: the L2 serves no hit under a miss
 
 A dropped operation leaves nothing behind: it counts no event, and
 when it issues again it reads the arrays afresh, seeing whatever they
-took meanwhile.
+took meanwhile. A dropped post leaves its store queued.
 
 ### The update stage
 
@@ -130,7 +148,7 @@ for its way.
 | Transaction | Lookup that hits | Lookup that misses, or pass-through |
 |---|---|---|
 | Line read | `done` at i+2, with the hit way's line | a bus transaction: four reads from the line's address. `done` with the bus's line, which a lookup without a fault installs |
-| Cacheable write | posted; `done` at i+2; its bytes written into the line at i+2 | posted; `done` at i+2; nothing installed |
+| Post | the store posted at i+1; its bytes written into the line at i+2 | the store posted at i+1; nothing installed |
 | Word read | — | a bus transaction: one read, its address and byte lanes as they are, the bus's 32 bits in word 0 |
 | Word write | — | a bus transaction: one write, likewise; `done` once the bus has taken it, with its fault |
 
@@ -138,25 +156,59 @@ A pass-through line read reads four words and the requester uses one,
 as the port has it for a disabled L2. The fetch side's requests carry
 no byte lanes, so a fetch's word read reads all four.
 
-## The posted write
+## The store buffer
 
-The uncore holds one cacheable write for later delivery. The write is
-posted at its verdict and completes in the next cycle, and the bus
-master takes it as soon as it is idle, ahead of any bus transaction:
-the posted write is older than every operation behind it. So every
-later bus access follows it. A line read the L2 cannot serve reads
-memory that already holds the written bytes, and a word access reaches
-the bus after every write requested before it, as the port requires.
-A line read the L2 serves sees the bytes in the line, which the
-write's update stage wrote.
+The store buffer holds the stores that have entered on the
+[store side](./uncore-port.md#the-store-side), in the order they
+entered, each in an entry of its own: its word's physical address,
+its data and its byte lanes. It has sixteen entries
+([depth](./memory-performance.md#store-buffer-at-the-core-boundary)).
+A store passes two states before its entry is free:
 
-A second cacheable write waits, dropped at its verdict, until the
-first has left the posted write, once the bus master has completed it.
+| State | From | Until |
+|---|---|---|
+| Queued | it enters | its post completes |
+| Posted | its post completes | the bus master completes its write |
 
-The bus faulting the posted write is a `store_fault` with the write's
-address, in the cycle after the bus master completes it
-([faults](./uncore-port.md#faults)). A cacheable write's `done` never
-carries a fault.
+A store is registered as it enters and reaches its entry a cycle
+later, so the store side's fields reach nothing but that register. It
+counts as queued from the cycle it enters.
+
+The oldest queued store is the buffer's request at the select, and
+its post completes at the first verdict it reaches with no bus
+transaction in flight. The bus master takes the oldest posted store's
+write as soon as it is idle, ahead of any bus transaction: the posted
+stores are older than every operation behind them. A posted store's
+write and a bus transaction are never on the bus master at once, as a
+post completes only while no transaction is in flight, and a
+transaction starts only while no store is posted.
+
+The sides' operations keep the buffer's order at the verdict, so each
+sees every store that entered before it:
+
+- **A line read** waits while a queued store holds its line. When the
+  L2 serves it, every older store to the line has posted, and the
+  write hits have put their bytes in the line.
+- **A bus transaction** starts only once no store is posted. Memory
+  then holds every older store's bytes when a line read reaches it.
+- **A word access** waits for the buffer to be empty, so it reaches
+  the bus after every store that entered before it, as the port
+  requires.
+
+**Full and empty** come from registers and are exact, counting a
+store from the cycle it enters: while full is low, a store may enter
+whatever else the cycle does.
+
+**Storage.** The entries are LUT RAM, with a copy for each store the
+buffer offers, the oldest queued and the oldest posted, since LUT RAM
+reads one address; both offers come from registers. Each queued
+store's line sits in a register as well, so a line read's line is
+compared against every one at once.
+
+The bus faulting a posted store's write is a `store_fault` with the
+store's address, in the cycle after the bus master completes it
+([faults](./uncore-port.md#faults)). The entry frees with the write,
+faulted or not.
 
 ## The bus transaction
 
@@ -213,15 +265,16 @@ L1s do.
   pipeline and no bus transaction is in flight, and nothing issues
   while it waits to start. While it runs, operations issue and pass
   through, which keeps every read and write correct: the L2 is
-  write-through, so memory holds every byte a line holds. Software
+  write-through, so every byte a line holds is in memory or owed to it
+  by a posted store, which a bus transaction waits for. Software
   need not wait for the walk:
   no line can hit from the write on.
 - **`STATUS.BUSY`** is high from the `INVAL_ALL` write until the walk
   ends.
 - **The counters** count each lookup once, at the verdict where it
   completes or takes the bus: a line read as a read hit or miss, a
-  cacheable write as a write hit or miss. A dropped operation and a
-  pass-through count nothing.
+  post as a write hit or miss. A dropped operation and a pass-through
+  count nothing.
 
 The same walk runs after reset, so a line left from before a reset
 never hits.
@@ -233,9 +286,9 @@ From the cycle a request issues, with the pipeline free:
 | Operation | `done` |
 |---|---|
 | Line read, L2 hit | i+2 |
-| Cacheable write | i+2 |
 | Bus transaction | the bus master takes it at the end of i+1; `done` a cycle after the bus master completes |
 
 An L2-hit fill then takes the L1 four cycles from its request to its
 own completion, and an L2 miss adds the bus master's transaction to
-that.
+that. A post completes at its verdict, i+1, with no `done`, and a
+write hit's bytes are in the line at i+2.

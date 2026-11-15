@@ -5,19 +5,23 @@
 Every memory access the core cannot finish in its own L1 goes to the
 uncore: a load or fetch that missed, any access to an uncacheable
 page, and every store's write to memory. This document specifies the
-port they cross: the four transactions it carries, its signals and
-handshake, and what each end may assume about the other.
+port they cross: the three transactions the L1s request, the store
+side that carries cacheable stores, their signals and handshake, and
+what each end may assume about the other.
 
-Three terms:
+Four terms:
 
 - The **uncore** is everything between this port and the external bus:
-  the choice between the two sides' requests, the L2, and the
+  the choice between the requests, the store buffer, the L2, and the
   [bus master](./overview.md#fork-boundary).
 - A **requester** holds a request up. There are two, one per
   **side**, and each is that side's [L1](./l1-cache.md): the L1-D for
   data, the L1-I for instructions. An L1 carries every access of its
-  side that goes past it. Each side has its own copy of the request
-  fields and at most one request up at a time.
+  side that goes past it, but a cacheable store's write. Each side has
+  its own copy of the request fields and at most one request up at a
+  time.
+- The **store side** carries each cacheable store's write from MEM2
+  as the store retires, with no request held and no `done`.
 - A **line** is 16 bytes at a 16-byte-aligned physical address, four
   words: the unit every cache level stores.
 
@@ -33,13 +37,15 @@ asks for between the core and its memory hierarchy.
 graph LR
     DL1["L1-D<br/>(data side)"] -->|request| UC
     IL1["L1-I<br/>(fetch side)"] -->|request| UC
-    UC["uncore<br/>I/D select, L2, bus master"] ---|sync bus| BUS["external bus"]
+    M2["MEM2<br/>(store side)"] -->|"cacheable store"| UC
+    UC["uncore<br/>select, store buffer,<br/>L2, bus master"] ---|sync bus| BUS["external bus"]
     UC -->|"done"| DL1
     UC -->|"done"| IL1
     UC -->|"fault, line<br/>(one register each)"| BOTH["both L1s"]
+    UC -->|"full"| M2
 ```
 
-## The four transactions
+## The three transactions
 
 `we` and `cacheable` name a request's transaction.
 
@@ -47,10 +53,11 @@ graph LR
 |---|:-:|:-:|---|---|---|
 | **Line read** | 0 | 1 | a cacheable load or fetch that missed L1 | nothing if L2 holds the line; else its four words, read in address order | the line |
 | **Word read** | 0 | 0 | an uncacheable load or fetch | exactly one read | one word |
-| **Cacheable write** | 1 | 1 | every cacheable store, whether or not it hit L1 | one write | nothing |
 | **Word write** | 1 | 0 | an uncacheable store | exactly one write | nothing |
 
-The fetch side issues only the two reads.
+The fetch side issues only the two reads. No side requests a write
+with `cacheable` set: a cacheable store's write goes on the
+[store side](#the-store-side).
 
 **`cacheable` is the translation's verdict and nothing else.** An
 access is cacheable only when the MMU is on and its page is mapped
@@ -81,13 +88,8 @@ lanes, both passed to the bus unchanged, so a device sees the access
 the bus protocol's
 [access width](../../hardware/bus-protocol.md#access-width) rules
 describe. L2 neither serves it nor keeps it. The bus sees it after
-every write requested before it.
-
-**Cacheable write.** One write of the lanes `byte_en` marks, in the
-word holding `addr`. Its `done` promises that every later read on the
-port, from either side, returns the written bytes. It promises nothing
-about when the write reaches the bus, and it never reports a fault
-([Faults](#faults)).
+every write requested before it, and after every store that entered
+on the store side before it was requested.
 
 ## Signals
 
@@ -112,8 +114,8 @@ The response, all driven from flip-flops in the uncore:
 | `done` | 1 | one each | this side's request has completed; one cycle |
 | `fault` | 1 | shared | the bus faulted the transaction; valid with either `done` |
 | `line` | 4 × 32 | shared | read data; valid with either `done` of a read that did not fault |
-| `store_fault` | 1 | data | the bus faulted a cacheable write; one cycle, in any cycle |
-| `store_fault_addr` | 32 | data | that write's `addr`; valid with `store_fault` |
+| `store_fault` | 1 | data | the bus faulted a cacheable store's write; one cycle, in any cycle |
+| `store_fault_addr` | 32 | data | that store's address; valid with `store_fault` |
 
 `fault` and `line` are one register each. The uncore never raises both
 sides' `done` in one cycle, so whichever side sees its `done` owns
@@ -151,6 +153,29 @@ waits for `done` and assumes no bound; the cycle counts the uncore
 aims for are in
 [memory performance](./memory-performance.md#design-target-memory-latency-in-cpu-cycles).
 
+## The store side
+
+A cacheable store leaves MEM2 on the store side as its instruction
+retires, whether or not it hit L1, and enters the uncore's
+[store buffer](./uncore.md#the-store-buffer) in that cycle:
+
+| Field | Width | Driven by | Meaning |
+|---|:-:|---|---|
+| `store_enq` | 1 | core | a store enters; one cycle |
+| `store_addr` | 32 | core | its physical byte address |
+| `store_byte_en` | 4 | core | its byte lanes |
+| `store_wdata` | 32 | core | its data, each byte in its bus lane |
+| `store_full` | 1 | uncore | no store may enter |
+
+A store's entry promises that every later read on the port, from
+either side, returns the written bytes, and that a word read or word
+write requested after it reaches the bus after its write. It promises
+nothing about when the write reaches the bus, and never reports a
+fault on the store ([faults](#faults)).
+
+**`store_full` is exact.** While it is low, a store may enter in that
+cycle, whatever else the cycle does; while it is high, none may.
+
 ## Read data
 
 - **A line read** returns the line's four words in address order:
@@ -177,10 +202,10 @@ reach the port.
 - **A word read or a word write** reports its one access's fault,
   which the requester passes to its client; the data side delivers it
   [precisely](./memory-completion.md#fault-precision).
-- **A cacheable write** completes with `fault` low whatever the bus
-  said. Its bus fault comes apart from any `done`: a `store_fault`
-  pulse in whatever cycle the bus reported it, with the write's `addr`
-  on `store_fault_addr`. The core takes it as a
+- **A cacheable store** has no `done` to carry a fault. Its write's
+  bus fault is a `store_fault` pulse in whatever cycle the bus reported
+  it, with the store's `store_addr` on `store_fault_addr`. The core
+  takes it as a
   [deferred bus fault](../../system/architecture.md#deferred-bus-faults).
 
 ## Timing
@@ -191,10 +216,16 @@ Both directions of the port run from registers.
   straight from registers in the requester. A miss sets a flop and the
   flop raises `valid`; no hit, miss or translation verdict reaches the
   port in the cycle it forms.
+- **The store side is registered at the uncore.** `store_enq` and
+  `store_addr` form behind MEM2's translation verdict, in the cycle the
+  store retires, so the uncore takes the store side's fields into
+  registers before any of its logic reads them. The one exception is
+  `store_enq` choosing between results already computed without it,
+  as the store buffer's counts and `store_full` do.
 - **Responses leave flip-flops.** `done`, `fault`, `line`,
-  `store_fault` and `store_fault_addr` come straight from registers in
-  the uncore, and no path runs from a request field to a response
-  within a cycle.
+  `store_fault`, `store_fault_addr` and `store_full` come straight
+  from registers in the uncore, and no path runs from a request field
+  to a response within a cycle.
 - **What may sit between.** The uncore may select between the two
   sides' requests ahead of its first register. A requester may gate
   `done` with its own flops ahead of its registers and its arrays'
@@ -210,9 +241,6 @@ Both directions of the port run from registers.
 - **How the uncore gets a line** shows only as latency: L2, a line
   taken from the bus as it fills L2, prefetch
   ([one uncore pipeline](./memory-performance.md#one-uncore-pipeline)).
-- **A store buffer,** where the core has one, takes a cacheable store
-  as it commits and issues the write itself, so the L1-D issues no
-  cacheable write. The port's other three transactions are unchanged:
-  the uncore holds a line read or a word access back until the
-  buffered writes it must follow have left the buffer
-  ([store buffer](./memory-performance.md#store-buffer-at-the-core-boundary)).
+- **The store buffer's state** shows only as `store_full` and as
+  latency: how many stores it holds, and when each reaches L2 and the
+  bus ([the store buffer](./uncore.md#the-store-buffer)).

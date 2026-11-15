@@ -458,10 +458,11 @@ the seed sweep, not into a higher clock.
      back-end stall and the load/store completion + fault-precision contract.
    - [`l1-cache.md`](./l1-cache.md) — the two L1s as their clients see
      them: lookups, stores, and the accesses each L1 carries past it.
-   - [`uncore-port.md`](./uncore-port.md) — the port between the L1s and
-     the uncore: its four transactions, handshake and faults.
+   - [`uncore-port.md`](./uncore-port.md) — the port between the core and
+     the uncore: the L1s' three transactions, the store side, handshake
+     and faults.
    - [`uncore.md`](./uncore.md) — the uncore behind that port: the L2's
-     geometry and pipeline, the posted write, the bus transaction, and
+     geometry and pipeline, the store buffer, the bus transaction, and
      the L2's cache device.
    - [`machine.md`](./machine.md) — how the core, MMU, L1s, uncore and
      sysreg devices compose into the machine, and the program-end pulse.

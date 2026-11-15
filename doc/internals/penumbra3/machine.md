@@ -25,6 +25,7 @@ graph LR
     CORE -->|"fetch, data<br/>translate"| MMU
     CORE -->|"data launch,<br/>store, access"| L1D
     CORE -->|"fetch access"| L1I
+    CORE -->|"cacheable store"| UC
     MMU -->|"candidate frames"| L1I
     MMU -->|"candidate frames"| L1D
     L1I ---|"fetch side"| UC
@@ -51,12 +52,17 @@ graph LR
   freezes both launch-to-resolve registers alike, so a held slot keeps
   its verdicts. Stores and the accesses past the L1-D are the L1-D's
   ([accesses](./l1-cache.md#accesses)).
+- **The store side.** A cacheable store's write goes from the core to
+  the uncore directly: MEM2 gives its enqueue and physical address,
+  and its data and byte lanes are the L1-D's store strobe's, which
+  every store drives. The uncore's full goes back to the core
+  ([the store side](./uncore-port.md#the-store-side)).
 - **The MMU's fault registers** take the core's fault commit, already
   qualified to the faults that carry an address.
 - **The store fault.** The L1-D passes the uncore's store fault and
-  its write's address to the core, which takes it as a deferred bus
+  its store's address to the core, which takes it as a deferred bus
   fault ([fault precision](./memory-completion.md#fault-precision)).
-- **The uncore** serves both L1s on the
+- **The uncore** serves both L1s and the store side on the
   [core-to-uncore port](./uncore-port.md) and drives the external bus
   ([the uncore](./uncore.md)). The L2 inside it is a sysreg device.
 
