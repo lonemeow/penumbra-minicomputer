@@ -113,14 +113,68 @@ has already passed into ID before the stall begins, and it costs its
 cycle. Penumbra/2 redirects every taken branch from EX, so it has no
 such bubble to hide.
 
+### Penumbra/3
+
+An ALU operation occupies each stage for one cycle: **1**.
+
+**Loads** issue in **1**: MEM1 and MEM2 take a hit without holding
+the pipeline. The loaded value is forwarded only from the MEM2/WB
+register
+([memory-completion.md](penumbra3/memory-completion.md#load-hit--a-registered-load-use-hazard)),
+so ID holds a reader directly behind a load for two cycles, and for
+one with a single instruction between them: a latency of **3**, for an
+operand, an address, a store's data, the flags of a compare and a
+jump's target alike. `RDSYS` takes the same path.
+
+**Stores** enter the store buffer (`penumbra3_store_buffer`,
+[uncore.md](penumbra3/uncore.md)) at MEM2 and cost their issue cycle
+while it has room. The bus master writes each posted store as a
+transaction of its own — accept, presentation, ack and completion —
+which is the ~5 cycles a store takes in a run
+([memory-performance.md](penumbra3/memory-performance.md#sustained-writes-on-the-sdram-stack));
+a full buffer holds MEM2.
+
+**Multiply and divide** hold EX for the divmul unit, 10 cycles for a
+multiply and 34 for a divide with the instruction's own cycle
+included. WB then writes Rd and Rdh on consecutive cycles, and its
+hold on the second (`writing_aux` in `penumbra3_wb_stage.sv`) stalls
+everything behind it, two-register form or not: **11** and **35**. A
+`MUL` or `DIV` directly behind waits in EX for its own unit through
+that cycle, so the first of the pair costs one less. Both halves are
+late writers through MEM2
+([hw-core.md](../TODO/hw-core.md), "a gen3 divmul's low half waits as
+a late writer"): ID holds a reader directly behind for 3 cycles, one
+fewer for each instruction between, a latency of **14** and **38**
+for either half.
+
+**Control transfers.** IF2 pre-decodes each word and steers IF1 for a
+`B`, a `BL`, a `Bcc` the direction table calls taken, and a `JMP R13`
+from the return stack's top
+([branch-prediction.md](penumbra3/branch-prediction.md#design)); the
+sequential fetch IF1 launched in that cycle is discarded, so a
+predicted taken transfer costs **2**. EX checks every prediction and
+redirects on a mismatch, discarding what the front end and ID hold
+behind the transfer: **4**, in either direction, and for every `JMP`
+and `JALR` the return stack does not predict.
+
+**Stalls beside a predicted taken branch.** IF1, IF2 and the fetch
+buffer keep fetching while the back end stalls. A predicted taken
+transfer that reaches IF2 during a stall has its discarded fetch
+absorbed: one to five instructions behind the stalled instruction,
+whether it stalls in EX (a `MUL` or `DIV`), in ID (a reader waiting)
+or in MEM2 (a miss). Further back, the transfer leaves IF2 after the
+stall and its bubble costs its cycle. A hit holds nothing, so a load
+or store beside a branch hides nothing, unlike on Penumbra/2.5.
+
 ## Measuring
 
 The figures come from bare-metal programs run on the program
 testbenches, which simulate a whole machine with its SDRAM clocked at
-four times the CPU: `build/V<core>_tb_cpu_prog` for Penumbra/1 and
-`build/V<core>_tb_penumbra2_prog` for Penumbra/2 and /2.5, each
-program assembled with `pasm.py --org 0xFFFF0000` and passed as
-`+rom_hex=`. Each program:
+four times the CPU: `build/V<core>_tb_cpu_prog` for Penumbra/1,
+`build/V<core>_tb_penumbra2_prog` for Penumbra/2 and /2.5 and
+`build/Vpenumbra3_tb_penumbra3_prog` for Penumbra/3, each program
+assembled with `pasm.py --org 0xFFFF0000` and passed as `+rom_hex=`.
+Each program:
 
 1. maps its data page and the ROM page cacheable, and enables the MMU
    and the L1 caches — and the L2, through its own `CACHE_CTRL`, when
@@ -143,6 +197,19 @@ cycle, stores as 5, `MUL` as 10 and `DIV` as 34. The overlap itself
 is measured by the opposite placement: the instruction directly
 before the `SUB`, or between it and the `BNE`.
 
+Penumbra/3 hides the bubble from further back: a stall absorbs it
+with the `BNE` up to five instructions behind
+([Penumbra/3](#penumbra3)). Two fillers read a `MUL` there as 10 and
+a miss a cycle low; four or more fillers ahead of the `SUB` keep every
+figure clean. A reader's wait shrinks the same way when it is a stall
+of its own, so its probes need the padding too: with two fillers a
+`MUL`'s reader waits 4, 2, 1 and 0 cycles at distances one to four,
+where the true waits are 3, 2, 1 and 0.
+
+On Penumbra/3 two independent `MUL`s or `DIV`s in a row cost one
+cycle less than two apart, so a pair measures a different cost from
+one; time one, with the padding.
+
 **Fillers must depend on nothing.** `ADD R0, R9` writes the zero
 register and reads a constant, so no instruction waits on it. A
 two-address `ADD Rn, Rm` reads its own destination: four in a row are
@@ -159,7 +226,10 @@ should shrink by the filler's issue cycles, down to none.
 **Miss costs** come from a dependent pointer chase — each load's
 address is the previous load's result, so nothing overlaps it —
 through a working set larger than every baseline L1 and smaller than
-the L2: 8 KiB, one pointer per 16-byte line. Against a chase that
+the L2: 16 KiB, one pointer per 16-byte line, each 37 lines past the
+last, so consecutive loads share neither a line's neighbour nor an L1
+set. Run it once around the ring before timing it, so every line is
+in the L2 and none in the L1. Against a chase that
 keeps hitting one line, the difference is the cost of an L1 miss
 served by the L2; with the L2 disabled, the same chase measures the
 memory path instead. Mapping the extra pages takes `TLB_VPN` values
