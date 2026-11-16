@@ -106,18 +106,22 @@ stores into it. What remains is the staged levers, in the order the
 overview ranks them ("Levers ranked by measured benefit").
 
 Each lever is read against a full-top seed sweep. The current one, at
-`b60a812` with loads releasing their readers at MEM2, is of the ULX3S
-top with the line SDRAM stack and no floorplan, the placement choices
-taken over from gen2: 9 of 10 seeds close every domain, and the tenth
-misses the CPU clock's 37.5 MHz. The CPU clock is the worst domain on
-all 10, and its critical path is the fetch side's on 6: the L1-I data
-word through the pre-decode and IF2's way select into the return
-stack's pop (4) or the fetch buffer (2). On the other 4 it is the D
+`89dc784` with a divmul's low half forwarding like an ALU result, is
+of the ULX3S top with the line SDRAM stack and no floorplan, the
+placement choices taken over from gen2: 9 of 10 seeds close every
+domain, and the tenth misses the CPU clock's 37.5 MHz. The CPU clock
+is the worst domain on 9; one seed that closes every domain has less
+margin on the USB clock's 60 MHz. The CPU clock's critical path is the
+fetch side's on 6: the I-TLB's word through the TLB match, into IF1's
+PC past the L1-I's tag compare and the predictor (3), or into the
+fetch buffer past the fetch's fault verdict (3). On 2 it is the D
 side's: the D-TLB's word through the TLB match and the L1-D's tag
-compare, into MEM2's writeback payload, the L1-D's held lookup or its
-write-hit event, or the store buffer's empty flag. 58-65% of it is
-routing. EX's forwarding loop is the worst path on none. The next
-lever's sweep is read against this one.
+compare, into MEM2's writeback payload or the L1-D's held lookup. On
+the other 2 it is the bus master's word index through the bus
+address's adder into the USB host's crossing buffer, a 26-level path
+that is 77-78% routing; the rest are 63-66% routing. ID's scoreboard
+and EX's forwarding loop are the worst path on none. The next lever's
+sweep is read against this one.
 
 ## Hardware: a gen3 divmul's second write stalls the whole back end
 
