@@ -7,8 +7,8 @@
 //     indices (penumbra3_regmap for GPRs; an inline map for SPR refs),
 //   - asks the scoreboard whether a late writer of either source is in
 //     flight,
-//   - decides issue (penumbra3_issue): block a source only when it is read,
-//     pending, and not forwardable this cycle,
+//   - decides issue (penumbra3_issue): block a source only when it is read
+//     and a late writer of it is in flight,
 //   - drives the regfile read ports and selects the final ALU operands,
 //   - finalizes the mode-dependent exception state (priv fault + vector),
 //   - latches the bundle + operands + physical dst + PC into the ID/EX
@@ -23,11 +23,11 @@
 // them. NZCV is not a scoreboard entry (it forwards in EX), so flag reads
 // never stall here.
 //
-// Forwarding boundary. Whether a pending source can be supplied *this* cycle
-// depends on where its producer sits in EX/MEM/WB -- so the spine broadcasts
-// "physical register R's value is forwardable now" on the forward ports, and
-// this stage only *matches* its source indices against them. The broadcast
-// generation (which stages, what "ready" means) is co-designed with EX.
+// Forwarding boundary. Where a late writer's value first forwards from is
+// the spine's to know, so the spine lists a late writer only while a reader
+// issued now would reach EX ahead of that value: a load or sysreg read in EX
+// or MEM1 (from MEM2 its value reaches MEM2/WB as the reader reaches EX), a
+// divmul through MEM2. This stage only compares its sources against the list.
 
 module penumbra3_id_stage
     import penumbra_pkg::*;
@@ -70,14 +70,6 @@ module penumbra3_id_stage
     // One slot each; a slot's index is the physical entry it writes.
     input  logic [LATE_WRITERS-1:0]               i_late_wr_en,
     input  logic [LATE_WRITERS-1:0][SB_IDX_W-1:0] i_late_wr_idx,
-
-    // ── Forward broadcasts (driven by the spine from EX/MEM2/WB) ─
-    // Each names a physical register whose value is forwardable to EX this
-    // cycle. A pending source matching one may issue (EX supplies the value).
-    input  logic                  i_fwd0_en,
-    input  logic [SB_IDX_W-1:0]   i_fwd0_idx,
-    input  logic                  i_fwd1_en,
-    input  logic [SB_IDX_W-1:0]   i_fwd1_idx,
 
     // ── ID/EX register (to EX) ───────────────────────────────────
     output ctrl_bundle_t          o_ex_bundle,
@@ -241,16 +233,6 @@ module penumbra3_id_stage
         .o_src1_pending (src_b_pending)
     );
 
-    // ── Forward availability ─────────────────────────────────────
-    // A pending source may issue this cycle if a forward broadcast names its
-    // physical register (EX will supply the value). See the forwarding-boundary
-    // note in the header: ID matches, the spine generates the broadcasts.
-    logic src_a_fwd, src_b_fwd;
-    assign src_a_fwd = (i_fwd0_en && phys_src_a == i_fwd0_idx)
-                     | (i_fwd1_en && phys_src_a == i_fwd1_idx);
-    assign src_b_fwd = (i_fwd0_en && phys_src_b == i_fwd0_idx)
-                     | (i_fwd1_en && phys_src_b == i_fwd1_idx);
-
     // ── Issue decision ───────────────────────────────────────────
     logic can_issue;
     penumbra3_issue u_issue (
@@ -258,10 +240,8 @@ module penumbra3_id_stage
         .i_pipe_hold    (i_pipe_hold),
         .i_src0_used    (phys_src_a_used),
         .i_src0_pending (src_a_pending),
-        .i_src0_fwd     (src_a_fwd),
         .i_src1_used    (phys_src_b_used),
         .i_src1_pending (src_b_pending),
-        .i_src1_fwd     (src_b_fwd),
         .o_can_issue    (can_issue)
     );
 

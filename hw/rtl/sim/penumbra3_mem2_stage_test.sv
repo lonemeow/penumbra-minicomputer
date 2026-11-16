@@ -72,14 +72,17 @@ module penumbra3_mem2_stage_test
     output logic [3:0]  o_wb_op_class,
     output logic [31:0] o_wb_value,
     output logic [SB_IDX_W-1:0] o_wb_phys_dst,
+    output logic        o_wb_phys_dst_we,
+    output logic [31:0] o_wb_pc,
+    output logic        o_wb_flags_updater,
     output logic        o_wb_fault_pending,
     output logic [3:0]  o_wb_fault_vec,
 
     output logic        o_mem_pending,
+    output logic        o_load_parked,
+    output logic [SB_IDX_W-1:0] o_load_parked_dest,
     output logic        o_complete,
     output logic        o_complete_we,
-    output logic [SB_IDX_W-1:0] o_complete_dest,
-    output logic [31:0] o_complete_value,
     output logic        o_complete_fault,
     output logic [31:0] o_complete_pc,
     output logic [31:0] o_complete_vaddr,
@@ -314,10 +317,10 @@ module penumbra3_mem2_stage_test
         .i_store_full           (i_store_full),
         .i_sys_rdata            (32'b0),
         .o_mem_pending          (o_mem_pending),
+        .o_load_parked          (o_load_parked),
+        .o_load_parked_dest     (o_load_parked_dest),
         .o_complete             (o_complete),
         .o_complete_we          (o_complete_we),
-        .o_complete_dest        (o_complete_dest),
-        .o_complete_value       (o_complete_value),
         .o_complete_fault       (o_complete_fault),
         .o_complete_pc          (o_complete_pc),
         .o_complete_vaddr       (o_complete_vaddr),
@@ -339,6 +342,9 @@ module penumbra3_mem2_stage_test
     assign o_wb_op_class      = wb_bundle.op_class;
     assign o_wb_value         = wb_payload.value;
     assign o_wb_phys_dst      = wb_payload.phys_dst;
+    assign o_wb_phys_dst_we   = wb_payload.phys_dst_we;
+    assign o_wb_pc            = wb_payload.pc;
+    assign o_wb_flags_updater = wb_bundle.flags_updater;
     assign o_wb_fault_pending = wb_payload.fault_pending;
     assign o_wb_fault_vec     = wb_payload.fault_vec;
 

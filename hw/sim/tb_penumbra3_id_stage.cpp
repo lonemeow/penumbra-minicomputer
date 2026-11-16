@@ -53,7 +53,6 @@ static void clear(Vpenumbra3_id_stage_test* dut) {
     dut->i_stall_in = 0; dut->i_bubble = 0; dut->i_fetch_busy = 0; dut->i_pipe_hold = 0;
     dut->i_rd_data_a = 0; dut->i_rd_data_b = 0; dut->i_spr_src_value = 0;
     dut->i_late_wr_en = 0; dut->i_late_wr_idx = 0;
-    dut->i_fwd0_en = 0; dut->i_fwd0_idx = 0; dut->i_fwd1_en = 0; dut->i_fwd1_idx = 0;
 }
 
 int main(int argc, char** argv) {
@@ -101,9 +100,8 @@ int main(int argc, char** argv) {
     // ── Scoreboard: a late writer holds its readers back ─────────
     // The testbench plays the spine, which lists the late writers in flight:
     // a LOAD into R3 in one slot. A dependent ADD R4, R3 is blocked on its
-    // source B, a forward broadcast naming R3 releases it, and so does the
-    // writer leaving the list. A writer of R4 blocks it on source A; a writer
-    // of another entry blocks nothing.
+    // source B until the writer leaves the list. A writer of R4 blocks it on
+    // source A; a writer of another entry blocks nothing.
     clear(dut);
     dut->i_ir = enc_m(1, 2, 0, 3, 5, 0);   // LDW R3, [R5+0]
     dut->i_valid = 1; dut->eval();
@@ -116,10 +114,7 @@ int main(int argc, char** argv) {
     dut->eval();
     check("dep_blocked_deq",   dut->o_deq_ready, 0);
     check("dep_blocked_stall", dut->o_local_stall, 1);
-    dut->i_fwd0_en = 1; dut->i_fwd0_idx = 3; dut->eval();
-    check("dep_fwd_deq",   dut->o_deq_ready, 1);
-    check("dep_fwd_stall", dut->o_local_stall, 0);
-    dut->i_fwd0_en = 0; dut->i_late_wr_en = 0; dut->eval();
+    dut->i_late_wr_en = 0; dut->eval();
     check("dep_released_deq", dut->o_deq_ready, 1);
     dut->i_late_wr_en = 1u << 0; dut->i_late_wr_idx = late_slot(0, 4); dut->eval();
     check("dep_src_a_blocked", dut->o_deq_ready, 0);

@@ -119,48 +119,22 @@ stack's pop (2), or the I-TLB's VPN word into IF1's next PC through
 the miss's flush (1). 61-67% of it is routing. The store buffer is the
 worst path on none. The next lever's sweep is read against this one.
 
-## Hardware: a gen3 load's reader waits for its regfile write
+## Hardware: a gen3 divmul's low half waits as a late writer
 
-ID holds a reader of a late writer (a load, a sysreg read, a divmul)
-until the writer leaves MEM2, and then reads the value from the
-regfile in the cycle WB writes it. EX could take it a cycle sooner: it
-forwards loads and sysreg reads from the MEM2/WB register, so a reader
-issued with the writer still in MEM2 would find the value there. ID
-already matches the broadcasts that would release such a reader
-(`i_fwd0`, `i_fwd1`); the spine ties them off. A reader directly
-behind a load therefore waits 3 cycles where the design's load-use
-wait is 2 (`doc/internals/penumbra3/memory-completion.md`, "Load hit
-— a registered load-use hazard").
-
-A divmul's low half need not be a late writer at all: EX's MEM1 leg
-already forwards it, and gen2.5 takes it at no cost (`MUL` 11/11, `DIV`
-35/35 in `doc/system/instruction-timing.md`) where gen3 holds a reader
-directly behind it 3 cycles longer than an independent op (spine
-testbench).
-
-The ISS's load-use model puts the 2-cycle wait at 131–147 cycles per
-1000 instructions on `pbench kernel` and Doom `demo3`
-(`doc/internals/penumbra4/load-use.md`); the third cycle has not been
-counted.
-
-Releasing the reader while the load is in MEM2 bets that the load
-hits; when it parks instead, the released reader waits in EX and takes
-the word from the completion, forwarded in MEM2/WB's place
-(`memory-completion.md`, "Load hit" and "Load miss"). Modelled on
-libc's `memcpy` word loop, the release and the forward take a copy from
-L2 from 7.00 to 6.00 cycles a word, and one from memory on the Nexys
-from 14.20 to 13.61. The forward is a quarter cycle a word of that, a
-cycle a line: a copy that misses spends most of its time with a fill and
-the store drain taking turns on the bus, and the miss's cycle comes
-right after the fill.
+A divmul is a late writer of both its results through MEM2, so ID holds
+a reader of either until the divmul has left MEM2. Its low half need not
+be one at all: EX's MEM1 leg already forwards it, and gen2.5 takes it at
+no cost (`MUL` 11/11, `DIV` 35/35 in `doc/system/instruction-timing.md`)
+where gen3 holds a reader directly behind it 3 cycles longer than an
+independent op (spine testbench). Loads and sysreg reads release their
+readers at MEM2 (`doc/internals/penumbra3/memory-completion.md`, "Load
+hit"); the high half, which WB writes a cycle after the low, has no leg
+to forward from.
 
 Open:
 
-- Build the release and the completion's forward as
-  `memory-completion.md` specifies, and read a seed sweep for the
-  sub-word extract on the forward leg.
-- The divmul's low half leaves the late-writer list.
-- What the third cycle costs: `+loadusemodel=ex+wait:3` beside `ex`.
+- The divmul's low half leaves the late-writer list, its high half
+  staying on it.
 
 ## Hardware: a gen3 divmul's second write stalls the whole back end
 

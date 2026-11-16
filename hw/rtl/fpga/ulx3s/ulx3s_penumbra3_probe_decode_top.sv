@@ -155,10 +155,8 @@ module ulx3s_penumbra3_probe_decode_top (
         .i_pipe_hold    (mem_pending),
         .i_src0_used    (src0_used_q & src0_tracked),
         .i_src0_pending (src0_pending),
-        .i_src0_fwd     (lfsr_q[13]),
         .i_src1_used    (src1_used_q & src1_tracked),
         .i_src1_pending (src1_pending),
-        .i_src1_fwd     (lfsr_q[14]),
         .o_can_issue    (can_issue)
     );
 

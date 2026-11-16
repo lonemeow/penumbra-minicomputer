@@ -78,6 +78,7 @@ static void clear(Vpenumbra3_ex_stage_test* dut) {
     dut->i_mem2_dst_we = 0; dut->i_mem2_valid = 0;
     dut->i_wb_result = 0; dut->i_wb_phys_dst = 0;
     dut->i_wb_dst_we = 0; dut->i_wb_valid = 0;
+    dut->i_cpl_awaited = 0; dut->i_cpl_dest = 0;
     dut->i_sr_flags = 0; dut->i_mem2_flags = 0; dut->i_mem2_writes_flags = 0;
     dut->i_wb_flags = 0; dut->i_wb_writes_flags = 0; dut->i_sr_committed = 0;
     dut->i_irq_inject = 0; dut->i_irq_vec = 0;
@@ -411,6 +412,111 @@ int main(int argc, char** argv) {
     check("wrsys_first_value", dut->o_sys_wdata, 0x5678);
     tick(dut);
     dut->i_valid = 0; dut->i_first_cycle = 0; dut->eval();
+    tick(dut);
+
+    // ── A released reader awaiting a parked load ─────────────────
+    // A reader released while its load was in MEM2 waits here, frozen, when
+    // the load parks, its operand read stale. Its redirect, its divmul launch
+    // and its WRSYS value wait for the load's word to reach the MEM2/WB leg;
+    // one that awaits nothing acts at once.
+    struct { const char* n; uint32_t pred_target; int redirect; } ret[] = {
+        {"await_ret_pred_right", 0x3000, 0},
+        {"await_ret_pred_wrong", 0x3100, 1},
+    };
+    for (auto& c : ret) {
+        char n[64];
+        clear(dut);
+        dut->i_ir = enc_l(OP_L_JMP, 13);       // JMP R13 behind LDW R13, a miss
+        dut->i_pc = 0x2000; dut->i_next_pc = 0x2004;
+        dut->i_op_a = 0xBAD0; dut->i_phys_src_a = 13; dut->i_src_a_fwdable = 1;
+        dut->i_pred_taken = 1; dut->i_pred_target = c.pred_target;
+        dut->i_stall_in = 1; dut->i_cpl_awaited = 1; dut->i_cpl_dest = 13;
+        dut->i_valid = 1; dut->i_first_cycle = 1; dut->eval();
+        snprintf(n, sizeof n, "%s_holds", c.n);
+        check(n, dut->o_redirect, 0);          // not to the stale 0xBAD0
+        snprintf(n, sizeof n, "%s_no_trace", c.n);
+        check(n, dut->o_branch_taken, 0);
+        tick(dut);
+        dut->i_first_cycle = 0; dut->eval();
+        snprintf(n, sizeof n, "%s_still_holds", c.n);
+        check(n, dut->o_redirect, 0);
+        tick(dut);
+        dut->i_cpl_awaited = 0;                // R13's word reaches the leg
+        dut->i_wb_valid = 1; dut->i_wb_dst_we = 1;
+        dut->i_wb_phys_dst = 13; dut->i_wb_result = 0x3000;
+        dut->eval();
+        snprintf(n, sizeof n, "%s_redirect", c.n);
+        check(n, dut->o_redirect, c.redirect);
+        snprintf(n, sizeof n, "%s_target", c.n);
+        check(n, dut->o_branch_target, 0x3000);
+        tick(dut);
+    }
+
+    clear(dut);                                // awaiting another register
+    dut->i_ir = enc_l(OP_L_JMP, 4);
+    dut->i_pc = 0x2000; dut->i_next_pc = 0x2004;
+    dut->i_op_a = 0x3000; dut->i_phys_src_a = 4; dut->i_src_a_fwdable = 1;
+    dut->i_stall_in = 1; dut->i_cpl_awaited = 1; dut->i_cpl_dest = 9;
+    dut->i_valid = 1; dut->i_first_cycle = 1; dut->eval();
+    check("await_other_redirects", dut->o_redirect, 1);
+    tick(dut);
+
+    // MUL R1, R2 behind LDW R1, a miss: the unit launches only once R1's
+    // word is on the leg, and on that word, here with the launch side still
+    // held a cycle more.
+    clear(dut);
+    dut->i_ir = enc_r(OP_R_MUL, 1, 2, 0);
+    dut->i_op_a = 0xBAD; dut->i_op_b = 7;
+    dut->i_phys_src_a = 1; dut->i_src_a_fwdable = 1; dut->i_phys_src_b = 2;
+    dut->i_phys_dst = 1; dut->i_phys_dst_we = 1;
+    dut->i_stall_in = 1; dut->i_cpl_awaited = 1; dut->i_cpl_dest = 1;
+    dut->i_valid = 1; dut->i_first_cycle = 1; dut->eval();
+    check("await_mul_stall", dut->o_funit_stall, 1);
+    for (int i = 0; i < 3; i++) { tick(dut); dut->i_first_cycle = 0; dut->eval(); }
+    check("await_mul_still_stall", dut->o_funit_stall, 1);
+    dut->i_cpl_awaited = 0;
+    dut->i_wb_valid = 1; dut->i_wb_dst_we = 1;
+    dut->i_wb_phys_dst = 1; dut->i_wb_result = 6;
+    dut->eval();
+    tick(dut);
+    dut->i_wb_valid = 0; dut->i_stall_in = 0; dut->eval();
+    done = 0;
+    for (int i = 0; i < 60 && !done; i++) {
+        tick(dut); dut->eval();
+        if (dut->o_mem1_valid && dut->o_mem1_op_class == OPC_DIVMUL) done = 1;
+    }
+    check("await_mul_done", done, 1);
+    check("await_mul_lo",   dut->o_mem1_result, 42);
+    tick(dut);
+    dut->i_valid = 0; dut->eval();
+    tick(dut);
+
+    // WRSYS R5 behind LDW R5, a miss: it arrives awaiting, takes the value
+    // as the word reaches the leg, and writes it at the drained commit.
+    clear(dut);
+    dut->i_ir = enc_r(OP_R_WRSYS, 5, 0, 0) | (0u << 12) | (5u << 8);
+    dut->i_op_b = 0xBAD;
+    dut->i_phys_src_b = 5; dut->i_src_b_fwdable = 1;
+    dut->i_back_end_active = 1;
+    dut->i_cpl_awaited = 1; dut->i_cpl_dest = 5;
+    dut->i_valid = 1; dut->i_first_cycle = 1; dut->eval();
+    check("await_wrsys_wait", dut->o_dc_commit, 0);
+    tick(dut);
+    dut->i_first_cycle = 0; dut->eval();
+    tick(dut);
+    dut->i_cpl_awaited = 0;
+    dut->i_wb_valid = 1; dut->i_wb_dst_we = 1;
+    dut->i_wb_phys_dst = 5; dut->i_wb_result = 0x4321;
+    dut->eval();
+    check("await_wrsys_completion_wait", dut->o_dc_commit, 0);
+    tick(dut);
+    dut->i_wb_valid = 0; dut->eval();
+    tick(dut);
+    dut->i_back_end_active = 0; dut->eval();
+    check("await_wrsys_commit", dut->o_dc_commit, 1);
+    check("await_wrsys_value",  dut->o_sys_wdata, 0x4321);
+    tick(dut);
+    dut->i_valid = 0; dut->eval();
     tick(dut);
 
     // ── Handshake: stall holds EX/MEM1, bubble flushes it ────────

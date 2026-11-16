@@ -53,8 +53,8 @@ a dependent issued too close behind. That hazard is resolved against
 - A parked load is in no pipeline register, and the scoreboard does not
   see it. Nothing issues while it is parked: the back end's hold
   ([what the pipe gate freezes](#what-the-pipe-gate-freezes)) keeps every
-  instruction still in ID there until its completion has written the
-  regfile.
+  instruction still in ID there until its completion has reached WB,
+  which writes the regfile as ID reads it.
 
 A load's value forwards from the MEM2/WB register, so a dependent issued
 directly behind it waits 2 cycles, one with an instruction between them,
@@ -72,10 +72,21 @@ MEM2 and never on the translate's verdict.
 **A release is a bet that the load hits.** A load released in MEM2 may
 park there instead of reaching MEM2/WB. The reader released with it is
 then in EX, which only one instruction occupies, and the back end's hold
-freezes it there until the completion forwards the load's word to it
+freezes it there until the load's completion reaches MEM2/WB, the leg it
+would have taken a hit's word from
 ([load miss](#load-miss--hold-and-complete)). It leaves EX in the cycle
 the launch side resumes, a cycle before a dependent that waited in ID
 could reach EX. A sysreg read never parks, so its release always lands.
+
+**EX acts on an awaiting reader only once its word is there.** Most of
+what EX does is latched as it advances, but three things happen while
+it holds: a transfer steers fetch, a divmul starts its unit, and a
+drain-commit takes its value. None of them happens while EX's slot
+awaits a parked load — the load's word on no leg yet, and one of the
+slot's sources its destination, all registered state. Each happens once
+the completed load is in MEM2/WB instead, from the word that leg
+forwards, so fetch never leaves on a stale target and no unit takes a
+stale operand.
 
 The scoreboard keeps no state of its own, so two late writers of one
 register never confuse it: the register stays pending until the younger
@@ -122,33 +133,34 @@ graph LR
   faulted or the L1 is disabled. Neither the line nor the install reaches
   the completion unit, which takes the load's word whatever the L1 did.
 - **Completion is the L1-D's registered `done`,** in the cycle after the
-  read completes. The completion unit delivers the word to the held load's
-  register, or takes the [bus fault](#fault-precision), and retires the
-  instruction. A reader released before the park takes the word from the
-  completion's forward, below.
-- **The launch side resumes when `mem_pending` drops:** with completion,
-  or a cycle later when the load or store held in MEM2 behind the miss has
+  read completes. A load's completion enters the MEM2/WB register and
+  retires at WB as a hit does, below. The completion unit takes a
+  [bus fault](#fault-precision) itself, and retires an uncached store.
+- **The launch side resumes when `mem_pending` drops:** in the cycle after
+  a load's completion, which takes MEM2/WB in its own cycle, and with any
+  other completion. The load or store held in MEM2 behind a miss may have
   its lookup in the set the line went into, which the L1 shows it a cycle
-  late. The L1-D folds that cycle into its busy, so the completion unit
-  sees only busy and `done`.
+  late; the L1-D folds that cycle into its busy, and it falls in the
+  completion's cycle.
 
-**The completion forwards in MEM2/WB's place.** While a load is parked,
-MEM2/WB carries only bubbles, so the completion shares that register's
-forward leg: the parked load's destination, and its word extracted as a
-hit's is. Both stay put until EX advances: the L1-D keeps the word until
-its next `done`, and the completion unit keeps the descriptor until the
-launch side resumes. The completion is on the leg from its own cycle
-until EX next advances, in that cycle or the one after when the launch
-side resumes late, and leaves it then. Nothing younger can write the
-register in between, since the pipe stays frozen from the park until EX
-advances, so the leg never shadows a newer value. A completion that
-faults forwards nothing: its fault flushes the reader.
+**The completion enters MEM2/WB.** While a load is parked, MEM2/WB
+carries only bubbles, so a load's completion takes that register in its
+cycle: the parked load's destination and PC, and its word extracted as a
+hit's is, from the L1-D's word register and the descriptor. The slot
+behind the access waits in MEM2 through that cycle, `mem_pending`
+covering it from the L1-D's `done`, and follows the load into WB a
+cycle later. A released reader takes the word from the MEM2/WB leg as it
+would a hit's, in the one cycle the load is there, which is the cycle
+the launch side resumes, so EX advances, or launches what it holds,
+then. A completion that faults stays out of MEM2/WB: its fault commits
+from the completion and flushes the reader.
 
-The extract sits ahead of EX's operand mux on this leg alone; the other
-legs start at their registers. If a seed sweep shows that path does not
-fit the period, the release covers word loads alone, which need no
-extract, and a sub-word load's readers wait in ID until it has left
-MEM2.
+Every forward leg into EX starts at a register, the completion's
+included, and the extract sits ahead of the MEM2/WB register beside a
+hit's. The price is the launch side's cycle: a leg of the completion's
+own in EX's operand mux would give the word in the completion's cycle,
+with a select formed from the L1-D's `done` ahead of the youngest-first
+compare on EX's forwarding loop.
 
 ## Stores — write-through, write-no-allocate
 
@@ -228,15 +240,16 @@ single write (+byte-en) from the store buffer, and its fault is
 
 `mem_pending` is back-pressure with a boundary, not a global freeze: it holds
 the launch side and lets the commit side drain. It is set by an outstanding
-load *or* uncached store, and by a full store buffer; an uncached store pends
-identically to a load (only its completion differs — no register writeback).
-Both sources are registers: the L1-D's busy and the buffer's full.
+load *or* uncached store, through a load's completion, and by a full store
+buffer; an uncached store pends identically to a load until its completion,
+which writes no register. Every source is a register: the L1-D's busy and
+`done`, and the buffer's full.
 
 - **Held while an access is pending:** MEM1, the MEM1/MEM2 register, the
   [address-translation launch](./mem-stage.md), and issue: nothing issues,
   so a parked load's dependents need no scoreboard entry
   ([the issue gate](#the-issue-gate)), and a reader released before the
-  park waits in EX for the completion's forward. The pending
+  park waits in EX for the completed load to reach MEM2/WB. The pending
   access and every younger instruction hold in place. The instruction held
   in MEM2 keeps its verdict and does nothing with it: its commit, a store's
   cache write and a miss of its own all happen in the one cycle it leaves
@@ -244,11 +257,12 @@ Both sources are registers: the L1-D's busy and the buffer's full.
   or squashed by a fault.
 - **Not held:** the MEM2/WB register. It carries instructions *older* than the
   pending access to the commit point, and an older instruction must retire
-  while the access waits. A pending access drives that register to bubbles,
-  and a held load reaches a register through the completion path above,
-  never through MEM2/WB, so draining the register is always correct. (A
-  store reaches no register at all; a cacheable store passes through this
-  one as it enters the store buffer, ahead of its write.)
+  while the access waits. A pending access drives that register to bubbles
+  until its completion: a load's then takes it, in a cycle the launch side
+  holds for it, and an uncached store's retires without it, so draining
+  the register is always correct. (A store reaches no register at all; a
+  cacheable store passes through this one as it enters the store buffer,
+  ahead of its write.)
 
 The MEM2/WB register's only back-pressure is a genuine downstream stall: the
 commit stage holding for a multi-cycle writeback (the divmul dual-register
@@ -428,9 +442,9 @@ which P0.1 verifies: **no combinational arc from a cache `busy`/hit input to
 any issue-enable or MMU output**. The hit and the translation verdict feed
 only the L1-D's request register, the completion unit's park and the store
 buffer's input register and counts, and the gate, `mem_pending`, is the
-L1-D's registered busy or the buffer's registered full. The probe confirms
-the longest path into the issue enable originates at a flop, and a
-Verilator assertion guards the wiring.
+L1-D's registered busy or `done` or the buffer's registered full. The
+probe confirms the longest path into the issue enable originates at a
+flop, and a Verilator assertion guards the wiring.
 
 ## What P0.1 proves
 

@@ -7,13 +7,14 @@
 // load hit, the fault merge for the commit point, and the L1's store strobe.
 // A load the L1 had no word for and an uncached store leave as an access the
 // L1-D takes (doc/internals/penumbra3/l1-cache.md), and their descriptors
-// park in penumbra3_mem_completion, which writes a load's register back when
-// the L1-D's access is done. A cacheable store retires into the store
-// buffer.
+// park in penumbra3_mem_completion until the L1-D's access is done. A load's
+// completion then enters the MEM2/WB register and retires at WB as a hit
+// does; a store's, or one the bus faulted, retires by itself. A cacheable
+// store retires into the store buffer.
 //
 // The back-end stall is the whole point: the only things that hold the pipe
-// are the L1-D's registered busy and the store buffer's registered full,
-// reported as o_mem_pending and distributed by the spine -- never a
+// are the L1-D's registered busy and done and the store buffer's registered
+// full, reported as o_mem_pending and distributed by the spine -- never a
 // combinational cache/TLB verdict reaching into issue.
 //
 // The spine holds a slot in MEM2 in two ways: behind a parked access
@@ -78,10 +79,14 @@ module penumbra3_mem2_stage
 
     // -- Back-end hold + completion (to the spine) ----------------
     output logic                  o_mem_pending,
+    // A parked load whose word has not reached the MEM2/WB register, and
+    // its destination; both registered.
+    output logic                  o_load_parked,
+    output logic [SB_IDX_W-1:0]   o_load_parked_dest,
+    // An access that retires with its own completion: an uncached store,
+    // or one the bus faulted. A load's word retires through MEM2/WB.
     output logic                  o_complete,
     output logic                  o_complete_we,     // with o_complete: a load
-    output logic [SB_IDX_W-1:0]   o_complete_dest,
-    output logic [31:0]           o_complete_value,
     output logic                  o_complete_fault,  // one cycle, with o_complete
     output logic [31:0]           o_complete_pc,
     output logic [31:0]           o_complete_vaddr,
@@ -216,16 +221,35 @@ module penumbra3_mem2_stage
         end
     end
 
-    logic [31:0] mc_complete_data;
-    logic [1:0]  mc_complete_size, mc_complete_addr_lo;
-    logic        mc_complete_sign, mc_pending_store;
+    logic                mc_complete, mc_complete_we, mc_complete_fault;
+    logic [SB_IDX_W-1:0] mc_complete_dest;
+    logic [31:0]         mc_complete_data, mc_complete_pc, mc_complete_value;
+    logic [1:0]          mc_complete_size, mc_complete_addr_lo;
+    logic                mc_complete_sign, mc_pending_store;
+
+    // A load's completion takes the MEM2/WB register in its own cycle, so
+    // the slot behind the access stays in MEM2 for that cycle, and leaves
+    // it in the next with the completed load in WB ahead of it. All three
+    // terms are registers.
+    logic cpl_enters_wb;
+    assign cpl_enters_wb = mc_complete & mc_complete_we & ~mc_complete_fault;
 
     // The access leaves for the L1-D as its descriptor parks.
     assign o_dcache_access_req       = mem2_parks;
     assign o_dcache_access_we        = mem2_is_store;
     assign o_dcache_access_addr      = i_translate_paddr;
     assign o_dcache_access_cacheable = i_translate_cacheable;
-    assign o_mem_pending             = i_dcache_busy | i_store_full;
+    assign o_mem_pending             = i_dcache_busy | i_store_full | cpl_enters_wb;
+
+    // Until its completion is in MEM2/WB, a parked load's word is on no
+    // forward leg: through the L1-D's busy and in the completion's cycle.
+    assign o_load_parked      = ~mc_pending_store & (i_dcache_busy | mc_complete);
+    assign o_load_parked_dest = mc_complete_dest;
+
+    assign o_complete       = mc_complete & ~cpl_enters_wb;
+    assign o_complete_we    = mc_complete_we;
+    assign o_complete_fault = mc_complete_fault;
+    assign o_complete_pc    = mc_complete_pc;
 
     // The store leaves for the buffer as it retires.
     logic mem2_enqueues;
@@ -251,34 +275,48 @@ module penumbra3_mem2_stage
         .i_l1_word          (i_dcache_access_word),
         .i_l1_fault         (i_dcache_access_fault),
         .o_pending_store    (mc_pending_store),
-        .o_complete         (o_complete),
-        .o_complete_we      (o_complete_we),
-        .o_complete_dest    (o_complete_dest),
+        .o_complete         (mc_complete),
+        .o_complete_we      (mc_complete_we),
+        .o_complete_dest    (mc_complete_dest),
         .o_complete_data    (mc_complete_data),
         .o_complete_size    (mc_complete_size),
         .o_complete_addr_lo (mc_complete_addr_lo),
         .o_complete_sign    (mc_complete_sign),
-        .o_complete_fault   (o_complete_fault),
-        .o_complete_pc      (o_complete_pc),
+        .o_complete_fault   (mc_complete_fault),
+        .o_complete_pc      (mc_complete_pc),
         .o_complete_vaddr   (o_complete_vaddr),
         .o_complete_status  (o_complete_status)
     );
 
-    // Completion writeback: extract the sub-word result from the parked
-    // descriptor so a byte/halfword miss writes back correctly.
+    // A load's completion: the sub-word result extracted from the L1-D's
+    // word by the parked descriptor, as a hit's is from the way's. Both
+    // come from registers.
     byte_ext u_byte_ext_complete (
         .i_data     (mc_complete_data),
         .i_addr_lo  (mc_complete_addr_lo),
         .i_size     (mc_complete_size),
         .i_sign_ext (mc_complete_sign),
-        .o_data     (o_complete_value)
+        .o_data     (mc_complete_value)
     );
 
     // -- Writeback value + store write + forward source -----------
+    // The value is a hit's word, extracted, or what the slot takes when it
+    // is no hit: a load's completion, a sysreg read, a carried result. The
+    // hit's word comes behind the TLB, the tag compare and the way select,
+    // and everything else from registers, so the two meet in one AND-OR
+    // at the end. The kept nets hold that shape: the mapper takes the
+    // spine alone and sees all its inputs, the hit's word among them,
+    // arrive at once, so it would otherwise put the completion's select
+    // and extract in the hit's path.
+    (* keep *) logic        hit_sel;
+    (* keep *) logic [31:0] wb_other;
     logic [31:0] wb_value;
-    assign wb_value = mem2_is_load  ? load_data
+    assign hit_sel  = mem2_is_load & ~cpl_enters_wb;
+    assign wb_other = cpl_enters_wb ? mc_complete_value
                     : mem2_is_rdsys ? i_sys_rdata
+                    : mem2_is_load  ? 32'b0
                     :                 i_payload.value;
+    assign wb_value = ({32{hit_sel}} & load_data) | wb_other;
 
     // A store writes the L1 as it leaves MEM2 fault-free, and each
     // cacheable access is counted in that same cycle. The L1 folds its own
@@ -310,7 +348,14 @@ module penumbra3_mem2_stage
     // -- MEM2/WB register -----------------------------------------
     // Assemble the WB payload from the carried payload, overriding value (the
     // resolved datum) and the fault verdict; latch it as a unit.
+    //
+    // A load's completion is the slot the register takes in its cycle, the
+    // slot in MEM2 waiting behind it. WB, the forward legs and the retire
+    // report read a retiring load's slot for its value (wb_value) and the
+    // fields set below alone, so the rest stay the waiting slot's and the
+    // select reaches only these.
     dpath_payload_t wb_payload_d;
+    ctrl_bundle_t   wb_bundle_d;
     always_comb begin
         wb_payload_d               = i_payload;
         wb_payload_d.value         = wb_value;
@@ -318,6 +363,16 @@ module penumbra3_mem2_stage
         wb_payload_d.fault_vec     = mem2_fault_vec;
         wb_payload_d.fault_vaddr   = mem2_fault_vaddr;
         wb_payload_d.fault_status  = mem2_fault_status;
+        wb_bundle_d                = i_bundle;
+        if (cpl_enters_wb) begin
+            wb_payload_d.phys_dst        = mc_complete_dest;
+            wb_payload_d.phys_dst_we     = 1'b1;
+            wb_payload_d.phys_dst_aux_we = 1'b0;
+            wb_payload_d.pc              = mc_complete_pc;
+            wb_payload_d.fault_pending   = 1'b0;
+            wb_bundle_d.op_class         = OPC_LOAD;
+            wb_bundle_d.flags_updater    = 1'b0;
+        end
     end
 
     // The bubble WB gets while an access is parked is that access's, whatever
@@ -338,17 +393,17 @@ module penumbra3_mem2_stage
     // decision behind them waits on the TLB permission check, cacheability
     // and the L1 hit. A parked access does not hold this register: it loads a
     // bubble every cycle the slot behind the access waits, so what is ahead
-    // of that slot drains to retire.
+    // of that slot drains to retire, and a load's completion in its cycle.
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
             o_wb_valid  <= 1'b0;
             o_wb_bcause <= BCAUSE_FLUSH;
         end else if (~i_hold) begin
-            o_wb_valid  <= mem2_retires;
+            o_wb_valid  <= mem2_retires | cpl_enters_wb;
             o_wb_bcause <= i_bubble ? BCAUSE_FLUSH : mem2_bcause;
         end
         if (~i_hold) begin
-            o_wb_bundle  <= i_bundle;
+            o_wb_bundle  <= wb_bundle_d;
             o_wb_payload <= wb_payload_d;
         end
     end
@@ -371,17 +426,25 @@ module penumbra3_mem2_stage
             else $error("penumbra3_mem2_stage: a fired slot neither retired nor parked");
 
     // A held MEM1/MEM2 register keeps its slot through a flush, so a fault
-    // commit must never find one held. While an access is parked or the
-    // store buffer is full, WB sees bubbles, or a store that retired as it
-    // entered the buffer, carrying no fault: the buffer fills only in the
-    // cycle after a store enters it. A completion's bus fault finds
-    // o_mem_pending low: the faulted access installed nothing, so no held
-    // lookup keeps the L1-D busy past its done, and no store entered the
-    // buffer while it was parked. And WB holds MEM2 only for a divmul's
+    // commit must never find one held. While an access is parked or a
+    // load's completion enters WB, or the store buffer is full, WB sees
+    // bubbles, or a store that retired as it entered the buffer, carrying
+    // no fault: the buffer fills only in the cycle after a store enters it.
+    // A completion's bus fault finds o_mem_pending low: the faulted access
+    // installed nothing, so no held lookup keeps the L1-D busy past its
+    // done, no store entered the buffer while it was parked, and its
+    // completion stays out of WB. And WB holds MEM2 only for a divmul's
     // second write, which is no fault commit.
     always_comb
         assert (i_rst || !(i_bubble && i_launch_hold))
             else $error("penumbra3_mem2_stage: a fault commit met a held MEM2 slot");
+
+    // A load's completion enters the MEM2/WB register in the one cycle it
+    // comes, so that register must be free to take it: WB holds a bubble
+    // then, which neither writes twice nor faults.
+    always_comb
+        assert (i_rst || !(cpl_enters_wb && (i_hold || i_bubble)))
+            else $error("penumbra3_mem2_stage: a load's completion met a held or flushed WB");
 
     // A fault born here comes only with an access: MEM1 checks alignment
     // and launches the translate for loads and stores alone. The MEM2->EX

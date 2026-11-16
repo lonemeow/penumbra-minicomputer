@@ -200,9 +200,9 @@ module penumbra3_spine
     logic [SB_IDX_W-1:0] mem2_fwd_dst;
     logic                mem2_fwd_we, mem2_fwd_valid;
     logic                mc_complete, mc_complete_we;
-    logic [SB_IDX_W-1:0] mc_complete_dest;
-    logic [31:0]         mc_complete_value;
     logic                mc_complete_fault;
+    logic                load_parked;
+    logic [SB_IDX_W-1:0] load_parked_dest;
     logic [31:0]         mc_complete_pc, mc_complete_vaddr, mc_complete_status;
     logic                mem_pending;
 
@@ -230,9 +230,9 @@ module penumbra3_spine
     // The local stalls each stage exposes (downstream-independent), plus the
     // registered back-end hold. These three are the only inputs the freeze
     // composition needs; everything below is derived from them.
-    //   - mem_pending   : the L1-D's registered busy and the store buffer's
-    //                     registered full, through MEM2, never a live
-    //                     cache/TLB verdict.
+    //   - mem_pending   : the L1-D's registered busy, its done for a load's
+    //                     completion, and the store buffer's registered
+    //                     full, through MEM2, never a live cache/TLB verdict.
     //   - wb_local_stall: WB's dual-write hold (flop-shallow).
     //   - ex_local_stall: EX's divmul / drain-commit hold (flop-shallow).
 
@@ -396,16 +396,14 @@ module penumbra3_spine
     // ════════════════════════════════════════════════════════════
     // Register file (ID reads; WB commit + load completion write)
     // ════════════════════════════════════════════════════════════
-    // One write port, muxed between the WB commit and a parked load's
-    // completion; a store's completion writes no register. They are
-    // temporally exclusive: while an access is pending the MEM2/WB register
-    // drains to bubbles, so no WB commit coincides with o_complete.
+    // One write port, WB's: a parked load's completion reaches it through
+    // the MEM2/WB register, and a store's completion writes no register.
     logic [SB_IDX_W-1:0] rf_rd_idx_a, rf_rd_idx_b, rf_wr_idx;
     logic [31:0]         rf_rd_data_a, rf_rd_data_b, rf_wr_data;
     logic                rf_wr_en;
-    assign rf_wr_en   = mc_complete ? mc_complete_we & ~mc_complete_fault : wb_regfile_we;
-    assign rf_wr_idx  = mc_complete ? mc_complete_dest   : wb_regfile_idx;
-    assign rf_wr_data = mc_complete ? mc_complete_value  : wb_regfile_data;
+    assign rf_wr_en   = wb_regfile_we;
+    assign rf_wr_idx  = wb_regfile_idx;
+    assign rf_wr_data = wb_regfile_data;
 
     penumbra3_regfile u_regfile (
         .i_clk(i_clk), .i_rst(i_rst),
@@ -417,14 +415,17 @@ module penumbra3_spine
     // ════════════════════════════════════════════════════════════
     // The late writers in flight (ID's scoreboard compares against them)
     // ════════════════════════════════════════════════════════════
-    // Every late writer (penumbra3_pkg::late_result) in EX, MEM1 and MEM2,
-    // primary and aux destination, from registered state alone. A late writer
-    // that has left MEM2 for WB has its value, since MEM2 parks every load it
-    // has no word for, and WB writes a primary as it takes it, the regfile's
-    // reads being write-first. The two writes still to come past MEM2 need no
-    // slot because each holds issue outright until it is made: a divmul's
-    // aux, by WB's second-write hold, and a parked load, by the L1-D's busy
-    // (asserted below).
+    // Every late writer (penumbra3_pkg::late_result) short of the register its
+    // value first forwards from, primary and aux destination, from registered
+    // state alone. A load or sysreg read counts in EX and MEM1: from MEM2 its
+    // value reaches MEM2/WB as a reader issued now reaches EX. That releases
+    // the reader on the bet that the load hits; one that parks instead
+    // reaches that register with its completion (below). A divmul counts
+    // through MEM2, both destinations. The two writes still to come past MEM2
+    // need no slot because each holds issue outright until it is made: a
+    // divmul's aux, by WB's second-write hold, and a parked load, by
+    // mem_pending until its completion is in MEM2/WB (asserted below)
+    // (doc/internals/penumbra3/memory-completion.md, "Load hit").
     logic [LATE_WRITERS-1:0]               late_wr_en;
     logic [LATE_WRITERS-1:0][SB_IDX_W-1:0] late_wr_idx;
     always_comb begin
@@ -438,7 +439,7 @@ module penumbra3_spine
         late_wr_idx[2] = exmem1_payload.phys_dst;
         late_wr_en[3]  = exmem1_valid & exmem1_payload.phys_dst_aux_we;
         late_wr_idx[3] = exmem1_payload.phys_dst_aux;
-        late_wr_en[4]  = mem1mem2_valid & late_result(mem1mem2_bundle.op_class)
+        late_wr_en[4]  = mem1mem2_valid & (mem1mem2_bundle.op_class == OPC_DIVMUL)
                        & mem1mem2_payload.phys_dst_we;
         late_wr_idx[4] = mem1mem2_payload.phys_dst;
         late_wr_en[5]  = mem1mem2_valid & mem1mem2_payload.phys_dst_aux_we;
@@ -448,10 +449,6 @@ module penumbra3_spine
     // ════════════════════════════════════════════════════════════
     // ID -- issue (owns the scoreboard)
     // ════════════════════════════════════════════════════════════
-    // Forward broadcasts are tied off in this increment (correctness-first: a
-    // reader of a late writer waits until the writer has left the late-writer
-    // list, not for a release as its value reaches a forward leg). They are
-    // driven in the forwarding-release increment.
     penumbra3_id_stage u_id (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_bundle(i_bundle), .i_pc(i_pc), .i_next_pc(i_next_pc),
@@ -468,7 +465,6 @@ module penumbra3_spine
         .i_rd_data_a(rf_rd_data_a), .i_rd_data_b(rf_rd_data_b),
         .o_spr_rd_sel(id_spr_rd_sel), .i_spr_src_value(spr_operand_value),
         .i_late_wr_en(late_wr_en), .i_late_wr_idx(late_wr_idx),
-        .i_fwd0_en(1'b0), .i_fwd0_idx('0), .i_fwd1_en(1'b0), .i_fwd1_idx('0),
         .o_ex_bundle(idex_bundle),
         .o_ex_op_a(idex_op_a), .o_ex_op_b(idex_op_b), .o_ex_store_data(idex_store_data),
         .o_ex_phys_dst(idex_phys_dst), .o_ex_phys_dst_we(idex_phys_dst_we),
@@ -491,6 +487,14 @@ module penumbra3_spine
     // before MEM2); three-ahead, loads and sysreg reads included, from the
     // MEM2/WB register.
     // Flag forward sources: the MEM1/MEM2 producer and the MEM2/WB producer.
+    //
+    // A reader released while its load was in MEM2 waits in EX when the load
+    // parks instead. The completion enters the MEM2/WB register, with the
+    // launch side held in its cycle, so the reader takes the word from that
+    // leg in the next, as it would a hit's; until then EX holds back what it
+    // does before it advances for the reader
+    // (doc/internals/penumbra3/memory-completion.md, "Load miss").
+
     penumbra3_ex_stage u_ex (
         .i_clk(i_clk), .i_rst(i_rst),
         .i_bundle(idex_bundle),
@@ -509,6 +513,7 @@ module penumbra3_spine
         .i_mem2_dst_we(mem2_fwd_we), .i_mem2_valid(mem2_fwd_valid),
         .i_wb_result(mem2wb_payload.value), .i_wb_phys_dst(mem2wb_payload.phys_dst),
         .i_wb_dst_we(mem2wb_payload.phys_dst_we), .i_wb_valid(mem2wb_valid),
+        .i_cpl_awaited(load_parked), .i_cpl_dest(load_parked_dest),
         .i_sr_flags(sr_flags),
         .i_mem2_flags(mem1mem2_payload.flags),
         .i_mem2_writes_flags(mem1mem2_valid & mem1mem2_bundle.flags_updater
@@ -580,8 +585,8 @@ module penumbra3_spine
         .i_store_full(i_store_full),
         .i_sys_rdata(i_sys_rdata),
         .o_mem_pending(mem_pending),
+        .o_load_parked(load_parked), .o_load_parked_dest(load_parked_dest),
         .o_complete(mc_complete), .o_complete_we(mc_complete_we),
-        .o_complete_dest(mc_complete_dest), .o_complete_value(mc_complete_value),
         .o_complete_fault(mc_complete_fault), .o_complete_pc(mc_complete_pc),
         .o_complete_vaddr(mc_complete_vaddr), .o_complete_status(mc_complete_status),
         .o_fwd_result(mem2_fwd_result), .o_fwd_dst(mem2_fwd_dst),
@@ -626,8 +631,10 @@ module penumbra3_spine
     assign o_mmu_fault_vaddr  = fault_vaddr;
     assign o_mmu_fault_status = fault_status;
 
-    // An instruction retires at WB, or with its parked access's completion. A
-    // pending access drains WB to bubbles, so the two never share a cycle.
+    // An instruction retires at WB, or with its parked access's completion
+    // when that is an uncached store's or a faulted one: a load's completion
+    // retires at WB. A pending access drains WB to bubbles, so the two never
+    // share a cycle.
     assign o_insn_committed = wb_insn_committed | mc_complete;
     assign o_retire_valid   = mem2wb_valid | mc_complete;
     assign o_retire_pc      = mc_complete ? mc_complete_pc : mem2wb_payload.pc;
@@ -636,7 +643,8 @@ module penumbra3_spine
     assign o_commit_data    = rf_wr_data;
     assign o_commit_we      = rf_wr_en;
 
-    // A completion is a load's or an uncached store's.
+    // A completion retiring here is an uncached store's, or a load's the bus
+    // faulted.
     always_comb begin
         if (mc_complete) o_retire_op_class = mc_complete_we ? OPC_LOAD : OPC_STORE;
         else             o_retire_op_class = mem2wb_bundle.op_class;
@@ -652,9 +660,9 @@ module penumbra3_spine
     // ════════════════════════════════════════════════════════════
     // Assertions -- sim-only (Verilator --assert); stripped at synth.
     // ════════════════════════════════════════════════════════════
-    // WB and a completion share the regfile write port, the retire report and
-    // the fault commit, and a completion's fault has to be the oldest in
-    // flight: the freeze drains WB to bubbles while an access is pending.
+    // WB and a completion share the retire report and the fault commit, and
+    // a completion's fault has to be the oldest in flight: the freeze drains
+    // WB to bubbles while an access is pending.
     always_comb
         assert (!(mc_complete && mem2wb_valid))
             else $error("penumbra3_spine: an access completed with a live slot in WB");
@@ -664,10 +672,20 @@ module penumbra3_spine
     // holds keeps their readers from issuing ahead of the write.
     always_comb
         assert (!(id_issue && mem_pending))
-            else $error("penumbra3_spine: issue while the L1-D is busy");
+            else $error("penumbra3_spine: issue while an access is pending");
     always_comb
         assert (!(id_issue && wb_local_stall))
             else $error("penumbra3_spine: issue ahead of a divmul's second write");
+
+    // A completed load is in MEM2/WB for one cycle, and a reader released
+    // ahead of it takes the word there in that cycle alone, so the launch
+    // side must let EX advance then.
+    logic load_in_wb_q;
+    always_ff @(posedge i_clk)
+        load_in_wb_q <= ~i_rst & load_parked & i_dcache_access_done & ~i_dcache_access_fault;
+    always_comb
+        assert (i_rst || !(load_in_wb_q && ex_stall_in))
+            else $error("penumbra3_spine: a completed load reached WB with the launch side held");
 
     /* verilator lint_on PINCONNECTEMPTY */
 endmodule

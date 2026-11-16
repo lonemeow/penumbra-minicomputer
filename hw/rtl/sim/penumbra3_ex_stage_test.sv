@@ -51,6 +51,8 @@ module penumbra3_ex_stage_test
     input  logic [SB_IDX_W-1:0]   i_wb_phys_dst,
     input  logic                  i_wb_dst_we,
     input  logic                  i_wb_valid,
+    input  logic                  i_cpl_awaited,
+    input  logic [SB_IDX_W-1:0]   i_cpl_dest,
 
     input  logic [3:0]            i_sr_flags,
     input  logic [3:0]            i_mem2_flags,
@@ -148,6 +150,8 @@ module penumbra3_ex_stage_test
         .i_wb_phys_dst          (i_wb_phys_dst),
         .i_wb_dst_we            (i_wb_dst_we),
         .i_wb_valid             (i_wb_valid),
+        .i_cpl_awaited          (i_cpl_awaited),
+        .i_cpl_dest             (i_cpl_dest),
         .i_sr_flags             (i_sr_flags),
         .i_mem2_flags           (i_mem2_flags),
         .i_mem2_writes_flags    (i_mem2_writes_flags),

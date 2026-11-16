@@ -7,9 +7,10 @@
 // them on the right cycle. Commit/retire/branch/fault observability is
 // fanned out flat.
 //
-// The L1-D is a real penumbra3_l1, left disabled: every lookup misses, and
-// every load and uncached store goes to the uncore, which the testbench
-// plays at the L1's port. A cacheable store goes to the store buffer, which
+// The L1-D is a real penumbra3_l1, disabled at reset: every lookup misses,
+// and every load and uncached store goes to the uncore, which the testbench
+// plays at the L1's port. A WRSYS to its device reaches its registers, as
+// in the machine, so a program can enable it and hit. A cacheable store goes to the store buffer, which
 // the testbench plays at the spine's store port. The translation's frame is
 // the L1's one candidate.
 //
@@ -187,9 +188,9 @@ module penumbra3_spine_test
         .i_rsp_line         (i_rsp_line),
         .i_rsp_store_fault  (1'b0),
         .i_rsp_store_fault_addr ('0),
-        .i_sys_reg          (4'b0),
-        .i_sys_wdata        (32'b0),
-        .i_sys_we           (1'b0),
+        .i_sys_reg          (o_sys_wr_reg),
+        .i_sys_wdata        (o_sys_wdata),
+        .i_sys_we           (o_sys_we && (o_sys_wr_dev == SYSDEV_L1_DCACHE)),
         .i_sys_re           (1'b0),
         .o_sys_rdata        ()
     );

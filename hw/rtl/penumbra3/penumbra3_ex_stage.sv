@@ -83,6 +83,13 @@ module penumbra3_ex_stage
     input  logic                  i_wb_dst_we,
     input  logic                  i_wb_valid,
 
+    // -- An awaited destination (registered) ----------------------
+    // While i_cpl_awaited is high, i_cpl_dest's value is on no forward leg
+    // and the slot here does not advance; in the cycle it drops, the value
+    // is on one.
+    input  logic                  i_cpl_awaited,
+    input  logic [SB_IDX_W-1:0]   i_cpl_dest,
+
     // -- Flag bypass external sources (MEM1 producer is internal) -
     input  logic [3:0]            i_sr_flags,        // committed SR NZCV
     input  logic [3:0]            i_mem2_flags,      // MEM2 in-flight producer
@@ -224,6 +231,15 @@ module penumbra3_ex_stage
     assign op_b       = (i_src_b_fwdable & fb.hit) ? fb.val : i_op_b;
     assign store_data = (store_fwdable   & fb.hit) ? fb.val : i_store_data;
 
+    // One of the slot's sources is awaited, so its operand is stale. The
+    // slot does not advance while it is, so what EX latches as it advances
+    // needs no gate; anything EX does while the slot holds waits for this
+    // to drop. It compares registered fields alone.
+    logic awaits_cpl;
+    assign awaits_cpl = i_cpl_awaited & i_valid & ~i_bubble
+                      & ((i_src_a_fwdable & (i_phys_src_a == i_cpl_dest))
+                       | (i_src_b_fwdable & (i_phys_src_b == i_cpl_dest)));
+
     // ================================================================
     // Flag bypass: youngest in-flight NZCV for the EX reader
     // ================================================================
@@ -346,9 +362,9 @@ module penumbra3_ex_stage
     logic resolves;
     assign resolves = i_valid & ~i_fault_pending & ~i_bubble;
 
-    assign o_redirect      = mispredict & resolves;
+    assign o_redirect      = mispredict & resolves & ~awaits_cpl;
     assign o_redirect_pc   = successor;
-    assign o_branch_taken  = taken & resolves;
+    assign o_branch_taken  = taken & resolves & ~awaits_cpl;
     assign o_branch_target = target;
 
     // ================================================================
@@ -385,10 +401,17 @@ module penumbra3_ex_stage
     // first cycle here, when each producer still in flight is on a leg and
     // each older one wrote the regfile before ID read it. A commit in that
     // cycle finds the back end already drained, nothing forwarding, so the
-    // value read at issue is the one to write.
+    // value read at issue is the one to write. An awaited source is on
+    // neither: operand B is taken again in the cycle it stops awaiting, when
+    // its value is on a leg.
     logic [31:0] dc_op_b_q;
+    logic        awaits_cpl_q;
     always_ff @(posedge i_clk) begin
-        if (i_first_cycle) dc_op_b_q <= op_b;
+        if (i_rst) awaits_cpl_q <= 1'b0;
+        else       awaits_cpl_q <= awaits_cpl;
+    end
+    always_ff @(posedge i_clk) begin
+        if (i_first_cycle || (awaits_cpl_q && !awaits_cpl)) dc_op_b_q <= op_b;
     end
     assign o_sys_wdata = i_first_cycle ? i_op_b : dc_op_b_q;
 
@@ -435,8 +458,9 @@ module penumbra3_ex_stage
     // Pulse start on a divmul's first EX cycle: dm_started latches once we
     // launch and holds until the instruction advances out of EX (the next
     // divmul re-arms). Holding until advance -- not until the unit goes idle --
-    // keeps a finished-but-back-pressured divmul from re-launching.
-    assign dm_start = divmul_in_ex & ~dm_started;
+    // keeps a finished-but-back-pressured divmul from re-launching. An
+    // awaiting divmul launches once it stops awaiting.
+    assign dm_start = divmul_in_ex & ~dm_started & ~awaits_cpl;
 
     always_ff @(posedge i_clk) begin
         if (i_rst)         dm_started <= 1'b0;
@@ -460,10 +484,11 @@ module penumbra3_ex_stage
         .o_flag_n    (dm_n)
     );
 
-    // o_done still describes the previous operation on the launch cycle, so EX
-    // covers that cycle from dm_start, the launch decision it already owns.
+    // o_done still describes the previous operation until the unit is
+    // launched, so EX stalls from arrival through the launch cycle on
+    // dm_started, then on the unit's done.
     logic dm_stall;
-    assign dm_stall      = divmul_in_ex & (dm_start | ~dm_done);
+    assign dm_stall      = divmul_in_ex & (~dm_started | ~dm_done);
     assign o_funit_stall = dm_stall;
 
     // ================================================================

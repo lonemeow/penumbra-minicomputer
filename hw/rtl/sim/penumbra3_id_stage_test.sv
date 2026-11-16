@@ -45,10 +45,6 @@ module penumbra3_id_stage_test
     input  logic [LATE_WRITERS-1:0]               i_late_wr_en,
     input  logic [LATE_WRITERS-1:0][SB_IDX_W-1:0] i_late_wr_idx,
 
-    input  logic                  i_fwd0_en,
-    input  logic [SB_IDX_W-1:0]   i_fwd0_idx,
-    input  logic                  i_fwd1_en,
-    input  logic [SB_IDX_W-1:0]   i_fwd1_idx,
 
     output logic [3:0]            o_ex_op_class,
     output logic [3:0]            o_ex_alu_op,
@@ -121,10 +117,6 @@ module penumbra3_id_stage_test
         .i_spr_src_value     (i_spr_src_value),
         .i_late_wr_en        (i_late_wr_en),
         .i_late_wr_idx       (i_late_wr_idx),
-        .i_fwd0_en           (i_fwd0_en),
-        .i_fwd0_idx          (i_fwd0_idx),
-        .i_fwd1_en           (i_fwd1_en),
-        .i_fwd1_idx          (i_fwd1_idx),
         .o_ex_bundle         (ex_bundle),
         .o_ex_op_a           (o_ex_op_a),
         .o_ex_op_b           (o_ex_op_b),

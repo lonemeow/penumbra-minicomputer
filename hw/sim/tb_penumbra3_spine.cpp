@@ -483,6 +483,108 @@ int main(int argc, char** argv) {
                       {{10, 0x1000}, {1, 4}, {1, 0x1004}, {1, w}, {1, w + 0x1000}});
     }
 
+    // ── A load's readers are released as it reaches MEM2 ─────────
+    // With the L1-D enabled a load that hits forwards from MEM2/WB, so its
+    // reader d behind it reaches EX 3 cycles after the load for d up to 3,
+    // and d cycles after it from there. The first load fills the line; the
+    // fillers keep the freeze it takes clear of the timed load.
+    for (int d = 1; d <= 4; d++) {
+        Trace t;
+        std::vector<uint32_t> prog = {
+            enc_l(OP_L_LLI, 2, 1), wrsys(2, 2, 1),   // L1-D CTRL.ENABLE
+            enc_l(OP_L_LLI, 5, 0x1000), enc_l(OP_L_LLI, 3, 0),
+            ldw(6, 5, 0),                            // the miss, filling the line
+        };
+        for (int k = 0; k < 4; k++) prog.push_back(enc_l(OP_L_LLI, 7, (uint16_t)k));
+        uint32_t load_pc = (uint32_t)prog.size() * 4;
+        prog.push_back(ldw(1, 5, 4));                // the timed load, a hit
+        for (int k = 1; k < d; k++) prog.push_back(enc_l(OP_L_LLI, 7, (uint16_t)k));
+        uint32_t reader_pc = (uint32_t)prog.size() * 4;
+        prog.push_back(enc_r(OP_R_ADD, 3, 1, 0));
+        run_mem(dut, prog, {}, 120, t);
+        char tag[40];
+        snprintf(tag, sizeof tag, "release_hit_d%d_requests", d);
+        check(tag, t.requests, 1);                   // the timed load hit
+        snprintf(tag, sizeof tag, "release_hit_d%d_value", d);
+        check(tag, t.commits.empty() ? 0 : t.commits.back().data, mem_word(0x1004));
+        snprintf(tag, sizeof tag, "release_hit_d%d_gap", d);
+        check(tag, t.ex_arrival.count(load_pc) && t.ex_arrival.count(reader_pc)
+                   ? t.ex_arrival[reader_pc] - t.ex_arrival[load_pc] : 0,
+              d <= 3 ? 3 : (uint32_t)d);
+    }
+
+    // A sysreg read is released the same way, and never parks.
+    {
+        Trace t;
+        run_mem(dut, {enc_l(OP_L_LLI, 3, 0), rdsys(1, 8, 0), enc_r(OP_R_ADD, 3, 1, 0)},
+                {}, 40, t);
+        check("release_rdsys_gap",
+              t.ex_arrival.count(4) && t.ex_arrival.count(8)
+                  ? t.ex_arrival[8] - t.ex_arrival[4] : 0, 3);
+    }
+
+    // A reader released behind a load that parks waits in EX for the load's
+    // word: it is there before the done, and takes the word from MEM2/WB.
+    // The completion enters MEM2/WB in the L1-D's done, a cycle after the
+    // uncore's, and retires at WB a cycle later; the reader leaves EX as
+    // the load retires, three stages behind it.
+    {
+        Trace t;
+        run_mem(dut, {enc_l(OP_L_LLI, 5, 0x1000), enc_l(OP_L_LLI, 3, 0),
+                      enc_l(OP_L_LLI, 6, 0x6601),        // what a stale read gives
+                      ldw(6, 5, 8), enc_r(OP_R_ADD, 3, 6, 0)}, {}, 40, t);
+        check("release_miss_value", t.commits.empty() ? 0 : t.commits.back().data,
+              mem_word(0x1008));
+        check("release_miss_in_ex_before_done",
+              t.ex_arrival.count(16) && !t.done_cycles.empty()
+                  && t.ex_arrival[16] < t.done_cycles[0], 1);
+        auto retired = [&](uint32_t pc) -> uint32_t {
+            for (size_t k = 0; k < t.retire_pcs.size(); k++)
+                if (t.retire_pcs[k] == pc) return t.retire_cycles[k];
+            return 0;
+        };
+        uint32_t r = t.done_cycles.empty() ? 0 : t.done_cycles[0];
+        check("release_miss_load_retires",   retired(12) - r, 2);
+        check("release_miss_reader_retires", retired(16) - r, 5);
+    }
+
+    // The same with the launch side resuming a cycle after the completion:
+    // the load held in MEM2 behind the miss has its lookup in the set the
+    // line goes into, so the forward stays on the leg a cycle more.
+    {
+        Trace t;
+        run_mem(dut, {enc_l(OP_L_LLI, 2, 1), wrsys(2, 2, 1),
+                      enc_l(OP_L_LLI, 5, 0x1000), enc_l(OP_L_LLI, 8, 0),
+                      enc_l(OP_L_LLI, 6, 0x6602),
+                      ldw(6, 5, 8), ldw(7, 5, 12), enc_r(OP_R_ADD, 8, 6, 0)},
+                {}, 60, t);
+        check("release_held_requests", t.requests, 1);
+        check_commits("release_held", t.commits,
+                      {{2, 1}, {5, 0x1000}, {8, 0}, {6, 0x6602}, {6, mem_word(0x1008)},
+                       {7, mem_word(0x100C)}, {8, mem_word(0x1008)}});
+    }
+
+    // A divmul and a WRSYS released behind a parked load take the word too:
+    // neither launches nor takes its value before the completion.
+    {
+        Trace t;
+        run_mem(dut, {enc_l(OP_L_LLI, 5, 0x1000), enc_l(OP_L_LLI, 1, 3),
+                      enc_l(OP_L_LLI, 6, 0x6603),
+                      ldw(6, 5, 8), enc_r(OP_R_MUL, 1, 6, 0) | (3 << 12)}, {}, 80, t);
+        uint64_t p = 3ull * mem_word(0x1008);       // R1 = lo, R3 = hi
+        check_commits("release_mul", t.commits,
+                      {{5, 0x1000}, {1, 3}, {6, 0x6603}, {6, mem_word(0x1008)},
+                       {1, (uint32_t)p}, {3, (uint32_t)(p >> 32)}});
+    }
+    {
+        Trace t;
+        run_mem(dut, {enc_l(OP_L_LLI, 5, 0x1000), enc_l(OP_L_LLI, 6, 0x6604),
+                      ldw(6, 5, 8), wrsys(6, 7, 0)}, {}, 60, t);
+        check("release_wrsys_count", (uint32_t)t.sys_wdata.size(), 1);
+        check("release_wrsys_value", t.sys_wdata.empty() ? 0 : t.sys_wdata[0],
+              mem_word(0x1008));
+    }
+
     // ── A cacheable store retires once, into the store buffer ────
     {
         Trace t;

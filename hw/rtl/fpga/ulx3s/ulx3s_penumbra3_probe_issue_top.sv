@@ -134,10 +134,8 @@ module ulx3s_penumbra3_probe_issue_top (
         .i_pipe_hold    (mem_pending),
         .i_src0_used    (lfsr_q[30]),
         .i_src0_pending (src0_pending),
-        .i_src0_fwd     (lfsr_q[31]),
         .i_src1_used    (lfsr_q[14]),
         .i_src1_pending (src1_pending),
-        .i_src1_fwd     (lfsr_q[3]),
         .o_can_issue    (can_issue)
     );
 

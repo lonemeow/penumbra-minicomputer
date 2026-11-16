@@ -11,7 +11,8 @@
 // the next tick, into WB or into the completion unit.
 //
 // Covers: a load with the L1 disabled; a miss, its request and the
-// completion, cycle by cycle; hits on the installed line
+// completion entering WB ahead of the slot behind it, cycle by cycle; hits
+// on the installed line
 // (+ sub-word); an uncached load as a word read; a faulted line read;
 // stores -- a hit and a miss entering the store buffer as they retire, a
 // sub-word store's lane, the instruction behind a store never held, a full
@@ -103,10 +104,13 @@ static struct {
     uint32_t enq_addr, enq_wdata; int enq_byte_en;
     uint32_t req_addr;  int req_cacheable, req_byte_en, req_we;
     uint32_t req_wdata;
-    uint32_t cpl_value; int cpl_dest, cpl_fault, cpl_we;
+    int      cpl_fault, cpl_we;
     uint32_t cpl_pc, cpl_vaddr, cpl_status;
     int      strays;    // cycles a completion's fault rose without o_complete
+    // What retired at WB, by destination: how often, the last value, and
+    // the cycle and PC it last retired with.
     int      wb_n[32];  uint32_t wb_value[32];
+    int      wb_cycle[32]; uint32_t wb_pc[32]; int wb_flags[32];
     // Cycles from a done to the first cycle o_mem_pending is low after it.
     int      done_at, release_lag;
     bool     lag_open;
@@ -143,7 +147,6 @@ static void tick(Dut* d) {
     }
     if (d->o_complete) {
         m.completions++;
-        m.cpl_value = d->o_complete_value; m.cpl_dest = d->o_complete_dest;
         m.cpl_fault = d->o_complete_fault; m.cpl_we = d->o_complete_we;
         m.cpl_pc = d->o_complete_pc; m.cpl_vaddr = d->o_complete_vaddr;
         m.cpl_status = d->o_complete_status;
@@ -166,6 +169,9 @@ static void tick(Dut* d) {
     if (d->o_wb_valid) {
         m.wb_n[d->o_wb_phys_dst]++;
         m.wb_value[d->o_wb_phys_dst] = d->o_wb_value;
+        m.wb_cycle[d->o_wb_phys_dst] = m.cycle;
+        m.wb_pc[d->o_wb_phys_dst]    = d->o_wb_pc;
+        m.wb_flags[d->o_wb_phys_dst] = d->o_wb_flags_updater;
     }
     if (m.lag_open && m.prev_pending && !d->o_mem_pending) {
         m.release_lag = m.cycle - m.done_at; m.lag_open = false;
@@ -282,7 +288,7 @@ int main(int argc, char** argv) {
     check("off_request",       m.requests, 1);
     check("off_cacheable",     m.req_cacheable, 1);
     check("off_addr",          m.req_addr, 0x2008);
-    check("off_value",         m.cpl_value, mem_word(0x2008));
+    check("off_value",         m.wb_value[5], mem_word(0x2008));
     run(d, ld(MEM_SZ_WORD, 0, 5), 0x1008, 5, 1);
     check("off_asks_again",    m.requests, 2);
 
@@ -305,19 +311,36 @@ int main(int argc, char** argv) {
     check("miss_not_retired",      d->o_wb_valid, 0);
     tick(d); tick(d);
     check("miss_request_held",     d->o_dreq_valid, 1);
+    check("miss_parked",           d->o_load_parked, 1);
+    check("miss_parked_dest",      d->o_load_parked_dest, 5);
     uncore_answer(d, false);                   // r
     check("miss_no_complete_yet",  d->o_complete, 0);
-    tick(d);                                   // r+1
+    tick(d);                                   // r+1, the done
     uncore_idle(d);
-    check("miss_complete",         d->o_complete, 1);
-    check("miss_complete_value",   d->o_complete_value, mem_word(0x2008));
-    check("miss_complete_dest",    d->o_complete_dest, 5);
-    check("miss_complete_nofault", d->o_complete_fault, 0);
+    // The load's completion takes the MEM2/WB register in its cycle, so
+    // the launch side stays held through it, and the load's word is on no
+    // leg yet.
+    check("miss_done_pending",     d->o_mem_pending, 1);
+    check("miss_done_parked",      d->o_load_parked, 1);
+    check("miss_done_not_retired", d->o_wb_valid, 0);
+    check("miss_done_no_complete", d->o_complete, 0);       // it retires at WB
+    check("miss_done_nofault",     d->o_complete_fault, 0);
     check("miss_request_dropped",  d->o_dreq_valid, 0);
+    tick(d);                                   // r+2
+    check("miss_wb_valid",         d->o_wb_valid, 1);
+    check("miss_wb_value",         d->o_wb_value, mem_word(0x2008));
+    check("miss_wb_dest",          d->o_wb_phys_dst, 5);
+    check("miss_wb_dest_we",       d->o_wb_phys_dst_we, 1);
+    check("miss_wb_op_class",      d->o_wb_op_class, OPC_LOAD);
+    check("miss_wb_pc",            d->o_wb_pc, pc_of(0x1008));
+    check("miss_wb_nofault",       d->o_wb_fault_pending, 0);
+    check("miss_wb_released",      d->o_mem_pending, 0);
+    check("miss_wb_not_parked",    d->o_load_parked, 0);
     drain(d);
     check("miss_one_request",      m.requests, 1);
     check("miss_request_stable",   m.req_changed, 0);
-    check("miss_one_completion",   m.completions, 1);
+    check("miss_retires_once",     m.wb_n[5], 1);
+    check("miss_no_completion",    m.completions, 0);
     uc.automatic = true;
 
     // ── Hits on the installed line ──
@@ -336,7 +359,7 @@ int main(int argc, char** argv) {
     watch_reset();
     run(d, ld(MEM_SZ_BYTE, 1, 5), 0x1021, 5, 1);           // byte 1, sign-extended
     check("subword_miss_request", m.requests, 1);
-    check("subword_miss_value",   m.cpl_value, (uint32_t)sext8(mem_word(0x2020) >> 8));
+    check("subword_miss_value",   m.wb_value[5], (uint32_t)sext8(mem_word(0x2020) >> 8));
     run(d, ld(MEM_SZ_HALF, 0, 6), 0x1022, 6, 1);           // the upper half, now a hit
     check("subword_hit_value",    m.wb_value[6], mem_word(0x2020) >> 16);
 
@@ -347,8 +370,8 @@ int main(int argc, char** argv) {
     check("uncached_cacheable",  m.req_cacheable, 0);
     check("uncached_addr",       m.req_addr, 0x4006);      // the byte address, unchanged
     check("uncached_byte_en",    m.req_byte_en, 0x4);
-    check("uncached_value",      m.cpl_value, (mem_word(0x4004) >> 16) & 0xFF);
-    check("uncached_release_lag", m.release_lag, 1);       // nothing was installed
+    check("uncached_value",      m.wb_value[5], (mem_word(0x4004) >> 16) & 0xFF);
+    check("uncached_release_lag", m.release_lag, 2);       // its completion's cycle
     run(d, ld(MEM_SZ_BYTE, 0, 5), 0x3006, 5, 1);
     check("uncached_asks_again", m.requests, 2);
 
@@ -362,9 +385,11 @@ int main(int argc, char** argv) {
     check("fault_vaddr",      m.cpl_vaddr, 0x1040);        // the page's, not 0x2040
     check("fault_status",     m.cpl_status, FAULT_BUS | FSTAT_R);
     check("fault_one_cycle",  d->o_complete_fault, 0);
+    check("fault_not_in_wb",  m.wb_n[5], 0);
+    check("fault_release_lag", m.release_lag, 1);          // it takes no WB cycle
     run(d, ld(MEM_SZ_WORD, 0, 5), 0x1040, 5, 1);           // so it is asked for again
     check("fault_asks_again", m.requests, 2);
-    check("fault_then_value", m.cpl_value, mem_word(0x2040));
+    check("fault_then_value", m.wb_value[5], mem_word(0x2040));
 
     // ── A cacheable store that hits writes the L1 and enters the buffer ──
     watch_reset();
@@ -440,7 +465,7 @@ int main(int argc, char** argv) {
     check("store_miss_no_request", m.requests, 0);
     run(d, ld(MEM_SZ_WORD, 0, 6), 0x10A4, 6, 1);
     check("store_miss_load_misses", m.requests, 1);      // nothing was allocated
-    check("store_miss_read_back",  m.cpl_value, 0x0BADF00D);
+    check("store_miss_read_back",  m.wb_value[6], 0x0BADF00D);
 
     // ── An uncached store: a word write, retired by its completion ──
     watch_reset();
@@ -453,8 +478,9 @@ int main(int argc, char** argv) {
     check("uc_store_completes",     m.completions, 1);
     check("uc_store_writes_no_reg", m.cpl_we, 0);
     check("uc_store_memory",        mem_word(0x4004) >> 16, 0xBEEF);
+    check("uc_store_release_lag",   m.release_lag, 1);    // it takes no WB cycle
     run(d, ld(MEM_SZ_HALF, 0, 6), 0x3006, 6, 1);
-    check("uc_store_read_back",     m.cpl_value, 0xBEEF);
+    check("uc_store_read_back",     m.wb_value[6], 0xBEEF);
 
     // ── A faulted uncached store completes with it, writing nothing ──
     watch_reset();
@@ -538,8 +564,12 @@ int main(int argc, char** argv) {
             enc_r(0 /* ADD */, 4), 0x11110000, 4, 1);
     check("behind_alu_retires_once",  m.wb_n[4], 1);
     check("behind_alu_value",         m.wb_value[4], 0x11110000);
-    check("behind_alu_load_completes", m.completions, 1);
-    check("behind_alu_release_lag",   m.release_lag, 1);   // it reads no lookup
+    check("behind_alu_load_retires",  m.wb_n[5], 1);
+    check("behind_alu_load_first",    m.wb_cycle[4] - m.wb_cycle[5], 1);
+    check("behind_alu_load_pc",       m.wb_pc[5], pc_of(0x1180));
+    check("behind_alu_load_no_flags", m.wb_flags[5], 0);   // the ADD's are its own
+    check("behind_alu_flags",         m.wb_flags[4], 1);
+    check("behind_alu_release_lag",   m.release_lag, 2);   // the completion's cycle
 
     // ── A store behind a parked load writes the L1 once ──
     watch_reset();
@@ -565,7 +595,7 @@ int main(int argc, char** argv) {
     check("held_load_parks_on_release", d->o_mem_pending, 1);
     drain(d);
     check("held_load_one_request",      m.requests, 1);
-    check("held_load_completes_once",   m.completions, 1);
+    check("held_load_retires_once",     m.wb_n[5], 1);
 
     // ── A load squashed in MEM2 by a fault commit does not park ──
     watch_reset();
@@ -610,7 +640,7 @@ int main(int argc, char** argv) {
     check("evicted_store_other_kept", m.requests, 1);      // way 1's line stayed
     run(d, ld(MEM_SZ_WORD, 0, 6), 0x12C4, 6, 1);
     check("evicted_store_victim_gone", m.requests, 2);     // the fill took way 0
-    check("evicted_store_victim_value", m.cpl_value, 0xFEEDFACE);
+    check("evicted_store_victim_value", m.wb_value[6], 0xFEEDFACE);
 
     // ── A load of another set, behind a load that fills ──
     watch_reset();
@@ -618,7 +648,7 @@ int main(int argc, char** argv) {
             ld(MEM_SZ_WORD, 0, 6), 0x1024, 6, 1);          // hits a line installed above
     check("other_set_behind_one_request", m.requests, 1);
     check("other_set_behind_value",       m.wb_value[6], mem_word(0x2024));
-    check("other_set_behind_release_lag", m.release_lag, 1);  // its set is as it was
+    check("other_set_behind_release_lag", m.release_lag, 2);  // the completion's cycle
 
     // ── A load directly behind a store reads what the store wrote ──
     // The L1 gives the load the word its store hit wrote, from the cycle of
@@ -635,7 +665,7 @@ int main(int argc, char** argv) {
     run2(d, st(MEM_SZ_WORD), 0x10E4, 0,
             ld(MEM_SZ_WORD, 0, 6), 0x10E4, 6, 1, 0, 0x7E57DA7A);
     check("load_behind_store_miss_requests", m.requests, 1);  // the line
-    check("load_behind_store_miss_value",    m.cpl_value, 0x7E57DA7A);
+    check("load_behind_store_miss_value",    m.wb_value[6], 0x7E57DA7A);
 
     // A fault is a pulse, never left high between completions.
     check("no_stray_pulses", m.strays, 0);
