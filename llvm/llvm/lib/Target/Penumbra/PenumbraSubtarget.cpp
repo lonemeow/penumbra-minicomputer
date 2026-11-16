@@ -9,6 +9,7 @@
 #include "MCTargetDesc/PenumbraMCTargetDesc.h"
 #include "PenumbraTargetMachine.h"
 #include "llvm/CodeGen/GlobalISel/InstructionSelector.h"
+#include <cmath>
 
 namespace llvm {
 // Defined in GISel/PenumbraInstructionSelector.cpp.
@@ -54,41 +55,46 @@ PenumbraSubtarget::PenumbraSubtarget(const Triple &TT, StringRef CPU,
       static_cast<const PenumbraTargetMachine &>(TM), *this, RegBankInfo));
 }
 
-// Every Penumbra scheduling model states ALU, MUL and DIV latencies, and the
-// models are otherwise incomplete, so a missing entry reads back as zero
-// cycles — a free operation.  Fail instead of pricing it that way.
-static unsigned getModelCycles(const PenumbraSubtarget &STI, unsigned Opcode) {
-  unsigned SchedClass = STI.getInstrInfo()->get(Opcode).getSchedClass();
-  int Cycles = STI.getSchedModel().computeInstrLatency(STI, SchedClass);
-  if (Cycles <= 0)
-    reportFatalInternalError("Penumbra scheduling model states no latency for "
-                             "a costed instruction class");
-  return Cycles;
+static const MCSchedClassDesc *getSchedClassDesc(const PenumbraSubtarget &STI,
+                                                 unsigned Opcode) {
+  return STI.getSchedModel().getSchedClassDesc(
+      STI.getInstrInfo()->get(Opcode).getSchedClass());
+}
+
+// The cycles an instruction of the opcode's class holds the core: its
+// reciprocal throughput.
+static unsigned getIssueCycles(const PenumbraSubtarget &STI, unsigned Opcode) {
+  const MCSchedClassDesc *SC = getSchedClassDesc(STI, Opcode);
+  // Without resource figures, getReciprocalThroughput falls back to a
+  // micro-op count rather than failing.
+  if (!SC->isValid() || SC->NumWriteProcResEntries == 0)
+    reportFatalInternalError("Penumbra scheduling model states no issue "
+                             "figure for a costed instruction class");
+  return std::lround(MCSchedModel::getReciprocalThroughput(STI, *SC));
 }
 
 unsigned PenumbraSubtarget::getALUCycles() const {
-  return getModelCycles(*this, Penumbra::ADD);
+  return getIssueCycles(*this, Penumbra::ADD);
 }
 
 unsigned PenumbraSubtarget::getMulCycles() const {
-  return getModelCycles(*this, Penumbra::MUL);
+  return getIssueCycles(*this, Penumbra::MUL);
 }
 
 unsigned PenumbraSubtarget::getDivCycles() const {
-  return getModelCycles(*this, Penumbra::DIV);
+  return getIssueCycles(*this, Penumbra::DIV);
 }
 
 unsigned PenumbraSubtarget::getWideConstantCycles() const {
-  const MCSchedModel &SM = getSchedModel();
-  const MCSchedClassDesc *LLI =
-      SM.getSchedClassDesc(getInstrInfo()->get(Penumbra::LLI).getSchedClass());
-  const MCSchedClassDesc *LUI =
-      SM.getSchedClassDesc(getInstrInfo()->get(Penumbra::LUI).getSchedClass());
-  // LUI's first register read is its own destination: the LLI result.
-  int Advance = getReadAdvanceCycles(
-      LUI, /*UseIdx=*/0, getWriteLatencyEntry(LLI, 0)->WriteResourceID);
-  return getModelCycles(*this, Penumbra::LLI) + std::max(-Advance, 0) +
-         getModelCycles(*this, Penumbra::LUI);
+  const MCWriteLatencyEntry *Result =
+      getWriteLatencyEntry(getSchedClassDesc(*this, Penumbra::LLI), 0);
+  // LUI's first register read is its own destination: the LLI result.  It
+  // waits for whatever part of that latency LLI's own issue does not cover.
+  int Advance = getReadAdvanceCycles(getSchedClassDesc(*this, Penumbra::LUI),
+                                     /*UseIdx=*/0, Result->WriteResourceID);
+  int LLIIssue = getIssueCycles(*this, Penumbra::LLI);
+  int Wait = std::max(int(Result->Cycles) - Advance - LLIIssue, 0);
+  return LLIIssue + Wait + getIssueCycles(*this, Penumbra::LUI);
 }
 
 bool PenumbraSubtarget::preferRecomputingWideConstants() const {

@@ -232,16 +232,16 @@ def AddrRegImm : ComplexPattern<iPTR, 2, "SelectAddrRegImm">;
 // Scheduling classes
 //===----------------------------------------------------------------------===//
 
-// Each core's scheduling model (Penumbra.td) states a latency for these: the
-// cycles an instruction of the class holds that core.  The figures are in
-// doc/system/instruction-timing.md, and how they are measured in
-// doc/internals/instruction-timing.md.
+// Each core's scheduling model (Penumbra.td) states an issue and a latency
+// for these.  The figures are in doc/system/instruction-timing.md, and how
+// they are measured in doc/internals/instruction-timing.md.
 def WriteALU : SchedWrite;
 def WriteMul : SchedWrite;
 def WriteDiv : SchedWrite;
 
-// An ALU instruction's read of a register operand.  A core that makes the
-// reader wait for its producer states the wait as a ReadAdvance on it.
+// An ALU instruction's read of a register operand.  A core whose reader gets
+// a result sooner or later than the producer's latency says states the
+// difference as a ReadAdvance on it.
 def ReadALU : SchedRead;
 
 //===----------------------------------------------------------------------===//

@@ -76,39 +76,50 @@ class PenumbraSchedModel : SchedMachineModel {
   let CompleteModel = 0;         // Don't require itineraries for every opcode
 }
 
-// Each model states the issue cycles of an ALU operation, a multiply and a
-// divide -- how long an instruction holds its core -- from the timing
-// reference (doc/system/instruction-timing.md).  PenumbraSubtarget reads them
-// back for cost decisions, so every model must state all three.
+// A model states the two figures the timing reference
+// (doc/system/instruction-timing.md) gives an instruction: its issue, the
+// cycles it holds the core, and its latency, the cycles from its start until
+// a reader can start without waiting.  The core is the model's one resource:
+// a single unit that nothing queues for, so an instruction holding it holds
+// every instruction behind it.  PenumbraSubtarget reads the issue figures back
+// for cost decisions, so every model must state them for ALU operations,
+// multiplies and divides.
+class PenumbraCore : ProcResource<1> { let BufferSize = 0; }
+
+class PenumbraWrite<SchedWrite write, PenumbraCore core, int issue, int latency>
+    : WriteRes<write, [core]> {
+  let ReleaseAtCycles = [issue];
+  let Latency = latency;
+}
+
 def Penumbra1Model : PenumbraSchedModel;
 let SchedModel = Penumbra1Model in {
-  def : WriteRes<WriteALU, []> { let Latency = 2; }
-  def : WriteRes<WriteMul, []> { let Latency = 37; }
-  def : WriteRes<WriteDiv, []> { let Latency = 37; }
-  def : ReadAdvance<ReadALU, 0>;   // serial: nothing waits on a producer
+  def Penumbra1Core : PenumbraCore;
+  def : PenumbraWrite<WriteALU, Penumbra1Core, 2, 2>;
+  def : PenumbraWrite<WriteMul, Penumbra1Core, 37, 37>;
+  def : PenumbraWrite<WriteDiv, Penumbra1Core, 37, 37>;
+  def : ReadAdvance<ReadALU, 0>;
 }
 
 // Penumbra/2 and Penumbra/2.5 hold the core for the same cycles per
-// instruction.  They differ in how long a consumer waits for its producer:
-// Penumbra/2 has no forwarding, so an ALU instruction reads a register only
-// once the producer has left WB, three cycles later at distance one;
-// Penumbra/2.5 forwards it (doc/system/instruction-timing.md, "Issue and
-// latency").
-multiclass Penumbra2InstrCycles {
-  def : WriteRes<WriteALU, []> { let Latency = 1; }
-  def : WriteRes<WriteMul, []> { let Latency = 11; }
-  def : WriteRes<WriteDiv, []> { let Latency = 35; }
-}
-
+// instruction.  Penumbra/2 has no forwarding, so a reader waits for its
+// producer to leave WB, and every result arrives three cycles later than
+// on Penumbra/2.5.
 def Penumbra2Model : PenumbraSchedModel;
 let SchedModel = Penumbra2Model in {
-  defm : Penumbra2InstrCycles;
-  def : ReadAdvance<ReadALU, -3>;
+  def Penumbra2Core : PenumbraCore;
+  def : PenumbraWrite<WriteALU, Penumbra2Core, 1, 4>;
+  def : PenumbraWrite<WriteMul, Penumbra2Core, 11, 14>;
+  def : PenumbraWrite<WriteDiv, Penumbra2Core, 35, 38>;
+  def : ReadAdvance<ReadALU, 0>;
 }
 
 def Penumbra2_5Model : PenumbraSchedModel;
 let SchedModel = Penumbra2_5Model in {
-  defm : Penumbra2InstrCycles;
+  def Penumbra2_5Core : PenumbraCore;
+  def : PenumbraWrite<WriteALU, Penumbra2_5Core, 1, 1>;
+  def : PenumbraWrite<WriteMul, Penumbra2_5Core, 11, 11>;
+  def : PenumbraWrite<WriteDiv, Penumbra2_5Core, 35, 35>;
   def : ReadAdvance<ReadALU, 0>;
 }
 

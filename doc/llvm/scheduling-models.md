@@ -24,9 +24,14 @@ so an instruction without a scheduling class takes the defaults.
 
 ## What a model states
 
-Three write classes carry a latency. The reference gives each
-instruction an issue figure and a result latency; the models state the
-issue figure here:
+A model states the two figures the reference gives an instruction:
+its issue, as the cycles the instruction holds the model's one
+resource, the core, and its latency, as the latency of its write.
+The core is a single unit that nothing queues for
+(`BufferSize = 0`), so an instruction holding it holds every
+instruction behind it.
+
+Three write classes carry the figures:
 
 | Class | Instructions |
 |---|---|
@@ -34,19 +39,20 @@ issue figure here:
 | `WriteMul` | `MUL`, `MULU` |
 | `WriteDiv` | `DIV`, `DIVU` |
 
-One read class, `ReadALU`, carries a `ReadAdvance`: the part of an
-ALU result's latency that reaches past its producer's issue — nothing
-on `penumbra1` and `penumbra2_5`, three cycles on `penumbra2`.
+One read class, `ReadALU`, carries a `ReadAdvance` for a reader that
+gets a result sooner or later than its producer's latency says. Every
+model states 0.
 
 Loads, stores and control transfers carry no scheduling class, so
 their costs and the waits on a load's result are not represented.
 
 ## Who reads it
 
-`PenumbraSubtarget` reads the latencies back as `getALUCycles`,
+`PenumbraSubtarget` reads the issue figures back as `getALUCycles`,
 `getMulCycles` and `getDivCycles`, and prices a wide constant as
-`getWideConstantCycles` (`LLI`, the `ReadALU` wait for its result,
-then `LUI`). The consumers are cost decisions, not instruction order:
+`getWideConstantCycles`: `LLI`, the part of its latency that `LLI`'s
+issue does not cover, then `LUI`. The consumers are cost decisions,
+not instruction order:
 
 - `PenumbraTTIImpl` weighs multiplies and divides against ALU
   operations for the IR-level cost model;
