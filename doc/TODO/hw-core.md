@@ -727,38 +727,60 @@ compare behind the TLB verdict"). That covers the cones through the L1,
 not what the arrays cost a full machine's routing. No replacement has
 been looked at.
 
-## Hardware: a gen3 load behind a fill into its set waits a cycle
+## Hardware: a gen3 load miss holds the launch side a cycle past its done
 
-The L1 shows an installed line to a lookup it already holds two cycles
-after the install, so it stays busy a cycle longer when an install
-lands in a held lookup's set (`doc/internals/penumbra3/l1-cache.md`,
-"Busy and done"). The load or store held in MEM2 behind a miss holds
-such a lookup, so when the fill went into its set the launch side
-resumes a cycle after the miss completes rather than with it. The next
-word of the line just filled is the common case. Against an L2-hit fill
-estimated at about 5 cycles that is one cycle in six, and each hop on
-the fill path is worth several percent of cycles at the measured fill
-rates (`doc/internals/penumbra3/memory-performance.md`, "The line-wide
-transfer").
+A load's completion takes the MEM2/WB register in the cycle of the
+L1-D's `done`, so the launch side resumes a cycle after the done rather
+than with it (`doc/internals/penumbra3/memory-completion.md`, "Load
+miss"). A miss with anything but a lookup of the filled set behind it,
+an ALU op, a branch, an access to another set, pays that cycle alone.
+When the load or store held in MEM2 behind the miss has its lookup in
+the set the line went into, the L1-D's busy covers the same cycle, as
+the L1 shows a held lookup an install a cycle late
+(`doc/internals/penumbra3/l1-cache.md`, "Busy and done"). Every install
+is a load miss's, so that cycle always falls in a completion's: taking
+it out alone saves nothing.
 
-The cycle goes if the held lookup sees the install at once. Its valid
-bit and word can be given it off the hit path: the valid bit set as the
-output flop reads it, the word as a third input of the store bypass's
-mux. The tag is the cost. A mux after the tag block RAM sits in front of
-the compare, on a path that binds today (P0.5's worst paths start at
-a TLB or an L1 tag block RAM, `doc/internals/penumbra3/phase0-probes.md`,
-"P0.5 -- physical-tag compare behind the TLB verdict"). The
-alternative is the block RAM forwarding it itself: the install written
-through the lookup's own read port in write-through mode when it lands
-in that set, the second port taking other sets. A write-through port
-needs the true dual-port mode, at most 18 bits a port on the ECP5
-(yosys's `DP16KD` map) and on Artix-7, so the 20-bit tag takes two block
-RAMs a way instead of one: four more for the two L1s.
+memspeed shows the overlap. Each of its misses has a load of the same
+line behind it, which paid the busy cycle before the completion moved
+into MEM2/WB, and its Nexys rates at `7797ec8` match those at `3539275`
+to the hundredth: 2.12 cycles a word from L2, 8.18 from memory.
+Modelled on libc's `memcpy` word loop, where an add follows each load
+and so holds no lookup, the cycle costs a quarter cycle a word: 6.25
+against 6.00 from L2.
 
-Open: how often a fill has a load or store of its set right behind it,
-counted on a running core or by the ISS cache model, and the
-write-through form's mapping under yosys and Vivado with a sweep on
-both sides of it.
+The first part below takes the cycle out wherever no lookup of the
+filled set is behind the miss; where one is, it takes both:
+
+- **The completion forwards in its own cycle:** a leg of its own in
+  EX's operand mux, its select formed from the L1-D's `done` ahead of
+  the youngest-first compare. A build of that, swept before `854284a`,
+  closed every domain on 2 of 10 seeds against 6, but on 8 of them its
+  critical path ended in the zero flag's chain that commit removed, so
+  the leg's own cost is not measured.
+- **A held lookup of the filled set sees the install at once:** its
+  valid bit and word can be given it off the hit path, the valid bit set
+  as the output flop reads it, the word as a third input of the store
+  bypass's mux. The tag is the cost. A mux after the tag block RAM sits
+  in front of the compare, on a path that binds (P0.5's worst paths
+  start at a TLB or an L1 tag block RAM,
+  `doc/internals/penumbra3/phase0-probes.md`, "P0.5 -- physical-tag
+  compare behind the TLB verdict"). The alternative is the block RAM
+  forwarding it itself: the install written through the lookup's own
+  read port in write-through mode when it lands in that set, the second
+  port taking other sets. A write-through port needs the true dual-port
+  mode, at most 18 bits a port on the ECP5 (yosys's `DP16KD` map) and
+  on Artix-7, so the 20-bit tag takes two block RAMs a way instead of
+  one: four more for the two L1s.
+
+Open:
+
+- How many load misses have something other than a lookup of the
+  filled set behind them, the share the leg alone would save, counted
+  by the ISS cache model or on a running core.
+- A sweep of the leg on top of `854284a`.
+- If both parts are worth having, the write-through form's mapping
+  under yosys and Vivado, with a sweep on both sides of it.
 
 ## Hardware: a gen3 drain-commit's wait sits on the issue stall
 
