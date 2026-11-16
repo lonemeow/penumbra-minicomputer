@@ -140,12 +140,13 @@ included. WB then writes Rd and Rdh on consecutive cycles, and its
 hold on the second (`writing_aux` in `penumbra3_wb_stage.sv`) stalls
 everything behind it, two-register form or not: **11** and **35**. A
 `MUL` or `DIV` directly behind waits in EX for its own unit through
-that cycle, so the first of the pair costs one less. Both halves are
-late writers through MEM2
-([hw-core.md](../TODO/hw-core.md), "a gen3 divmul's low half waits as
-a late writer"): ID holds a reader directly behind for 3 cycles, one
-fewer for each instruction between, a latency of **14** and **38**
-for either half.
+that cycle, so the first of the pair costs one less. The low half
+forwards from EX/MEM1 on, as an ALU result does, and its reader waits
+for nothing: a latency of **11** and **35**. No leg carries the high
+half, so the spine lists it as a late writer through MEM2 and WB's
+hold covers its write: ID holds a reader directly behind for 3
+cycles, one fewer for each instruction between, a latency of **14**
+and **38**.
 
 **Control transfers.** IF2 pre-decodes each word and steers IF1 for a
 `B`, a `BL`, a `Bcc` the direction table calls taken, and a `JMP R13`
@@ -202,9 +203,9 @@ with the `BNE` up to five instructions behind
 ([Penumbra/3](#penumbra3)). Two fillers read a `MUL` there as 10 and
 a miss a cycle low; four or more fillers ahead of the `SUB` keep every
 figure clean. A reader's wait shrinks the same way when it is a stall
-of its own, so its probes need the padding too: with two fillers a
-`MUL`'s reader waits 4, 2, 1 and 0 cycles at distances one to four,
-where the true waits are 3, 2, 1 and 0.
+of its own, so its probes need the padding too: with two fillers the
+reader of a `MUL`'s high half waits 4, 2, 1 and 0 cycles at distances
+one to four, where the true waits are 3, 2, 1 and 0.
 
 On Penumbra/3 two independent `MUL`s or `DIV`s in a row cost one
 cycle less than two apart, so a pair measures a different cost from

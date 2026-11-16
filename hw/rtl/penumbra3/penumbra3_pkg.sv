@@ -93,17 +93,17 @@ package penumbra3_pkg;
   // ── Late writers ─────────────────────────────────────────────────
   // An op whose register result the scoreboard holds its readers back from:
   // a load's and a sysreg read's resolve in MEM2, after a reader issued
-  // behind them would take its operands, and a divmul's two results are
-  // written over two WB cycles. Every other result forwards to EX. A
-  // divmul's second result is a late write too, of the aux destination.
+  // behind them would take its operands. Every other result forwards to EX,
+  // a divmul's low half among them. A divmul's second result is a late write
+  // too, of the aux destination: no leg carries it.
   function automatic logic late_result(op_class_e op_class);
-    return (op_class == OPC_LOAD) || (op_class == OPC_RDSYS)
-        || (op_class == OPC_DIVMUL);
+    return (op_class == OPC_LOAD) || (op_class == OPC_RDSYS);
   endfunction
 
   // The late writers the spine reports to ID each cycle, a slot each: the
-  // primary and aux destinations of EX, MEM1 and MEM2.
-  localparam int LATE_WRITERS = 6;
+  // primary destinations of EX and MEM1, and the aux destinations of EX,
+  // MEM1 and MEM2.
+  localparam int LATE_WRITERS = 5;
 
   // ── Memory operation ─────────────────────────────────────────────
   typedef enum logic [1:0] {

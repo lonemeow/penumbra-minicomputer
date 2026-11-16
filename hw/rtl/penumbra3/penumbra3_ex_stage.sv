@@ -17,9 +17,10 @@
 //   - latches the EX/MEM1 register under the back-pressure handshake.
 //
 // Forwarding model. EX owns operand forwarding. The scoreboard holds back only
-// the readers of late writers (loads, divmul, sysreg reads;
-// penumbra3_pkg::late_result); every other dependency is supplied here from an
-// in-flight result. The issue-release broadcasts ID matches against are
+// the readers of late writers (loads and sysreg reads,
+// penumbra3_pkg::late_result, and a divmul's second result); every other
+// dependency, a divmul's low half included, is supplied here from an in-flight
+// result. The issue-release broadcasts ID matches against are
 // driven by the spine from the back end, where loads and sysreg reads resolve,
 // not from here.
 //

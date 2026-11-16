@@ -374,6 +374,52 @@ int main(int argc, char** argv) {
         check_commits(tag, got, want);
     }
 
+    // The lo half read behind the MUL, at each distance: it forwards from
+    // EX/MEM1 on, as an ALU result does, so its reader reaches EX in the
+    // cycle an independent instruction in its place would.
+    for (int d = 1; d <= 4; d++) {
+        uint32_t gap[2] = {0, 0};
+        for (int dep = 0; dep <= 1; dep++) {
+            std::vector<uint32_t> prog = {
+                enc_l(OP_L_LLI, 1, 6), enc_l(OP_L_LLI, 2, 7),
+                enc_l(OP_L_LLI, 3, 0), enc_l(OP_L_LLI, 8, 0),
+            };
+            uint32_t mul_pc = (uint32_t)prog.size() * 4;
+            prog.push_back(enc_r(OP_R_MUL, 1, 2, 0));            // R1 = 42
+            for (int k = 1; k < d; k++) prog.push_back(enc_l(OP_L_LLI, 7, (uint16_t)k));
+            uint32_t reader_pc = (uint32_t)prog.size() * 4;
+            prog.push_back(enc_r(OP_R_ADD, 3, dep ? 1 : 8, 0));  // R3 += R1 or R8
+            Trace t;
+            run_mem(dut, prog, {}, 120, t);
+            gap[dep] = t.ex_arrival.count(mul_pc) && t.ex_arrival.count(reader_pc)
+                     ? t.ex_arrival[reader_pc] - t.ex_arrival[mul_pc] : 0;
+            if (dep) {
+                char tag[40];
+                snprintf(tag, sizeof tag, "mul_lo_reader_d%d_value", d);
+                check(tag, t.commits.empty() ? 0 : t.commits.back().data, 42);
+            }
+        }
+        char tag[40];
+        snprintf(tag, sizeof tag, "mul_lo_reader_d%d_gap", d);
+        check(tag, gap[1] != 0 && gap[1] == gap[0], 1);
+    }
+
+    // With Rdh = Rd the register ends up holding the hi half, which no leg
+    // carries: a reader directly behind waits for the second write rather
+    // than take the lo half forwarded. 0x10000 squared: lo 0, hi 1.
+    {
+        std::vector<uint32_t> prog = {
+            enc_l(OP_L_LLI, 3, 0), enc_l(OP_L_LLI, 1, 0x8000),
+            enc_r(OP_R_ADD, 1, 1, 0),                    // R1 = 0x10000
+            enc_r(OP_R_MUL, 1, 1, 0) | (1 << 12),        // R1 = lo 0, then hi 1
+            enc_r(OP_R_ADD, 3, 1, 0),                    // R3 += R1
+        };
+        std::vector<Commit> got; std::vector<FaultEvt> flt;
+        run(dut, prog, 120, got, flt);
+        check_commits("mul_rdh_is_rd", got,
+                      {{3, 0}, {1, 0x8000}, {1, 0x10000}, {1, 0}, {1, 1}, {3, 1}});
+    }
+
     // ── Precise fault: an illegal op faults, commits no register ─
     {
         std::vector<uint32_t> prog = {

@@ -416,16 +416,16 @@ module penumbra3_spine
     // The late writers in flight (ID's scoreboard compares against them)
     // ════════════════════════════════════════════════════════════
     // Every late writer (penumbra3_pkg::late_result) short of the register its
-    // value first forwards from, primary and aux destination, from registered
-    // state alone. A load or sysreg read counts in EX and MEM1: from MEM2 its
-    // value reaches MEM2/WB as a reader issued now reaches EX. That releases
-    // the reader on the bet that the load hits; one that parks instead
-    // reaches that register with its completion (below). A divmul counts
-    // through MEM2, both destinations. The two writes still to come past MEM2
-    // need no slot because each holds issue outright until it is made: a
-    // divmul's aux, by WB's second-write hold, and a parked load, by
-    // mem_pending until its completion is in MEM2/WB (asserted below)
-    // (doc/internals/penumbra3/memory-completion.md, "Load hit").
+    // value first forwards from, from registered state alone. A load or sysreg
+    // read counts in EX and MEM1: from MEM2 its value reaches MEM2/WB as a
+    // reader issued now reaches EX. That releases the reader on the bet that
+    // the load hits; one that parks instead reaches that register with its
+    // completion (below). A divmul's aux counts through MEM2; its low half is
+    // on every leg from EX/MEM1 on, as an ALU result is. The two writes still
+    // to come past MEM2 need no slot because each holds issue outright until
+    // it is made: a divmul's aux, by WB's second-write hold, and a parked
+    // load, by mem_pending until its completion is in MEM2/WB (asserted
+    // below) (doc/internals/penumbra3/memory-completion.md, "Load hit").
     logic [LATE_WRITERS-1:0]               late_wr_en;
     logic [LATE_WRITERS-1:0][SB_IDX_W-1:0] late_wr_idx;
     always_comb begin
@@ -439,11 +439,8 @@ module penumbra3_spine
         late_wr_idx[2] = exmem1_payload.phys_dst;
         late_wr_en[3]  = exmem1_valid & exmem1_payload.phys_dst_aux_we;
         late_wr_idx[3] = exmem1_payload.phys_dst_aux;
-        late_wr_en[4]  = mem1mem2_valid & (mem1mem2_bundle.op_class == OPC_DIVMUL)
-                       & mem1mem2_payload.phys_dst_we;
-        late_wr_idx[4] = mem1mem2_payload.phys_dst;
-        late_wr_en[5]  = mem1mem2_valid & mem1mem2_payload.phys_dst_aux_we;
-        late_wr_idx[5] = mem1mem2_payload.phys_dst_aux;
+        late_wr_en[4]  = mem1mem2_valid & mem1mem2_payload.phys_dst_aux_we;
+        late_wr_idx[4] = mem1mem2_payload.phys_dst_aux;
     end
 
     // ════════════════════════════════════════════════════════════

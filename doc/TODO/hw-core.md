@@ -119,23 +119,6 @@ write-hit event, or the store buffer's empty flag. 58-65% of it is
 routing. EX's forwarding loop is the worst path on none. The next
 lever's sweep is read against this one.
 
-## Hardware: a gen3 divmul's low half waits as a late writer
-
-A divmul is a late writer of both its results through MEM2, so ID holds
-a reader of either until the divmul has left MEM2. Its low half need not
-be one at all: EX's MEM1 leg already forwards it, and gen2.5 takes it at
-no cost (`MUL` 11/11, `DIV` 35/35 in `doc/system/instruction-timing.md`)
-where gen3 holds a reader directly behind it 3 cycles longer than an
-independent op (spine testbench). Loads and sysreg reads release their
-readers at MEM2 (`doc/internals/penumbra3/memory-completion.md`, "Load
-hit"); the high half, which WB writes a cycle after the low, has no leg
-to forward from.
-
-Open:
-
-- The divmul's low half leaves the late-writer list, its high half
-  staying on it.
-
 ## Hardware: a gen3 divmul's second write stalls the whole back end
 
 The divmul's two-cycle WB writeback makes WB occupy two cycles, and

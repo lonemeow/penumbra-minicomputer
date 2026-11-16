@@ -15,19 +15,20 @@
 //     register under the back-pressure handshake.
 //
 // Hazard model. The core forwards, so the scoreboard holds back only the
-// readers of *late writers* -- loads, divmul, and sysreg reads
-// (penumbra3_pkg::late_result) -- whose results are not available by the
-// time a back-to-back dependent would forward them. The spine lists the
-// late writers in flight each cycle (i_late_wr_*); ID compares its two
-// sources against them. ALU results are never late writers; EX forwards
-// them. NZCV is not a scoreboard entry (it forwards in EX), so flag reads
-// never stall here.
+// readers of *late writers* -- loads and sysreg reads
+// (penumbra3_pkg::late_result), and a divmul's second result -- whose
+// results are not available by the time a back-to-back dependent would
+// forward them. The spine lists the late writers in flight each cycle
+// (i_late_wr_*); ID compares its two sources against them. ALU results and
+// a divmul's low half are never late writers; EX forwards them. NZCV is not
+// a scoreboard entry (it forwards in EX), so flag reads never stall here.
 //
 // Forwarding boundary. Where a late writer's value first forwards from is
 // the spine's to know, so the spine lists a late writer only while a reader
 // issued now would reach EX ahead of that value: a load or sysreg read in EX
 // or MEM1 (from MEM2 its value reaches MEM2/WB as the reader reaches EX), a
-// divmul through MEM2. This stage only compares its sources against the list.
+// divmul's aux through MEM2. This stage only compares its sources against
+// the list.
 
 module penumbra3_id_stage
     import penumbra_pkg::*;

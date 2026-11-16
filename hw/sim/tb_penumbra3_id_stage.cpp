@@ -110,7 +110,7 @@ int main(int argc, char** argv) {
     clear(dut);
     dut->i_ir = enc_r(ALU_ADD, 4, 3, 0);   // ADD R4, R3 (R3 = srcB)
     dut->i_valid = 1;
-    dut->i_late_wr_en = 1u << 5; dut->i_late_wr_idx = late_slot(5, 3);
+    dut->i_late_wr_en = 1u << 2; dut->i_late_wr_idx = late_slot(2, 3);
     dut->eval();
     check("dep_blocked_deq",   dut->o_deq_ready, 0);
     check("dep_blocked_stall", dut->o_local_stall, 1);

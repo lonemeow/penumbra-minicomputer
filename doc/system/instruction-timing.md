@@ -19,9 +19,9 @@ How the cycles arise inside each core, and how every figure here was
 measured, is in
 [`internals/instruction-timing.md`](../internals/instruction-timing.md).
 
-The `penumbra3` figures were measured at `b22144471804`, before that
-generation's design was settled. A change to its RTL can move them;
-re-measure them after one.
+The `penumbra3` figures were measured before that generation's design
+was settled, each in the commit that last changed it. A change to its
+RTL can move them; re-measure them after one.
 
 ## Facts and typical figures
 
@@ -87,9 +87,9 @@ writes no register.
 | ALU operation ¹ | 2 / 2 | 1 / 4 | 1 / 1 | 1 / 1 |
 | Load ² | 4 / 4 | 2 / 5 | 2 / 3 | 1 / 3 |
 | Store, *typical* ³ | 8 / — | 6 / — | 6 / — | 1 / — |
-| `MUL`, `MULU` ⁵ | 37 / 37 | 11 / 14 | 11 / 11 | 11 / 14 |
+| `MUL`, `MULU` ⁵ | 37 / 37 | 11 / 14 | 11 / 11 | 11 / 11 |
 | `MUL`, `MULU`, high half ⁵ | 37 / 37 | 11 / 14 | 11 / 14 | 11 / 14 |
-| `DIV`, `DIVU` ⁵ | 37 / 37 | 35 / 38 | 35 / 35 | 35 / 38 |
+| `DIV`, `DIVU` ⁵ | 37 / 37 | 35 / 38 | 35 / 35 | 35 / 35 |
 | `DIV`, `DIVU`, high half ⁵ | 37 / 37 | 35 / 38 | 35 / 38 | 35 / 38 |
 | `RDSYS` ⁴ | 3 / 3 | 2 / 5 | 2 / 3 | 1 / 3 |
 | `WRSYS` ⁴ | 2 / — | 6 / — | 7 / — | 7 / — |
@@ -126,8 +126,7 @@ the pipeline one cycle less: 10 or 34.
 
 `MUL` and `DIV` take the same time whatever their operands, and
 whether or not the two-register forms write the high half. The high
-half arrives later than the low half on `penumbra2` and `penumbra2_5`,
-and with it on `penumbra3`.
+half arrives later than the low half on `penumbra2_5` and `penumbra3`.
 
 ## Control transfers
 
