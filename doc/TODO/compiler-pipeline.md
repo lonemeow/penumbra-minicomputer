@@ -170,18 +170,12 @@ targets opt into are silently off.  Status per item:
   than turning it on target-wide.  Revisit for gen1 only if a kernel
   pbench A/B surfaces reducible pressure that Dhrystone lacks.
 
-  **The pipelined-generation condition is met.**  `penumbra2_5` has
-  its own model, and the timing reference
-  (`doc/system/instruction-timing.md`) measures what a scheduler could
-  use there: a load issues in 2 cycles with a latency of 3, so its
-  reader waits a cycle at distance 1 and none at distance 2; `RDSYS`
-  and a multiply's high half also have a latency past their issue.
-  Nothing represents it: loads carry no scheduling class, the shared
-  `LoadLatency = 1` is argued from gen1, and the pass is off.  The
-  reference's two figures map onto a model directly — issue onto the
-  resource cycles an instruction occupies, latency onto its `WriteRes`
-  latency — where today's models state issue as the latency and carry
-  `penumbra2`'s extra wait as a `ReadAdvance`.
+  **The pipelined-generation condition is met.**  `penumbra2_5` and
+  `penumbra3` have their own models, and every model states the
+  timing reference's issue and latency for ALU operations, loads,
+  stores, multiplies and divides (`cdb7898`, `7cc0d6c`): a load's
+  reader waits a cycle at distance 1 on `penumbra2_5`, and two on
+  `penumbra3`.  `RDSYS` has no class, and the pass is off.
 
   **Measured 2026-10-04 on `penumbra2_5`, and not the scheduler to
   enable.**  With the load and store figures in the model, this
@@ -836,17 +830,19 @@ on the ULX3S, not the ISS.
 
 ## Compiler: the costs the compiler is not told
 
-The scheduling models state how long an ALU operation, a multiply and
-a divide take ([scheduling-models.md](../llvm/scheduling-models.md)).
-Every other cost is LLVM's default, and the defaults describe a
-machine where a load, a store, a call and a register save each cost
-about what an ALU operation does.  On the pipelined generations they
-do not ([instruction-timing.md](../system/instruction-timing.md)):
+The scheduling models state the reference's figures for ALU
+operations, loads, stores, multiplies and divides
+([scheduling-models.md](../llvm/scheduling-models.md)), but no
+scheduler runs to read a load's or a store's.  Every other cost is
+LLVM's default, and the defaults describe a machine where a call and
+a register save each cost about what an ALU operation does.  On the
+pipelined generations they do not
+([instruction-timing.md](../system/instruction-timing.md)):
 
 | Cost | What the compiler assumes | `penumbra2_5` |
 |---|---|---|
-| Load | no scheduling class, `LoadLatency = 1` | issues in 2 cycles, latency 3 |
-| Store | no scheduling class | 6 cycles |
+| Load | stated in the model, read by no pass | issues in 2 cycles, latency 3 |
+| Store | stated in the model, read by no pass | 6 cycles |
 | Call and return | the inliner's call penalty of 25, five instructions' worth | 7 cycles, and 8 more for each register the callee saves and restores |
 | Jump-table dispatch | preferred from 4 cases | 11 cycles: five instructions, one a load whose reader waits, one a jump that is never predicted |
 | First use of a callee-saved register | free: `getCSRFirstUseCost` returns 0 | a store and a load on every call, 8 cycles |
@@ -927,11 +923,9 @@ four together.
 
 ### Load and store timing, and a scheduler to read it
 
-Loads and stores get scheduling classes, and a model states the two
-figures the reference gives for each instruction: issue as the cycles
-it holds a one-unit, unbuffered resource, and latency as the write's
-latency.  Only a scheduler reads them, and the one that runs after
-register allocation is the one that pays:
+Every model states a load's and a store's figures (`7cc0d6c`),
+`penumbra3`'s included.  Only a scheduler reads them, and the one that
+runs after register allocation is the one that pays:
 
 - **It changes no instruction count by more than 0.13%** and removes
   54% of Doom's load-use pairs, 53% of Dhrystone's, 27% of CoreMark's
@@ -940,8 +934,8 @@ register allocation is the one that pays:
 - **Most pairs move to distance 2:** in Doom's own code, 10 per 1000
   instructions become 68.  That is free on `penumbra2_5`.  gen3 waits
   two cycles at distance 1 and one at distance 2, so the same
-  schedule takes 30% of Doom's waits there rather than 54%, and a
-  gen3 model has to ask for two instructions between a load and its
+  schedule takes 30% of Doom's waits there rather than 54%; the
+  `penumbra3` model asks for two instructions between a load and its
   reader.
 - **The scheduler before register allocation adds instructions.**
   In its bidirectional mode, with the cross-block copy coalescing its

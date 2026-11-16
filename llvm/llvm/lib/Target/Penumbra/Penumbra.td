@@ -143,6 +143,22 @@ let SchedModel = Penumbra2_5Model in {
   def : ReadAdvance<ReadALU, 0>;
 }
 
+// Penumbra/3 issues a load or a store in one cycle.  A load's reader waits
+// two cycles longer than an ALU result's.  A store enters a store buffer, and
+// its issue is the reference's typical figure, while the buffer has room.
+def Penumbra3Model : PenumbraSchedModel;
+let SchedModel = Penumbra3Model in {
+  def Penumbra3Core : PenumbraCore;
+  def : PenumbraResult<WriteALU, Penumbra3Core, 1, 1>;
+  def : PenumbraResult<WriteLoad, Penumbra3Core, 1, 3>;
+  def : PenumbraNoResult<WriteStore, Penumbra3Core, 1>;
+  def : PenumbraResult<WriteMul, Penumbra3Core, 11, 11>;
+  def : PenumbraHighHalf<WriteMulHigh, 14>;
+  def : PenumbraResult<WriteDiv, Penumbra3Core, 35, 35>;
+  def : PenumbraHighHalf<WriteDivHigh, 38>;
+  def : ReadAdvance<ReadALU, 0>;
+}
+
 // The architecture list is empty for every processor — one ISA, one set of
 // legal instructions — so processors differ only in their tune list and
 // scheduling model.  A PenumbraTuning carries that pair as one record, so a
@@ -168,6 +184,11 @@ def : PenumbraProcessor<"penumbra2", Penumbra2Tuning>;
 // The pipelined core with GPR forwarding.
 def Penumbra2_5Tuning : PenumbraTuning<Penumbra2_5Model, []>;
 def : PenumbraProcessor<"penumbra2_5", Penumbra2_5Tuning>;
+
+// The seven-stage pipelined core, with a store buffer and branch prediction at
+// fetch.
+def Penumbra3Tuning : PenumbraTuning<Penumbra3Model, []>;
+def : PenumbraProcessor<"penumbra3", Penumbra3Tuning>;
 
 // The name a build uses when it names no core.  It is the most-used variant's
 // tuning under a stable name — never a blend across generations — so moving

@@ -13,6 +13,9 @@
 ; RUN:   -mcpu=penumbra2_5 < %s 2>&1 \
 ; RUN:   | FileCheck %s --check-prefixes=CHECK,FASTMUL \
 ; RUN:   --implicit-check-not="not a recognized"
+; RUN: llc -mtriple=penumbra -global-isel -verify-machineinstrs -mcpu=penumbra3 \
+; RUN:   < %s 2>&1 | FileCheck %s --check-prefixes=CHECK,FASTMUL \
+; RUN:   --implicit-check-not="not a recognized"
 
 ; Every generation implements the same ISA, so a processor name selects tuning
 ; and nothing else: each one must accept the module, and no name may change
@@ -61,6 +64,14 @@ define i32 @tuned_for_penumbra2_5(i32 %a, i32 %b) #3 {
   ret i32 %result
 }
 
+define i32 @tuned_for_penumbra3(i32 %a, i32 %b) #4 {
+; CHECK-LABEL: tuned_for_penumbra3:
+; CHECK:         add r1, r2
+; CHECK-NEXT:    jmp lr
+  %result = add i32 %a, %b
+  ret i32 %result
+}
+
 ; A function tuned for one generation next to a function tuned for another has
 ; to reach a different subtarget for each, so the cache may not collide them.
 define i32 @tuned_for_generic(i32 %a, i32 %b) #2 {
@@ -82,8 +93,8 @@ define i32 @udiv10_untuned(i32 %a) {
   ret i32 %result
 }
 
-; A "tune-cpu" attribute overrides the command line, so these three decide the
-; same way under every RUN line -- and generic decides as penumbra2_5 does.
+; A "tune-cpu" attribute overrides the command line, so these decide the same
+; way under every RUN line -- and generic decides as penumbra2_5 does.
 define i32 @udiv10_tuned_for_penumbra1(i32 %a) #0 {
 ; CHECK-LABEL: udiv10_tuned_for_penumbra1:
 ; CHECK:         divu r1, r2
@@ -94,6 +105,15 @@ define i32 @udiv10_tuned_for_penumbra1(i32 %a) #0 {
 
 define i32 @udiv10_tuned_for_penumbra2_5(i32 %a) #3 {
 ; CHECK-LABEL: udiv10_tuned_for_penumbra2_5:
+; CHECK:         mulu r2, r1, r1
+; CHECK-NOT:     divu
+; CHECK:         jmp lr
+  %result = udiv i32 %a, 10
+  ret i32 %result
+}
+
+define i32 @udiv10_tuned_for_penumbra3(i32 %a) #4 {
+; CHECK-LABEL: udiv10_tuned_for_penumbra3:
 ; CHECK:         mulu r2, r1, r1
 ; CHECK-NOT:     divu
 ; CHECK:         jmp lr
@@ -114,3 +134,4 @@ attributes #0 = { "tune-cpu"="penumbra1" }
 attributes #1 = { "tune-cpu"="penumbra2" }
 attributes #2 = { "tune-cpu"="generic" }
 attributes #3 = { "tune-cpu"="penumbra2_5" }
+attributes #4 = { "tune-cpu"="penumbra3" }

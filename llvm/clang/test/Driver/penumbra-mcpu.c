@@ -15,6 +15,10 @@
 // RUN:   2>&1 | FileCheck %s --check-prefix=TUNE25
 // TUNE25: "-tune-cpu" "penumbra2_5"
 
+// RUN: %clang -### --target=penumbra-unknown-none -mtune=penumbra3 -c %s \
+// RUN:   2>&1 | FileCheck %s --check-prefix=TUNE3
+// TUNE3: "-tune-cpu" "penumbra3"
+
 // RUN: %clang -### --target=penumbra-unknown-none -mcpu=penumbra1 \
 // RUN:   -mtune=penumbra2 -c %s 2>&1 | FileCheck %s --check-prefix=BOTH
 // BOTH-DAG: "-target-cpu" "penumbra1"
@@ -25,7 +29,7 @@
 // RUN: not %clang --target=penumbra-unknown-none -mcpu=penumbra9 -c %s 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=BAD-CPU
 // BAD-CPU: error: unknown target CPU 'penumbra9'
-// BAD-CPU: note: valid target CPU values are: generic, penumbra1, penumbra2, penumbra2_5
+// BAD-CPU: note: valid target CPU values are: generic, penumbra1, penumbra2, penumbra2_5, penumbra3
 
 // RUN: not %clang --target=penumbra-unknown-none -mtune=penumbra9 -c %s 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=BAD-TUNE

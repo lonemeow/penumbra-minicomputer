@@ -16,7 +16,7 @@ using namespace clang::targets;
 // tables).  All of them accept the same binaries, so any name is valid for
 // both -mcpu and -mtune.
 static constexpr llvm::StringLiteral ValidCPUNames[] = {
-    "generic", "penumbra1", "penumbra2", "penumbra2_5"};
+    "generic", "penumbra1", "penumbra2", "penumbra2_5", "penumbra3"};
 
 bool PenumbraTargetInfo::isValidCPUName(StringRef Name) const {
   return llvm::is_contained(ValidCPUNames, Name);

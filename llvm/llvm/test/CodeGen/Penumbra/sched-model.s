@@ -5,6 +5,8 @@
 # RUN:   | FileCheck %s --check-prefix=P2
 # RUN: llvm-mca -mtriple=penumbra -mcpu=penumbra2_5 -instruction-tables < %s \
 # RUN:   | FileCheck %s --check-prefix=P25
+# RUN: llvm-mca -mtriple=penumbra -mcpu=penumbra3 -instruction-tables < %s \
+# RUN:   | FileCheck %s --check-prefix=P3
 # RUN: llvm-mca -mtriple=penumbra -mcpu=generic -instruction-tables < %s \
 # RUN:   | FileCheck %s --check-prefix=P25
 
@@ -45,6 +47,14 @@ div r1, r2, r3
 # P25-NEXT: [5]: MayStore
 # P25-NEXT: [6]: HasSideEffects (U)
 
+# P3:       Instruction Info:
+# P3-NEXT:  [1]: #uOps
+# P3-NEXT:  [2]: Latency
+# P3-NEXT:  [3]: RThroughput
+# P3-NEXT:  [4]: MayLoad
+# P3-NEXT:  [5]: MayStore
+# P3-NEXT:  [6]: HasSideEffects (U)
+
 # P1:       [1]    [2]    [3]    [4]    [5]    [6]    Instructions:
 # P1-NEXT:   1      2     2.00                        add	r1, r2
 # P1-NEXT:   1      4     4.00    *                   ldw	r1, [r2 + 4]
@@ -72,6 +82,15 @@ div r1, r2, r3
 # P25-NEXT:  1      35    35.00                 U     div	r1, r2
 # P25-NEXT:  1      38    35.00                 U     div	r1, r2, r3
 
+# P3:       [1]    [2]    [3]    [4]    [5]    [6]    Instructions:
+# P3-NEXT:   1      1     1.00                        add	r1, r2
+# P3-NEXT:   1      3     1.00    *                   ldw	r1, [r2 + 4]
+# P3-NEXT:   1      1     1.00           *            stw	r1, [r2 + 4]
+# P3-NEXT:   1      11    11.00                       mul	r1, r2
+# P3-NEXT:   1      14    11.00                       mul	r1, r2, r3
+# P3-NEXT:   1      35    35.00                 U     div	r1, r2
+# P3-NEXT:   1      38    35.00                 U     div	r1, r2, r3
+
 # P1:       Resources:
 # P1-NEXT:  [0]   - Penumbra1Core
 
@@ -80,6 +99,9 @@ div r1, r2, r3
 
 # P25:      Resources:
 # P25-NEXT: [0]   - Penumbra2_5Core
+
+# P3:       Resources:
+# P3-NEXT:  [0]   - Penumbra3Core
 
 # P1:       Resource pressure per iteration:
 # P1-NEXT:  [0]
@@ -92,6 +114,10 @@ div r1, r2, r3
 # P25:      Resource pressure per iteration:
 # P25-NEXT: [0]
 # P25-NEXT: 101.00
+
+# P3:       Resource pressure per iteration:
+# P3-NEXT:  [0]
+# P3-NEXT:  95.00
 
 # P1:       Resource pressure by instruction:
 # P1-NEXT:  [0]    Instructions:
@@ -122,3 +148,13 @@ div r1, r2, r3
 # P25-NEXT: 11.00  mul	r1, r2, r3
 # P25-NEXT: 35.00  div	r1, r2
 # P25-NEXT: 35.00  div	r1, r2, r3
+
+# P3:       Resource pressure by instruction:
+# P3-NEXT:  [0]    Instructions:
+# P3-NEXT:  1.00   add	r1, r2
+# P3-NEXT:  1.00   ldw	r1, [r2 + 4]
+# P3-NEXT:  1.00   stw	r1, [r2 + 4]
+# P3-NEXT:  11.00  mul	r1, r2
+# P3-NEXT:  11.00  mul	r1, r2, r3
+# P3-NEXT:  35.00  div	r1, r2
+# P3-NEXT:  35.00  div	r1, r2, r3

@@ -10,12 +10,12 @@ counts feed the compiler").
 
 ## One model per generation
 
-`penumbra1`, `penumbra2` and `penumbra2_5` are processors with an empty
-architecture list: one ISA, so they differ only in their tuning. A
-`PenumbraTuning` record pairs a model with its tune features, so a
-name that borrows another generation's tuning — `generic` borrows
-`penumbra2_5`'s — borrows both halves together. `-mcpu` and `-mtune`
-accept every name.
+`penumbra1`, `penumbra2`, `penumbra2_5` and `penumbra3` are processors
+with an empty architecture list: one ISA, so they differ only in their
+tuning. A `PenumbraTuning` record pairs a model with its tune
+features, so a name that borrows another generation's tuning —
+`generic` borrows `penumbra2_5`'s — borrows both halves together.
+`-mcpu` and `-mtune` accept every name.
 
 Every model shares `PenumbraSchedModel`'s parameters: single issue,
 in order (`MicroOpBufferSize = 0`), `LoadLatency = 1`,
