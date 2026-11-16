@@ -697,6 +697,12 @@ module penumbra3_ex_stage
         assert (!(dm_stall && advance))
             else $error("penumbra3_ex_stage: divmul advanced into EX/MEM1 while busy");
 
+    // A slot awaiting a source never advances (i_cpl_awaited's contract),
+    // so nothing EX latches as it advances takes a stale operand.
+    always_comb
+        assert (!(awaits_cpl && advance))
+            else $error("penumbra3_ex_stage: a slot advanced awaiting a source");
+
     // A forward must never source the youngest leg from a producer whose value
     // is not yet computed at MEM1 (a load / sysreg read) -- that leg carries an
     // address, not the result.
