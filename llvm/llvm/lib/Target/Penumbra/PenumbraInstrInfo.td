@@ -232,12 +232,21 @@ def AddrRegImm : ComplexPattern<iPTR, 2, "SelectAddrRegImm">;
 // Scheduling classes
 //===----------------------------------------------------------------------===//
 
-// Each core's scheduling model (Penumbra.td) states an issue and a latency
-// for these.  The figures are in doc/system/instruction-timing.md, and how
-// they are measured in doc/internals/instruction-timing.md.
+// Each core's scheduling model (Penumbra.td) states an issue for these, and a
+// latency for those that write a register.  The figures are in
+// doc/system/instruction-timing.md, and how they are measured in
+// doc/internals/instruction-timing.md.
 def WriteALU : SchedWrite;
+def WriteLoad : SchedWrite;
+def WriteStore : SchedWrite;
 def WriteMul : SchedWrite;
 def WriteDiv : SchedWrite;
+
+// The high half a MUL or DIV pair form writes to Rdh: a product's high half
+// or a quotient's remainder.  A model states only its latency, since the
+// instruction's issue is stated with its Rd result.
+def WriteMulHigh : SchedWrite;
+def WriteDivHigh : SchedWrite;
 
 // An ALU instruction's read of a register operand.  A core whose reader gets
 // a result sooner or later than the producer's latency says states the
@@ -346,11 +355,11 @@ let Defs = [SR], mayLoad = 0, mayStore = 0,
     // Pair forms: an explicit write-only Rdh captures the high half.
     def MUL_P  : FormatR_DivMul<0b10000, (outs GPR:$Rd, GPR:$Rdh),
                                 (ins GPR:$Rd_in, GPR:$Rs), "mul\t$Rd, $Rs, $Rdh"> {
-      let SchedRW = [WriteMul];
+      let SchedRW = [WriteMul, WriteMulHigh];
     }
     def MULU_P : FormatR_DivMul<0b10001, (outs GPR:$Rd, GPR:$Rdh),
                                 (ins GPR:$Rd_in, GPR:$Rs), "mulu\t$Rd, $Rs, $Rdh"> {
-      let SchedRW = [WriteMul];
+      let SchedRW = [WriteMul, WriteMulHigh];
     }
   }
 
@@ -372,11 +381,11 @@ let Defs = [SR], mayLoad = 0, mayStore = 0,
     // Pair forms: an explicit write-only Rdh captures the remainder.
     def DIV_P  : FormatR_DivMul<0b10010, (outs GPR:$Rd, GPR:$Rdh),
                                 (ins GPR:$Rd_in, GPR:$Rs), "div\t$Rd, $Rs, $Rdh"> {
-      let SchedRW = [WriteDiv];
+      let SchedRW = [WriteDiv, WriteDivHigh];
     }
     def DIVU_P : FormatR_DivMul<0b10011, (outs GPR:$Rd, GPR:$Rdh),
                                 (ins GPR:$Rd_in, GPR:$Rs), "divu\t$Rd, $Rs, $Rdh"> {
-      let SchedRW = [WriteDiv];
+      let SchedRW = [WriteDiv, WriteDivHigh];
     }
   }
 }
@@ -432,7 +441,7 @@ let Defs = [SR] in {
 
 // Loads: L=1
 // $Rb uses GPR: allows R0 as base (zero-base addressing for low memory).
-let hasSideEffects = 0, mayLoad = 1, mayStore = 0 in {
+let hasSideEffects = 0, mayLoad = 1, mayStore = 0, SchedRW = [WriteLoad] in {
   def LDW  : FormatM<1, 0b10, 0, (outs GPR:$Rd), (ins GPR:$Rb, memoffset16:$offset),
                      "ldw\t$Rd, [$Rb + $offset]">;
   def LDH  : FormatM<1, 0b01, 0, (outs GPR:$Rd), (ins GPR:$Rb, memoffset16:$offset),
@@ -448,7 +457,7 @@ let hasSideEffects = 0, mayLoad = 1, mayStore = 0 in {
 // Stores: L=0
 // Both $Rd (data) and $Rb (base) use GPR: R0 is valid in both slots, so a
 // store of zero can store R0.
-let hasSideEffects = 0, mayLoad = 0, mayStore = 1 in {
+let hasSideEffects = 0, mayLoad = 0, mayStore = 1, SchedRW = [WriteStore] in {
   def STW  : FormatM<0, 0b10, 0, (outs), (ins GPR:$Rd, GPR:$Rb, memoffset16:$offset),
                      "stw\t$Rd, [$Rb + $offset]">;
   def STH  : FormatM<0, 0b01, 0, (outs), (ins GPR:$Rd, GPR:$Rb, memoffset16:$offset),

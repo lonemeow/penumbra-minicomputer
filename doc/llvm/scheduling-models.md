@@ -19,32 +19,40 @@ accept every name.
 
 Every model shares `PenumbraSchedModel`'s parameters: single issue,
 in order (`MicroOpBufferSize = 0`), `LoadLatency = 1`,
-`HighLatency = 8`, `MispredictPenalty = 0`, and an incomplete model,
-so an instruction without a scheduling class takes the defaults.
+`MispredictPenalty = 0`, and an incomplete model, so an instruction
+without a scheduling class takes the defaults.
 
 ## What a model states
 
-A model states the two figures the reference gives an instruction:
-its issue, as the cycles the instruction holds the model's one
-resource, the core, and its latency, as the latency of its write.
-The core is a single unit that nothing queues for
-(`BufferSize = 0`), so an instruction holding it holds every
+A model states the figures the reference gives an instruction: its
+issue, as the cycles the instruction holds the model's one resource,
+the core, and for one that writes a register its latency, as the
+latency of its write. The core is a single unit that nothing queues
+for (`BufferSize = 0`), so an instruction holding it holds every
 instruction behind it.
 
-Three write classes carry the figures:
+The write classes carry the figures:
 
-| Class | Instructions |
-|---|---|
-| `WriteALU` | ALU operations, register and immediate forms |
-| `WriteMul` | `MUL`, `MULU` |
-| `WriteDiv` | `DIV`, `DIVU` |
+| Class | Instructions | Figures |
+|---|---|---|
+| `WriteALU` | ALU operations, register and immediate forms | issue, latency |
+| `WriteLoad` | `LDW`, `LDH`, `LDHS`, `LDB`, `LDBS` | issue, latency |
+| `WriteStore` | `STW`, `STH`, `STB` | issue |
+| `WriteMul` | `MUL`, `MULU` | issue, latency |
+| `WriteMulHigh` | the high half a pair form writes | latency |
+| `WriteDiv` | `DIV`, `DIVU` | issue, latency |
+| `WriteDivHigh` | the remainder a pair form writes | latency |
+
+A pair form's second write states no issue: the instruction's issue
+is its first write's, and the cycles of two writes on one resource
+add up.
 
 One read class, `ReadALU`, carries a `ReadAdvance` for a reader that
 gets a result sooner or later than its producer's latency says. Every
 model states 0.
 
-Loads, stores and control transfers carry no scheduling class, so
-their costs and the waits on a load's result are not represented.
+Control transfers and the system instructions carry no scheduling
+class.
 
 ## Who reads it
 

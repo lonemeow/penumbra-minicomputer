@@ -50,76 +50,96 @@ include "GISel/PenumbraRegisterBanks.td"
 // Scheduling models.  MCSubtargetInfo reads the model from the *tune* name
 // rather than the architecture name, so a processor's model is part of its
 // tuning answer.  A model states what the compiler can observe of a core —
-// how many cycles an instruction holds it — and nothing about how the
-// hardware arrives there: two implementations with the same counts are the
-// same core to the compiler.
+// how long an instruction holds it and when its result can be read — and
+// nothing about how the hardware arrives there: two implementations with the
+// same figures are the same core to the compiler.
 //
-// The parameters every model shares are calibrated against the microcoded
-// single-issue core and stay shared until a generation has measured numbers
-// of its own: the scheduler acts on a speculative model just as confidently
-// as on a measured one.
-//
-// LoadLatency = 1 (not the real ~4 cache-hit cycles) because our execution
-// is microcoded and single-issue — each multi-cycle op stalls the pipeline,
-// so the scheduler cannot actually fill load-delay slots with unrelated
-// work.  Telling the scheduler "load result is available next cycle" stops
-// it from reordering ALU ops ahead of loads/stores, which on its own does
-// nothing useful but does extend live ranges and inflate register pressure.
-// HighLatency = 8 still flags multi-cycle ops (MUL/DIV libcalls) for the
-// "expensive" heuristics used by the allocator.
+// Every generation issues at most one instruction a cycle, in order.
+// LoadLatency is the latency of a load without a scheduling class, and every
+// load instruction has one.
 class PenumbraSchedModel : SchedMachineModel {
-  let IssueWidth = 1;            // Single-issue, microcoded
-  let MicroOpBufferSize = 0;     // In-order: no reorder buffer
-  let LoadLatency = 1;           // Microcoded: no benefit from hiding load latency
-  let HighLatency = 8;           // Threshold for "expensive" ops
+  let IssueWidth = 1;
+  let MicroOpBufferSize = 0;
+  let LoadLatency = 1;
   let MispredictPenalty = 0;     // No branch predictor
   let CompleteModel = 0;         // Don't require itineraries for every opcode
 }
 
-// A model states the two figures the timing reference
+// A model states the figures the timing reference
 // (doc/system/instruction-timing.md) gives an instruction: its issue, the
-// cycles it holds the core, and its latency, the cycles from its start until
-// a reader can start without waiting.  The core is the model's one resource:
-// a single unit that nothing queues for, so an instruction holding it holds
-// every instruction behind it.  PenumbraSubtarget reads the issue figures back
-// for cost decisions, so every model must state them for ALU operations,
-// multiplies and divides.
+// cycles it holds the core, and for one that writes a register its latency,
+// the cycles from its start until a reader can start without waiting.  The
+// core is the model's one resource: a single unit that nothing queues for, so
+// an instruction holding it holds every instruction behind it.
+// PenumbraSubtarget reads the issue figures back for cost decisions, so every
+// model must state them for ALU operations, multiplies and divides.
 class PenumbraCore : ProcResource<1> { let BufferSize = 0; }
 
-class PenumbraWrite<SchedWrite write, PenumbraCore core, int issue, int latency>
-    : WriteRes<write, [core]> {
+// Each helper below is an LLVM WriteRes ("write resources"): what one
+// SchedWrite costs in the enclosing model, as the resources it holds and its
+// latency.  The only resource is the core.  A helper is named for the
+// register its figures describe.
+
+// An instruction that writes Rd: its issue, and the latency of Rd.
+class PenumbraResult<SchedWrite write, PenumbraCore core, int issue,
+                     int latency> : WriteRes<write, [core]> {
   let ReleaseAtCycles = [issue];
   let Latency = latency;
+}
+
+// An instruction that writes no register: its issue alone.
+class PenumbraNoResult<SchedWrite write, PenumbraCore core, int issue>
+    : WriteRes<write, [core]> {
+  let ReleaseAtCycles = [issue];
+}
+
+// The high half a MUL or DIV pair form writes to Rdh: its latency alone,
+// since the instruction's issue is stated with its Rd result.
+class PenumbraHighHalf<SchedWrite write, int latency> : WriteRes<write, []> {
+  let Latency = latency;
+  let NumMicroOps = 0;
 }
 
 def Penumbra1Model : PenumbraSchedModel;
 let SchedModel = Penumbra1Model in {
   def Penumbra1Core : PenumbraCore;
-  def : PenumbraWrite<WriteALU, Penumbra1Core, 2, 2>;
-  def : PenumbraWrite<WriteMul, Penumbra1Core, 37, 37>;
-  def : PenumbraWrite<WriteDiv, Penumbra1Core, 37, 37>;
+  def : PenumbraResult<WriteALU, Penumbra1Core, 2, 2>;
+  def : PenumbraResult<WriteLoad, Penumbra1Core, 4, 4>;
+  def : PenumbraNoResult<WriteStore, Penumbra1Core, 8>;
+  def : PenumbraResult<WriteMul, Penumbra1Core, 37, 37>;
+  def : PenumbraHighHalf<WriteMulHigh, 37>;
+  def : PenumbraResult<WriteDiv, Penumbra1Core, 37, 37>;
+  def : PenumbraHighHalf<WriteDivHigh, 37>;
   def : ReadAdvance<ReadALU, 0>;
 }
 
 // Penumbra/2 and Penumbra/2.5 hold the core for the same cycles per
 // instruction.  Penumbra/2 has no forwarding, so a reader waits for its
-// producer to leave WB, and every result arrives three cycles later than
-// on Penumbra/2.5.
+// producer to leave WB.  Penumbra/2.5 forwards every result but a MUL's or
+// DIV's high half, which arrives as late as on Penumbra/2.
 def Penumbra2Model : PenumbraSchedModel;
 let SchedModel = Penumbra2Model in {
   def Penumbra2Core : PenumbraCore;
-  def : PenumbraWrite<WriteALU, Penumbra2Core, 1, 4>;
-  def : PenumbraWrite<WriteMul, Penumbra2Core, 11, 14>;
-  def : PenumbraWrite<WriteDiv, Penumbra2Core, 35, 38>;
+  def : PenumbraResult<WriteALU, Penumbra2Core, 1, 4>;
+  def : PenumbraResult<WriteLoad, Penumbra2Core, 2, 5>;
+  def : PenumbraNoResult<WriteStore, Penumbra2Core, 6>;
+  def : PenumbraResult<WriteMul, Penumbra2Core, 11, 14>;
+  def : PenumbraHighHalf<WriteMulHigh, 14>;
+  def : PenumbraResult<WriteDiv, Penumbra2Core, 35, 38>;
+  def : PenumbraHighHalf<WriteDivHigh, 38>;
   def : ReadAdvance<ReadALU, 0>;
 }
 
 def Penumbra2_5Model : PenumbraSchedModel;
 let SchedModel = Penumbra2_5Model in {
   def Penumbra2_5Core : PenumbraCore;
-  def : PenumbraWrite<WriteALU, Penumbra2_5Core, 1, 1>;
-  def : PenumbraWrite<WriteMul, Penumbra2_5Core, 11, 11>;
-  def : PenumbraWrite<WriteDiv, Penumbra2_5Core, 35, 35>;
+  def : PenumbraResult<WriteALU, Penumbra2_5Core, 1, 1>;
+  def : PenumbraResult<WriteLoad, Penumbra2_5Core, 2, 3>;
+  def : PenumbraNoResult<WriteStore, Penumbra2_5Core, 6>;
+  def : PenumbraResult<WriteMul, Penumbra2_5Core, 11, 11>;
+  def : PenumbraHighHalf<WriteMulHigh, 14>;
+  def : PenumbraResult<WriteDiv, Penumbra2_5Core, 35, 35>;
+  def : PenumbraHighHalf<WriteDivHigh, 38>;
   def : ReadAdvance<ReadALU, 0>;
 }
 
