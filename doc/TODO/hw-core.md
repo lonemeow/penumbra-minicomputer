@@ -105,19 +105,19 @@ landed in `dd116d6` and the commit after it, which retires cacheable
 stores into it. What remains is the staged levers, in the order the
 overview ranks them ("Levers ranked by measured benefit").
 
-Each lever is read against a full-top seed sweep. The current one, with
-the store buffer in, is of the ULX3S top with the line SDRAM stack and
-no floorplan, the placement choices taken over from gen2: 7 of 10 seeds
-close the CPU clock at 37.5 MHz, and 6 of those every domain; the
-seventh misses the USB clock's 60 MHz. The CPU clock is the worst
-domain on 8, and its critical path is the D side's on 7 of the 10: the
-D-TLB's word through the TLB match and the L1-D's tag compare, into
-MEM2's writeback payload past the way select and the byte extract. On
-the other 3 it is the fetch side's: the L1-I data word through the
-pre-decode and IF2's way select into the fetch buffer or the return
-stack's pop (2), or the I-TLB's VPN word into IF1's next PC through
-the miss's flush (1). 61-67% of it is routing. The store buffer is the
-worst path on none. The next lever's sweep is read against this one.
+Each lever is read against a full-top seed sweep. The current one, at
+`b60a812` with loads releasing their readers at MEM2, is of the ULX3S
+top with the line SDRAM stack and no floorplan, the placement choices
+taken over from gen2: 9 of 10 seeds close every domain, and the tenth
+misses the CPU clock's 37.5 MHz. The CPU clock is the worst domain on
+all 10, and its critical path is the fetch side's on 6: the L1-I data
+word through the pre-decode and IF2's way select into the return
+stack's pop (4) or the fetch buffer (2). On the other 4 it is the D
+side's: the D-TLB's word through the TLB match and the L1-D's tag
+compare, into MEM2's writeback payload, the L1-D's held lookup or its
+write-hit event, or the store buffer's empty flag. 58-65% of it is
+routing. EX's forwarding loop is the worst path on none. The next
+lever's sweep is read against this one.
 
 ## Hardware: a gen3 divmul's low half waits as a late writer
 
