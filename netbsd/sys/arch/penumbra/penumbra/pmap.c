@@ -85,7 +85,7 @@ static bool pmap_initialized;
  * only happens once every 255 distinct user pmap activations.
  */
 static uint32_t pmap_asid_generation = 1;
-static uint8_t  pmap_asid_next = 1;
+static u_int	pmap_asid_next = 1;	/* wider than an ASID: must reach 256 */
 
 /*
  * pmap_asid_alloc: assign a fresh ASID to a pmap.
@@ -111,6 +111,7 @@ pmap_asid_alloc(struct pmap *pm)
 		tlb_invalidate_all();
 	}
 
+	KASSERT(pmap_asid_next >= 1 && pmap_asid_next <= 255);
 	pm->pm_asid = pmap_asid_next++;
 	pm->pm_asid_gen = pmap_asid_generation;
 }
