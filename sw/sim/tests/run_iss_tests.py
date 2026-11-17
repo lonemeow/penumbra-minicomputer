@@ -222,6 +222,11 @@ def store_buffer(stores, drained, waits, waited):
 #   3:4:4:5:      A drains in 5 and the rest in 3: 8, and D 3.
 #   post:         both fills come from memory and need the bus, so posting
 #                 changes nothing: 8l/line/bus/post waits as 8l/line/bus.
+#   inorder:      the first load, needing the bus, waits for every entry's
+#                 bus write: A to T+17, B to T+22 and C to T+27, 20, as
+#                 8l/all/bus.  The load from C finds the buffer empty.
+#                 Word entries' six writes end at T+31: 24, as 8w/all/bus,
+#                 and D is draining when the uncached load comes: 4.
 #   8l/merge/bus: the first load waits for A in flight: 10.  B starts after
 #                 that fill and the load from C waits only for it: 4.  C,
 #                 still open, drains once D's store closes it, and the
@@ -244,6 +249,9 @@ SB_WINDOW_LISTED = {
     "sb 8l/all/3:4:4:5": store_buffer(*SB_LINES, (0, 0, 8, 3), SB_FIRST_FILL_WAITS),
     "sb 8l/merge/bus": store_buffer(*SB_LINES, (0, 0, 14, 9), SB_BOTH_FILLS_WAIT),
     "sb 8l/line/bus/post": store_buffer(*SB_LINES, (0, 0, 19, 5), SB_BOTH_FILLS_WAIT),
+    "sb 8l/line/bus/post/inorder": store_buffer(*SB_LINES, (0, 0, 20, 5), SB_FIRST_FILL_WAITS),
+    "sb 8w/line/bus/post/inorder": store_buffer((7, 0, 7, 1), (7, 0, 0, 0), (0, 0, 24, 4),
+                                                SB_FIRST_FILL_WAITS),
 }
 
 # sb_posted.s inside the window, T as in sb_window.s: A completes at T+4
@@ -259,6 +267,8 @@ SB_WINDOW_LISTED = {
 #                      and C from T+17 to T+27: 11.
 #   8l/line/bus/post:  the load waits only for B's L2 write, to T+8: 1.
 #                      The uncached store at T+14 waits to T+27: 13.
+#   /inorder:          a fill L2 serves does not need the bus, so the
+#                      same as 8l/line/bus/post.
 SB_POSTED_STORES = ((6, 3, 3, 1), (2, 0, 0, 1))
 SB_POSTED_ONE_FILL = (0, (0, 1), (1, 1), (0, 1))     # the load waits; the store does not
 SB_POSTED_BOTH = (0, (0, 1), (1, 1), (1, 1))
@@ -267,6 +277,8 @@ SB_POSTED = {
     "sb 8l/line/bus": store_buffer(*SB_POSTED_STORES, (0, 0, 10, 9), SB_POSTED_BOTH),
     "sb 8l/all/bus/post": store_buffer(*SB_POSTED_STORES, (0, 0, 3, 11), SB_POSTED_BOTH),
     "sb 8l/line/bus/post": store_buffer(*SB_POSTED_STORES, (0, 0, 1, 13), SB_POSTED_BOTH),
+    "sb 8l/line/bus/post/inorder": store_buffer(*SB_POSTED_STORES, (0, 0, 1, 13),
+                                                SB_POSTED_BOTH),
 }
 SB_WINDOW_CPI2 = {"sb 8l/all/bus": store_buffer(*SB_LINES, (0, 0, 17, 5), SB_FIRST_FILL_WAITS)}
 SB_WINDOW_ARGS = ["+cachemodel=4k/2:4k/2:64k/4", "+model_start=0xFFFF0800",

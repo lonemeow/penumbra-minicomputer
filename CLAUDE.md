@@ -387,7 +387,10 @@ rom.ld ──────────────────┘
   `line`, or for none as they `merge` buffered bytes, and drain costs
   as a preset (`bus`, `combine`) or four cycle counts by burst length
   (`8l/line/5:7:9:11`); a trailing `/post` posts write-through past L2,
-  so a fill L2 serves waits only for L2 writes.  Each window reports
+  so a fill L2 serves waits only for L2 writes, and `/inorder` keeps
+  every access that needs the bus behind every buffered write, as
+  gen3's uncore does (without it, a fill from memory goes ahead of
+  writes not yet on the bus).  Each window reports
   merges, drains by burst length, and the cycles the core waits on a
   full buffer and on drains before I fills, D fills and uncached
   accesses.  **Waits are an upper bound:** nothing else a pipeline

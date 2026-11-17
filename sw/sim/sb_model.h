@@ -23,8 +23,10 @@
 // cycles and the entry then waits, in order, for its turn on the bus; a
 // fill L2 serves needs only L2, while a fill from memory and an uncached
 // access need both.  A write that has not reached the bus yields to a
-// waiting access, unless the access has to wait for that entry.  Each
-// buffer:
+// waiting access, unless the access has to wait for that entry.  With
+// "/inorder" nothing passes a write on the bus: an access that needs the
+// bus waits for every entry's bus write, as gen3's uncore takes the bus
+// only with no store posted.  Each buffer:
 //
 //  - holds line entries (a line and a byte mask, which stores to that
 //    line merge into) or word entries (one store each);
@@ -95,6 +97,7 @@ struct SbConfig {
     SbPolicy    policy;
     uint32_t    drain[4];    // cycles to drain a burst of 1..4 words
     bool        posted;      // L2 posts write-through to the bus
+    bool        in_order;    // an access that needs the bus waits for every entry
 };
 
 // ── One store buffer on its own clock ────────────────────────────
@@ -161,10 +164,11 @@ public:
         const char* policy = cfg_.policy == SbPolicy::All  ? "every entry"
                            : cfg_.policy == SbPolicy::Line ? "entries up to their line"
                            :                                 "no entry, merging";
-        fprintf(out, "-- store buffer %s: %u %s entries, fills wait for %s, drain %u/%u/%u/%u cycles%s\n",
+        fprintf(out, "-- store buffer %s: %u %s entries, fills wait for %s, drain %u/%u/%u/%u cycles%s%s\n",
                 cfg_.label.c_str(), cfg_.entries, cfg_.lines ? "line" : "word", policy,
                 cfg_.drain[0], cfg_.drain[1], cfg_.drain[2], cfg_.drain[3],
-                cfg_.posted ? ", write-through posted" : "");
+                cfg_.posted ? ", write-through posted" : "",
+                cfg_.in_order ? ", the bus in order" : "");
         const Counts& c = counts_;
         fprintf(out, "  stores: %llu buffered, %llu merged, %llu entries; %llu uncached\n",
                 (unsigned long long)c.stores, (unsigned long long)c.merged,
@@ -223,8 +227,9 @@ private:
     // that for its own cycles.
     void reach_uncore(Access kind, Served served, uint32_t pa) {
         advance(now_);
-        size_t n = kind == Access::Uncached ? queue_.size() : must_drain(pa / LINE_BYTES);
         bool bus = !cfg_.posted || served != Served::L2;
+        size_t n = kind == Access::Uncached || (cfg_.in_order && bus) ? queue_.size()
+                 : must_drain(pa / LINE_BYTES);
         double ready = n ? finish_through(n, bus) : now_;
         double start = std::max({now_, ready, l2_free_, bus ? bus_free_ : 0.0});
         counts_.reached[int(kind)]++;
@@ -352,10 +357,11 @@ private:
 class SbModel {
 public:
     // Parse the +sbmodel value: empty for a default comparison, or a
-    // comma-separated list of ENTRIES{l|w}/POLICY/DRAIN[/post] — ENTRIES
-    // line or word entries, POLICY "all", "line" or "merge", DRAIN a preset
-    // name or four colon-separated cycle counts for bursts of 1..4 words,
-    // and "/post" for write-through posted past L2.
+    // comma-separated list of ENTRIES{l|w}/POLICY/DRAIN[/post][/inorder] —
+    // ENTRIES line or word entries, POLICY "all", "line" or "merge", DRAIN
+    // a preset name or four colon-separated cycle counts for bursts of 1..4
+    // words, "/post" for write-through posted past L2, and "/inorder" for a
+    // bus that no access takes ahead of a buffered write.
     static bool parse(const char* spec, double cpi, SbModel& model, std::string& err) {
         model.cpi_ = cpi;
         std::string s(*spec ? spec : "8l/all/bus,8l/line/bus,8l/all/combine,8l/line/combine,8w/all/bus");
@@ -387,14 +393,24 @@ private:
     static bool parse_item(const std::string& item, SbConfig& c, std::string& err) {
         c.label = item;
         size_t a = item.find('/'), b = a == std::string::npos ? a : item.find('/', a + 1);
-        if (b == std::string::npos) { err = "not ENTRIES{l|w}/POLICY/DRAIN[/post]"; return false; }
+        if (b == std::string::npos) {
+            err = "not ENTRIES{l|w}/POLICY/DRAIN[/post][/inorder]";
+            return false;
+        }
         size_t o = item.find('/', b + 1);
         std::string entries = item.substr(0, a), policy = item.substr(a + 1, b - a - 1),
                     drain = item.substr(b + 1, o == std::string::npos ? o : o - b - 1);
-        c.posted = o != std::string::npos;
-        if (c.posted && item.substr(o + 1) != "post") {
-            err = "unknown option '/" + item.substr(o + 1) + "' (post)";
-            return false;
+        c.posted = c.in_order = false;
+        while (o != std::string::npos) {
+            size_t next = item.find('/', o + 1);
+            std::string option = item.substr(o + 1, next == std::string::npos ? next : next - o - 1);
+            if (option == "post")         c.posted = true;
+            else if (option == "inorder") c.in_order = true;
+            else {
+                err = "unknown option '/" + option + "' (post, inorder)";
+                return false;
+            }
+            o = next;
         }
 
         char* end = nullptr;
