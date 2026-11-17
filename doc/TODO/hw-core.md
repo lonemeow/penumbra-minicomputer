@@ -159,8 +159,25 @@ only fetch by physical address, so threading a PA index into the VIPT
 caches is awkward; the read has to bypass the MMU but not the caches.
 Making it L2-cacheable saves a full SDRAM round-trip per trap.
 
-Open: the L2-cacheable vector read, and what it saves per trap on a
-running system.
+Behind gen3's 256×2 TLB, traps are rare. Counted 2026-11-17 by the
+ISS's `+opstats` at `+core=penumbra3`, over the windows of "Hardware: a
+gen3 load miss holds the launch side a cycle past its done":
+
+| Per 1000 instructions | shell loop | `pbench kernel` | Doom `demo3` |
+|---|---:|---:|---:|
+| Exceptions | 0.823 | 1.668 | 0.053 |
+| … TLB misses | 0.600 | 0.603 | 0.049 |
+| … system calls | 0.216 | 1.056 | 0.001 |
+| … interrupts | 0.004 | 0.004 | 0.004 |
+| … TLB protection faults | 0.003 | 0.005 | — |
+
+At an estimated 10–20 cycles saved a trap, that is about 8–16, 17–33
+and under 1 cycle per 1000 instructions: a kernel-path lever the size
+of selective `WRSYS` (`doc/internals/penumbra3/overview.md`, "Levers
+ranked by measured benefit"), and nothing for Doom.
+
+Open: what a trap's vector read costs on gen3 against an L2 hit, which
+prices the saving, and the L2-cacheable read itself.
 
 ## Hardware: FPU
 
@@ -736,38 +753,36 @@ Modelled on libc's `memcpy` word loop, where an add follows each load
 and so holds no lookup, the cycle costs a quarter cycle a word: 6.25
 against 6.00 from L2.
 
-The first part below takes the cycle out wherever no lookup of the
-filled set is behind the miss; where one is, it takes both:
+The fix takes the cycle out wherever the instruction after the miss
+holds no lookup of the filled set. **The completion forwards in its own
+cycle:** a leg of its own in EX's operand mux, its select formed from
+the L1-D's `done` ahead of the youngest-first compare. A build of that,
+swept before `854284a`, closed every domain on 2 of 10 seeds against 6,
+but on 8 of them its critical path ended in the zero flag's chain that
+commit removed, so the leg's own cost is not measured.
 
-- **The completion forwards in its own cycle:** a leg of its own in
-  EX's operand mux, its select formed from the L1-D's `done` ahead of
-  the youngest-first compare. A build of that, swept before `854284a`,
-  closed every domain on 2 of 10 seeds against 6, but on 8 of them its
-  critical path ended in the zero flag's chain that commit removed, so
-  the leg's own cost is not measured.
-- **A held lookup of the filled set sees the install at once:** its
-  valid bit and word can be given it off the hit path, the valid bit set
-  as the output flop reads it, the word as a third input of the store
-  bypass's mux. The tag is the cost. A mux after the tag block RAM sits
-  in front of the compare, on a path that binds (P0.5's worst paths
-  start at a TLB or an L1 tag block RAM,
-  `doc/internals/penumbra3/phase0-probes.md`, "P0.5 -- physical-tag
-  compare behind the TLB verdict"). The alternative is the block RAM
-  forwarding it itself: the install written through the lookup's own
-  read port in write-through mode when it lands in that set, the second
-  port taking other sets. A write-through port needs the true dual-port
-  mode, at most 18 bits a port on the ECP5 (yosys's `DP16KD` map) and
-  on Artix-7, so the 20-bit tag takes two block RAMs a way instead of
-  one: four more for the two L1s.
+Counted 2026-11-17 by the ISS cache model at `+core=penumbra3` (an
+8 KB 2-way L1-D), the instruction after each L1-D load miss. The
+workloads are the multiuser image's shell loop and `pbench kernel`
+(`doc/internals/penumbra3/memory-performance.md`, "Miss profiles from
+the shadow models") and Doom `demo3` from its first
+`R_RenderPlayerView` to `G_CheckDemoStatus`:
 
-Open:
+| Per 1000 instructions | shell loop | `pbench kernel` | Doom `demo3` |
+|---|---:|---:|---:|
+| Load misses | 10.09 | 6.39 | 12.91 |
+| … then no access | 7.03 | 4.44 | 10.73 |
+| … then an access to another set | 2.31 | 1.38 | 1.72 |
+| … then an access to the filled set | 0.74 | 0.58 | 0.46 |
 
-- How many load misses have something other than a lookup of the
-  filled set behind them, the share the leg alone would save, counted
-  by the ISS cache model or on a running core.
-- A sweep of the leg on top of `854284a`.
-- If both parts are worth having, the write-through form's mapping
-  under yosys and Vivado, with a sweep on both sides of it.
+The leg takes the cycle out of 91–96 % of misses: about 9.3, 5.8 and
+12.5 cycles per 1000 instructions. The model runs no clock, so it never
+sees a bubble between a miss and the instruction after it, and an empty
+slot holds no lookup either: the figures are floors. The rest, a
+lookup of the filled set seeing the install at once, is under Ruled
+out ("Showing a held gen3 lookup the install at once").
+
+Open: a sweep of the leg on top of `854284a`.
 
 ## Hardware: a gen3 drain-commit's wait sits on the issue stall
 
@@ -956,3 +971,18 @@ Open:
   user mode would wait out the stores ahead of it, for a fault only a
   cacheable mapping of address space that does not take the write can
   raise (`doc/system/architecture.md`, "Deferred Bus Faults").
+- **Showing a held gen3 lookup the install at once.**  When the
+  instruction after a load miss looks up the set the line went into,
+  the L1-D holds it a cycle (`doc/internals/penumbra3/l1-cache.md`,
+  "Busy and done"), so the completion's forwarding leg alone leaves
+  that miss's cycle in place.  Such misses are 0.74, 0.58 and 0.46 per
+  1000 instructions on the shell loop, `pbench kernel` and Doom
+  `demo3`, so taking their cycle out too saves under 1 cycle per 1000
+  ("Hardware: a gen3 load miss holds the launch side a cycle past its
+  done").  The valid bit and word can be given off the hit path; the
+  tag cannot.  A mux after the tag block RAM sits in front of the
+  compare, on a path that binds (`doc/internals/penumbra3/phase0-probes.md`,
+  "P0.5 -- physical-tag compare behind the TLB verdict"), and the block
+  RAM forwarding the install through a write-through port needs the
+  true dual-port mode, 18 bits a port on the ECP5 and Artix-7: two
+  block RAMs a way for the 20-bit tag, four more for the two L1s.

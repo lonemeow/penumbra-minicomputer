@@ -1200,7 +1200,8 @@ the MMU instead; how they stay off the lookup path is in the
   lower base CPI, which argues for the selective form there.
 - **The vector fetch is uncached**, an SDRAM round trip per trap unless
   the adapter still holds that line; making it cacheable is recorded
-  under the gen3 build status in `doc/TODO/hw-core.md`.
+  in `doc/TODO/hw-core.md`, "Hardware: a gen3 exception's vector read
+  always goes to memory".
 
 ## Synchronous CPU/SDRAM clocking — ruled out
 
