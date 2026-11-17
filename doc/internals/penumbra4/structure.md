@@ -1,0 +1,341 @@
+# Penumbra/4 — Structure: modules, boundaries and bring-up
+
+> **Applies to:** Penumbra/4 · the core's and the machine's modules
+> (a sketch; nothing is built).
+
+This sketches the modules gen4 is built from: what each is for and
+owns, the signals at each boundary and when they settle in the cycle,
+the smallest form of each that keeps its contract, and the order in
+which the machine comes up. The design it divides is the
+[overview](./overview.md)'s.
+
+## Rules
+
+- **A module is a part of the machine, with one purpose.** It is named
+  for what it is: the fetch unit, the predictor, the fetch queue. A
+  behaviour that crosses parts, such as a miss or the entry to an
+  exception, is a contract between the parts it crosses, each carrying
+  its share ([behaviours](#behaviours-and-the-parts-that-carry-them)),
+  never a module of its own. A module that cannot name the part of the
+  machine it is, is a behaviour, and belongs to the parts it touches.
+- **A module owns its state, and its clients see a contract:** a
+  request, busy and done; a verdict; a payload. Its arrays, its policy
+  and which cycle it does its work in stay inside.
+- **A part that only predicts never steers.** The predictor says where
+  the line goes; the fetch unit chooses the address. A predictor that
+  also steered would have two purposes, and every change to one would
+  reach the other.
+- **Every output has a timing class**, stated in its contract
+  ([timing classes](#timing-classes)).
+- **One term per stage gates every effect**
+  ([the stage contract](#the-stage-contract)).
+- **Hazards are read from the pipeline registers.** No module keeps a
+  copy of what an op in flight will write.
+- **Each operand has one stage that captures it,** named in that
+  stage's contract.
+- **The core module only connects.** It instantiates the stages and
+  units and wires them; every decision belongs to one of them.
+- **Smallest first.** Each module first exists in the smallest form
+  that keeps its contract, and the machine runs code on the board with
+  it. The full form then replaces it behind the same ports, one module
+  at a time ([bring-up](#bring-up)). Nothing selects between the two
+  forms: the smallest is the module's first version, not a mode of it.
+- **What fits is used as it is.** The devices and the shared cells
+  that fit a boundary here unchanged are instantiated as they are, in
+  their own style. Every module written for gen4 follows the
+  [rules for new modules](../coding-standards.md#rules-for-new-modules).
+
+## The machine
+
+The machine keeps the gen2 machine's external port list
+([the machine layer](../build-system.md#the-machine-layer)), so a
+board top and a sim wrapper attach devices to gen4 as they do to gen3,
+and the machine's first build can be flashed with the board's devices,
+memory stack and shell as they are. Inside it, the timer and the
+machine-identity device are the shared ones, and the MMU's pinned TLB
+is the shared `tlb_pinned`.
+
+```mermaid
+graph LR
+    CORE["core"]
+    MMU["MMU<br/>I and D translation"]
+    L1I["L1-I"]
+    L1D["L1-D"]
+    SB["store buffer"]
+    UC["uncore<br/>select, L2, bus master"]
+    DEV["sysreg devices"]
+    BUS["external bus"]
+    CORE -->|"fetch lookup,<br/>access"| L1I
+    CORE -->|"data lookup,<br/>store, access"| L1D
+    CORE -->|"translate"| MMU
+    MMU -->|"candidate frames"| L1I
+    MMU -->|"candidate frames"| L1D
+    CORE -->|"cacheable stores"| SB
+    L1I --- UC
+    L1D --- UC
+    SB --- UC
+    UC --- BUS
+    CORE ---|"RDSYS, WRSYS"| DEV
+```
+
+| Module | Purpose | Owns |
+|---|---|---|
+| `penumbra4_mmu` | translates fetch and data addresses | the main and pinned TLBs, the invalidation sweep, the fault registers, sysreg device 0 |
+| `penumbra4_icache` | answers fetch lookups with a line, carries the fetch side's accesses | its arrays, replacement, enable, its side's request on the port |
+| `penumbra4_dcache` | answers data lookups with a word, takes stores that hit, carries the data side's accesses | the same, for the data side |
+| `penumbra4_store_buffer` | holds cacheable stores until memory has them | its entries and their order |
+| `penumbra4_uncore` | serves the L1s and the store buffer from the L2 and the external bus | the select, the L2, the bus master, sysreg device 9 |
+
+The two L1s are separate modules over one storage leaf. The fetch side
+reads a line and never stores; the data side reads a word and takes
+stores. A module serving both would tie off half its ports on each
+side.
+
+The L1s, the store buffer and the uncore keep gen3's designs: the
+[L1s' contract with their clients](../penumbra3/l1-cache.md), the
+[core-to-uncore port](../penumbra3/uncore-port.md), the
+[uncore](../penumbra3/uncore.md) and the
+[store buffer](../penumbra3/memory-performance.md#store-buffer-at-the-core-boundary).
+What changes is the fetch side's lookup, which answers with the hit
+way's line.
+
+## The core
+
+```mermaid
+graph LR
+    IF1["IF1<br/>fetch"] --> IF2["IF2<br/>line"]
+    IF2 --> Q{{"fetch queue"}}
+    Q --> ID["ID<br/>issue"]
+    ID --> EX["EX<br/>execute, X and Y"]
+    EX --> MEM1["MEM1<br/>launch"]
+    MEM1 --> MEM2["MEM2<br/>resolve"]
+    MEM2 --> WB["WB<br/>commit"]
+    PR["predictor"] -.->|"prediction"| IF1
+    EX -.->|"training"| PR
+    EX -.->|"misprediction"| IF1
+    WB -.->|"trap, ERET, resync"| IF1
+    RF[("register file")] --> ID
+    WB --> RF
+```
+
+**Stages.** Each owns its output register.
+
+| Stage | Module | Purpose |
+|---|---|---|
+| IF1 | `penumbra4_fetch` | chooses the address fetch reads next and launches its lookup |
+| IF2 | `penumbra4_line` | turns the line the L1-I returns into instructions for the queue |
+| — | `penumbra4_fetch_queue` | holds fetched instructions until issue takes them |
+| ID | `penumbra4_issue` | decides which ops issue and in which slots, and reads their registers |
+| EX | `penumbra4_execute` | computes both ops' results and the access's address, and resolves the transfer |
+| MEM1 | `penumbra4_mem_launch` | launches the access's translation and lookup |
+| MEM2 | `penumbra4_mem_resolve` | takes the access's verdicts and finishes the access or hands it to the L1-D |
+| WB | `penumbra4_commit` | makes the pair's effects architectural, or takes its trap |
+
+**Units** hold no state; a stage instantiates them.
+
+| Unit | Purpose | Where |
+|---|---|---|
+| `penumbra4_predecode` | an instruction's transfer kind and direct target | IF2, one a word of each way |
+| `penumbra4_decode` | an instruction's fields | IF2 or the queue's read side ([open](#open)) |
+| `penumbra4_fuser` | forms ops from adjacent instructions | IF2 or the queue's read side ([open](#open)) |
+| `penumbra4_alu` | one op's result and flags | EX, one a slot |
+| `penumbra4_operands` | each of the four operands and the flags, from the register file or a result in flight | EX |
+| `penumbra4_resolve` | whether a transfer went where fetch predicted, and where it goes | EX, slot Y |
+| `cond_eval` | whether a condition holds for the flags | EX, in resolve |
+| `byte_ext`, `byte_rep` | a loaded sub-word extended, a stored one placed in its lanes | MEM2, MEM1 |
+
+`cond_eval`, `byte_ext` and `byte_rep` are the shared cells, used as
+they are.
+
+**Storage and peers.**
+
+| Module | Purpose | Owns |
+|---|---|---|
+| `penumbra4_predictor` | predicts where each fetched line goes | the direction table, the return stack |
+| `penumbra4_regfile` | the general registers | four read ports, two write ports |
+| `penumbra4_status` | the status and save state | SR, EPC, ESR, the scratch registers |
+| `divmul` | multiplies and divides; the shared unit, used as it is | its sequence |
+| `penumbra4_perfctr` | counts what the core does | the CPU device's counters |
+
+## Behaviours and the parts that carry them
+
+| Behaviour | Carried by | Between them |
+|---|---|---|
+| A fetch the L1-I has no word for | the L1-I takes the access; the fetch unit launches the address again when it is done | busy, done |
+| A prediction | the predictor predicts the line's exit; the fetch unit steers by it | the predicted exit word and target |
+| A misprediction | execute's resolve finds it; the fetch unit steers; each younger stage clears | redirect, kill |
+| A load the L1-D has no word for | MEM2 hands the access to the L1-D as the pair leaves; the pair waits at commit until the L1-D is done | busy, done, word, fault |
+| Entry to an exception | commit decides it and saves the state; the fetch unit reads the vector and fetches from it | the commit redirect and its vector |
+| `ERET`, and a resync after a system write | commit redirects | the commit redirect |
+| An interrupt | commit takes it as a trap ([open](#open)) | |
+| A cacheable store's bus fault | the store buffer reports it; commit takes it at a later instruction | fault and address |
+| A system write with a lasting effect | the device raises busy; the fetch unit launches nothing while it is up | busy |
+
+The fetch unit is the one place that steers. Its sources, in priority:
+commit's redirect, execute's, the vector read, a relaunch after a
+miss, the prediction for the line in IF2, and the next line.
+
+## The stage contract
+
+- **A pair moves as one.** A stage's output register holds two slots
+  and which of them is older. A stage takes or holds the pair, never
+  one slot.
+- **Holds travel back one stage at a time.** A stage holds while its
+  successor holds or while it waits on something of its own, which is
+  a registered busy. No module computes another's hold.
+- **A kill clears the stages younger than its redirect** and never
+  waits on a hold.
+- **One term says the pair leaves the stage,** and every effect the
+  stage has, a write, a request or a count, is gated by it.
+
+## Timing classes
+
+- **R:** straight from a flop.
+- **E:** early, a few LUT levels after flops, such as a mux or a
+  compare of registered fields.
+- **L:** late, behind a block RAM's output, a carry chain or a wide
+  compare.
+
+A late signal ends in a register of the module that takes it, or in a
+block RAM's address. It never passes through that module into a third
+one's decision in the same cycle, as a translation verdict reaching
+another stage's operand mux would.
+
+| From → to | Carries | Class |
+|---|---|---|
+| fetch → L1-I, MMU | the next fetch address | L, ending in the block RAMs' address registers |
+| L1-I, MMU → IF2 | each way's line, the hit, the candidate frames, the fault, cacheability | L |
+| predictor → fetch | the line's predicted exit, its word and target | L, ending in the fetch address |
+| IF2 → queue | up to four instructions and their count | L, ending in the queue |
+| queue → IF2 | room for a line | R |
+| queue → issue | the instructions at the head | E |
+| issue → queue | the instructions taken | E |
+| issue ↔ register file | four read indices, four values | E |
+| stage registers → issue | the writers in flight and when each result can be forwarded | R |
+| issue → execute | the pair | R |
+| execute → fetch, queue, issue | a misprediction's redirect and kill | L ([open](#open)) |
+| execute → predictor | the transfer's PC, outcome and target, for training | R |
+| execute → MEM1 | the pair and the access's address | R |
+| MEM1 → MMU, L1-D | the access's launch | R |
+| MMU, L1-D → MEM2 | the translation verdict, the hit and the word | L |
+| MEM2 → L1-D, store buffer | a store's write, an access | L, ending in the receivers' registers |
+| MEM2 → commit | the pair, its results and faults, whether it waits on an access | R |
+| L1-D → commit | busy, done, the access's word and fault | R |
+| commit → register file, status | two register writes, the flags, the save state | R |
+| commit → fetch, every stage | a trap's, `ERET`'s or a resync's redirect, and its kill | R |
+| commit → MMU | the fault that carries an address, for the fault registers | R |
+| store buffer → commit | a store's bus fault and its address | R |
+| L1s, store buffer ↔ uncore | the [core-to-uncore port](../penumbra3/uncore-port.md) | R |
+| MEM1 → sysreg device → MEM2 | an `RDSYS`'s read, and its data a cycle later | R |
+| execute ↔ `divmul` | start; busy, done and the results | R |
+
+## Payloads
+
+The package holds one type for each thing that crosses a stage:
+
+- **An instruction** in the queue: the word or its decoded fields, its
+  PC, what fetch did after it (went on, or took a predicted target),
+  and its fetch fault.
+- **An op:** one instruction or two fused. Its class, up to two
+  registers read and two written, its flag reads and writes, its
+  immediate, its first PC, its prediction and its fault.
+- **A slot:** an op in a stage, a valid bit, and what the stages so
+  far have computed for it.
+- **A pair:** slots X and Y, and which is older.
+
+Each is a packed struct, and the values inside them have types of
+their own: a virtual and a physical address, a register number, an
+instruction word, a translation's fault. The boundary tables above are
+written in that vocabulary, and so are the ports.
+
+The fetch queue carries its entries as an opaque payload, so where
+decode and the fuser sit changes the front end's wiring and not the
+queue.
+
+## Smallest forms
+
+| Module | Smallest form | Full form |
+|---|---|---|
+| predictor | predicts no exit | direct targets, the direction table, the return stack |
+| L1-I | no arrays: every lookup misses, and each fetch is an access | the cache |
+| L1-D | no arrays: every load is an access, every store is written through | the cache |
+| fetch queue | one line | sixteen entries |
+| fuser | fuses nothing | the four fusions, `addmem`, `addwb` |
+| issue | one op a cycle, in Y, once nothing in flight writes its sources | pairs, and issues through the forwards |
+| operands | the register file's values | forwards from both pipelines |
+| register file | flops | [XOR banks over distributed RAM](./regfile.md#design) |
+| execute, slot X | nothing: issue never fills it | simple ALU ops, shifts and moves |
+| MMU | the full sysreg interface over a small TLB | the board's geometry |
+| store buffer | one entry, held until memory has it | the buffer |
+| uncore | the select and the bus master | with the L2 |
+| perfctr | cycles and retirements | the pairing and wait counters |
+
+The other modules have one form. The smallest machine is single-issue
+and slow, but every boundary in it is the full design's.
+
+## Bring-up
+
+Each step ends with the whole machine flashed and running code on both
+boards: the Nexys Video, whose Artix-7 the design is for, and the
+ULX3S, where it has to run reasonably. Both already carry the machine
+layer.
+
+1. **The smallest machine.** Every module in its smallest form. It
+   passes `isa/` conformance on the RTL runner and runs the ROM
+   monitor and the bare-metal benchmarks on the board. The ISS's
+   `+core=penumbra4` reports its name and geometry.
+2. **The caches and the TLB.** Their full forms, so NetBSD boots on the
+   board at a speed worth working at.
+3. **The cones dual issue rests on.** Each is a module's full form on
+   the running machine, read on the full top of both parts: the
+   register file with the forwards, issue with X filled, the fused
+   compare-and-branch's resolve, the address adder, and the line
+   through IF2 with decode and the fuser. A full form that misses the
+   clock changes its contract here, before the modules around it take
+   their full forms.
+4. **The rest outside the cones:** the predictor, the queue's depth,
+   the store buffer, the L2. These change cycle counts, not
+   boundaries.
+
+## Open
+
+- **The cut itself.** Every module and boundary here is a proposal.
+- **Where decode and the fuser sit:** in IF2 or at the queue's read side
+  ([room for the fuser](./front-end.md#open)).
+- **ID's window:** three instructions when a fused op pairs with a
+  simple one, two when it issues alone. Whether the head fuses with
+  the instruction behind it, and which of those shapes pair, depend
+  only on the instructions, so each can be a bit in the queue entry,
+  made before ID: within a line at IF2 or at the L1-I's fill, across
+  lines when the next line arrives. ID then chooses by registered bits,
+  beside its hazard compares.
+- **The fused compare-and-branch's resolve.** Its condition need not
+  wait for the sum: a compare's Z is the equality of its operands, the
+  Z of an add or a subtract has a test that needs no carry propagation,
+  and N, C and V come off the carry chain. The probe decides whether
+  the resolve and its redirect fit in EX. If they do not, the fused
+  branch resolves in MEM1, the cycle it would resolve unfused, or every
+  EX redirect is registered. A shift's Z comes after the shifter, so a
+  shift may have to stay apart from its `Bcc`.
+- **Another stage between IF1 and EX,** an ID1 for decode and the
+  fuser, or a later resolve. Either adds a cycle to each redirect from
+  EX or commit, and none to a predicted taken branch, which IF2
+  redirects ahead of the queue. With gen3's predictor that is about
+  11 / 6 cycles per 1000 instructions on `pbench kernel` / Doom, plus
+  trap entries and `ERET`s: in gen3's
+  [redirect counts](../penumbra3/branch-prediction.md#the-target-buffer-depends-on-the-if2-redirect),
+  registering the IF2 redirect adds one cycle for each IF2 redirect,
+  and what is left of each row is the EX redirects at four cycles
+  each. A stage ahead of issue holds no op in flight, so adding one
+  changes only which stages a kill clears.
+- **Where an interrupt joins the stream:** on the op entering issue, or
+  at EX. Commit takes it as a trap either way.
+- **A missed load at commit:** whether the pair waiting there holds
+  only the stages behind it, and whose write port the load's word
+  takes when it arrives.
+- **Where a pair waits for `divmul`'s result:** in EX, or at commit
+  beside a missed load.
+- **The commit trace:** a pair commits up to three instructions in a
+  cycle, so the trace needs a lane an op, each naming the instructions
+  it holds, or a lane an instruction. The board tops leave it
+  unconnected; the sim wrappers read it.

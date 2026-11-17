@@ -21,6 +21,8 @@ design starts from numbers when it starts.
 - [`front-end.md`](./front-end.md) — how many instructions a cycle
   fetch has to supply, what the cycle after a taken transfer costs,
   and how far the fuser has to see.
+- [`structure.md`](./structure.md) — the modules gen4 is built from,
+  the boundaries between them, and the order the machine comes up in.
 
 ## Why dual issue
 
@@ -51,6 +53,20 @@ The two reach different cycles. Fusion takes adjacent instructions
 that depend on each other, a second slot adjacent ones that do not:
 together they take 92–98 % of what each takes alone, added
 ([measured](./issue-pairing.md#fusion-and-the-second-slot-add-up)).
+
+## Targets
+
+- **CPI near 1.0, not below it.** A feature is weighed by how far it
+  moves the cycles an instruction takes toward one, against what it
+  costs in timing.
+- **The Artix-7 first.** gen4 is designed for the Artix-7 and larger
+  parts. It also runs on the ECP5, well enough that a ULX3S alone is
+  enough to try the project and experiment with it. Keeping gen3's
+  37.5 MHz there is wanted, but gives way to the design.
+- **Fuse or pair, at the least.** A cycle issues one fused op, two
+  ops, or one. A fused op paired with a simple ALU op is the design
+  wanted, where its timing allows; the ECP5 is where it is least
+  likely to. Two fused ops never pair.
 
 ## The shape
 
@@ -127,6 +143,11 @@ arrives with the two-wide front end that dual issue needs anyway.
 
 ## Open
 
+- **The issue stage the targets ask for is not measured.** The pairing
+  measurements let a fused op pair with any op, a fused one included.
+  Neither the floor, where a fused op issues alone, nor the design
+  wanted, where it pairs only with a simple ALU op, has been run, and
+  the [front end](./front-end.md) is sized for the measured stage.
 - **Stalls.** The pairing measurements count issue slots, and the
   load-use wait is measured for a single-issue core
   ([load-use](./load-use.md)). How waits, misses and redirects interact
