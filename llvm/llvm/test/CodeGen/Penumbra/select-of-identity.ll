@@ -208,8 +208,8 @@ define i32 @select_two_uses(i32 %x, i32 %a, i32 %k, ptr %q) {
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r3, zero
 ; CHECK-NEXT:  .LBB11_2:
-; CHECK-NEXT:    stw r3, [r4 + 0]
 ; CHECK-NEXT:    sub r1, r3
+; CHECK-NEXT:    stw r3, [r4 + 0]
 ; CHECK-NEXT:    jmp lr
   %c = icmp eq i32 %a, 0
   %s = select i1 %c, i32 %k, i32 0

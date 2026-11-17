@@ -10,8 +10,8 @@ define i64 @smax_i64(i64 %a, i64 %b) {
 ; CHECK-LABEL: smax_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r11, r1
 ; CHECK-NEXT:    cmp r3, r1
+; CHECK-NEXT:    mov r11, r1
 ; CHECK-NEXT:    cmpc r4, r2
 ; CHECK-NEXT:    blt .LBB0_2
 ; CHECK-NEXT:  // %bb.1:
@@ -33,8 +33,8 @@ define i64 @umin_i64(i64 %a, i64 %b) {
 ; CHECK-LABEL: umin_i64:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    mov r11, r1
 ; CHECK-NEXT:    cmp r1, r3
+; CHECK-NEXT:    mov r11, r1
 ; CHECK-NEXT:    cmpc r2, r4
 ; CHECK-NEXT:    bcc .LBB1_2
 ; CHECK-NEXT:  // %bb.1:

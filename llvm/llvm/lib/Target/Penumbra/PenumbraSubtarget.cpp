@@ -97,6 +97,12 @@ unsigned PenumbraSubtarget::getWideConstantCycles() const {
   return LLIIssue + Wait + getIssueCycles(*this, Penumbra::LUI);
 }
 
+// The default also demands the scheduler before register allocation, which
+// stays off: it adds instructions and saved registers, and hides no more waits.
+bool PenumbraSubtarget::enablePostRAMachineScheduler() const {
+  return enablePostRAScheduler();
+}
+
 bool PenumbraSubtarget::preferRecomputingWideConstants() const {
   return getWideConstantCycles() <= 2 * getALUCycles();
 }

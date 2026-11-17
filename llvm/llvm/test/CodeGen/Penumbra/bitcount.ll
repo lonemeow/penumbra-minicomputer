@@ -51,14 +51,14 @@ define i32 @test_cttz(i32 %a) {
 ; O1-NEXT:    sub r1, 1
 ; O1-NEXT:    and r1, r2
 ; O1-NEXT:    mov r2, r1
-; O1-NEXT:    shr r2, 1
 ; O1-NEXT:    lli r3, 21845
+; O1-NEXT:    shr r2, 1
 ; O1-NEXT:    lui r3, 21845
 ; O1-NEXT:    and r3, r2
 ; O1-NEXT:    sub r1, r3
 ; O1-NEXT:    mov r2, r1
-; O1-NEXT:    shr r2, 2
 ; O1-NEXT:    lli r3, 13107
+; O1-NEXT:    shr r2, 2
 ; O1-NEXT:    lui r3, 13107
 ; O1-NEXT:    and r2, r3
 ; O1-NEXT:    and r1, r3
@@ -147,14 +147,14 @@ define i32 @test_ctlz(i32 %a) {
 ; O1-NEXT:    shr r2, 16
 ; O1-NEXT:    or r2, r1
 ; O1-NEXT:    mov r1, r2
-; O1-NEXT:    shr r1, 1
 ; O1-NEXT:    lli r3, 21845
+; O1-NEXT:    shr r1, 1
 ; O1-NEXT:    lui r3, 21845
 ; O1-NEXT:    and r3, r1
 ; O1-NEXT:    sub r2, r3
 ; O1-NEXT:    mov r1, r2
-; O1-NEXT:    shr r1, 2
 ; O1-NEXT:    lli r3, 13107
+; O1-NEXT:    shr r1, 2
 ; O1-NEXT:    lui r3, 13107
 ; O1-NEXT:    and r1, r3
 ; O1-NEXT:    and r2, r3
@@ -212,14 +212,14 @@ define i32 @test_ctpop(i32 %a) {
 ; O1:         .cfi_startproc
 ; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    mov r2, r1
-; O1-NEXT:    shr r2, 1
 ; O1-NEXT:    lli r3, 21845
+; O1-NEXT:    shr r2, 1
 ; O1-NEXT:    lui r3, 21845
 ; O1-NEXT:    and r3, r2
 ; O1-NEXT:    sub r1, r3
 ; O1-NEXT:    mov r2, r1
-; O1-NEXT:    shr r2, 2
 ; O1-NEXT:    lli r3, 13107
+; O1-NEXT:    shr r2, 2
 ; O1-NEXT:    lui r3, 13107
 ; O1-NEXT:    and r2, r3
 ; O1-NEXT:    and r1, r3

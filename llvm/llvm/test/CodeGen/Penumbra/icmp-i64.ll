@@ -355,9 +355,9 @@ define void @br_slt_minus_big(i64 %a) {
 ; CHECK-LABEL: br_slt_minus_big:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    llis r3, -1
 ; CHECK-NEXT:    lli r4, 43400
 ; CHECK-NEXT:    lui r4, 60875
+; CHECK-NEXT:    llis r3, -1
 ; CHECK-NEXT:    cmp r1, r4
 ; CHECK-NEXT:    cmpc r2, r3
 ; CHECK-NEXT:    bge .LBB15_2

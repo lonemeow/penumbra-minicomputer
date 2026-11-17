@@ -79,8 +79,8 @@ define ptr @negation_kept(ptr %p, i32 %n, ptr %out) {
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    mov r4, zero
 ; CHECK-NEXT:    sub r4, r2
-; CHECK-NEXT:    stw r4, [r3 + 0]
 ; CHECK-NEXT:    sub r1, r2
+; CHECK-NEXT:    stw r4, [r3 + 0]
 ; CHECK-NEXT:    jmp lr
   %neg = sub i32 0, %n
   store i32 %neg, ptr %out
@@ -97,8 +97,8 @@ define ptr @scaled_kept(ptr %p, i32 %n, ptr %out) {
 ; CHECK-NEXT:    mov r4, zero
 ; CHECK-NEXT:    sub r4, r2
 ; CHECK-NEXT:    shl r4, 2
-; CHECK-NEXT:    stw r4, [r3 + 0]
 ; CHECK-NEXT:    add r1, r4
+; CHECK-NEXT:    stw r4, [r3 + 0]
 ; CHECK-NEXT:    jmp lr
   %neg = sub i32 0, %n
   %off = shl i32 %neg, 2

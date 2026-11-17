@@ -32,8 +32,8 @@ define i32 @strcmp_like(ptr %a, ptr %b) {
 ; CHECK-NEXT:    bne .LBB0_5
 ; CHECK-NEXT:  // %bb.3: // %loop.next
 ; CHECK-NEXT:    // in Loop: Header=BB0_2 Depth=1
-; CHECK-NEXT:    add r2, 1
 ; CHECK-NEXT:    ldb r1, [r3 + 0]
+; CHECK-NEXT:    add r2, 1
 ; CHECK-NEXT:    add r3, 1
 ; CHECK-NEXT:    cmp r1, 0
 ; CHECK-NEXT:    bne .LBB0_2

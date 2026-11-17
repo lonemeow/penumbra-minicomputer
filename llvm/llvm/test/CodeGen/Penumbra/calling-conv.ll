@@ -23,9 +23,9 @@ define i32 @call_four_args(i32 %a, i32 %b, i32 %c, i32 %d) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 4
-; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:    mov r2, r4
+; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    bl extern_func
 ; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    add sp, 4
@@ -40,10 +40,10 @@ define i32 @callee_saved(i32 %a) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 8
+; CHECK-NEXT:    mov r2, r1
 ; CHECK-NEXT:    stw r5, [sp + 4] // 4-byte Folded Spill
 ; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r5, r1
-; CHECK-NEXT:    mov r2, r1
 ; CHECK-NEXT:    bl extern_func
 ; CHECK-NEXT:    mov r2, r5
 ; CHECK-NEXT:    bl extern_func

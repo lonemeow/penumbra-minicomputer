@@ -56,9 +56,9 @@ define i32 @flags_live_at_restore(i32 %a) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 8
+; CHECK-NEXT:    cmp r1, 0
 ; CHECK-NEXT:    stw r5, [sp + 4] // 4-byte Folded Spill
 ; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    cmp r1, 0
 ; CHECK-NEXT:    beq .LBB1_1
 ; CHECK-NEXT:  // %bb.3: // %body
 ; CHECK-NEXT:    bl g
@@ -168,13 +168,13 @@ define i32 @large_frame_r11_dead(i32 %a) {
 ; CHECK-NEXT:    mov r1, sp
 ; CHECK-NEXT:    add r1, 4
 ; CHECK-NEXT:    bl use
-; CHECK-NEXT:    lli r1, 1
 ; CHECK-NEXT:    lli r2, 4468
 ; CHECK-NEXT:    lui r2, 1
 ; CHECK-NEXT:    add r2, sp
 ; CHECK-NEXT:    ldw lr, [r2 + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    lli r11, 4472
 ; CHECK-NEXT:    lui r11, 1
+; CHECK-NEXT:    lli r1, 1
 ; CHECK-NEXT:    add sp, r11
 ; CHECK-NEXT:    jmp lr
 ; CHECK-NEXT:  .LBB3_1: // %early

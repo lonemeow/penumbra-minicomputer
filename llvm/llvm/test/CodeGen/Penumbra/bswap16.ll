@@ -11,15 +11,15 @@ define i16 @bswap16(i16 %x) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    mov r2, r1
-; CHECK-NEXT:    shl r2, 24
 ; CHECK-NEXT:    mov r3, r1
+; CHECK-NEXT:    shl r2, 24
 ; CHECK-NEXT:    shr r3, 24
 ; CHECK-NEXT:    or r3, r2
 ; CHECK-NEXT:    mov r2, r1
 ; CHECK-NEXT:    and r2, 65280
 ; CHECK-NEXT:    shl r2, 8
-; CHECK-NEXT:    or r2, r3
 ; CHECK-NEXT:    shr r1, 8
+; CHECK-NEXT:    or r2, r3
 ; CHECK-NEXT:    and r1, 65280
 ; CHECK-NEXT:    or r1, r2
 ; CHECK-NEXT:    shr r1, 16

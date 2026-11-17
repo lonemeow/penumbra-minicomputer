@@ -56,10 +56,10 @@ define void @call_pair(ptr %out) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 4
-; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r3, r1
 ; CHECK-NEXT:    lli r1, 7
 ; CHECK-NEXT:    lli r2, 8
+; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    bl take_pair
 ; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    add sp, 4

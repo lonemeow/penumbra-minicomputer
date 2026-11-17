@@ -18,8 +18,8 @@ define void @countdown_exit(i32 %start) {
 ; CHECK-NEXT:  // %bb.0: // %entry
 ; CHECK-NEXT:    sub sp, 8
 ; CHECK-NEXT:    stw r5, [sp + 4] // 4-byte Folded Spill
-; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r5, r1
+; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:  .LBB0_1: // %loop
 ; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
 ; CHECK-NEXT:    mov r1, r5
@@ -84,9 +84,9 @@ define void @wide_wrap_carry(ptr %bt, i64 %x) {
 ; CHECK-NEXT:    adc r11, r3
 ; CHECK-NEXT:    mov r2, zero
 ; CHECK-NEXT:    adc r2, zero
+; CHECK-NEXT:    test r2, 1
 ; CHECK-NEXT:    stw r4, [r1 + 0]
 ; CHECK-NEXT:    stw r11, [r1 + 4]
-; CHECK-NEXT:    test r2, 1
 ; CHECK-NEXT:    beq .LBB2_2
 ; CHECK-NEXT:  // %bb.1: // %bump
 ; CHECK-NEXT:    ldw r2, [r1 + 8]

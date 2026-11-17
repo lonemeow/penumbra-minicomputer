@@ -57,8 +57,8 @@ define void @zero_across_call() {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 4
-; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r1, zero
+; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    bl use
 ; CHECK-NEXT:    mov r1, zero
 ; CHECK-NEXT:    bl use

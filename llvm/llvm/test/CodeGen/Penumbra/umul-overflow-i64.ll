@@ -15,28 +15,28 @@ define i64 @umul_overflow_i64_clamp(i64 %a, i64 %b) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 20
+; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    mov lr, r1
 ; CHECK-NEXT:    stw r5, [sp + 16] // 4-byte Folded Spill
 ; CHECK-NEXT:    stw r6, [sp + 12] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r7, [sp + 8] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r8, [sp + 4] // 4-byte Folded Spill
-; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r5, r2
-; CHECK-NEXT:    mul r5, r3
 ; CHECK-NEXT:    mov r6, r1
-; CHECK-NEXT:    mul r6, r4
-; CHECK-NEXT:    mov lr, r1
 ; CHECK-NEXT:    mulu lr, r3, r11
+; CHECK-NEXT:    mul r5, r3
+; CHECK-NEXT:    mul r6, r4
 ; CHECK-NEXT:    add r6, r5
 ; CHECK-NEXT:    mov r5, zero
 ; CHECK-NEXT:    adc r5, zero
 ; CHECK-NEXT:    add r6, r11
 ; CHECK-NEXT:    mov r6, zero
 ; CHECK-NEXT:    adc r6, zero
+; CHECK-NEXT:    stw r8, [sp + 4] // 4-byte Folded Spill
 ; CHECK-NEXT:    add r6, r5
 ; CHECK-NEXT:    mov r5, r2
-; CHECK-NEXT:    mulu r5, r4, r7
 ; CHECK-NEXT:    mulu r2, r3, r8
 ; CHECK-NEXT:    mulu r1, r4, r3
+; CHECK-NEXT:    stw r7, [sp + 8] // 4-byte Folded Spill
+; CHECK-NEXT:    mulu r5, r4, r7
 ; CHECK-NEXT:    add r8, r5
 ; CHECK-NEXT:    mov r4, zero
 ; CHECK-NEXT:    adc r4, zero
@@ -63,13 +63,13 @@ define i64 @umul_overflow_i64_clamp(i64 %a, i64 %b) {
 ; CHECK-NEXT:    add r2, r11
 ; CHECK-NEXT:    mov r4, r2
 ; CHECK-NEXT:  .LBB0_4:
-; CHECK-NEXT:    mov r1, r3
-; CHECK-NEXT:    mov r2, r4
 ; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    ldw r8, [sp + 4] // 4-byte Folded Reload
 ; CHECK-NEXT:    ldw r7, [sp + 8] // 4-byte Folded Reload
 ; CHECK-NEXT:    ldw r6, [sp + 12] // 4-byte Folded Reload
 ; CHECK-NEXT:    ldw r5, [sp + 16] // 4-byte Folded Reload
+; CHECK-NEXT:    mov r1, r3
+; CHECK-NEXT:    mov r2, r4
 ; CHECK-NEXT:    add sp, 20
 ; CHECK-NEXT:    jmp lr
   %t = call {i64, i1} @llvm.umul.with.overflow.i64(i64 %a, i64 %b)
@@ -84,14 +84,14 @@ define i1 @umul_overflow_i64_flag(i64 %a, i64 %b) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 12
-; CHECK-NEXT:    stw r5, [sp + 8] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r6, [sp + 4] // 4-byte Folded Spill
-; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r11, r2
+; CHECK-NEXT:    stw r5, [sp + 8] // 4-byte Folded Spill
+; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mulu r11, r3, r5
 ; CHECK-NEXT:    mov lr, r1
-; CHECK-NEXT:    mulu lr, r4, r6
 ; CHECK-NEXT:    mulu r1, r3, r3
+; CHECK-NEXT:    stw r6, [sp + 4] // 4-byte Folded Spill
+; CHECK-NEXT:    mulu lr, r4, r6
 ; CHECK-NEXT:    add lr, r11
 ; CHECK-NEXT:    mov r1, zero
 ; CHECK-NEXT:    adc r1, zero
@@ -115,11 +115,11 @@ define i1 @umul_overflow_i64_flag(i64 %a, i64 %b) {
 ; CHECK-NEXT:    or r3, r2
 ; CHECK-NEXT:    cmp zero, r3
 ; CHECK-NEXT:    mov r1, zero
-; CHECK-NEXT:    sbc r1, zero
-; CHECK-NEXT:    and r1, 1
 ; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    ldw r6, [sp + 4] // 4-byte Folded Reload
 ; CHECK-NEXT:    ldw r5, [sp + 8] // 4-byte Folded Reload
+; CHECK-NEXT:    sbc r1, zero
+; CHECK-NEXT:    and r1, 1
 ; CHECK-NEXT:    add sp, 12
 ; CHECK-NEXT:    jmp lr
   %t = call {i64, i1} @llvm.umul.with.overflow.i64(i64 %a, i64 %b)

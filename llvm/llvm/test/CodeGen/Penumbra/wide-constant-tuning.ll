@@ -96,8 +96,8 @@ define i32 @penumbra2_5(i32 %a, i32 %b, ptr %p) #2 {
 ; CHECK-NEXT:  .LBB2_1: // %l
 ; CHECK-NEXT:    stw r4, [r3 + 0]
 ; CHECK-NEXT:  .LBB2_3: // %join
-; CHECK-NEXT:    add r2, r4
 ; CHECK-NEXT:    lli r1, 22136
+; CHECK-NEXT:    add r2, r4
 ; CHECK-NEXT:    lui r1, 4660
 ; CHECK-NEXT:    add r1, r2
 ; CHECK-NEXT:    jmp lr

@@ -12,11 +12,11 @@ define i8 @fshl_i8(i8 %a, i8 %b, i8 %sh) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    not r4, r3
+; CHECK-NEXT:    and r2, 255
 ; CHECK-NEXT:    and r3, 7
 ; CHECK-NEXT:    and r4, 7
-; CHECK-NEXT:    shl r1, r3
-; CHECK-NEXT:    and r2, 255
 ; CHECK-NEXT:    shr r2, 1
+; CHECK-NEXT:    shl r1, r3
 ; CHECK-NEXT:    shr r2, r4
 ; CHECK-NEXT:    or r1, r2
 ; CHECK-NEXT:    jmp lr
@@ -31,11 +31,11 @@ define i16 @fshl_i16(i16 %a, i16 %b, i16 %sh) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    not r4, r3
+; CHECK-NEXT:    and r2, 65535
 ; CHECK-NEXT:    and r3, 15
 ; CHECK-NEXT:    and r4, 15
-; CHECK-NEXT:    shl r1, r3
-; CHECK-NEXT:    and r2, 65535
 ; CHECK-NEXT:    shr r2, 1
+; CHECK-NEXT:    shl r1, r3
 ; CHECK-NEXT:    shr r2, r4
 ; CHECK-NEXT:    or r1, r2
 ; CHECK-NEXT:    jmp lr
@@ -52,8 +52,8 @@ define i32 @fshl_i32(i32 %a, i32 %b, i32 %sh) {
 ; CHECK-NEXT:    not r4, r3
 ; CHECK-NEXT:    and r3, 31
 ; CHECK-NEXT:    and r4, 31
-; CHECK-NEXT:    shl r1, r3
 ; CHECK-NEXT:    shr r2, 1
+; CHECK-NEXT:    shl r1, r3
 ; CHECK-NEXT:    shr r2, r4
 ; CHECK-NEXT:    or r1, r2
 ; CHECK-NEXT:    jmp lr
@@ -87,14 +87,14 @@ define i64 @fshl_i64(i64 %a, i64 %b, i64 %sh) {
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 16
 ; CHECK-NEXT:    stw r5, [sp + 12] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r6, [sp + 8] // 4-byte Folded Spill
-; CHECK-NEXT:    stw r7, [sp + 4] // 4-byte Folded Spill
-; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    mov r11, r1
 ; CHECK-NEXT:    ldw r5, [sp + 16]
+; CHECK-NEXT:    stw r6, [sp + 8] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r6, r5
 ; CHECK-NEXT:    and r6, 63
+; CHECK-NEXT:    mov r11, r1
 ; CHECK-NEXT:    cmp r6, 32
+; CHECK-NEXT:    stw r7, [sp + 4] // 4-byte Folded Spill
+; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    bcc .LBB4_1
 ; CHECK-NEXT:  // %bb.2:
 ; CHECK-NEXT:    mov r1, zero
@@ -115,8 +115,8 @@ define i64 @fshl_i64(i64 %a, i64 %b, i64 %sh) {
 ; CHECK-NEXT:  .LBB4_4:
 ; CHECK-NEXT:    lli r7, 32
 ; CHECK-NEXT:    sub r7, r6
-; CHECK-NEXT:    shr r11, r7
 ; CHECK-NEXT:    mov lr, r2
+; CHECK-NEXT:    shr r11, r7
 ; CHECK-NEXT:    shl lr, r6
 ; CHECK-NEXT:    or lr, r11
 ; CHECK-NEXT:  .LBB4_6:
@@ -126,8 +126,8 @@ define i64 @fshl_i64(i64 %a, i64 %b, i64 %sh) {
 ; CHECK-NEXT:  // %bb.7:
 ; CHECK-NEXT:    mov r2, lr
 ; CHECK-NEXT:  .LBB4_8:
-; CHECK-NEXT:    shr r3, 1
 ; CHECK-NEXT:    mov r11, r4
+; CHECK-NEXT:    shr r3, 1
 ; CHECK-NEXT:    shl r11, 31
 ; CHECK-NEXT:    or r11, r3
 ; CHECK-NEXT:    shr r4, 1
@@ -145,8 +145,8 @@ define i64 @fshl_i64(i64 %a, i64 %b, i64 %sh) {
 ; CHECK-NEXT:    lli r6, 32
 ; CHECK-NEXT:    sub r6, r5
 ; CHECK-NEXT:    mov lr, r11
-; CHECK-NEXT:    shr lr, r5
 ; CHECK-NEXT:    mov r3, r4
+; CHECK-NEXT:    shr lr, r5
 ; CHECK-NEXT:    shl r3, r6
 ; CHECK-NEXT:    or r3, lr
 ; CHECK-NEXT:    cmp r5, 0
@@ -162,12 +162,12 @@ define i64 @fshl_i64(i64 %a, i64 %b, i64 %sh) {
 ; CHECK-NEXT:  .LBB4_14:
 ; CHECK-NEXT:    shr r4, r5
 ; CHECK-NEXT:  .LBB4_16:
-; CHECK-NEXT:    or r1, r11
-; CHECK-NEXT:    or r2, r4
 ; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    ldw r7, [sp + 4] // 4-byte Folded Reload
 ; CHECK-NEXT:    ldw r6, [sp + 8] // 4-byte Folded Reload
 ; CHECK-NEXT:    ldw r5, [sp + 12] // 4-byte Folded Reload
+; CHECK-NEXT:    or r1, r11
+; CHECK-NEXT:    or r2, r4
 ; CHECK-NEXT:    add sp, 16
 ; CHECK-NEXT:    jmp lr
   %r = call i64 @llvm.fshl.i64(i64 %a, i64 %b, i64 %sh)
@@ -181,15 +181,15 @@ define i32 @bswap_i32(i32 %a) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    mov r2, r1
-; CHECK-NEXT:    shl r2, 24
 ; CHECK-NEXT:    mov r3, r1
+; CHECK-NEXT:    shl r2, 24
 ; CHECK-NEXT:    shr r3, 24
 ; CHECK-NEXT:    or r3, r2
 ; CHECK-NEXT:    mov r2, r1
 ; CHECK-NEXT:    and r2, 65280
 ; CHECK-NEXT:    shl r2, 8
-; CHECK-NEXT:    or r2, r3
 ; CHECK-NEXT:    shr r1, 8
+; CHECK-NEXT:    or r2, r3
 ; CHECK-NEXT:    and r1, 65280
 ; CHECK-NEXT:    or r1, r2
 ; CHECK-NEXT:    jmp lr
@@ -204,27 +204,27 @@ define i64 @bswap_i64(i64 %a) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    mov r3, r2
-; CHECK-NEXT:    shl r3, 24
 ; CHECK-NEXT:    mov r4, r2
+; CHECK-NEXT:    shl r3, 24
 ; CHECK-NEXT:    shr r4, 24
 ; CHECK-NEXT:    or r4, r3
 ; CHECK-NEXT:    mov r3, r2
 ; CHECK-NEXT:    and r3, 65280
 ; CHECK-NEXT:    shl r3, 8
-; CHECK-NEXT:    or r3, r4
 ; CHECK-NEXT:    shr r2, 8
+; CHECK-NEXT:    or r3, r4
 ; CHECK-NEXT:    and r2, 65280
 ; CHECK-NEXT:    or r3, r2
 ; CHECK-NEXT:    mov r2, r1
-; CHECK-NEXT:    shl r2, 24
 ; CHECK-NEXT:    mov r4, r1
+; CHECK-NEXT:    shl r2, 24
 ; CHECK-NEXT:    shr r4, 24
 ; CHECK-NEXT:    or r4, r2
 ; CHECK-NEXT:    mov r2, r1
 ; CHECK-NEXT:    and r2, 65280
 ; CHECK-NEXT:    shl r2, 8
-; CHECK-NEXT:    or r2, r4
 ; CHECK-NEXT:    shr r1, 8
+; CHECK-NEXT:    or r2, r4
 ; CHECK-NEXT:    and r1, 65280
 ; CHECK-NEXT:    or r2, r1
 ; CHECK-NEXT:    mov r1, r3

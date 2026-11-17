@@ -16,9 +16,9 @@ define void @bit_test_live(i32 %flags) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0: // %entry
 ; CHECK-NEXT:    sub sp, 8
+; CHECK-NEXT:    test r1, 4
 ; CHECK-NEXT:    stw r5, [sp + 4] // 4-byte Folded Spill
 ; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    test r1, 4
 ; CHECK-NEXT:    beq .LBB0_2
 ; CHECK-NEXT:  // %bb.1: // %t1
 ; CHECK-NEXT:    mov r5, r1

@@ -45,8 +45,8 @@ define void @memcpy_decr_loop(ptr %dst, ptr %src, i32 %n) {
 ; CHECK-NEXT:  .LBB1_1: // %loop
 ; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
 ; CHECK-NEXT:    ldb r4, [r2 + 0]
-; CHECK-NEXT:    stb r4, [r1 + 0]
 ; CHECK-NEXT:    add r2, 1
+; CHECK-NEXT:    stb r4, [r1 + 0]
 ; CHECK-NEXT:    add r1, 1
 ; CHECK-NEXT:    sub r3, 1
 ; CHECK-NEXT:    bne .LBB1_1
@@ -81,8 +81,8 @@ define i32 @no_elide_value_used_between(i32 %n, ptr %out) {
 ; CHECK-NEXT:    mov r3, r1
 ; CHECK-NEXT:  .LBB2_1: // %loop
 ; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
-; CHECK-NEXT:    stw r1, [r2 + 0]
 ; CHECK-NEXT:    sub r3, 1
+; CHECK-NEXT:    stw r1, [r2 + 0]
 ; CHECK-NEXT:    cmp r1, 0
 ; CHECK-NEXT:    mov r1, r3
 ; CHECK-NEXT:    bne .LBB2_1
@@ -111,8 +111,8 @@ define void @no_elide_carry_read_in_gap(i64 %x, ptr %p, ptr %q) {
 ; CHECK-NEXT:  // %bb.0: // %entry
 ; CHECK-NEXT:    sub r1, 1
 ; CHECK-NEXT:    sbc r2, zero
-; CHECK-NEXT:    stw r2, [r3 + 0]
 ; CHECK-NEXT:    cmp r1, 0
+; CHECK-NEXT:    stw r2, [r3 + 0]
 ; CHECK-NEXT:    beq .LBB3_1
 ; CHECK-NEXT:  // %bb.2: // %b
 ; CHECK-NEXT:    jmp lr

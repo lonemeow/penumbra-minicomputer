@@ -33,15 +33,15 @@ define i64 @mul_i64(i64 %a, i64 %b) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 4
-; CHECK-NEXT:    stw r5, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r11, r1
+; CHECK-NEXT:    stw r5, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mulu r11, r3, r5
 ; CHECK-NEXT:    mul r2, r3
 ; CHECK-NEXT:    mul r4, r1
 ; CHECK-NEXT:    add r2, r4
 ; CHECK-NEXT:    add r2, r5
-; CHECK-NEXT:    mov r1, r11
 ; CHECK-NEXT:    ldw r5, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    mov r1, r11
 ; CHECK-NEXT:    add sp, 4
 ; CHECK-NEXT:    jmp lr
   %r = mul i64 %a, %b

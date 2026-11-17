@@ -14,11 +14,11 @@ define i32 @first_vararg(i32 %named, ...) {
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 20
 ; CHECK-NEXT:    stw r1, [sp + 4]
+; CHECK-NEXT:    mov r1, sp
+; CHECK-NEXT:    add r1, 8
 ; CHECK-NEXT:    stw r2, [sp + 8]
 ; CHECK-NEXT:    stw r3, [sp + 12]
 ; CHECK-NEXT:    stw r4, [sp + 16]
-; CHECK-NEXT:    mov r1, sp
-; CHECK-NEXT:    add r1, 8
 ; CHECK-NEXT:    stw r1, [sp + 0]
 ; CHECK-NEXT:    ldw r2, [sp + 0]
 ; CHECK-NEXT:    ldw r1, [r2 + 0]
@@ -40,11 +40,11 @@ define i32 @multi_named(i32 %a, i32 %b, i32 %c, ...) {
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 20
 ; CHECK-NEXT:    stw r1, [sp + 4]
+; CHECK-NEXT:    mov r1, sp
+; CHECK-NEXT:    add r1, 16
 ; CHECK-NEXT:    stw r2, [sp + 8]
 ; CHECK-NEXT:    stw r3, [sp + 12]
 ; CHECK-NEXT:    stw r4, [sp + 16]
-; CHECK-NEXT:    mov r1, sp
-; CHECK-NEXT:    add r1, 16
 ; CHECK-NEXT:    stw r1, [sp + 0]
 ; CHECK-NEXT:    ldw r2, [sp + 0]
 ; CHECK-NEXT:    ldw r1, [r2 + 0]
@@ -69,11 +69,11 @@ define i32 @many_named(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e, i32 %f, ...) {
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 20
 ; CHECK-NEXT:    stw r1, [sp + 4]
+; CHECK-NEXT:    mov r1, sp
+; CHECK-NEXT:    add r1, 28
 ; CHECK-NEXT:    stw r2, [sp + 8]
 ; CHECK-NEXT:    stw r3, [sp + 12]
 ; CHECK-NEXT:    stw r4, [sp + 16]
-; CHECK-NEXT:    mov r1, sp
-; CHECK-NEXT:    add r1, 28
 ; CHECK-NEXT:    stw r1, [sp + 0]
 ; CHECK-NEXT:    ldw r2, [sp + 0]
 ; CHECK-NEXT:    ldw r1, [r2 + 0]
@@ -98,11 +98,11 @@ define i64 @vaarg_i64(i32 %named, ...) {
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 20
 ; CHECK-NEXT:    stw r1, [sp + 4]
+; CHECK-NEXT:    mov r1, sp
+; CHECK-NEXT:    add r1, 8
 ; CHECK-NEXT:    stw r2, [sp + 8]
 ; CHECK-NEXT:    stw r3, [sp + 12]
 ; CHECK-NEXT:    stw r4, [sp + 16]
-; CHECK-NEXT:    mov r1, sp
-; CHECK-NEXT:    add r1, 8
 ; CHECK-NEXT:    stw r1, [sp + 0]
 ; CHECK-NEXT:    ldw r3, [sp + 0]
 ; CHECK-NEXT:    ldw r1, [r3 + 0]
@@ -130,11 +130,11 @@ define i32 @wide_named_all_regs(i64 %a, i64 %b, ...) {
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 20
 ; CHECK-NEXT:    stw r1, [sp + 4]
+; CHECK-NEXT:    mov r1, sp
+; CHECK-NEXT:    add r1, 20
 ; CHECK-NEXT:    stw r2, [sp + 8]
 ; CHECK-NEXT:    stw r3, [sp + 12]
 ; CHECK-NEXT:    stw r4, [sp + 16]
-; CHECK-NEXT:    mov r1, sp
-; CHECK-NEXT:    add r1, 20
 ; CHECK-NEXT:    stw r1, [sp + 0]
 ; CHECK-NEXT:    ldw r2, [sp + 0]
 ; CHECK-NEXT:    ldw r1, [r2 + 0]
@@ -160,11 +160,11 @@ define i32 @many_named_i64(i32 %a, i32 %b, i32 %c, i32 %d, i64 %e, i32 %f, ...) 
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 20
 ; CHECK-NEXT:    stw r1, [sp + 4]
+; CHECK-NEXT:    mov r1, sp
+; CHECK-NEXT:    add r1, 32
 ; CHECK-NEXT:    stw r2, [sp + 8]
 ; CHECK-NEXT:    stw r3, [sp + 12]
 ; CHECK-NEXT:    stw r4, [sp + 16]
-; CHECK-NEXT:    mov r1, sp
-; CHECK-NEXT:    add r1, 32
 ; CHECK-NEXT:    stw r1, [sp + 0]
 ; CHECK-NEXT:    ldw r2, [sp + 0]
 ; CHECK-NEXT:    ldw r1, [r2 + 0]
@@ -188,24 +188,24 @@ define i32 @sum_counted(i32 %n, ...) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0: // %entry
 ; CHECK-NEXT:    sub sp, 20
-; CHECK-NEXT:    stw r1, [sp + 4]
 ; CHECK-NEXT:    stw r2, [sp + 8]
-; CHECK-NEXT:    stw r3, [sp + 12]
-; CHECK-NEXT:    stw r4, [sp + 16]
 ; CHECK-NEXT:    mov r2, sp
 ; CHECK-NEXT:    add r2, 8
 ; CHECK-NEXT:    stw r2, [sp + 0]
-; CHECK-NEXT:    mov r2, zero
 ; CHECK-NEXT:    cmp r1, 0
+; CHECK-NEXT:    mov r2, zero
+; CHECK-NEXT:    stw r1, [sp + 4]
+; CHECK-NEXT:    stw r3, [sp + 12]
+; CHECK-NEXT:    stw r4, [sp + 16]
 ; CHECK-NEXT:    beq .LBB6_2
 ; CHECK-NEXT:  .LBB6_1: // %loop
 ; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
 ; CHECK-NEXT:    ldw r3, [sp + 0]
 ; CHECK-NEXT:    ldw r4, [r3 + 0]
 ; CHECK-NEXT:    add r3, 4
-; CHECK-NEXT:    stw r3, [sp + 0]
 ; CHECK-NEXT:    add r2, r4
 ; CHECK-NEXT:    sub r1, 1
+; CHECK-NEXT:    stw r3, [sp + 0]
 ; CHECK-NEXT:    bne .LBB6_1
 ; CHECK-NEXT:  .LBB6_2: // %done
 ; CHECK-NEXT:    mov r1, r2

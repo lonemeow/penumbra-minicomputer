@@ -14,12 +14,12 @@ define i32 @inst_check_f(i32 %m) {
 ; CHECK-NEXT:    ble .LBB0_1
 ; CHECK-NEXT:  // %bb.2: // %loop
 ; CHECK-NEXT:    mov r2, r1
-; CHECK-NEXT:    sub r2, 1
 ; CHECK-NEXT:    mov r3, r1
+; CHECK-NEXT:    sub r2, 1
 ; CHECK-NEXT:    sub r3, 2
 ; CHECK-NEXT:    mulu r3, r2, r2
-; CHECK-NEXT:    and r2, 1
 ; CHECK-NEXT:    shr r3, 1
+; CHECK-NEXT:    and r2, 1
 ; CHECK-NEXT:    shl r2, 31
 ; CHECK-NEXT:    or r2, r3
 ; CHECK-NEXT:    add r2, r1

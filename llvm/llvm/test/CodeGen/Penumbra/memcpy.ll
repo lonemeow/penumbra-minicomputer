@@ -99,8 +99,8 @@ define void @test_memcpy_small(ptr %dst, ptr %src) {
 ; O1:         .cfi_startproc
 ; O1-NEXT:  // %bb.0:
 ; O1-NEXT:    sub sp, 4
-; O1-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; O1-NEXT:    lli r3, 8
+; O1-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; O1-NEXT:    bl memcpy
 ; O1-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
 ; O1-NEXT:    add sp, 4

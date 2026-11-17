@@ -143,9 +143,9 @@ define i16 @srem_i16_7(i16 %x) {
 ; FASTMUL-LABEL: srem_i16_7:
 ; FASTMUL:         .cfi_startproc
 ; FASTMUL-NEXT:  // %bb.0:
-; FASTMUL-NEXT:    lli r2, 18725
 ; FASTMUL-NEXT:    mov r3, r1
 ; FASTMUL-NEXT:    shl r3, 16
+; FASTMUL-NEXT:    lli r2, 18725
 ; FASTMUL-NEXT:    sar r3, 16
 ; FASTMUL-NEXT:    mul r3, r2
 ; FASTMUL-NEXT:    sar r3, 16
@@ -253,9 +253,9 @@ define i64 @sdiv64_10(i64 %x) {
 ; FASTMUL:         .cfi_startproc
 ; FASTMUL-NEXT:  // %bb.0:
 ; FASTMUL-NEXT:    sub sp, 4
-; FASTMUL-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; FASTMUL-NEXT:    lli r3, 10
 ; FASTMUL-NEXT:    mov r4, zero
+; FASTMUL-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; FASTMUL-NEXT:    bl __divdi3
 ; FASTMUL-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
 ; FASTMUL-NEXT:    add sp, 4
@@ -282,9 +282,9 @@ define i64 @udiv64_10(i64 %x) {
 ; FASTMUL:         .cfi_startproc
 ; FASTMUL-NEXT:  // %bb.0:
 ; FASTMUL-NEXT:    sub sp, 4
-; FASTMUL-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; FASTMUL-NEXT:    lli r3, 10
 ; FASTMUL-NEXT:    mov r4, zero
+; FASTMUL-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; FASTMUL-NEXT:    bl __udivdi3
 ; FASTMUL-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
 ; FASTMUL-NEXT:    add sp, 4

@@ -96,6 +96,12 @@ public:
   // live, as the tuned core's timing answers it.
   bool preferRecomputingWideConstants() const;
 
+  bool enablePostRAMachineScheduler() const override;
+
+  // Alias analysis trusts every memory operand: one the backend builds must
+  // describe its access exactly or name no value.
+  bool useAA() const override { return true; }
+
   const PenumbraInstrInfo *getInstrInfo() const override { return &InstrInfo; }
   const PenumbraFrameLowering *getFrameLowering() const override {
     return &FrameLowering;

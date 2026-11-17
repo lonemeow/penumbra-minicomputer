@@ -68,7 +68,6 @@ define i64 @ssub_sat_i64(i64 %a, i64 %b) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 4
-; CHECK-NEXT:    stw r5, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    sub r1, r3
 ; CHECK-NEXT:    mov r3, zero
 ; CHECK-NEXT:    sbc r3, zero
@@ -76,14 +75,15 @@ define i64 @ssub_sat_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    add r3, r4
 ; CHECK-NEXT:    mov r11, r2
 ; CHECK-NEXT:    sub r11, r3
+; CHECK-NEXT:    mov r3, r11
 ; CHECK-NEXT:    xor r4, r2
 ; CHECK-NEXT:    xor r2, r11
-; CHECK-NEXT:    and r2, r4
-; CHECK-NEXT:    mov r3, r11
 ; CHECK-NEXT:    sar r3, 31
+; CHECK-NEXT:    stw r5, [sp + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    and r2, r4
 ; CHECK-NEXT:    lli r5, 0
-; CHECK-NEXT:    lui r5, 32768
 ; CHECK-NEXT:    mov r4, r3
+; CHECK-NEXT:    lui r5, 32768
 ; CHECK-NEXT:    add r4, 0
 ; CHECK-NEXT:    adc r3, r5
 ; CHECK-NEXT:    cmp r2, 0
@@ -96,9 +96,9 @@ define i64 @ssub_sat_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:  // %bb.3:
 ; CHECK-NEXT:    mov r3, r11
 ; CHECK-NEXT:  .LBB2_4:
+; CHECK-NEXT:    ldw r5, [sp + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    mov r1, r4
 ; CHECK-NEXT:    mov r2, r3
-; CHECK-NEXT:    ldw r5, [sp + 0] // 4-byte Folded Reload
 ; CHECK-NEXT:    add sp, 4
 ; CHECK-NEXT:    jmp lr
   %r = call i64 @llvm.ssub.sat.i64(i64 %a, i64 %b)
@@ -111,11 +111,10 @@ define i64 @sadd_sat_i64(i64 %a, i64 %b) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 4
-; CHECK-NEXT:    stw r5, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    add r3, r1
 ; CHECK-NEXT:    mov r1, zero
-; CHECK-NEXT:    adc r1, zero
 ; CHECK-NEXT:    mov r11, r2
+; CHECK-NEXT:    adc r1, zero
 ; CHECK-NEXT:    add r11, r4
 ; CHECK-NEXT:    add r11, r1
 ; CHECK-NEXT:    xor r2, r11
@@ -123,9 +122,10 @@ define i64 @sadd_sat_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    and r4, r2
 ; CHECK-NEXT:    mov r2, r11
 ; CHECK-NEXT:    sar r2, 31
+; CHECK-NEXT:    stw r5, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    lli r5, 0
-; CHECK-NEXT:    lui r5, 32768
 ; CHECK-NEXT:    mov r1, r2
+; CHECK-NEXT:    lui r5, 32768
 ; CHECK-NEXT:    add r1, 0
 ; CHECK-NEXT:    adc r2, r5
 ; CHECK-NEXT:    cmp r4, 0
@@ -174,10 +174,10 @@ define i64 @bavail_i64(i64 %bfree, i64 %bresvd) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 4
-; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r11, r1
-; CHECK-NEXT:    mov lr, r2
 ; CHECK-NEXT:    sub r1, r3
+; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
+; CHECK-NEXT:    mov lr, r2
 ; CHECK-NEXT:    sbc r2, r4
 ; CHECK-NEXT:    cmp r3, r11
 ; CHECK-NEXT:    cmpc r4, lr

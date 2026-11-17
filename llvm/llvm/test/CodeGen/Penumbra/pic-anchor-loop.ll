@@ -16,25 +16,25 @@ define void @lookup_row(ptr %dst, ptr %src, i32 %n) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0: // %entry
 ; CHECK-NEXT:    sub sp, 8
-; CHECK-NEXT:    stw r5, [sp + 4] // 4-byte Folded Spill
-; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    lli r4, %pcrel_lo16(table-.LPC0_0)
 ; CHECK-NEXT:    lui r4, %pcrel_hi16(table-.LPC0_0)
 ; CHECK-NEXT:  .LPC0_0:
 ; CHECK-NEXT:    add r4, pc
 ; CHECK-NEXT:    mov r11, zero
+; CHECK-NEXT:    stw r5, [sp + 4] // 4-byte Folded Spill
+; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:  .LBB0_1: // %loop
 ; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
 ; CHECK-NEXT:    mov lr, r2
 ; CHECK-NEXT:    add lr, r11
 ; CHECK-NEXT:    ldb r5, [lr + 0]
+; CHECK-NEXT:    mov lr, r1
 ; CHECK-NEXT:    add r5, r4
 ; CHECK-NEXT:    ldb r5, [r5 + 0]
-; CHECK-NEXT:    mov lr, r1
 ; CHECK-NEXT:    add lr, r11
-; CHECK-NEXT:    stb r5, [lr + 0]
 ; CHECK-NEXT:    add r11, 1
 ; CHECK-NEXT:    cmp r11, r3
+; CHECK-NEXT:    stb r5, [lr + 0]
 ; CHECK-NEXT:    bcc .LBB0_1
 ; CHECK-NEXT:  // %bb.2: // %exit
 ; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
@@ -66,26 +66,26 @@ define void @lookup_row_got(ptr %dst, ptr %src, i32 %n) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0: // %entry
 ; CHECK-NEXT:    sub sp, 8
-; CHECK-NEXT:    stw r5, [sp + 4] // 4-byte Folded Spill
-; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    lli r4, %got_pcrel_lo16(gtable-.LPC1_0)
 ; CHECK-NEXT:    lui r4, %got_pcrel_hi16(gtable-.LPC1_0)
 ; CHECK-NEXT:  .LPC1_0:
 ; CHECK-NEXT:    add r4, pc
 ; CHECK-NEXT:    ldw r4, [r4 + 0]
 ; CHECK-NEXT:    mov r11, zero
+; CHECK-NEXT:    stw r5, [sp + 4] // 4-byte Folded Spill
+; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:  .LBB1_1: // %loop
 ; CHECK-NEXT:    // =>This Inner Loop Header: Depth=1
 ; CHECK-NEXT:    mov lr, r2
 ; CHECK-NEXT:    add lr, r11
 ; CHECK-NEXT:    ldb r5, [lr + 0]
+; CHECK-NEXT:    mov lr, r1
 ; CHECK-NEXT:    add r5, r4
 ; CHECK-NEXT:    ldb r5, [r5 + 0]
-; CHECK-NEXT:    mov lr, r1
 ; CHECK-NEXT:    add lr, r11
-; CHECK-NEXT:    stb r5, [lr + 0]
 ; CHECK-NEXT:    add r11, 1
 ; CHECK-NEXT:    cmp r11, r3
+; CHECK-NEXT:    stb r5, [lr + 0]
 ; CHECK-NEXT:    bcc .LBB1_1
 ; CHECK-NEXT:  // %bb.2: // %exit
 ; CHECK-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload

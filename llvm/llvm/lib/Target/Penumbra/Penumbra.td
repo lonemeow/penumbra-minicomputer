@@ -65,6 +65,10 @@ class PenumbraSchedModel : SchedMachineModel {
   let CompleteModel = 0;         // Don't require itineraries for every opcode
 }
 
+// Only a pipelined core makes a reader wait for its operand, so only there
+// does reordering after register allocation pay.
+class PenumbraPipelinedModel : PenumbraSchedModel { let PostRAScheduler = 1; }
+
 // A model states the figures the timing reference
 // (doc/system/instruction-timing.md) gives an instruction: its issue, the
 // cycles it holds the core, and for one that writes a register its latency,
@@ -117,7 +121,7 @@ let SchedModel = Penumbra1Model in {
 // instruction.  Penumbra/2 has no forwarding, so a reader waits for its
 // producer to leave WB.  Penumbra/2.5 forwards every result but a MUL's or
 // DIV's high half, which arrives as late as on Penumbra/2.
-def Penumbra2Model : PenumbraSchedModel;
+def Penumbra2Model : PenumbraPipelinedModel;
 let SchedModel = Penumbra2Model in {
   def Penumbra2Core : PenumbraCore;
   def : PenumbraResult<WriteALU, Penumbra2Core, 1, 4>;
@@ -130,7 +134,7 @@ let SchedModel = Penumbra2Model in {
   def : ReadAdvance<ReadALU, 0>;
 }
 
-def Penumbra2_5Model : PenumbraSchedModel;
+def Penumbra2_5Model : PenumbraPipelinedModel;
 let SchedModel = Penumbra2_5Model in {
   def Penumbra2_5Core : PenumbraCore;
   def : PenumbraResult<WriteALU, Penumbra2_5Core, 1, 1>;
@@ -146,7 +150,7 @@ let SchedModel = Penumbra2_5Model in {
 // Penumbra/3 issues a load or a store in one cycle.  A load's reader waits
 // two cycles longer than an ALU result's.  A store enters a store buffer, and
 // its issue is the reference's typical figure, while the buffer has room.
-def Penumbra3Model : PenumbraSchedModel;
+def Penumbra3Model : PenumbraPipelinedModel;
 let SchedModel = Penumbra3Model in {
   def Penumbra3Core : PenumbraCore;
   def : PenumbraResult<WriteALU, Penumbra3Core, 1, 1>;

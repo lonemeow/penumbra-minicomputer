@@ -14,8 +14,8 @@ define void @curlwp_across_calls() {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 4
-; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r1, tp
+; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    bl use
 ; CHECK-NEXT:    mov r1, tp
 ; CHECK-NEXT:    bl use

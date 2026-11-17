@@ -23,7 +23,6 @@ define void @call6() {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 12
-; CHECK-NEXT:    stw lr, [sp + 8] // 4-byte Folded Spill
 ; CHECK-NEXT:    lli r1, 5
 ; CHECK-NEXT:    stw r1, [sp + 0]
 ; CHECK-NEXT:    lli r1, 6
@@ -32,6 +31,7 @@ define void @call6() {
 ; CHECK-NEXT:    lli r2, 2
 ; CHECK-NEXT:    lli r3, 3
 ; CHECK-NEXT:    lli r4, 4
+; CHECK-NEXT:    stw lr, [sp + 8] // 4-byte Folded Spill
 ; CHECK-NEXT:    bl take6
 ; CHECK-NEXT:    ldw lr, [sp + 8] // 4-byte Folded Reload
 ; CHECK-NEXT:    add sp, 12
@@ -46,13 +46,13 @@ define void @call_ll(i64 %v) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 12
-; CHECK-NEXT:    stw lr, [sp + 8] // 4-byte Folded Spill
 ; CHECK-NEXT:    stw r1, [sp + 0]
 ; CHECK-NEXT:    stw r2, [sp + 4]
 ; CHECK-NEXT:    lli r1, 1
 ; CHECK-NEXT:    lli r2, 2
 ; CHECK-NEXT:    lli r3, 3
 ; CHECK-NEXT:    lli r4, 4
+; CHECK-NEXT:    stw lr, [sp + 8] // 4-byte Folded Spill
 ; CHECK-NEXT:    bl take_ll
 ; CHECK-NEXT:    ldw lr, [sp + 8] // 4-byte Folded Reload
 ; CHECK-NEXT:    add sp, 12

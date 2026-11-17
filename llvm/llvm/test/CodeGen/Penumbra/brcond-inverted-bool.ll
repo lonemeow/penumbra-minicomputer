@@ -72,13 +72,13 @@ define i32 @inverted_value_used(i1 %c) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0: // %entry
 ; CHECK-NEXT:    sub sp, 8
-; CHECK-NEXT:    stw r5, [sp + 4] // 4-byte Folded Spill
-; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    lli r2, 1
 ; CHECK-NEXT:    xor r2, r1
+; CHECK-NEXT:    stw r5, [sp + 4] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r5, r2
 ; CHECK-NEXT:    and r5, 1
 ; CHECK-NEXT:    test r2, 1
+; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    bne .LBB2_2
 ; CHECK-NEXT:  // %bb.1: // %body
 ; CHECK-NEXT:    bl work

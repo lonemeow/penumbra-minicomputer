@@ -16,16 +16,16 @@ define i32 @dyn_alloca_stack_args(i32 %n) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 16
+; CHECK-NEXT:    add r1, 3
+; CHECK-NEXT:    llis r2, -4
 ; CHECK-NEXT:    stw r5, [sp + 12] // 4-byte Folded Spill
+; CHECK-NEXT:    and r2, r1
+; CHECK-NEXT:    mov r5, sp
+; CHECK-NEXT:    sub r5, r2
 ; CHECK-NEXT:    stw r6, [sp + 8] // 4-byte Folded Spill
 ; CHECK-NEXT:    stw r10, [sp + 4] // 4-byte Folded Spill
 ; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r10, sp
-; CHECK-NEXT:    add r1, 3
-; CHECK-NEXT:    llis r2, -4
-; CHECK-NEXT:    and r2, r1
-; CHECK-NEXT:    mov r5, sp
-; CHECK-NEXT:    sub r5, r2
 ; CHECK-NEXT:    mov sp, r5
 ; CHECK-NEXT:    sub sp, 4
 ; CHECK-NEXT:    lli r1, 77
@@ -59,16 +59,16 @@ define i32 @dyn_alloca_reg_args(i32 %n) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 16
+; CHECK-NEXT:    add r1, 3
+; CHECK-NEXT:    llis r2, -4
 ; CHECK-NEXT:    stw r5, [sp + 12] // 4-byte Folded Spill
+; CHECK-NEXT:    and r2, r1
+; CHECK-NEXT:    mov r5, sp
+; CHECK-NEXT:    sub r5, r2
 ; CHECK-NEXT:    stw r6, [sp + 8] // 4-byte Folded Spill
 ; CHECK-NEXT:    stw r10, [sp + 4] // 4-byte Folded Spill
 ; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    mov r10, sp
-; CHECK-NEXT:    add r1, 3
-; CHECK-NEXT:    llis r2, -4
-; CHECK-NEXT:    and r2, r1
-; CHECK-NEXT:    mov r5, sp
-; CHECK-NEXT:    sub r5, r2
 ; CHECK-NEXT:    mov sp, r5
 ; CHECK-NEXT:    lli r1, 1
 ; CHECK-NEXT:    lli r2, 2
@@ -98,13 +98,13 @@ define i32 @fixed_frame_stack_args() {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 8
-; CHECK-NEXT:    stw lr, [sp + 4] // 4-byte Folded Spill
 ; CHECK-NEXT:    lli r1, 77
 ; CHECK-NEXT:    stw r1, [sp + 0]
 ; CHECK-NEXT:    lli r1, 1
 ; CHECK-NEXT:    lli r2, 2
 ; CHECK-NEXT:    lli r3, 3
 ; CHECK-NEXT:    lli r4, 4
+; CHECK-NEXT:    stw lr, [sp + 4] // 4-byte Folded Spill
 ; CHECK-NEXT:    bl g5
 ; CHECK-NEXT:    ldw lr, [sp + 4] // 4-byte Folded Reload
 ; CHECK-NEXT:    add sp, 8

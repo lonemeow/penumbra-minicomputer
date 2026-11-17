@@ -59,23 +59,23 @@ define i32 @scmp_i64(i64 %a, i64 %b) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 4
-; CHECK-NEXT:    stw r5, [sp + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    lli r5, 1
 ; CHECK-NEXT:    cmp r3, r1
+; CHECK-NEXT:    stw r5, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    cmpc r4, r2
+; CHECK-NEXT:    lli r5, 1
 ; CHECK-NEXT:    blt .LBB2_2
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r5, zero
 ; CHECK-NEXT:  .LBB2_2:
-; CHECK-NEXT:    llis r11, -1
 ; CHECK-NEXT:    cmp r1, r3
+; CHECK-NEXT:    llis r11, -1
 ; CHECK-NEXT:    cmpc r2, r4
 ; CHECK-NEXT:    blt .LBB2_4
 ; CHECK-NEXT:  // %bb.3:
 ; CHECK-NEXT:    mov r11, r5
 ; CHECK-NEXT:  .LBB2_4:
-; CHECK-NEXT:    mov r1, r11
 ; CHECK-NEXT:    ldw r5, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    mov r1, r11
 ; CHECK-NEXT:    add sp, 4
 ; CHECK-NEXT:    jmp lr
   %r = call i32 @llvm.scmp.i32.i64(i64 %a, i64 %b)
@@ -87,23 +87,23 @@ define i32 @ucmp_i64(i64 %a, i64 %b) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    sub sp, 4
-; CHECK-NEXT:    stw r5, [sp + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    lli r5, 1
 ; CHECK-NEXT:    cmp r3, r1
+; CHECK-NEXT:    stw r5, [sp + 0] // 4-byte Folded Spill
 ; CHECK-NEXT:    cmpc r4, r2
+; CHECK-NEXT:    lli r5, 1
 ; CHECK-NEXT:    bcc .LBB3_2
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r5, zero
 ; CHECK-NEXT:  .LBB3_2:
-; CHECK-NEXT:    llis r11, -1
 ; CHECK-NEXT:    cmp r1, r3
+; CHECK-NEXT:    llis r11, -1
 ; CHECK-NEXT:    cmpc r2, r4
 ; CHECK-NEXT:    bcc .LBB3_4
 ; CHECK-NEXT:  // %bb.3:
 ; CHECK-NEXT:    mov r11, r5
 ; CHECK-NEXT:  .LBB3_4:
-; CHECK-NEXT:    mov r1, r11
 ; CHECK-NEXT:    ldw r5, [sp + 0] // 4-byte Folded Reload
+; CHECK-NEXT:    mov r1, r11
 ; CHECK-NEXT:    add sp, 4
 ; CHECK-NEXT:    jmp lr
   %r = call i32 @llvm.ucmp.i32.i64(i64 %a, i64 %b)

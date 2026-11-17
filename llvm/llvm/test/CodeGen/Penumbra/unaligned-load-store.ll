@@ -55,8 +55,8 @@ define i32 @load_i32_align1(ptr %p) {
 ; CHECK-LABEL: load_i32_align1:
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
-; CHECK-NEXT:    ldb r2, [r1 + 0]
 ; CHECK-NEXT:    ldb r3, [r1 + 1]
+; CHECK-NEXT:    ldb r2, [r1 + 0]
 ; CHECK-NEXT:    shl r3, 8
 ; CHECK-NEXT:    or r3, r2
 ; CHECK-NEXT:    ldb r2, [r1 + 2]
@@ -90,14 +90,14 @@ define void @store_i32_align1(ptr %p, i32 %v) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    mov r3, r2
-; CHECK-NEXT:    shr r3, 16
 ; CHECK-NEXT:    mov r4, r2
+; CHECK-NEXT:    shr r3, 16
 ; CHECK-NEXT:    and r4, 65535
 ; CHECK-NEXT:    shr r4, 8
-; CHECK-NEXT:    stb r2, [r1 + 0]
-; CHECK-NEXT:    stb r4, [r1 + 1]
 ; CHECK-NEXT:    stb r3, [r1 + 2]
 ; CHECK-NEXT:    shr r3, 8
+; CHECK-NEXT:    stb r2, [r1 + 0]
+; CHECK-NEXT:    stb r4, [r1 + 1]
 ; CHECK-NEXT:    stb r3, [r1 + 3]
 ; CHECK-NEXT:    jmp lr
   store i32 %v, ptr %p, align 1
@@ -183,18 +183,18 @@ define i64 @load_i64_align1(ptr %p) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0:
 ; CHECK-NEXT:    mov r2, r1
-; CHECK-NEXT:    ldb r1, [r1 + 0]
 ; CHECK-NEXT:    ldb r3, [r2 + 1]
+; CHECK-NEXT:    ldb r1, [r1 + 0]
 ; CHECK-NEXT:    shl r3, 8
 ; CHECK-NEXT:    or r3, r1
-; CHECK-NEXT:    ldb r4, [r2 + 2]
 ; CHECK-NEXT:    ldb r1, [r2 + 3]
+; CHECK-NEXT:    ldb r4, [r2 + 2]
 ; CHECK-NEXT:    shl r1, 8
 ; CHECK-NEXT:    or r1, r4
 ; CHECK-NEXT:    shl r1, 16
+; CHECK-NEXT:    ldb r4, [r2 + 5]
 ; CHECK-NEXT:    or r1, r3
 ; CHECK-NEXT:    ldb r3, [r2 + 4]
-; CHECK-NEXT:    ldb r4, [r2 + 5]
 ; CHECK-NEXT:    shl r4, 8
 ; CHECK-NEXT:    or r4, r3
 ; CHECK-NEXT:    ldb r3, [r2 + 6]

@@ -15,9 +15,9 @@ define void @expect_false(i32 %x) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0: // %entry
 ; CHECK-NEXT:    sub sp, 8
+; CHECK-NEXT:    cmp r1, 7
 ; CHECK-NEXT:    stw r5, [sp + 4] // 4-byte Folded Spill
 ; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    cmp r1, 7
 ; CHECK-NEXT:    beq .LBB0_1
 ; CHECK-NEXT:  .LBB0_2: // %hot
 ; CHECK-NEXT:    bl hot_path
@@ -47,9 +47,9 @@ define void @expect_true(i32 %x) {
 ; CHECK:         .cfi_startproc
 ; CHECK-NEXT:  // %bb.0: // %entry
 ; CHECK-NEXT:    sub sp, 8
+; CHECK-NEXT:    cmp r1, 7
 ; CHECK-NEXT:    stw r5, [sp + 4] // 4-byte Folded Spill
 ; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    cmp r1, 7
 ; CHECK-NEXT:    bne .LBB1_1
 ; CHECK-NEXT:  .LBB1_2: // %hot
 ; CHECK-NEXT:    bl hot_path

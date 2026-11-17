@@ -396,8 +396,8 @@ define i64 @mul64_minsize(i64 %x) minsize {
 ; FASTMUL-NEXT:    mulu r3, r1, r4
 ; FASTMUL-NEXT:    shl r2, 3
 ; FASTMUL-NEXT:    add r2, r1
-; FASTMUL-NEXT:    add r2, r4
 ; FASTMUL-NEXT:    mov r1, r3
+; FASTMUL-NEXT:    add r2, r4
 ; FASTMUL-NEXT:    jmp lr
 ;
 ; SLOWMUL-LABEL: mul64_minsize:

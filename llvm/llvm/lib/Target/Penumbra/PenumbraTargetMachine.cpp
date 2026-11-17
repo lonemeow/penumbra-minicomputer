@@ -172,7 +172,12 @@ namespace {
 class PenumbraPassConfig : public TargetPassConfig {
 public:
   PenumbraPassConfig(PenumbraTargetMachine &TM, PassManagerBase &PM)
-      : TargetPassConfig(TM, PM) {}
+      : TargetPassConfig(TM, PM) {
+    // The legacy list scheduler takes issue cycles only from itineraries,
+    // which no Penumbra model has.
+    if (TM.getOptLevel() != CodeGenOptLevel::None)
+      substitutePass(&PostRASchedulerID, &PostMachineSchedulerID);
+  }
 
   // Pre-GlobalISel IR passes.
   void addIRPasses() override {

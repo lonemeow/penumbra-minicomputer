@@ -20,7 +20,7 @@ define i32 @remat(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e,
 ; CHECK-LABEL: remat:
 ; CHECK:       lli r1, 22136
 ; CHECK-NEXT:  lui r1, 4660
-; CHECK-NEXT:  bl clobber
+; CHECK:       bl clobber
 ; CHECK:       lli r{{[0-9]+}}, 22136
 ; CHECK-NEXT:  lui r{{[0-9]+}}, 4660
   call void @clobber(i32 305419896)

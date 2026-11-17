@@ -24,13 +24,13 @@ define i32 @global_offset(i32 %x) {
 ; STATIC-NEXT:    jmp lr
 ; STATIC-NEXT:  .LBB0_1: // %slow
 ; STATIC-NEXT:    sub sp, 4
-; STATIC-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; STATIC-NEXT:    lli r1, %lo16(table)
 ; STATIC-NEXT:    lui r1, %hi16(table)
 ; STATIC-NEXT:    add r1, 20
+; STATIC-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; STATIC-NEXT:    bl report
-; STATIC-NEXT:    mov r1, zero
 ; STATIC-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; STATIC-NEXT:    mov r1, zero
 ; STATIC-NEXT:    add sp, 4
 ; STATIC-NEXT:    jmp lr
 ;
@@ -43,15 +43,15 @@ define i32 @global_offset(i32 %x) {
 ; PIC-NEXT:    jmp lr
 ; PIC-NEXT:  .LBB0_1: // %slow
 ; PIC-NEXT:    sub sp, 4
-; PIC-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; PIC-NEXT:    lli r1, %pcrel_lo16(table-.LPC0_0)
 ; PIC-NEXT:    lui r1, %pcrel_hi16(table-.LPC0_0)
 ; PIC-NEXT:  .LPC0_0:
 ; PIC-NEXT:    add r1, pc
 ; PIC-NEXT:    add r1, 20
+; PIC-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; PIC-NEXT:    bl report
-; PIC-NEXT:    mov r1, zero
 ; PIC-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; PIC-NEXT:    mov r1, zero
 ; PIC-NEXT:    add sp, 4
 ; PIC-NEXT:    jmp lr
 entry:
@@ -75,12 +75,12 @@ define i32 @local_field(i32 %x) {
 ; STATIC-NEXT:    jmp lr
 ; STATIC-NEXT:  .LBB1_1: // %slow
 ; STATIC-NEXT:    sub sp, 16
-; STATIC-NEXT:    stw lr, [sp + 12] // 4-byte Folded Spill
 ; STATIC-NEXT:    mov r1, sp
 ; STATIC-NEXT:    add r1, 4
+; STATIC-NEXT:    stw lr, [sp + 12] // 4-byte Folded Spill
 ; STATIC-NEXT:    bl report
-; STATIC-NEXT:    mov r1, zero
 ; STATIC-NEXT:    ldw lr, [sp + 12] // 4-byte Folded Reload
+; STATIC-NEXT:    mov r1, zero
 ; STATIC-NEXT:    add sp, 16
 ; STATIC-NEXT:    jmp lr
 ;
@@ -93,12 +93,12 @@ define i32 @local_field(i32 %x) {
 ; PIC-NEXT:    jmp lr
 ; PIC-NEXT:  .LBB1_1: // %slow
 ; PIC-NEXT:    sub sp, 16
-; PIC-NEXT:    stw lr, [sp + 12] // 4-byte Folded Spill
 ; PIC-NEXT:    mov r1, sp
 ; PIC-NEXT:    add r1, 4
+; PIC-NEXT:    stw lr, [sp + 12] // 4-byte Folded Spill
 ; PIC-NEXT:    bl report
-; PIC-NEXT:    mov r1, zero
 ; PIC-NEXT:    ldw lr, [sp + 12] // 4-byte Folded Reload
+; PIC-NEXT:    mov r1, zero
 ; PIC-NEXT:    add sp, 16
 ; PIC-NEXT:    jmp lr
 entry:
@@ -125,11 +125,11 @@ define i32 @argument_offset(ptr %p, i32 %x) {
 ; STATIC-NEXT:    jmp lr
 ; STATIC-NEXT:  .LBB2_1: // %slow
 ; STATIC-NEXT:    sub sp, 4
-; STATIC-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; STATIC-NEXT:    add r1, 8
+; STATIC-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; STATIC-NEXT:    bl report
-; STATIC-NEXT:    mov r2, zero
 ; STATIC-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; STATIC-NEXT:    mov r2, zero
 ; STATIC-NEXT:    add sp, 4
 ; STATIC-NEXT:    mov r1, r2
 ; STATIC-NEXT:    jmp lr
@@ -144,11 +144,11 @@ define i32 @argument_offset(ptr %p, i32 %x) {
 ; PIC-NEXT:    jmp lr
 ; PIC-NEXT:  .LBB2_1: // %slow
 ; PIC-NEXT:    sub sp, 4
-; PIC-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; PIC-NEXT:    add r1, 8
+; PIC-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
 ; PIC-NEXT:    bl report
-; PIC-NEXT:    mov r2, zero
 ; PIC-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
+; PIC-NEXT:    mov r2, zero
 ; PIC-NEXT:    add sp, 4
 ; PIC-NEXT:    mov r1, r2
 ; PIC-NEXT:    jmp lr

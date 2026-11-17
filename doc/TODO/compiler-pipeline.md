@@ -175,15 +175,14 @@ targets opt into are silently off.  Status per item:
   timing reference's issue and latency for ALU operations, loads,
   stores, multiplies and divides (`cdb7898`, `7cc0d6c`): a load's
   reader waits a cycle at distance 1 on `penumbra2_5`, and two on
-  `penumbra3`.  `RDSYS` has no class, and the pass is off.
+  `penumbra3`.  `RDSYS` has no class.  The scheduler after register
+  allocation runs on those models; this one stays off.
 
   **Measured 2026-10-04 on `penumbra2_5`, and not the scheduler to
   enable.**  With the load and store figures in the model, this
   scheduler adds instructions and register saves to Doom and hides no
   more load-use waits than the one after register allocation does
-  alone
-  ([the costs the compiler is not told](#compiler-the-costs-the-compiler-is-not-told)).
-  What is left to try is in that entry's open list.
+  alone ([ruled out](#ruled-out)).
 - **Tail calls**: `PenumbraCallLowering.cpp` hardcodes
   `Info.IsTailCall = false` (`// TODO: tail calls`).  Wrapper-heavy
   kernel code pays a full frame per hop.  Measured opportunity and a
@@ -831,18 +830,17 @@ on the ULX3S, not the ISS.
 ## Compiler: the costs the compiler is not told
 
 The scheduling models state the reference's figures for ALU
-operations, loads, stores, multiplies and divides
-([scheduling-models.md](../llvm/scheduling-models.md)), but no
-scheduler runs to read a load's or a store's.  Every other cost is
-LLVM's default, and the defaults describe a machine where a call and
-a register save each cost about what an ALU operation does.  On the
+operations, loads, stores, multiplies and divides, and on the
+pipelined generations the scheduler after register allocation reads
+them ([scheduling-models.md](../llvm/scheduling-models.md)); the load
+and store figures landed in `7cc0d6c`.  Every other cost is LLVM's
+default, and the defaults describe a machine where a call and a
+register save each cost about what an ALU operation does.  On the
 pipelined generations they do not
 ([instruction-timing.md](../system/instruction-timing.md)):
 
 | Cost | What the compiler assumes | `penumbra2_5` |
 |---|---|---|
-| Load | stated in the model, read by no pass | issues in 2 cycles, latency 3 |
-| Store | stated in the model, read by no pass | 6 cycles |
 | Call and return | the inliner's call penalty of 25, five instructions' worth | 7 cycles, and 8 more for each register the callee saves and restores |
 | Jump-table dispatch | preferred from 4 cases | 11 cycles: five instructions, one a load whose reader waits, one a jump that is never predicted |
 | First use of a callee-saved register | free: `getCSRFirstUseCost` returns 0 | a store and a load on every call, 8 cycles |
@@ -920,38 +918,6 @@ four together.
 | kernel | −18% | +1% | −3% | 0 | −26% |
 | Registers saved per call: kernel, from 2.74 | 2.74 | 2.23 | 2.64 | 2.78 | 2.15 |
 | Doom, from 3.44 | 3.45 | 3.28 | 3.27 | 3.44 | 3.28 |
-
-### Load and store timing, and a scheduler to read it
-
-Every model states a load's and a store's figures (`7cc0d6c`),
-`penumbra3`'s included.  Only a scheduler reads them, and the one that
-runs after register allocation is the one that pays:
-
-- **It changes no instruction count by more than 0.13%** and removes
-  54% of Doom's load-use pairs, 53% of Dhrystone's, 27% of CoreMark's
-  and 18% of the kernel's.  Why the last two keep more of theirs was
-  not broken down.
-- **Most pairs move to distance 2:** in Doom's own code, 10 per 1000
-  instructions become 68.  That is free on `penumbra2_5`.  gen3 waits
-  two cycles at distance 1 and one at distance 2, so the same
-  schedule takes 30% of Doom's waits there rather than 54%; the
-  `penumbra3` model asks for two instructions between a load and its
-  reader.
-- **The scheduler before register allocation adds instructions.**
-  In its bidirectional mode, with the cross-block copy coalescing its
-  hook turns on and the later scheduler as well, it removes no more
-  of Doom's pairs (53.4% against 53.7%) and adds 0.49% to Doom's own
-  instructions, and 1.4% to the loads and 2.4% to the stores of the
-  whole run.
-  `R_DrawColumn` saves `r5`–`r8` where it saved `r5` and `r6`.  The
-  scheduler holds register pressure under the 12 allocatable
-  registers, and only five of them, `r1`–`r4` and `r11`, cost nothing
-  to use.
-
-Turning the later scheduler on alone takes two steps, because
-`enablePostRAMachineScheduler()` defaults to requiring the earlier
-one: substitute `PostMachineScheduler` for the legacy post-RA
-scheduler, as AArch64 and RISC-V do, and override that hook.
 
 ### The cost of a call
 
@@ -1201,9 +1167,19 @@ Not re-verified since the rework.
 
 ## Ruled out
 
-Both were measured 2026-10-04 the way
+All three were measured 2026-10-04 the way
 [the costs the compiler is not told](#compiler-the-costs-the-compiler-is-not-told)
 describes, against the same baseline.
+
+- **The machine scheduler before register allocation,** on top of
+  the one after it.  In its bidirectional mode, with the cross-block
+  copy coalescing its hook turns on, it removes no more of Doom's
+  load-use pairs (53.4% against 53.7%) and adds 0.49% to Doom's own
+  instructions, and 1.4% to the loads and 2.4% to the stores of the
+  whole run.  `R_DrawColumn` saves `r5`–`r8` where it saved `r5` and
+  `r6`: the scheduler holds register pressure under the 12
+  allocatable registers, and only five of them, `r1`–`r4` and `r11`,
+  cost nothing to use.
 
 - **Turning every select into a branch before selection.**  With no
   conditional move a `select` ends as a branch either way, and
