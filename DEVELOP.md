@@ -398,6 +398,17 @@ make simulate SDCARD=build/penumbra.img
 
 Image creation requires the NetBSD cross-tools (`nbfdisk`, `nbmakefs`) — i.e. the host-tools step from § 7 must have run.
 
+### A/B images
+
+A compiler change, or a flag, is measured on the board with two images that differ only in it. `sw/tools/ab-image.sh` builds one of them: kernel, userland, overlays and FAT32 ELFs, all from clean, with the given flags added to every clang command (`-k KERNCONF`, `GENERIC` by default; `-f FLAVOR`):
+
+```sh
+sw/tools/ab-image.sh base
+sw/tools/ab-image.sh nosched -mllvm -enable-post-misched=false
+```
+
+Each arm lands in `build/ab/<name>/` with its own NetBSD obj and dest dirs. Build the baseline with the script as well: an image from the regular tree may hold objects an older compiler built. To measure a compiler change that has no flag, build an arm with each compiler. The overlays build where a regular build does, so run nothing else while an arm builds.
+
 ### Simulated USB devices
 
 The ISS models the `CLASS_USBHC` port with a pluggable simulated device
