@@ -50,6 +50,68 @@ Prefix all module ports to distinguish them from internal signals:
     - Use blocking assignments (`=`) in `always_comb` blocks and for `assign` statements.
 - **Latches:** Implicit latches are strictly forbidden. Every `always_comb` block must have all paths assigned, and every `if` should have an `else`. Use default assignments at the top of the block if necessary.
 
+### Rules for new modules
+
+A module written from scratch follows four more rules. A module that
+already exists keeps its own style when it changes, until it is
+rewritten whole, and one that fits a new design unchanged, such as a
+device, is used as it is.
+
+- **A value's type says what it is.** A physical address is a
+  `paddr_t`, a register number a `reg_index_t`, an instruction an
+  `insn_t`, never a bare `logic [31:0]` or `logic [3:0]`. Two values
+  of one width that mean different things take different types, so a
+  port list reads as what crosses it. The names document rather than
+  enforce: SystemVerilog converts between vector types of one width
+  without a word, so a mixed-up assignment still compiles. A type
+  modules share lives in a package; one a single module uses is
+  declared in that module, sized from its parameters. Type names end
+  in `_t`, enum type names in `_e`. A bare width stays for a value
+  whose bits are all it is, such as a counter inside one block.
+- **A value made of fields is a packed struct.** Code names the field
+  (`pte.ppn`) rather than slicing bits out of it (`pte[31:12]`), and the
+  struct's declaration is the one place the layout is written. A layout
+  an outside contract fixes, such as the instruction encoding, a PTE or
+  a sysreg, is declared once in the package, as that contract gives it.
+  A slice stays where the bits are arithmetic rather than fields: a
+  sign bit, a carry out, the low bits of a sum.
+- **A register block holds only the register:** an `always_ff` block
+  contains the reset value, an optional enable and the assignment from
+  `_d` to `_q`. The logic that computes `_d` goes in `always_comb` or
+  `assign`. Every flop and its reset value are then in one place, and
+  what the module computes is in another.
+- **A state machine's states are an enum,** with one combinational
+  block for the next state and the outputs, and one register block.
+
+```systemverilog
+typedef enum logic [1:0] {
+    IDLE,
+    RUNNING,
+    DRAINING
+} state_e;
+
+state_e state_q, state_d;
+
+always_comb begin
+    state_d = state_q;
+    unique case (state_q)
+        IDLE:     if (i_start) state_d = RUNNING;
+        RUNNING:  if (i_stop)  state_d = DRAINING;
+        DRAINING: if (i_empty) state_d = IDLE;
+    endcase
+end
+
+always_ff @(posedge i_clk) begin
+    if (i_rst) begin
+        state_q <= IDLE;
+    end else begin
+        state_q <= state_d;
+    end
+end
+
+assign o_busy = (state_q != IDLE);
+```
+
 ## 4. Packages and Constants
 
 - Common constants (opcodes, register addresses, etc.) live in `hw/rtl/common/penumbra_pkg.sv`.
