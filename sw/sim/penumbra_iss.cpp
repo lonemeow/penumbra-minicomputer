@@ -1861,6 +1861,7 @@ static LoadUseModel* loaduse_model;
 static bool opstats_enabled = false;
 static void opstats_clear();
 static void opstats_report(FILE* out);
+static void opstats_exception(int vector);
 
 static CacheEnables cache_enables() {
     return { cache_l1i.enabled, cache_l1d.enabled, cache_l2.enabled };
@@ -2867,6 +2868,7 @@ static bool insn_trapped;  // The instruction being executed entered an exceptio
 static void exception_entry(int vector) {
     insn_trapped = true;
     if (pair_model) pair_model->boundary();
+    if (opstats_enabled) opstats_exception(vector);
     if (pcprof_on) {
         pcprof_vector[vector & 15]++;
         if (vector == VEC_TLB_MISS) pcprof_miss[mmu.fault_addr >> 12]++;
@@ -2958,8 +2960,13 @@ struct OpStats {
     uint64_t ret_jmp = 0;   // JMP Rd (return / indirect)
     uint64_t sys_spr = 0;   // RDSPR/WRSPR/RDSYS/WRSYS
     uint64_t other = 0;     // reserved / unclassified
+    // Exceptions taken, interrupts included, by vector: each entry reads
+    // the vector table once.
+    uint64_t exceptions[16] = {};
 };
 static OpStats opstats;
+
+static void opstats_exception(int vector) { opstats.exceptions[vector & 15]++; }
 
 static void opstats_record(uint32_t insn) {
     int fmt = (insn >> 30) & 3;
@@ -4057,6 +4064,20 @@ static void opstats_report(FILE* out) {
             bs_pct(o.br_cond + o.call + o.ret_jmp, total));
     fprintf(out, "  flag-compare + const-mat     %5.1f%%\n",
             bs_pct(o.cmp_test + o.imm_mat, total));
+
+    static const char* const vector_names[16] = {
+        "bus fault", "timer", "TLB miss", "TLB protection", "privilege", "syscall", "break",
+        "illegal", "alignment", "external IRQ", "arithmetic", "vector 11", "vector 12",
+        "vector 13", "vector 14", "vector 15",
+    };
+    uint64_t exceptions = 0;
+    for (uint64_t e : o.exceptions) exceptions += e;
+    fprintf(out, "-- exceptions %llu, %.3f per 1000 instructions\n",
+            (unsigned long long)exceptions, 1000.0 * exceptions / total);
+    for (int v = 0; v < 16; v++)
+        if (o.exceptions[v])
+            fprintf(out, "  %-22s %12llu  %8.3f per 1000\n", vector_names[v],
+                    (unsigned long long)o.exceptions[v], 1000.0 * o.exceptions[v] / total);
 
     const MulDivCensus& m = muldiv_census;
     auto n = [](uint64_t v) { return (unsigned long long)v; };

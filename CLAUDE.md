@@ -355,8 +355,11 @@ rom.ld ──────────────────┘
   (`8k/2:8k/2:64k/4`; 16-byte lines).  Each level follows the RTL's
   replacement, write and enable behaviour, and each window reports the
   counts the cache perfctrs keep plus L1 fills by kind, served from L2
-  or from memory, and the L1-I misses a next-line prediction buffer
-  (proposed for gen3) would have served.  A window opens at reset or at
+  or from memory, the L1-I misses a next-line prediction buffer
+  (proposed for gen3) would have served, and each L1-D load miss by the
+  instruction after it: a load or store to the filled set, to another
+  set, or no access (gen3 holds a lookup of the filled set across the
+  install).  A window opens at reset or at
   `+model_start=ADDR` and closes at `+model_stop=ADDR` (both first
   user-mode execution, as `+pcprof_start`), on `SIGUSR1` (which opens
   the next), or at exit; `+model_report=file` writes the reports there
@@ -453,8 +456,10 @@ rom.ld ──────────────────┘
   steps a multiply needs up to the highest set bit of `Rd`, of `Rs` or
   of the shorter of the two, at the `+core=` generation's multiplier
   bits a step, and the steps a divide needs past its dividend's leading
-  zeros or with the dividend aligned to its divisor.  Reported with the
-  models' windows; `+branchstats` counts the whole run.
+  zeros or with the dividend aligned to its divisor.  It also counts the
+  exceptions the window takes by vector, interrupts included, each of
+  which reads the vector table once.  Reported with the models'
+  windows; `+branchstats` counts the whole run.
 - **Execution profiles** (`+pcprof=file` plus
   `sw/tools/pcprof-report.py`) — buckets executed instructions by PC,
   exceptions by vector and TLB misses by faulting page.

@@ -120,17 +120,22 @@ def can_make_namespace():
         return False
 
 
-def hierarchy(l1i=(0, 0), l1d=(0, 0, 0, 0), l2=(0, 0, 0, 0), fills=None, prediction=None):
+def hierarchy(l1i=(0, 0), l1d=(0, 0, 0, 0), l2=(0, 0, 0, 0), fills=None, prediction=None,
+              after_miss=None):
     """A cache model's expected counts for one hierarchy over one window:
     L1I (read hits, read misses), L1D and L2 (read hits, read misses,
     write hits, write misses), and the L1 fills by (kind, mode) as
     (from L2, from memory).  Fills not listed must be zero.  `prediction`,
     when given, is the next-line buffer's (served once, served continue,
-    look-ups, missing L2, unused)."""
+    look-ups, missing L2, unused); `after_miss` the L1-D load misses and
+    the instruction after them (misses, filled set, another set, no
+    access)."""
     want = {"L1I": tuple(l1i) + (0, 0), "L1D": tuple(l1d), "L2": tuple(l2),
             "fills": fills or {}}
     if prediction is not None:
         want["prediction"] = tuple(prediction)
+    if after_miss is not None:
+        want["after miss"] = tuple(after_miss)
     return want
 
 
@@ -165,6 +170,17 @@ NEXTLINE = hierarchy(
     l2=(8 * 3 + 3 + 8 * 4 + 3 + 4 + 3, 8 + 1 + 1 + 1, 0, 0),
     fills={("I", "super"): (8 + 1, 8 + 1 + 1 + 1)},
     prediction=(4, 7, 8 + 1 + 8 + 1 + 1, 8 + 1 + 1 + 1, 1))
+
+# cache_aftermiss.s (see the program's header): eight cold load misses,
+# each a miss in L2 too, A's second load the one hit, and C's store a
+# write miss in both levels.  Only the set B's second load falls in
+# differs between the two geometries.
+def aftermiss(filled_set, another_set):
+    return hierarchy(l1d=(1, 8, 0, 1), l2=(8 * 3, 8, 0, 1), fills={("D", "super"): (0, 8)},
+                     after_miss=(8, filled_set, another_set, 3))
+
+
+AFTERMISS = {"penumbra1": aftermiss(3, 2), "penumbra3": aftermiss(2, 3)}
 
 # cache_window.s: inside the window, 16 re-loaded lines hit and 16 new
 # ones miss in both levels.
@@ -827,8 +843,10 @@ def operands(steps_each, rd, rs, shorter):
     """+opstats' expected counts over the window of ops_muldiv.s: the
     instruction classes, and a census whose four multiplies are of
     `steps_each` steps and need `rd`, `rs` and `shorter` of them in all,
-    by the operand walked.  The nine divides are the same on every core."""
+    by the operand walked.  The nine divides are the same on every core,
+    and the window's one exception is DZ's."""
     return {"ops": {"classes": OPS_MULDIV_CLASSES,
+                    "exceptions": {"arithmetic": 1},
                     "multiplies": (4, steps_each, rd, rs, shorter),
                     "divides": (9, 32, 127, 90),
                     "divides by steps needed aligned": {"none": 2, "1-8": 3, "9-16": 2,
@@ -991,6 +1009,8 @@ CASES = [
     Case("cachemodel next-line prediction", "cache_nextline.s",
          ["+cachemodel=penumbra1,penumbra2_5"],
          windows=[("reset to exit", {"penumbra1": NEXTLINE, "penumbra2_5": NEXTLINE})]),
+    Case("cachemodel after a load miss", "cache_aftermiss.s",
+         ["+cachemodel=penumbra1,penumbra3"], windows=[("reset to exit", AFTERMISS)]),
     Case("model window", "cache_window.s",
          ["+cachemodel", "+model_start=0xFFFF0800", "+model_stop=0xFFFF0900"],
          windows=[("start PC to stop PC", {"penumbra1": WINDOW_PENUMBRA1})]),
@@ -1122,6 +1142,7 @@ def named_counts(text):
 def parse_report(text):
     """The models' windows: [(span, {label: counts})]."""
     windows, counts = [], None
+    ops_list = "classes"    # which +opstats list a "name  N" line belongs to
     for line in text.splitlines():
         m = re.match(r"== model window \d+: \d+ instructions, (.+) ==$", line)
         if m:
@@ -1187,6 +1208,11 @@ def parse_report(text):
             continue
         if line == "-- instruction classes":
             counts = windows[-1][1].setdefault("opstats", {"ops": {"classes": {}}})
+            ops_list = "classes"
+            continue
+        if line.startswith("-- exceptions ") and counts is not None and "ops" in counts:
+            counts["ops"]["exceptions"] = {}
+            ops_list = "exceptions"
             continue
         if line == "-- MUL and DIV operands":
             continue
@@ -1194,7 +1220,7 @@ def parse_report(text):
             m = re.match(r"  (\S(?:.*?\S)?) {2,}(\d+)(?: |$)", line)
             if m:
                 if int(m.group(2)):
-                    counts["ops"]["classes"][m.group(1)] = int(m.group(2))
+                    counts["ops"][ops_list][m.group(1)] = int(m.group(2))
                 continue
             m = re.match(r"\s+multiplies (\d+), of (\d+) steps each; needed walking Rd (\d+) \(\S+\),"
                          r" Rs (\d+) \(\S+\), the shorter (\d+) \(", line)
@@ -1249,6 +1275,11 @@ def parse_report(text):
                      r".* looks up (\d+), (\d+) missing L2, (\d+) unused", line)
         if m:
             counts["prediction"] = tuple(int(v) for v in m.groups())
+            continue
+        m = re.match(r"\s+after miss\s+(\d+) L1-D load misses; the instruction after accesses the"
+                     r" filled set (\d+), another set (\d+), no memory (\d+)", line)
+        if m:
+            counts["after miss"] = tuple(int(v) for v in m.groups())
     return windows
 
 
@@ -1302,6 +1333,9 @@ def compare_windows(expected, got):
             if "prediction" in want and have.get("prediction") != want["prediction"]:
                 problems.append(f"{label} next-line {have.get('prediction')}, "
                                 f"expected {want['prediction']}")
+            if "after miss" in want and have.get("after miss") != want["after miss"]:
+                problems.append(f"{label} after miss {have.get('after miss')}, "
+                                f"expected {want['after miss']}")
     return problems
 
 

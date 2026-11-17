@@ -35,6 +35,15 @@
 // after every miss.  The buffer never changes what the caches hold or
 // count, and an L1-I INVAL_ALL clears it.
 //
+// Each L1-D load miss is also classified by the instruction after it in
+// program order: a load or store to the set the line goes into, one to
+// another set, or no access at all.  On a pipelined core that instruction
+// has launched its L1-D lookup as the miss requests its line, and a lookup
+// of the filled set is held across the install
+// (doc/internals/penumbra3/l1-cache.md, "Busy and done"), so a core that
+// resumes as the line arrives still waits for it; the other two need not.
+// No bubble is modelled between the two instructions.
+//
 // The model sees the architectural stream only: no wrong-path fetches,
 // and nothing that needs time — fill latency, prefetch, overlap.  Its
 // counts are exact for that stream; cycles are not modelled.  What
@@ -198,15 +207,18 @@ public:
           line_words_(l2.line_bytes / 4), page_lines_(page_bytes / l1i.line_bytes) {}
 
     Served fetch(uint32_t pa, bool cacheable, bool super, const CacheEnables& en) {
+        after_miss_fetch();
         return read(Kind::I, l1i_, counts_[L1I], pa, cacheable && en.l1i, en.l2, super);
     }
 
     Served load(uint32_t pa, bool cacheable, bool super, const CacheEnables& en) {
+        after_miss_access(l1d_.line_of(pa));
         return read(Kind::D, l1d_, counts_[L1D], pa, cacheable && en.l1d, en.l2, super);
     }
 
     void store(uint32_t pa, bool cacheable, bool super, const CacheEnables& en) {
         uint32_t line = l1d_.line_of(pa);
+        after_miss_access(line);
         if (cacheable && en.l1d) {
             if (l1d_.write(line)) counts_[L1D].write_hits++;
             else                  counts_[L1D].write_misses++;
@@ -234,6 +246,7 @@ public:
         for (auto& m : uncached_) for (auto& k : m) k[0] = k[1] = 0;
         i_misses_ = i_next_line_ = memory_fills_ = memory_next_line_ = 0;
         predicted_ = PredictionCounts();
+        after_miss_counts_ = AfterMissCounts();
     }
 
     void report(FILE* out, uint64_t insns) const {
@@ -284,6 +297,14 @@ public:
         fprintf(out, "                per 1000 instructions: %.2f, %.2f; %.2f, %.2f, %.2f\n",
                 k ? p.once_served / k : 0.0, k ? p.continue_served / k : 0.0,
                 k ? p.lookups / k : 0.0, k ? p.missing_l2 / k : 0.0, k ? p.unused / k : 0.0);
+        const AfterMissCounts& b = after_miss_counts_;
+        fprintf(out, "  after miss    %llu L1-D load misses; the instruction after accesses the"
+                     " filled set %llu, another set %llu, no memory %llu\n",
+                (unsigned long long)b.misses, (unsigned long long)b.same_set,
+                (unsigned long long)b.other_set, (unsigned long long)b.no_access);
+        fprintf(out, "                per 1000 instructions: %.2f; %.2f, %.2f, %.2f\n",
+                k ? b.misses / k : 0.0, k ? b.same_set / k : 0.0, k ? b.other_set / k : 0.0,
+                k ? b.no_access / k : 0.0);
     }
 
 private:
@@ -299,6 +320,7 @@ private:
         uint32_t line = l1.line_of(pa);
         if (l1.read(line)) { c.read_hits++; return Served::L1; }
         c.read_misses++;
+        if (kind == Kind::D) record_load_miss(line);
         if (kind == Kind::I) {
             i_misses_++;
             if (line == last_i_miss_ + 1) i_next_line_++;
@@ -325,6 +347,35 @@ private:
         l1.fill(line);
         if (kind == Kind::I) next_line_miss(line, l2_enabled);
         return from_l2 ? Served::L2 : Served::Memory;
+    }
+
+    // The instruction after an L1-D load miss.  The ISS fetches every
+    // instruction before it accesses memory, so instructions are numbered
+    // by their fetches: the instruction after the miss is miss_insn_ + 1,
+    // and a fetch numbered miss_insn_ + 2 means it made no access.
+    void record_load_miss(uint32_t line) {
+        miss_insn_ = insn_;
+        miss_set_ = line & (geom_[L1D].sets - 1);
+        miss_pending_ = true;
+        after_miss_counts_.misses++;
+    }
+
+    void after_miss_fetch() {
+        insn_++;
+        if (miss_pending_ && insn_ == miss_insn_ + 2) {
+            after_miss_counts_.no_access++;
+            miss_pending_ = false;
+        }
+    }
+
+    void after_miss_access(uint32_t line) {
+        if (miss_pending_ && insn_ == miss_insn_ + 1) {
+            if (miss_set_ == (line & (geom_[L1D].sets - 1)))
+                after_miss_counts_.same_set++;
+            else
+                after_miss_counts_.other_set++;
+            miss_pending_ = false;
+        }
     }
 
     // The prediction buffers at an L1-I miss to `line`: count whether each
@@ -379,6 +430,13 @@ private:
     uint32_t         page_lines_;
     NextLine         once_, continue_;
     PredictionCounts predicted_;
+
+    struct AfterMissCounts { uint64_t misses = 0, same_set = 0, other_set = 0, no_access = 0; };
+    uint64_t        insn_ = 0;             // the current instruction, numbered by its fetch
+    uint64_t        miss_insn_ = 0;        // the last load to miss L1-D
+    uint32_t        miss_set_ = 0;         // the L1-D set its line goes into
+    bool            miss_pending_ = false; // the instruction after it not yet counted
+    AfterMissCounts after_miss_counts_;
 };
 
 // ── The model: every hierarchy +cachemodel names ─────────────────
