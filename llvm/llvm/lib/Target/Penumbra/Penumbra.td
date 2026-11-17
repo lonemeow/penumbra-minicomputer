@@ -43,6 +43,10 @@ include "GISel/PenumbraRegisterBanks.td"
 // sharing the property reuses the same codegen path instead of growing
 // another `CPU ==` test.
 
+def TuneSmallICache
+    : SubtargetFeature<"small-icache", "HasSmallICache", "true",
+                       "The L1 instruction cache holds 4 KiB or less">;
+
 //===----------------------------------------------------------------------===//
 // Penumbra processors — tuning targets for one shared ISA
 //===----------------------------------------------------------------------===//
@@ -178,15 +182,15 @@ class PenumbraProcessor<string n, PenumbraTuning t>
     : ProcessorModel<n, t.Model, [], t.TuneFeatures>;
 
 // The original minicomputer: single-issue, microcoded, no branch prediction.
-def Penumbra1Tuning : PenumbraTuning<Penumbra1Model, []>;
+def Penumbra1Tuning : PenumbraTuning<Penumbra1Model, [TuneSmallICache]>;
 def : PenumbraProcessor<"penumbra1", Penumbra1Tuning>;
 
 // The pipelined core, without GPR forwarding.
-def Penumbra2Tuning : PenumbraTuning<Penumbra2Model, []>;
+def Penumbra2Tuning : PenumbraTuning<Penumbra2Model, [TuneSmallICache]>;
 def : PenumbraProcessor<"penumbra2", Penumbra2Tuning>;
 
 // The pipelined core with GPR forwarding.
-def Penumbra2_5Tuning : PenumbraTuning<Penumbra2_5Model, []>;
+def Penumbra2_5Tuning : PenumbraTuning<Penumbra2_5Model, [TuneSmallICache]>;
 def : PenumbraProcessor<"penumbra2_5", Penumbra2_5Tuning>;
 
 // The seven-stage pipelined core, with a store buffer and branch prediction at

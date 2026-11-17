@@ -80,7 +80,7 @@ not behavior.
 
 | File | Purpose |
 |------|---------|
-| `Penumbra.td` | Top-level TableGen: includes, per-core SchedMachineModels (`PenumbraSchedModel` shared parameters: IssueWidth=1, MicroOpBufferSize=0, LoadLatency=1; each model states an issue figure on its one core resource and a latency for ALU, load, store, MUL and DIV, a store without the latency and a pair form's second result without the issue), `PenumbraPipelinedModel` (`PostRAScheduler = 1`) for the pipelined generations, the `penumbra1`/`penumbra2`/`penumbra2_5`/`penumbra3` processors, AsmWriter, Target, pointer remap. One ISA: processors differ only in their `PenumbraTuning` (tune features + model), never the architecture list. `generic` borrows the most-used variant's tuning |
+| `Penumbra.td` | Top-level TableGen: includes, per-core SchedMachineModels (`PenumbraSchedModel` shared parameters: IssueWidth=1, MicroOpBufferSize=0, LoadLatency=1; each model states an issue figure on its one core resource and a latency for ALU, load, store, MUL and DIV, a store without the latency and a pair form's second result without the issue), `PenumbraPipelinedModel` (`PostRAScheduler = 1`) for the pipelined generations, the `small-icache` tune feature (every generation with an L1-I of 4 KiB or less), the `penumbra1`/`penumbra2`/`penumbra2_5`/`penumbra3` processors, AsmWriter, Target, pointer remap. One ISA: processors differ only in their `PenumbraTuning` (tune features + model), never the architecture list. `generic` borrows the most-used variant's tuning |
 | `PenumbraRegisterInfo.td` | 16 GPRs (R0=zero, R12=TP, R13=LR, R14=SP, R15=PC), GPR/GPR_Allocatable/CCR classes, HWEncoding |
 | `PenumbraInstrInfo.td` | All 4 formats (R/L/M/B) with bit-accurate encoding. Tied-operand constraints for 2-addr ops. ADC/SBC `Uses=[SR]`. All operand slots use full `GPR` (allocator honors R0's reserved+`isConstant`). Pseudos: RET, LEAfi, SELECT_GPR, SELECT_CC_GPR, ADJCALLSTACK. |
 | `PenumbraInstrInfo.{h,cpp}` | TargetInstrInfo: register copies, stack-slot loads and stores, branch analysis, `expandPostRAPseudo`, and the compare-elimination hooks (`analyzeCompare`/`optimizeCompareInstr`; the block comment in the .cpp describes them). `Penumbra::flagUsesFrom`/`flagsLiveBefore` are the one walk every question about flag liveness goes through |
@@ -89,7 +89,7 @@ not behavior.
 | `PenumbraCallingConv.td` | CC_Penumbra (R1–R4 args, stack overflow), RetCC_Penumbra (R1, R2 for i64), CSR_Penumbra (R5–R10, R13) |
 | `PenumbraRegisterInfo.{h,cpp}` | Reserved regs (R0/R12/R14/R15), callee-saved list, `getFrameRegister(R14)`. `eliminateFrameIndex` folds small offsets directly; large offsets expand to LLI+LUI+ADD via a fresh virtual register (RegScavenger picks the physical reg) |
 | `PenumbraFrameLowering.{h,cpp}` | StackGrowsDown, Align(4), `hasFPImpl()=true` when alloca present. `adjustSP` helper used by both prologue and epilogue (small frames use 16-bit imm, large frames materialize size in R11). `processFunctionBeforeFrameFinalized` adds an emergency spill slot for RegScavenger only when frame > 15-bit signed. Shrink-wrapping on: the prologue/epilogue may land in any block, so `canUseAsPrologue`/`canUseAsEpilogue` refuse blocks where SR or R11 is live at the SP adjustment |
-| `PenumbraISelLowering.{h,cpp}` | TargetLowering: JT encoding (EK_LabelDifference32), SELECT diamond expansion, inline-asm constraint mapping, `setStackPointerRegisterToSaveRestore(R14)`, `isIntDivCheap()` (weighs the model's MUL/DIV latencies), `shouldLocalize()` (lets the Localizer move constant-offset address adds), `shouldFormOverflowOp()` (keeps wrap checks as compares for compare elimination), `finalizeLowering()` (marks the flag definitions nothing reads as dead once selection is done), `isLegalAddressingMode` override |
+| `PenumbraISelLowering.{h,cpp}` | TargetLowering: JT encoding (EK_LabelDifference32), SELECT diamond expansion, inline-asm constraint mapping, `setStackPointerRegisterToSaveRestore(R14)`, `isIntDivCheap()` (weighs the model's MUL/DIV latencies), `shouldLocalize()` (lets the Localizer move constant-offset address adds), `shouldFormOverflowOp()` (keeps wrap checks as compares for compare elimination), `finalizeLowering()` (marks the flag definitions nothing reads as dead once selection is done), `isLegalAddressingMode` override, `getOptimalMemOpLLT()` and the `MaxStoresPerMem*` limits (the access type and store count of an inline memcpy/memmove/memset) |
 | `PenumbraTargetTransformInfo.h` | Header-only `PenumbraTTIImpl`. Routes LSR/cost-model queries to our `TargetLowering`. `getNumberOfRegisters` returns 12 for GPRRC, 0 for FPR/VR (disables vectorizers). `isLSRCostLess` makes `Insns` the primary sort key (PowerPC pattern) — without this, LSR rewrites `*d++ = *s++` loops into base+index form |
 | `PenumbraSubtarget.{h,cpp}` | Owns InstrInfo, FrameLowering, TLInfo, all GlobalISel objects. Holds the tune-feature fields; `resolveCPU`/`resolveTuneCPU` define what an unspecified `-mcpu`/`-mtune` means. Answers cost questions from the tuned core's model (`getALUCycles`…, `getWideConstantCycles`, `preferRecomputingWideConstants`), and runs the post-RA machine scheduler where that model sets `PostRAScheduler`, with alias analysis in its dependency graph (`useAA()`) |
 | `PenumbraTargetMachine.{h,cpp}` | Data layout `e-m:e-p:32:32-i32:32-i64:64-n32-S32`, GlobalISel pipeline, `setGlobalISel(true)`, the post-RA machine scheduler in place of the legacy list scheduler. `PenumbraTargetObjectFile` (local class): always inlines jump tables in `.text`. `PenumbraLowerTLS` IR pass: lowers `@llvm.threadlocal.address` (GD → `__tls_get_addr`; LE/IE → inline TP+offset) |
@@ -101,7 +101,7 @@ not behavior.
 | `GISel/PenumbraRegisterBanks.td` | `GPRRegBank` definition |
 | `GISel/PenumbraGlobalISelUtils.{h,cpp}` | Helpers shared by the GISel passes (`adjacentCompare`, used by the legalizer and selector) |
 | `GISel/PenumbraInstructionSelector.cpp` | Hybrid: `selectImpl()` for TableGen patterns, manual C++ for complex cases (wide values as `PseudoLI`, GOT-PCREL globals, frame-index folding, jump tables, ICMP+BRCOND fold, varargs, return-address capture, …) |
-| `GISel/PenumbraPreLegalizerCombiner.cpp` | Pre-legalizer combiner (-O1+). Boilerplate wrapper around `selectImpl` for rules in `PenumbraCombine.td` |
+| `GISel/PenumbraPreLegalizerCombiner.cpp` | Pre-legalizer combiner (-O1+). Its `tryCombineAll` runs the generated rules from `PenumbraCombine.td` (`tryCombineAllImpl`), then expands a constant-size memcpy/memmove/memset into loads and stores |
 | `GISel/PenumbraO0PreLegalizerCombiner.cpp` | Same shape with the smaller `optnone_combines` rule set (-O0 only) |
 | `GISel/PenumbraPostLegalizerCombiner.cpp` | Post-legalizer combiner (-O1+). C++ match/apply for the target-specific rules in `PenumbraCombine.td`, including constant-multiply strength reduction (`matchMulByConst`, costed by `isMulDecompositionCheaper` against the scheduling model) |
 | `Disassembler/PenumbraDisassembler.{h,cpp}` | Binary → MCInst. Custom decoders for branch targets (symbolic lookup), signed immediates (LLIS), signed mem offsets |
@@ -146,7 +146,10 @@ The pipeline is defined by group lists in `PenumbraCombine.td`:
   latencies from its scheduling model. `sub_to_add` flips
   (`G_SUB x, c` → `G_ADD x, -c`) are re-canonicalized after
   legalization by `penumbra_neg_imm_to_opposite` when `|-c|` fits
-  uimm16.
+  uimm16. After the rules, a constant-size `G_MEMCPY`, `G_MEMMOVE`
+  or `G_MEMSET` within the tuned generation's store limit becomes
+  loads and stores (`tryCombineMemCpyFamily`), as does every
+  `G_MEMCPY_INLINE`.
 - **Pre-legalizer at -O0:** `[optnone_combines]` — small upstream
   set (`trivial_combines`, `ptr_add_immed_chain`,
   `combines_for_extload`, `not_cmp_fold`,
@@ -207,7 +210,8 @@ shapes:
   native width via min/sub or USUBO+SELECT, then iteratively
   narrowed. (`lowerFor({s32, s64})` is the working idiom because
   `narrowScalarIf+changeTo` only relabels the type.)
-- G_MEMCPY/MEMMOVE/MEMSET via libcalls. G_PREFETCH custom-lowered
+- G_MEMCPY/MEMMOVE/MEMSET via libcalls, for those the pre-legalizer
+  combiner left. G_PREFETCH custom-lowered
   to no-op. G_FENCE always legal (compiler barrier; no hardware
   instruction).
 - G_DYN_STACKALLOC lowered by framework. G_STACKSAVE/RESTORE

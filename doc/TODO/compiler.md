@@ -37,18 +37,12 @@ a scan that misread branch targets written in upper-case hex.
 | Item | Shape counted | Kernel | libc | Doom | Tests |
 |---|---|---:|---:|---:|---:|
 | "InstCombine's shift-and-mask form costs a constant" | `llis t, -2^k; and y, t` | 413 | 300 | 12 | 234 |
-| "inline small constant-size memcpy/memset/memmove" | `lli r3, N` before a call to one, N ≤ 32 (≤ 64) | 510 (654) | — | — | — |
 | "pointer-minus-constant and integer MMIO addresses miss their folds": MMIO | `add x, imm; ld/st [x + 0]`, `x` dead | 63 | 2 | 1 | 0 |
 | same entry: `p - K` | `llis t, -K; add y, t`, `t` dead | 47 | 63 | 4 | 0 |
 | same entry: run-time indexed local | `mov x, sp; [add x, imm;] add x, y; ld/st [x + 0]` | 35 | 32 | 9 | 16 |
 | "hot-loop code review — software audio mixing": zero-low-half carry | `add/sub r, 0` feeding `adc`/`sbc` | 2 | 13 | 0 | 1,489 |
 
-The memory-call row counts the kernel only: libc and Doom call through
-the PLT, which the scan does not resolve.
-
-Each row saves about one instruction per site, except an inlined
-memory call, which trades the call and the callee's loop for a few
-loads and stores.  The two-address commute
+Each row saves about one instruction per site.  The two-address commute
 heuristics were measured the same way at 0.02–0.06% (in the
 audio-mixing review), and the 64-bit select of zero only concerns the
 32.32 mixer loop.
@@ -63,9 +57,9 @@ What follows, by value:
    outright, passing the address of its own frame.  15–18 KB of kernel
    text once wrappers lose their frames.  A first cut without outgoing
    stack arguments is small.
-2. **Inlined small memory calls and the `p - K` and MMIO folds** —
-   broad in the kernel but unmeasured at run time; the kernel
-   `memmove`'s backward byte loop is 10 instructions where 6 do.
+2. **The `p - K` and MMIO folds** — broad in the kernel but
+   unmeasured at run time; the kernel `memmove`'s backward byte loop
+   is 10 instructions where 6 do.
 3. **The rest** — at most 0.1% each; the zero-low-half carry and the
    64-bit select of zero go with the 32.32 mixer.
 

@@ -213,6 +213,8 @@ public:
 
   bool tryCombineAll(MachineInstr &I) const override;
 
+  bool tryCombineAllImpl(MachineInstr &I) const;
+
 private:
 #define GET_GICOMBINER_CLASS_MEMBERS
 #include "PenumbraGenPreLegalizeGICombiner.inc"
@@ -236,6 +238,26 @@ PenumbraPreLegalizerCombinerImpl::PenumbraPreLegalizerCombinerImpl(
 #include "PenumbraGenPreLegalizeGICombiner.inc"
 #undef GET_GICOMBINER_CONSTRUCTOR_INITS
 {
+}
+
+bool PenumbraPreLegalizerCombinerImpl::tryCombineAll(MachineInstr &MI) const {
+  if (tryCombineAllImpl(MI))
+    return true;
+
+  switch (MI.getOpcode()) {
+  case TargetOpcode::G_MEMCPY_INLINE:
+    return Helper.tryEmitMemcpyInline(MI);
+  case TargetOpcode::G_MEMCPY:
+  case TargetOpcode::G_MEMMOVE:
+  case TargetOpcode::G_MEMSET:
+    // A constant length that fits the store limit in the access types
+    // getOptimalMemOpLLT picks becomes loads and stores; the legalizer makes
+    // anything else a library call, whose return gen2.5 never predicts and
+    // across which only the callee-saved registers survive.
+    return Helper.tryCombineMemCpyFamily(MI);
+  default:
+    return false;
+  }
 }
 
 class PenumbraPreLegalizerCombiner : public MachineFunctionPass {

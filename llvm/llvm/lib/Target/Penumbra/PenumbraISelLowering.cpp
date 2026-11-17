@@ -58,6 +58,12 @@ PenumbraISelLowering::PenumbraISelLowering(const TargetMachine &TM,
   // and the library provides the synchronization (interrupt-disable CAS
   // now, RAS or LL/SC in future).
 
+  // An inline memcpy, memmove or memset trades a call for its loads and
+  // stores.  On a small instruction cache the code that adds costs more than
+  // the call, past the four stores LLVM allows when optimizing for size.
+  if (STI.hasSmallICache())
+    MaxStoresPerMemcpy = MaxStoresPerMemmove = MaxStoresPerMemset = 4;
+
   computeRegisterProperties(STI.getRegisterInfo());
 }
 
@@ -384,4 +390,17 @@ bool PenumbraISelLowering::isLegalAddressingMode(const DataLayout &DL,
     return false;
 
   return true;
+}
+
+// The generic expansion splits the operation into accesses of this type and
+// leaves a library call past MaxStoresPerMem* of them.  Its default starts
+// from s64 and, Penumbra having no misaligned access, drops from there
+// straight to s8 whenever the alignment is smaller.
+LLT PenumbraISelLowering::getOptimalMemOpLLT(
+    const MemOp &Op, const AttributeList &FuncAttributes) const {
+  if (Op.isAligned(Align(4)))
+    return LLT::scalar(32);
+  if (Op.isAligned(Align(2)))
+    return LLT::scalar(16);
+  return LLT::scalar(8);
 }

@@ -64,13 +64,17 @@ def penumbra_select_of_identity : GICombineRule<
 // latencies (PenumbraISelLowering.cpp): a core that multiplies sufficiently
 // faster than it divides takes the rewrite, and one that multiplies as slowly
 // as it divides keeps the divide.  Penumbra-specific fixups for the
-// zero-extending uimm16 form happen in the post-legalizer combiner.
+// zero-extending uimm16 form happen in the post-legalizer combiner.  The
+// rules run from tryCombineAllImpl, which the hand-written tryCombineAll
+// calls before expanding small memory operations, a combine no rule names.
 def PenumbraPreLegalizerCombiner
     : GICombiner<"PenumbraPreLegalizerCombinerImpl", [
       penumbra_srem_pow2,
       penumbra_select_of_identity,
       all_combines
-    ]>;
+    ]> {
+  let CombineAllMethodName = "tryCombineAllImpl";
+}
 
 // At -O0, run a small, hand-picked rule set that cleans up the most
 // obvious IRTranslator artefacts (DCE, ptr_add chaining, extload folding,

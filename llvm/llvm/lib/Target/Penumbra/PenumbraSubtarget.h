@@ -28,8 +28,7 @@ namespace llvm {
 
 class PenumbraSubtarget : public PenumbraGenSubtargetInfo {
   // Storage for the tuning features declared in Penumbra.td, written by
-  // ParseSubtargetFeatures from the tune name and any -mattr string.  The
-  // expansion is empty while no feature is declared.
+  // ParseSubtargetFeatures from the tune name and any -mattr string.
 #define GET_SUBTARGETINFO_MACRO(ATTRIBUTE, DEFAULT, GETTER)                    \
   bool ATTRIBUTE = DEFAULT;
 #include "PenumbraGenSubtargetInfo.inc"

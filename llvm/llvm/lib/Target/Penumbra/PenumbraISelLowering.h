@@ -98,6 +98,10 @@ public:
                              Type *Ty, unsigned AS,
                              Instruction *I) const override;
 
+  // The access type an inline memcpy, memmove or memset is built from.
+  LLT getOptimalMemOpLLT(const MemOp &Op,
+                         const AttributeList &FuncAttributes) const override;
+
 private:
   const PenumbraSubtarget &Subtarget;
 };
