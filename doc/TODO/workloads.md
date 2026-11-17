@@ -422,10 +422,51 @@ per pixel or per store do, in rough order of payoff here:
 
 Its iterative BSP walk (after GBADoom) buys little here, since the
 recursion is ~0.1% of a frame ("Doom: where a frame goes").  Drawing
-straight into the uncached framebuffer would save the 64 KB copy each
-frame — under write-through every store reaches the bus anyway — but
-tears without page flipping and makes fuzz read uncached memory;
-unmeasured.
+straight into the framebuffer is under Ruled out.
+
+## Doom: the frame copy is 11% of a gen3 frame
+
+`I_FinishUpdate` (`sw/doom/i_video_netbsd.c`) copies Doom's
+64,000-byte frame from a buffer in RAM into the framebuffer once a
+frame.  Measured 2026-11-17 on gen3, Nexys Video at 60 MHz, playing
+`demo3` with and without `-noblit`, which skips the copy: 2,652
+realtics against 2,361, 28.2 fps against 31.6.  The copy is 11.0% of
+the run, about 234k cycles a frame or 58 for each 16-byte line.  The
+stall counters, averaged over each run, split it:
+
+| Per line copied | Cycles |
+|---|---:|
+| `load` stalls | 34.8 |
+| Instructions retired | 17.6 |
+| `hazard` and `flush` | 5.0 |
+| `store` stalls | 0.4 |
+
+- **The source comes from memory.**  The renderer writes the frame
+  through L1-D and L2 without allocating, so the copy finds little or
+  none of it cached.  A fill from memory on the same machine is 28.2
+  cycles (memspeed, `doc/internals/penumbra3/memory-performance.md`,
+  "Transfer rates by block size, on hardware").  The other ~7 fit a
+  fill waiting behind posted framebuffer stores, since gen3's uncore
+  takes the bus only with no store posted; the counters do not
+  separate the two.
+- **The stores never wait.**  The store buffer absorbs the copy's
+  16,000 stores a frame: `store` stalls are 0.2% with or without it.
+- **The copy is ~70k instructions a frame,** 4.4 a word with libc's
+  two-words-a-pass `memcpy` (`66f1be7`).  The 7 a word in "Instruction
+  profile (2026-09-22)" predates it.
+- **The levers in reach are small.**  A stream prefetcher overlapping
+  the source fills with the loop is bounded by the bus, which carries a
+  line read and four framebuffer writes for each line, ~45 cycles
+  against the loop's ~18: at most ~2.5% of the run, estimated.  Faster
+  store drains reach only the wait behind posted stores, under 1%
+  ("Hardware: gen3's bus master takes one store every 5 cycles" in
+  [hw-core.md](hw-core.md)).  Drawing straight into the framebuffer is
+  under Ruled out.
+
+Open: whether the ~7 cycles above a fill are the wait behind posted
+stores, which an RTL trace of one copied line shows, and a stream
+prefetcher's reach measured with the store drains sharing its bus,
+which no ISS model does.
 
 ## Compiler: hot-loop code review — software audio mixing
 
@@ -789,3 +830,10 @@ one of those dominates.
 Open: profile a multiuser boot on the ISS (`+pcprof`, from reset;
 `sw/tools/iss-workloads.py` reaches the login prompt) and attribute
 it by rc script and program before choosing what to speed up.
+
+## Ruled out
+
+- **Drawing Doom's frame straight into the framebuffer.**  The display
+  has one framebuffer and no vertical-blank signal, so a frame drawn
+  in view tears, a worse player experience than the reference
+  platforms give.

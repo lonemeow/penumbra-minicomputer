@@ -813,6 +813,84 @@ and how often real workloads run these four against what a refetch
 costs. The test any shape has to keep is the `dc_*` group in
 `tb_penumbra3_spine`.
 
+## Hardware: gen3's bus master takes one store every 5 cycles
+
+A single-beat write through `penumbra3_bus_master` takes 5 cycles: it
+is accepted while the master is idle, presented until its `ack`, and
+completed in a cycle of its own before the master is ready again. The
+store buffer offers its next posted store only once the one on the bus
+frees. A stream of stores therefore drains at 5 cycles a word, as
+memspeed's write rate shows on the ULX3S (5.00), where the SDRAM stack
+takes separate writes every 4.0 cycles and writes under a held strobe
+every 3.04 (sequential) to 3.65 (a new row every word)
+(`doc/internals/penumbra3/memory-performance.md`, "Sustained writes on
+the SDRAM stack").
+
+Modelled 2026-11-17 with `+sbmodel` at `+core=penumbra3` on that day's
+multiuser image, over the shell loop, `pbench kernel` and Doom `demo3`:
+gen3's buffer (sixteen word entries, fills waiting for the entries up
+to their line) and its uncore's ordering, in which a fill from memory
+waits for every buffered write (`/post/inorder`). Cycles per 1000
+instructions the core waits on the buffer, CPI 1 / CPI 2:
+
+| Buffer | shell loop | `pbench kernel` | Doom `demo3` |
+|---|---|---|---|
+| Drain 5 cycles a word (as built) | 92.9 / 45.9 | 63.9 / 34.9 | 36.2 / 10.0 |
+| … 4 | 67.2 / 31.2 | 51.2 / 28.2 | 16.6 / 3.8 |
+| … 3 | 48.9 / 23.4 | 43.1 / 24.9 | 9.2 / 2.5 |
+| 5, a fill from memory passing writes to other lines | 75.8 / 40.4 | 55.5 / 32.4 | 25.1 / 8.5 |
+| 8 line entries, write combining | 88.8 / 68.2 | 49.6 / 37.4 | 64.3 / 58.3 |
+
+- **The drain rate sets fills' waits as well as full-buffer stalls.**
+  A fill from memory waits for every buffered write, so each cycle off
+  a drain comes off it too.
+- **I fills waiting on L2 barely move:** 45 → 35 and 41 → 36 per 1000
+  at CPI 1 on the kernel paths. Each posted write holds L2 for the
+  model's assumed 2 cycles, whatever the bus does.
+- **Doom on hardware gains little.** On the Nexys Video its `store`
+  stalls are 0.2%, and its frame copy waits at most ~7 cycles a line
+  behind posted stores ([workloads.md](workloads.md), "Doom: the frame
+  copy is 11% of a gen3 frame"): under 1% of the run. The model costs
+  every drain at the ULX3S's SDRAM rates, and Doom's framebuffer
+  stores go to the display's block RAM. The case rests on the kernel
+  paths on the ULX3S.
+- **Passing posted writes saves less than a 4-cycle drain,** and needs
+  the line search extended to posted entries and the uncore's rule for
+  taking the bus changed.
+- **Line entries lose under the in-order bus:** a fill from memory
+  waits for every line entry, the open one included, to drain as a
+  burst.
+
+The change, in two steps:
+
+1. **4 cycles a word.** The master accepts its next request in its
+   completion cycle as well as when idle; the store buffer offers the
+   oldest posted store not yet taken, from a send pointer beside the
+   head that frees; and the uncore takes a faulting store's address
+   from the master instead of from the buffer's offer
+   (`store_fault_addr_q` in `penumbra3_uncore.sv`), since the offer has
+   moved on. Every output stays registered.
+2. **~3 cycles a word.** The strobe held across consecutive writes,
+   which the sync bus allows (`doc/hardware/bus-protocol.md`, "Sync
+   burst"): the master latches the next write before the current
+   `ack` and completes each beat on its own.
+
+Open:
+
+- Step 1, memspeed's write rate on the ULX3S after it (4.00 expected),
+  and a full-top sweep: the master's address adder was the CPU clock's
+  worst path on 2 of 10 seeds ("Hardware: gen3 (Penumbra/3) features
+  still to build").
+- L2's occupancy per posted write on the RTL, against the model's 2
+  cycles.
+- Drain costs by target in the model: the framebuffer is block RAM on
+  the bus, not SDRAM.
+- `memory-performance.md`'s "Line or word entries" table and the
+  overview's write-combining lever (`doc/internals/penumbra3/overview.md`,
+  "Levers ranked by measured benefit") were modelled with fills from
+  memory passing posted writes. Under gen3's ordering both need
+  redoing with `/inorder`.
+
 ## Hardware: an L2 INVAL_ALL write is dropped or drops a strobe
 
 `l2_cache.sv` takes a `WRSYS` to `CACHE_INVAL_ALL` as a one-cycle
@@ -864,6 +942,10 @@ highest set bit, on magnitudes, as the unit works:
   take about 55 cycles per 1000 instructions there.  A multiply that stops
   at `Rd`'s highest set bit saves 13 of them, 16 walking the smaller
   operand; a divide aligned to its divisor saves 15.
+- **The hardware agrees on Doom.**  On gen3 (Nexys Video, 2026-11-17),
+  `demo3` without its frame copy spends 3.9 % of its cycles in `funit`
+  stalls, the divmul unit's: about 66 per 1000 instructions at its CPI
+  of 1.70, against the ~55 above.
 - **Skipping the dividend's leading zeros alone saves 3.**  Doom's
   dividends mostly fill the word: each wall column divides
   `0xffffffff` by a scale.  Aligned to the divisor, two thirds of its

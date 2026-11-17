@@ -86,7 +86,10 @@ set `PMAP_NOCACHE` unless the caller asks for
 `BUS_SPACE_MAP_PREFETCHABLE`. Decide the framebuffer's attribute at the
 same time, because uncached costs it: every framebuffer store blocks,
 and under a gen3 cacheable-only store buffer each one would also drain
-the buffer. A framebuffer wants uncached-but-bufferable
+the buffer. Through today's cacheable mapping, Doom's frame copy is
+already 11% of its run on gen3, its stores never waiting
+([workloads.md](workloads.md), "Doom: the frame copy is 11% of a gen3
+frame"). A framebuffer wants uncached-but-bufferable
 (write-combining) semantics, close to what the reserved PTE `S` bit is
 earmarked for — see the "PTE `S` (speculatable) bit" item under
 "Penumbra/2 SDRAM-backed sim + EX-frontier interrupts" below.
