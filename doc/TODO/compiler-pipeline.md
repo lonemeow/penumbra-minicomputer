@@ -127,7 +127,17 @@ residual needs associativity.
 Audited 2026-06-09 after the shrink-wrapping discovery: Penumbra
 overrides *no* behavior gates (only accessor plumbing in
 `PenumbraSubtarget.h`), so several generic optimizations that mature
-targets opt into are silently off.  Status per item:
+targets opt into are silently off.
+
+Swept again 2026-11-16 across the pass configuration and every hook
+scalar code reaches in the subtarget, instruction, register, frame,
+lowering and cost-model interfaces.  An item's estimated cycles come
+from the `-O2` IR corpus (the `test-compiler` programs, Doom, the
+bare-metal benchmarks and the kernel) compiled for `penumbra2_5`,
+with each basic block run once through the timing reference's issue
+and latency figures and every block weighted alike.
+
+Status per item:
 
 - **GISel Localizer — DONE** (`4c016efc4222`).  Was missing from the
   pipeline entirely; AArch64 runs it at every opt level.  dhry_1.c
@@ -183,6 +193,12 @@ targets opt into are silently off.  Status per item:
   scheduler adds instructions and register saves to Doom and hides no
   more load-use waits than the one after register allocation does
   alone ([ruled out](#ruled-out)).
+- **Cross-block copy coalescing** (`enableJoinGlobalCopies`): off
+  only because it defaults to `enableMachineScheduler()`, so nearly
+  every other target has it.  Alone (`-join-globalcopies`) it
+  estimates 0.09% fewer cycles in Doom, 0.03% fewer in the kernel and
+  none in `test-compiler`, whose spills and reloads grow 0.13%.  A
+  one-line override, for a gain below what a hardware A/B resolves.
 - **Tail calls**: `PenumbraCallLowering.cpp` hardcodes
   `Info.IsTailCall = false` (`// TODO: tail calls`).  Wrapper-heavy
   kernel code pays a full frame per hop.  Measured opportunity and a
@@ -225,13 +241,26 @@ targets opt into are silently off.  Status per item:
   placement; RISC-V and AArch64 add a copy-propagation run after block
   placement (`createMachineCopyPropagationPass(true)` in their
   pre-emit passes).
-- **`enableSpillageCopyElimination`** (MachineCopyPropagation
-  extension, X86 enables): cheap flip + measure.
+- **Stack-slot recognition** (`isLoadFromStackSlot`,
+  `isStoreToStackSlot` and their `PostFE` forms): not implemented, so
+  the spiller and stack-slot coloring cannot tell a spill from any
+  other store, and keep pairs they could drop.  The visible upper
+  bound is small: a reload directly after the spill of the same
+  register to the same slot occurs 382 times in the kernel and twice
+  in Doom.
+- **Hot/cold splitting** (`-hot-cold-split`): an IR pass that moves
+  the code behind `panic`, `KASSERT` and unlikely branches out of its
+  function, so hot code packs denser into the 4 KiB L1-I.  That
+  layout swung the kernel's syscall benchmarks by up to 6% either way
+  in the gen2.5 A/B of the scheduler after register allocation.  Not
+  measured; clang's `CCC_OVERRIDE_OPTIONS` adds the flag to every
+  compile of an image build, so an A/B needs no code.
 - **MachineOutliner / RISC-V-style save-restore millicode**: nothing
   implemented (`getOutliningCandidateInfo` etc.).  Code-size tools —
   attractive under the 1 KB I$ regime (21% of hot text is spill code;
   identical prologue/epilogue sequences outline well), but each
-  outlined call costs BL+JMP at runtime.  Bigger project; consider
+  outlined call costs BL+JMP at runtime, and gen2.5 predicts no
+  return, so the JMP costs 5.  Bigger project; consider
   RISC-V's `-msave-restore` shape (dedicated prologue/epilogue
   routines) rather than the general outliner first.
 - **PostRA scheduler** (no Penumbra scheduling model sets
@@ -243,12 +272,15 @@ targets opt into are silently off.  Status per item:
   no instruction count
   ([the costs the compiler is not told](#compiler-the-costs-the-compiler-is-not-told)).
 - **MachineCombiner** (`getMachineCombinerPatterns` + sched model):
-  reassociation for ILP — little to gain at IssueWidth=1; revisit
-  with gen2.
+  reassociation for ILP — little to gain on a single-issue core with
+  full forwarding; revisit with gen4's dual issue.
 - Not applicable: EarlyIfConversion (no predicated execution),
   MachinePipeliner (needs deep sched model, ILP machine),
   `enableSubRegLiveness` (no subregisters), GISel LoadStoreOpt
-  (no wider load/store ops to merge into).
+  (no wider load/store ops to merge into), SelectOptimize (turns a
+  `select` into a branch for a target whose `select` is a
+  conditional move; Penumbra's is a branch already, and the pass's
+  triggers need branch weights).
 - **TTI capability/cost audit** (opened by the SDAG action-table
   removal): with no SelectionDAG path, IR-level passes read machine
   capabilities from `PenumbraTTIImpl`, and un-overridden defaults can
@@ -256,11 +288,7 @@ targets opt into are silently off.  Status per item:
   (reports the fused DIV_P/DIVU_P; DivRemPairs keeps `x/y; x%y`
   pairs for the GISel divrem fusion instead of decomposing the rem
   into mul+sub — one ~33-cycle divmul op per pair instead of two).
-  Remaining candidate: `getArithmeticInstrCost`, which prices
-  MUL/DIV like single-cycle ALU ops for the inliner/unroller instead
-  of ~33-cycle divmul iterations — a cheap override, but cost-model
-  shifts move inlining decisions broadly, so it needs a kernel-bench
-  A/B before landing.
+  `getArithmeticInstrCost` — **DONE** (`c1ea725`).
 
 ## Compiler: shrink-wrapping — what still limits it
 
@@ -551,6 +579,15 @@ confirm on kernel hot paths.
 inline word stores. Other GISel targets inline the small constant-size
 cases; Penumbra is missing the wiring, not the capability.
 
+In the `-O2` IR corpus (2026-11-16) the kernel makes 293 word-aligned
+`memcpy` calls and 93 word-aligned `memset` calls of 32 bytes or
+less, and the `test-compiler` programs 121 and 36.  Each pays the
+argument set-up, the routine's own size and alignment dispatch, a
+return gen2.5 never predicts (5 cycles), and `r1`–`r4`, `r11` and
+`lr` lost across the call.  pbench measures a 16-byte `memcpy` at 101
+cycles an operation on gen2.5, its harness included; four `LDW` and
+four `STW` issue in 32.
+
 The expansion itself is generic: `CombinerHelper::tryCombineMemCpyFamily`
 (and `tryEmitMemcpyInline` for `llvm.memcpy.inline`) turns a constant-size
 op into a load/store sequence bounded by `TargetLowering::MaxStoresPerMem*`
@@ -585,6 +622,26 @@ byte stores and bounce back to the libcall. The realistic win is therefore
 word-aligned constant-size struct/array copies — which is the common case.
 Decide via `allowsMisalignedMemoryAccesses` whether to inline unaligned at
 all (probably not).
+
+## Compiler: expand small constant-size memcmp and bcmp inline
+
+A `memcmp` or `bcmp` with a small constant length is a library call.
+ExpandMemCmp turns one into loads and compares only where
+`TTI::enableMemCmpExpansion` names the load sizes to use, and
+Penumbra's cost model does not override it.  The `-O2` IR corpus has
+52 such calls of 16 bytes or less in the kernel and 163 in the
+`test-compiler` programs (2026-11-16).
+
+The expansion loads at whatever alignment the operands have, and
+Penumbra lowers an under-aligned load to byte loads and shifts, so it
+pays for short compares, or ones whose operands are known aligned.
+
+Open:
+
+- Override `enableMemCmpExpansion` for 4-, 2- and 1-byte loads, with
+  `MaxLoadsPerMemcmp` as the budget.
+- Count which of the kernel's 52 calls have aligned operands, and
+  how often the paths that make them run.
 
 ## Compiler: per-generation tuning — models and their consumers
 
@@ -778,13 +835,29 @@ Reaching zero would take launching the target fetch in the same cycle
 as the branch — worth weighing for gen3's front end, where every taken
 branch in a hot loop pays it.
 
+The compiler can hide that slot on gen2.5: a load, store, `MUL` or
+`DIV` among the two instructions directly before a predicted taken
+branch absorbs the discarded fetch
+([instruction-timing.md](../system/instruction-timing.md#taken-branches-beside-a-stall)).
+In the `-O2` IR corpus (2026-11-16), 505 of Doom's 2,301 backward
+branches and 7,624 of the kernel's 17,638 have a memory operation
+earlier in their block but none in those two slots.  That is an
+upper bound: every ALU operation sets the flags, so the one a `Bcc`
+reads stays directly before it, and a store ahead of its base's
+increment moves past it only with its offset rewritten.  A
+preference in the scheduler after register allocation would express
+it, since no model field does.  gen3 hides nothing this way, so the
+work pays only while gen2.5 is the board in use.
+
 No scheduling-model field expresses "a predicted taken branch still
-costs a cycle", and setting `MispredictPenalty` would change almost
-nothing for Penumbra: `SelectOptimize` uses it to choose between a
-`select` and a branch, but Penumbra has no conditional-move instruction,
-so a `select` becomes a branch diamond either way; SimplifyCFG adds
-`TTI::getBranchMispredictPenalty()` (default 0, overridden only by X86)
-to its speculation budget, and only for branches marked unpredictable.
+costs a cycle", and setting `MispredictPenalty` changes nothing: the
+reference's figures (4 for `penumbra2` and `penumbra2_5`, 3 for
+`penumbra3`) leave every file of the `-O2` IR corpus byte-identical
+(2026-11-16).  Its readers are EarlyIfConversion and SelectOptimize,
+which run only where a target adds them to its pipeline, and Penumbra
+adds neither; SimplifyCFG adds `TTI::getBranchMispredictPenalty()`
+(default 0, overridden only by X86) to its speculation budget, and
+only for branches marked unpredictable.
 The decisions these costs should drive are the branch-versus-branchless
 combines — see the "no branch-cost model" entry.
 
@@ -1057,7 +1130,12 @@ Open:
 - Then measure the pass: with five registers free of a save, values
   kept in them across calls to small functions are where it could
   pay ([the costs the compiler is not
-  told](#compiler-the-costs-the-compiler-is-not-told)).
+  told](#compiler-the-costs-the-compiler-is-not-told)).  A static
+  estimate (2026-11-16, on the corpus and method of
+  [the pass/gate audit](#compiler-codegen-passgate-audit--what-we-leave-at-the-default))
+  finds little: 2.75% fewer callee-saved registers and 0.24% fewer
+  cycles in `test-compiler`, and nothing in Doom or the kernel,
+  because a callee counts only when its body is in the same file.
 
 ## Compiler: 16-bit jump-table entries when offsets fit
 
@@ -1103,6 +1181,27 @@ Open:
 - This and "16-bit jump-table entries when offsets fit" pull opposite
   ways: a 16-bit entry is necessarily an offset.  Decide by relocation
   model and size together.
+
+## Compiler: register copies are a tenth of the instructions
+
+A `mov` between registers is 8.9% of Doom's instructions, 9.9% of the
+kernel's and 8.7% of the `test-compiler` programs' in the `-O2` IR
+corpus compiled for `penumbra2_5` (2026-11-16).  Where they come from
+is not known.  The candidates are the two-operand ALU forms, whose
+destination is also a source, so a value still live past the
+operation is copied first; argument and return registers; and copies
+PHI elimination leaves, of which
+[a loop-carried value that is also live out](#compiler-a-loop-carried-value-that-is-also-live-out-is-copied-twice)
+is one measured shape.
+
+Open:
+
+- Attribute the copies in Doom's and the kernel's hot code to their
+  sources, weighted by how often each runs.
+- Then pick the lever for each source: allocation hints, commuting a
+  two-operand form, or splitting an edge.  The ISS pairing model's
+  `movop` fusion, studied for gen4, would remove the first kind's
+  cost in hardware.
 
 ## Compiler: a loop-carried value that is also live out is copied twice
 
@@ -1167,9 +1266,11 @@ Not re-verified since the rework.
 
 ## Ruled out
 
-All three were measured 2026-10-04 the way
+The first three were measured 2026-10-04 the way
 [the costs the compiler is not told](#compiler-the-costs-the-compiler-is-not-told)
-describes, against the same baseline.
+describes, against the same baseline; the rest 2026-11-16 on the
+corpus and estimate of
+[the pass/gate audit](#compiler-codegen-passgate-audit--what-we-leave-at-the-default).
 
 - **The machine scheduler before register allocation,** on top of
   the one after it.  In its bidirectional mode, with the cross-block
@@ -1180,6 +1281,20 @@ describes, against the same baseline.
   `r6`: the scheduler holds register pressure under the 12
   allocatable registers, and only five of them, `r1`–`r4` and `r11`,
   cost nothing to use.
+
+  Register-pressure tracking was on in that run: the generic
+  scheduler tracks pressure in any region longer than half the
+  allocatable registers, six instructions here.  Forcing it on
+  everywhere (2026-11-16) changes nothing measurable, and lowering the
+  pressure limit to five registers keeps the `R_DrawColumn` saves:
+  that setup block needs seven registers in source order, so it
+  exceeds any such limit either way.  On the audit's estimate, every
+  variant tried (each direction, forced tracking, the lower limit)
+  costs `penumbra2_5` 0.8–1.8% in Doom, 0.1–0.4% in the kernel and
+  2.3% in `test-compiler`.  For `penumbra3` it saves 1.0–1.2% in Doom
+  and 0.3–0.5% in the kernel, and costs 0.5–0.9% in `test-compiler`;
+  the saving is an upper bound, since it prices a spill store at the
+  store buffer's one cycle.  Worth an A/B once gen3 runs NetBSD.
 
 - **Turning every select into a branch before selection.**  With no
   conditional move a `select` ends as a branch either way, and
@@ -1196,4 +1311,16 @@ describes, against the same baseline.
   Doom's own code runs 0.67% more instructions and CoreMark 0.71%
   fewer.  A preference for particular loops through
   `getUnrollingPreferences` is a different proposal, and nothing
-  measured here argues for one.
+  measured here argues for one.  gen3's 8 KiB L1s and 4-cycle fills
+  from the L2 make the text growth cheaper there, but the instruction
+  counts above still point to a wash; only a gen3 A/B would tell.
+
+- **Spill-copy elimination** (`enableSpillageCopyElimination`).  It
+  changes 9 of the corpus's 1,734 files, and no estimated cycle.
+
+- **A cost on a callee-saved register's first use**
+  (`getCSRFirstUseCost`).  The allocator takes the five registers
+  free of a save first anyway, so the cost only weighs a first
+  callee-saved register against a split or a spill.  At 2 and 5 it
+  moves no estimate past 0.03%; at 20 the kernel spills 1.5% more to
+  use 2.7% fewer callee-saved registers, for 0.22% more cycles.
