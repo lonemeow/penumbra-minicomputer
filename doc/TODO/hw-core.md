@@ -105,23 +105,21 @@ landed in `dd116d6` and the commit after it, which retires cacheable
 stores into it. What remains is the staged levers, in the order the
 overview ranks them ("Levers ranked by measured benefit").
 
-Each lever is read against a full-top seed sweep. The current one, at
-`89dc784` with a divmul's low half forwarding like an ALU result, is
-of the ULX3S top with the line SDRAM stack and no floorplan, the
-placement choices taken over from gen2: 9 of 10 seeds close every
-domain, and the tenth misses the CPU clock's 37.5 MHz. The CPU clock
-is the worst domain on 9; one seed that closes every domain has less
-margin on the USB clock's 60 MHz. The CPU clock's critical path is the
-fetch side's on 6: the I-TLB's word through the TLB match, into IF1's
-PC past the L1-I's tag compare and the predictor (3), or into the
-fetch buffer past the fetch's fault verdict (3). On 2 it is the D
-side's: the D-TLB's word through the TLB match and the L1-D's tag
-compare, into MEM2's writeback payload or the L1-D's held lookup. On
-the other 2 it is the bus master's word index through the bus
-address's adder into the USB host's crossing buffer, a 26-level path
-that is 77-78% routing; the rest are 63-66% routing. ID's scoreboard
-and EX's forwarding loop are the worst path on none. The next lever's
-sweep is read against this one.
+Each lever is read against a full-top seed sweep. The current one,
+with the bus master taking the next store as a write completes, is of
+the ULX3S top with the line SDRAM stack and no floorplan, the
+placement choices taken over from gen2: 8 of 10 seeds close every
+domain; one misses the CPU clock's 37.5 MHz and one the USB clock's
+60 MHz. The CPU clock is the worst domain on 9. Its critical path is
+the fetch side's on 9: the I-TLB's word through the TLB match into
+IF1's PC (3) or into the fetch buffer (1), or the L1-I's data into the
+fetch buffer (3) or the predictor (2). On the tenth it is the D
+side's: the D-TLB's word through the TLB match into the L1-D's busy
+flag. The bus master, ID's scoreboard and EX's forwarding loop are the
+worst path on none. Against the sweep before it, at `89dc784`, the
+CPU clock's median is the same, and the USB clock, which the change
+does not touch, moves as far from seed to seed as the CPU clock does.
+The next lever's sweep is read against this one.
 
 ## Hardware: a gen3 divmul's second write stalls the whole back end
 
@@ -813,18 +811,19 @@ and how often real workloads run these four against what a refetch
 costs. The test any shape has to keep is the `dc_*` group in
 `tb_penumbra3_spine`.
 
-## Hardware: gen3's bus master takes one store every 5 cycles
+## Hardware: gen3's bus master drops the strobe between stores
 
-A single-beat write through `penumbra3_bus_master` takes 5 cycles: it
-is accepted while the master is idle, presented until its `ack`, and
-completed in a cycle of its own before the master is ready again. The
-store buffer offers its next posted store only once the one on the bus
-frees. A stream of stores therefore drains at 5 cycles a word, as
-memspeed's write rate shows on the ULX3S (5.00), where the SDRAM stack
-takes separate writes every 4.0 cycles and writes under a held strobe
-every 3.04 (sequential) to 3.65 (a new row every word)
+`penumbra3_bus_master` writes each posted store as a transaction of
+its own. It takes the next store in the cycle it completes one, so its
+strobe drops a cycle between writes and a stream of stores drains at 4
+cycles a word, the SDRAM stack's floor for separate writes; under a
+held strobe the stack takes them closer together
 (`doc/internals/penumbra3/memory-performance.md`, "Sustained writes on
-the SDRAM stack").
+the SDRAM stack"). Taking the next store in the completion cycle, 5
+cycles a word to 4, landed in "hw: let gen3's bus master take the next
+store as a write completes". On the Nexys Video the DDR3 stack sets
+the drain whatever the master does (the same doc, "Transfer rates by
+block size, on hardware"), so this is a ULX3S lever.
 
 Modelled 2026-11-17 with `+sbmodel` at `+core=penumbra3` on that day's
 multiuser image, over the shell loop, `pbench kernel` and Doom `demo3`:
@@ -835,8 +834,8 @@ instructions the core waits on the buffer, CPI 1 / CPI 2:
 
 | Buffer | shell loop | `pbench kernel` | Doom `demo3` |
 |---|---|---|---|
-| Drain 5 cycles a word (as built) | 92.9 / 45.9 | 63.9 / 34.9 | 36.2 / 10.0 |
-| … 4 | 67.2 / 31.2 | 51.2 / 28.2 | 16.6 / 3.8 |
+| Drain 5 cycles a word | 92.9 / 45.9 | 63.9 / 34.9 | 36.2 / 10.0 |
+| … 4 (as built) | 67.2 / 31.2 | 51.2 / 28.2 | 16.6 / 3.8 |
 | … 3 | 48.9 / 23.4 | 43.1 / 24.9 | 9.2 / 2.5 |
 | 5, a fill from memory passing writes to other lines | 75.8 / 40.4 | 55.5 / 32.4 | 25.1 / 8.5 |
 | 8 line entries, write combining | 88.8 / 68.2 | 49.6 / 37.4 | 64.3 / 58.3 |
@@ -854,37 +853,28 @@ instructions the core waits on the buffer, CPI 1 / CPI 2:
   every drain at the ULX3S's SDRAM rates, and Doom's framebuffer
   stores go to the display's block RAM. The case rests on the kernel
   paths on the ULX3S.
-- **Passing posted writes saves less than a 4-cycle drain,** and needs
-  the line search extended to posted entries and the uncore's rule for
-  taking the bus changed.
+- **Passing posted writes saves less than the drain going from 5 to
+  4,** and needs the line search extended to posted entries and the
+  uncore's rule for taking the bus changed.
 - **Line entries lose under the in-order bus:** a fill from memory
   waits for every line entry, the open one included, to drain as a
   burst.
 
-The change, in two steps:
-
-1. **4 cycles a word.** The master accepts its next request in its
-   completion cycle as well as when idle; the store buffer offers the
-   oldest posted store not yet taken, from a send pointer beside the
-   head that frees; and the uncore takes a faulting store's address
-   from the master instead of from the buffer's offer
-   (`store_fault_addr_q` in `penumbra3_uncore.sv`), since the offer has
-   moved on. Every output stays registered.
-2. **~3 cycles a word.** The strobe held across consecutive writes,
-   which the sync bus allows (`doc/hardware/bus-protocol.md`, "Sync
-   burst"): the master latches the next write before the current
-   `ack` and completes each beat on its own.
+The change left: **~3 cycles a word**, the strobe held across
+consecutive writes, which the sync bus allows
+(`doc/hardware/bus-protocol.md`, "Sync burst"). The master latches the
+next write before the current `ack` and completes each beat on its
+own. The store buffer already lets the master take a store while
+earlier ones are sent, any number of them.
 
 Open:
 
-- Step 1, memspeed's write rate on the ULX3S after it (4.00 expected),
-  and a full-top sweep: the master's address adder was the CPU clock's
-  worst path on 2 of 10 seeds ("Hardware: gen3 (Penumbra/3) features
-  still to build").
 - L2's occupancy per posted write on the RTL, against the model's 2
   cycles.
 - Drain costs by target in the model: the framebuffer is block RAM on
   the bus, not SDRAM.
+- The model's `bus` drain preset (`sw/sim/sb_model.h`) still costs a
+  single word at 5 cycles.
 - `memory-performance.md`'s "Line or word entries" table and the
   overview's write-combining lever (`doc/internals/penumbra3/overview.md`,
   "Levers ranked by measured benefit") were modelled with fills from

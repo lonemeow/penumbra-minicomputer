@@ -5,8 +5,9 @@
 // master's back-to-back burst runs against the actual speculative-
 // prefetch adapter, which a gapped read stream can wedge
 // (doc/TODO/hw-core.md). The master's transaction interface is exposed
-// for the testbench; the cache-facing bus between master and memory is
-// internal.
+// for the testbench; of the cache-facing bus between master and memory,
+// only the strobes are, so the testbench can time the gaps between
+// transactions.
 module penumbra3_bus_master_test #(
     parameter int LINE_BYTES = 16,
     parameter int WORD_BYTES = 4
@@ -24,7 +25,11 @@ module penumbra3_bus_master_test #(
     input  logic [(LINE_BYTES/WORD_BYTES)-1:0][31:0] i_req_wline,
     output logic                                     o_rsp_valid,
     output logic [(LINE_BYTES/WORD_BYTES)-1:0][31:0] o_rsp_rline,
-    output logic                                     o_rsp_fault
+    output logic                                     o_rsp_fault,
+    output logic [31:0]                              o_rsp_addr,
+
+    output logic                                     o_bus_re,
+    output logic                                     o_bus_we
 );
 
     // Master <-> sdram_sim cache-facing bus
@@ -52,6 +57,7 @@ module penumbra3_bus_master_test #(
         .o_rsp_valid   (o_rsp_valid),
         .o_rsp_rline   (o_rsp_rline),
         .o_rsp_fault   (o_rsp_fault),
+        .o_rsp_addr    (o_rsp_addr),
         .o_bus_addr    (bus_addr),
         .o_bus_wdata   (bus_wdata),
         .o_bus_byte_en (bus_byte_en),
@@ -61,6 +67,9 @@ module penumbra3_bus_master_test #(
         .i_bus_ack     (bus_ack),
         .i_bus_fault   (1'b0)
     );
+
+    assign o_bus_re = bus_re;
+    assign o_bus_we = bus_we;
 
     sdram_sim u_mem (
         .i_clk       (i_clk),

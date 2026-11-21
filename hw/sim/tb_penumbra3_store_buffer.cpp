@@ -4,13 +4,14 @@
 // its contract (the module's header):
 //   - a store is registered as it enters and offered for posting from the
 //     second cycle after; the oldest queued store is offered
-//   - a posted store is offered to the bus, oldest first, until the bus
-//     master takes it, and frees when its write completes
-//   - o_posted while a posted store owes its write; o_empty with nothing
-//     entered, queued or posted
+//   - the oldest unsent store is offered to the bus master; one it takes is
+//     sent, and frees when its bus write completes. The master may take
+//     stores while earlier ones are still sent
+//   - o_posted while a posted store owes its bus write; o_empty with
+//     nothing entered, queued or posted
 //   - o_line_queued for a line any queued store holds, the entering one
 //     included, and for no line only posted stores hold
-//   - o_full exactly when every entry is taken, counting the entering
+//   - o_full exactly when every entry is in use, counting the entering
 //     store, so a store entering while it is low always finds an entry
 // Directed cases pin the latencies; a long random run against a reference
 // model covers the orderings, simultaneous events and wrap-around.
@@ -36,24 +37,31 @@ struct Model {
     std::deque<Store> ring;     // oldest first: posted ones, then queued
     bool  in_valid = false;     // the input stage
     Store in{};
-    bool  sent = false;         // the bus master has taken the oldest posted
+    int   sent = 0;             // the oldest posted stores, which the bus master has taken
 
     const Store* oldest_queued() const {
         for (const Store& s : ring) if (!s.posted) return &s;
         return nullptr;
     }
     bool any_posted() const { return !ring.empty() && ring.front().posted; }
+    // The store the bus port offers: the oldest unsent one.
+    const Store* offered() const {
+        if ((int)ring.size() > sent && ring[sent].posted) return &ring[sent];
+        return nullptr;
+    }
     bool line_queued(uint32_t line) const {
         if (in_valid && (in.addr >> 4) == line) return true;
         for (const Store& s : ring) if (!s.posted && (s.addr >> 4) == line) return true;
         return false;
     }
-    // The clock edge, with this cycle's inputs.
-    void step(bool enq, const Store& e, bool posted, bool taken, bool done) {
+    // The clock edge, with this cycle's inputs. A take sends the store
+    // offered this cycle and a done frees the oldest sent one, so the two
+    // can share a cycle.
+    void step(bool enq, const Store& e, bool posted, bool take, bool done) {
         if (done) ring.pop_front();
         if (posted)
             for (Store& s : ring) if (!s.posted) { s.posted = true; break; }
-        sent = !done && (sent || taken);
+        sent += (take ? 1 : 0) - (done ? 1 : 0);
         if (in_valid) ring.push_back(in);
         in_valid = enq;
         if (enq) { in = e; in.posted = false; }
@@ -77,19 +85,19 @@ static std::string hex(uint32_t v) {
 }
 
 // The model in the contract's terms: an entering store is queued and
-// takes an entry, though it is not in the ring yet.
+// holds an entry, though it is not in the ring yet.
 static std::string model_view() {
-    int taken = (int)m.ring.size() + (m.in_valid ? 1 : 0);
+    int used = (int)m.ring.size() + (m.in_valid ? 1 : 0);
     int posted = 0, queued = m.in_valid ? 1 : 0;
     for (const Store& s : m.ring) (s.posted ? posted : queued)++;
     std::string queued_at;
     if (const Store* q = m.oldest_queued()) queued_at = "oldest " + hex(q->addr);
     if (m.in_valid) queued_at += (queued_at.empty() ? "" : ", ") + hex(m.in.addr) + " entering";
-    std::string v = std::to_string(taken) + "/" + std::to_string(ENTRIES) + " entries taken; ";
+    std::string v = std::to_string(used) + "/" + std::to_string(ENTRIES) + " entries in use; ";
     v += "queued " + std::to_string(queued);
     if (!queued_at.empty()) v += " (" + queued_at + ")";
     v += "; posted " + std::to_string(posted);
-    if (m.sent) v += " (the oldest's write in flight)";
+    if (m.sent) v += " (" + std::to_string(m.sent) + " sent)";
     return v;
 }
 
@@ -126,7 +134,7 @@ static std::string describe(bool enq, const Store& e, bool posted, bool taken, b
     if (enq)    add("a store to " + hex(e.addr) + " entered");
     if (posted) add("the uncore posted");
     if (taken)  add("the bus master took");
-    if (done)   add("a write completed");
+    if (done)   add("a bus write completed");
     return s.empty() ? "nothing" : s;
 }
 
@@ -153,13 +161,12 @@ static void check_all(Dut* d, uint32_t line) {
         check_word("o_post_wdata", d->o_post_wdata, q->wdata);
         check_word("o_post_byte_en", d->o_post_byte_en, q->byte_en);
     }
-    bool bus = m.any_posted() && !m.sent;
-    check_flag("o_bus_valid", d->o_bus_valid, bus);
-    if (bus) {
-        const Store& h = m.ring.front();
-        check_word("o_bus_addr", d->o_bus_addr, h.addr & ~3u);
-        check_word("o_bus_wdata", d->o_bus_wdata, h.wdata);
-        check_word("o_bus_byte_en", d->o_bus_byte_en, h.byte_en);
+    const Store* h = m.offered();
+    check_flag("o_bus_valid", d->o_bus_valid, h != nullptr);
+    if (h) {
+        check_word("o_bus_addr", d->o_bus_addr, h->addr & ~3u);
+        check_word("o_bus_wdata", d->o_bus_wdata, h->wdata);
+        check_word("o_bus_byte_en", d->o_bus_byte_en, h->byte_en);
     }
     check_flag("o_posted", d->o_posted, m.any_posted());
     check_flag("o_empty", d->o_empty, m.ring.empty() && !m.in_valid);
@@ -200,7 +207,7 @@ int main(int argc, char** argv) {
     check_all(d, 0);
 
     step(d, false, Store{}, false, false, false);
-    scene = "store A's write in flight";
+    scene = "store A sent";
     check_all(d, 0);
 
     step(d, false, Store{}, false, false, true);
@@ -223,6 +230,25 @@ int main(int argc, char** argv) {
         step(d, false, Store{}, false, false, true);
     }
     scene = "three stores written";
+    check_all(d, 0);
+
+    // ── Back to back: the next store taken as a write completes ──
+    for (const Store& x : s) step(d, true, x, false, false, false);
+    step(d, false, Store{}, false, false, false);
+    for (int i = 0; i < 3; i++) step(d, false, Store{}, true, false, false);
+    step(d, false, Store{}, false, true, false);
+    scene = "back to back, store 0 sent: store 1 offered";
+    check_all(d, 0);
+    check_word("o_bus_addr (the oldest unsent)", d->o_bus_addr, s[1].addr);
+    step(d, false, Store{}, false, true, true);
+    scene = "back to back, store 1 taken as store 0 completed";
+    check_all(d, 0);
+    check_word("o_bus_addr (the oldest unsent)", d->o_bus_addr, s[2].addr);
+    step(d, false, Store{}, false, true, true);
+    scene = "back to back, store 2 taken as store 1 completed";
+    check_all(d, 0);
+    step(d, false, Store{}, false, false, true);
+    scene = "back to back, all written";
     check_all(d, 0);
 
     // ── Full, exactly ────────────────────────────────────────────
@@ -253,24 +279,25 @@ int main(int argc, char** argv) {
     // Drain everything left.
     scene = "draining";
     for (int guard = 0; guard < 200 && !(m.ring.empty() && !m.in_valid); guard++) {
-        bool posted = d->o_post_valid, taken = d->o_bus_valid, done = m.sent;
-        step(d, false, Store{}, posted, taken, done);
+        bool posted = d->o_post_valid, take = d->o_bus_valid, done = m.sent > 0;
+        step(d, false, Store{}, posted, take, done);
     }
     scene = "drained";
     check_all(d, 0);
 
     // ── Random against the model ─────────────────────────────────
     // Lines from a small pool, so stores share lines and the search sees
-    // queued, posted and absent lines alike. The run stops at its first
-    // failing cycle: past it the buffer and the model have parted, and
-    // every later difference repeats the first.
+    // queued, posted and absent lines alike. The bus master here takes
+    // whatever is offered, so several stores may be sent at once. The
+    // run stops at its first failing cycle: past it the buffer and the
+    // model have parted, and every later difference repeats the first.
     scene = "random run";
     srand(1);
     for (int c = 0; c < 200000; c++) {
         bool enq    = !d->o_full && (rand() % 100) < 55;
         bool posted = d->o_post_valid && (rand() % 100) < 45;
         bool taken  = d->o_bus_valid && (rand() % 100) < 60;
-        bool done   = m.sent && (rand() % 100) < 35;
+        bool done   = m.sent > 0 && (rand() % 100) < 35;
         uint32_t line = 0x4000 + (rand() % 12);
         Store e = store((line << 4) | ((rand() % 4) << 2), (uint32_t)rand(), 1 + rand() % 15);
         uint32_t probe = 0x4000 + (rand() % 12);

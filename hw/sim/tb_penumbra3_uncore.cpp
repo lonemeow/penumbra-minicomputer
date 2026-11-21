@@ -10,7 +10,9 @@
 //     its address and byte lanes as they are; a fetch reading all four
 //     lanes; what comes back, and the faults
 //   - a store entering the buffer and reaching the bus by itself, a bus
-//     fault on its write as a store fault with its address
+//     fault on its write as a store fault with its address, the store
+//     behind it written meanwhile; posted stores back to back, each
+//     write's ack one cycle more than the slave's latency after the last
 //   - the buffer's order: posted stores ahead of every later bus access,
 //     stores written in the order they entered, a line read waiting for a
 //     queued store to its line, a word access for the buffer to empty, a
@@ -58,7 +60,7 @@ enum { REG_INFO = 0, REG_CTRL = 1, REG_INVAL_ALL = 2, REG_STATUS = 6,
 
 // ── The bus slave and its memory ─────────────────────────────────
 static int lat = 2;
-struct Beat { uint32_t addr; int we; uint32_t be, wdata; };
+struct Beat { uint32_t addr; int we; uint32_t be, wdata; int acked_at; };
 static std::vector<Beat> beats;
 static std::map<uint32_t, uint32_t> ram;
 static int waited;
@@ -102,7 +104,7 @@ static void bus() {
             d->i_bus_fault = faults(a);
             d->i_bus_rdata = mem(a);
             if (d->o_bus_we && !faults(a)) mem_write(a, d->o_bus_byte_en, d->o_bus_wdata);
-            beats.push_back({a, d->o_bus_we, d->o_bus_byte_en, d->o_bus_wdata});
+            beats.push_back({a, d->o_bus_we, d->o_bus_byte_en, d->o_bus_wdata, cycle});
         }
     } else {
         waited = 0;
@@ -343,6 +345,16 @@ int main(int argc, char** argv) {
         check("sf_after_clean", r.fault, 0);
         settle();
         check("sf_after_no_sf", store_faults, 0);
+
+        // A store right behind a faulting one is taken as the faulting write
+        // completes; the fault still names the first store.
+        store(0xFFFE0048, 0xF, 0x8888);
+        store(0x0000A104, 0xF, 0x9999);
+        for (int i = 0; i < 24; i++) tick();
+        check("sf_behind_faults",  store_faults, 1);
+        check("sf_behind_addr",    store_fault_addr, 0xFFFE0048);
+        check("sf_behind_written", mem(0x0000A104), 0x9999);
+        settle();
     }
 
     // ── Stores go ahead of later bus accesses ────────────────────
@@ -376,6 +388,22 @@ int main(int argc, char** argv) {
         }
         check("ord_read_last", beats.size() == 7 ? beats[6].we : 1, 0);
         check("ord_read_clean", w.fault, 0);
+        settle();
+    }
+
+    // ── Posted stores go out back to back ────────────────────────
+    // The bus master takes each write in the completion cycle of the one
+    // before, so with nothing else asking for the bus the writes ack lat + 1
+    // cycles apart: lat with the strobe up, one with it down.
+    {
+        for (int k = 0; k < 6; k++) store(0x0000E400 + 4 * k, 0xF, 0xBBBB0000 + k);
+        drain();
+        check("pace_six_written", beats.size(), 6);
+        for (int k = 1; k < 6 && k < (int)beats.size(); k++) {
+            char n[32];
+            snprintf(n, sizeof(n), "pace_six_gap%d", k);
+            check(n, beats[k].acked_at - beats[k - 1].acked_at, lat + 1);
+        }
         settle();
     }
 

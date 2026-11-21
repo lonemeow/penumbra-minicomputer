@@ -459,7 +459,7 @@ stall counters, averaged over each run, split it:
   line read and four framebuffer writes for each line, ~45 cycles
   against the loop's ~18: at most ~2.5% of the run, estimated.  Faster
   store drains reach only the wait behind posted stores, under 1%
-  ("Hardware: gen3's bus master takes one store every 5 cycles" in
+  ("Hardware: gen3's bus master drops the strobe between stores" in
   [hw-core.md](hw-core.md)).  Drawing straight into the framebuffer is
   under Ruled out.
 

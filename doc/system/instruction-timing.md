@@ -114,7 +114,7 @@ Measured in RTL simulation of the ULX3S machine, SDRAM clocked at four
 times the CPU. Back-to-back stores can cost more on a memory system
 that cannot accept writes as fast as they come. On `penumbra3` a store
 enters a store buffer and costs its one issue cycle while the buffer
-has room. The buffer writes a store through to memory in about 5
+has room. The buffer writes a store through to memory in about 4
 cycles, so stores closer together than that fill it, and then each
 one waits that long.
 

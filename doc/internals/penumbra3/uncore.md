@@ -176,12 +176,16 @@ counts as queued from the cycle it enters.
 
 The oldest queued store is the buffer's request at the select, and
 its post completes at the first verdict it reaches with no bus
-transaction in flight. The bus master takes the oldest posted store's
-write as soon as it is idle, ahead of any bus transaction: the posted
-stores are older than every operation behind them. A posted store's
-write and a bus transaction are never on the bus master at once, as a
-post completes only while no transaction is in flight, and a
-transaction starts only while no store is posted.
+transaction in flight. A posted store is **unsent** until the bus
+master takes it, then **sent** until its write completes. The bus
+master takes the oldest unsent store whenever it is ready, ahead of
+any bus transaction: the posted stores are older than every operation
+behind them. It is ready while idle and in the cycle it completes a
+write, so a run of posted stores goes out with the strobe low one
+cycle between writes. A posted store's write and a bus transaction
+are never on the bus master at once, as a post completes only while
+no transaction is in flight, and a transaction starts only while no
+store is posted.
 
 The sides' operations keep the buffer's order at the verdict, so each
 sees every store that entered before it:
@@ -200,15 +204,16 @@ store from the cycle it enters: while full is low, a store may enter
 whatever else the cycle does.
 
 **Storage.** The entries are LUT RAM, with a copy for each store the
-buffer offers, the oldest queued and the oldest posted, since LUT RAM
+buffer offers, the oldest queued and the oldest unsent, since LUT RAM
 reads one address; both offers come from registers. Each queued
 store's line sits in a register as well, so a line read's line is
 compared against every one at once.
 
 The bus faulting a posted store's write is a `store_fault` with the
 store's address, in the cycle after the bus master completes it
-([faults](./uncore-port.md#faults)). The entry frees with the write,
-faulted or not.
+([faults](./uncore-port.md#faults)). The address is the one the bus
+master completed, since by then the buffer may be offering the next
+unsent store. The entry frees with the write, faulted or not.
 
 ## The bus transaction
 

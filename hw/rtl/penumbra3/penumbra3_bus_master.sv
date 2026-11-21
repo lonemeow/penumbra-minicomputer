@@ -31,7 +31,11 @@
 //     speculation chain alive across a line.
 //
 // Single-outstanding: one transaction at a time (the burst is the only
-// concurrency). o_req_ready is asserted only while idle.
+// concurrency). o_req_ready is asserted while idle and in the completion
+// cycle, so the next transaction is taken as the last one completes and
+// back-to-back transactions leave the strobe low one cycle between them.
+// The response, o_rsp_addr included, is read in that completion cycle;
+// a request taken then replaces it at the clock edge.
 module penumbra3_bus_master #(
     parameter  int LINE_BYTES = 16,
     parameter  int WORD_BYTES = 4,
@@ -51,6 +55,7 @@ module penumbra3_bus_master #(
     output logic                          o_rsp_valid,    // 1-cycle completion pulse
     output logic [LINE_WORDS-1:0][31:0]   o_rsp_rline,    // read data (single beat in word 0)
     output logic                          o_rsp_fault,    // any beat faulted
+    output logic [31:0]                   o_rsp_addr,     // the completing request's i_req_addr
 
     // ── External device-bus master side ─────────────────────────
     output logic [31:0]                   o_bus_addr,
@@ -70,7 +75,7 @@ module penumbra3_bus_master #(
         M_IDLE,   // ready for a request
         M_READ,   // streaming read beats into line_buf_q
         M_WRITE,  // streaming write beats out of line_buf_q
-        M_DONE    // present the completion for one cycle
+        M_DONE    // present the completion for one cycle; ready for the next
     } state_e;
 
     state_e                      state_q, state_d;
@@ -91,14 +96,18 @@ module penumbra3_bus_master #(
     assign beat_done = (state_q == M_READ || state_q == M_WRITE) && i_bus_ack;
     assign last_beat = (word_idx_q == last_idx);
 
+    logic accept;
+    assign o_req_ready = (state_q == M_IDLE) || (state_q == M_DONE);
+    assign accept      = o_req_ready && i_req_valid;
+
     // ── Next-state ───────────────────────────────────────────────
     always_comb begin
         state_d = state_q;
         case (state_q)
-            M_IDLE:  if (i_req_valid)            state_d = i_req_we ? M_WRITE : M_READ;
+            M_IDLE, M_DONE: if (accept)          state_d = i_req_we ? M_WRITE : M_READ;
+                            else                 state_d = M_IDLE;
             M_READ:  if (beat_done && last_beat) state_d = M_DONE;
             M_WRITE: if (beat_done && last_beat) state_d = M_DONE;
-            M_DONE:                              state_d = M_IDLE;
             default:                             state_d = M_IDLE;
         endcase
     end
@@ -116,10 +125,10 @@ module penumbra3_bus_master #(
     end
 
     // ── Completion ───────────────────────────────────────────────
-    assign o_req_ready = (state_q == M_IDLE);
     assign o_rsp_valid = (state_q == M_DONE);
     assign o_rsp_rline = line_buf_q;
     assign o_rsp_fault = fault_q;
+    assign o_rsp_addr  = base_addr_q;
 
     // ── Sequential state ─────────────────────────────────────────
     always_ff @(posedge i_clk) begin
@@ -134,7 +143,7 @@ module penumbra3_bus_master #(
         end else begin
             state_q <= state_d;
 
-            if (state_q == M_IDLE && i_req_valid) begin
+            if (accept) begin
                 base_addr_q <= i_req_addr;
                 word_idx_q  <= '0;
                 fault_q     <= 1'b0;

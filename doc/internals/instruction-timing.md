@@ -129,8 +129,9 @@ jump's target alike. `RDSYS` takes the same path.
 **Stores** enter the store buffer (`penumbra3_store_buffer`,
 [uncore.md](penumbra3/uncore.md)) at MEM2 and cost their issue cycle
 while it has room. The bus master writes each posted store as a
-transaction of its own — accept, presentation, ack and completion —
-which is the ~5 cycles a store takes in a run
+transaction of its own — accept, presentation and ack, with its
+completion the cycle it takes the next store — which is the ~4 cycles
+a store takes in a run
 ([memory-performance.md](penumbra3/memory-performance.md#sustained-writes-on-the-sdram-stack));
 a full buffer holds MEM2.
 

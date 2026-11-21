@@ -428,7 +428,7 @@ module penumbra3_uncore
     // A posted store goes first: it is older than the verdict's operation,
     // which waits for it.
     logic                        bm_req_valid, bm_we, bm_line_req, bm_done, bm_fault;
-    logic [31:0]                 bm_addr;
+    logic [31:0]                 bm_addr, bm_done_addr;
     logic [3:0]                  bm_byte_en;
     logic [LINE_WORDS-1:0][31:0] bm_wline;
     line_t                       bm_line;
@@ -467,6 +467,7 @@ module penumbra3_uncore
         .o_rsp_valid   (bm_done),
         .o_rsp_rline   (bm_line),
         .o_rsp_fault   (bm_fault),
+        .o_rsp_addr    (bm_done_addr),
         .o_bus_addr    (o_bus_addr),
         .o_bus_wdata   (o_bus_wdata),
         .o_bus_byte_en (o_bus_byte_en),
@@ -479,8 +480,9 @@ module penumbra3_uncore
 
     // The bus master runs a posted store's write and a bus transaction
     // never at once, so its completion is the transaction's while one is in
-    // flight. The buffer's bus port holds the store being written until its
-    // write completes, so a fault takes the store's address from there.
+    // flight. The buffer offers its oldest unsent store while the master
+    // writes a sent one, for the master to take as that write completes, so
+    // a fault takes the store's address from the master's completion.
     assign sb_bus_taken = sb_bus_valid && bm_ready;
     assign bt_done      = bm_done &&  bt_busy_q;
     assign post_done    = bm_done && !bt_busy_q;
@@ -490,7 +492,7 @@ module penumbra3_uncore
     always_ff @(posedge i_clk) begin
         if (i_rst) store_fault_q <= 1'b0;
         else       store_fault_q <= post_done && bm_fault;
-        if (post_done) store_fault_addr_q <= sb_bus_addr;
+        if (post_done) store_fault_addr_q <= bm_done_addr;
     end
 
     // ══════════════════════════════════════════════════════════

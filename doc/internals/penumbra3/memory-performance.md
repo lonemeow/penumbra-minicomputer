@@ -179,8 +179,10 @@ Measured 2026-09-29 in Verilator with scratch wrappers around
 unmodified RTL: the bus port of `sdram_sim` driven as a registered
 master (held strobe, address advanced after each `ack`), and
 `penumbra3_bus_master` issuing each transaction the cycle it is ready
-again. The word and line stacks share the write path and measure the
-same. CPU cycles; the middle column runs the clocks at the hardware's
+again. The two rows through the bus master are re-measured 2026-11-20,
+with the master taking its next request in the cycle it completes one.
+The word and line stacks share the write path and measure the same.
+CPU cycles; the middle column runs the clocks at the hardware's
 37.5 : 100 MHz.
 
 | Transaction | 4:1 | 37.5 : 100 | 2:1 |
@@ -189,8 +191,8 @@ same. CPU cycles; the middle column runs the clocks at the hardware's
 | … per 16-byte line | 10.1 | 12.2 | 14.2 |
 | Write burst, a new row every word, per word | 3.00 | 3.65 | 4.56 |
 | Separate writes, strobe dropped between, per word | 4.0 | 4.0 | 4.0 |
-| Line writes through `penumbra3_bus_master`, per line | 12.1 | 13.1 | 15.2 |
-| Single-beat writes through `penumbra3_bus_master`, per store | 5.0 | 5.0 | 5.0 |
+| Line writes through `penumbra3_bus_master`, per line | 11.1 | 12.2 | 14.2 |
+| Single-beat writes through `penumbra3_bus_master`, per store | 4.0 | 4.0 | 4.05 |
 | Line read (line stack) behind 1–16 posted writes, cycles added | 0–1 | 0–1 | 2 |
 
 - **The CDC paces a word stream.** Acknowledgements come in pairs
@@ -199,10 +201,12 @@ same. CPU cycles; the middle column runs the clocks at the hardware's
   own time for a word written to the open row, six SDRAM clocks or
   2.25 CPU cycles, sits under that; a row change on every word adds
   only 0.6.
-- **The bus master's transaction is its own floor.** A single-beat
-  write through `penumbra3_bus_master` takes 5 cycles at every clock
-  ratio: accept, presentation, `ack` and completion, one registered
-  step each. The stack alone takes one every 3–4.
+- **The bus master runs separate writes at the stack's floor.** It
+  takes its next request in the cycle it completes one, so its strobe
+  drops one cycle between transactions, and a single-beat write costs
+  what the stack's separate writes cost. A line write runs at the
+  held-strobe burst's rate but for that dropped cycle, which shows
+  only at 4:1; the CDC's pacing hides it at the slower ratios.
 - **Posted writes barely delay a read.** The CDC holds at most two,
   and the controller finishes them while the read is crossing.
 
@@ -254,11 +258,17 @@ What a fill adds to a line's four reads, over four L1 hits:
 - **A write stream runs at the drain.** Both caches write through, so
   every store becomes a bus write and the write rate is the same at
   every block size. The store buffer's sixteen entries absorb a burst;
-  a longer stream runs at the rate the buffer drains. On the ULX3S
-  that is the bus master's single-beat floor exactly, 5.00 cycles a
-  store ([sustained writes](#sustained-writes-on-the-sdram-stack)),
-  with the loop's own instructions hidden under it. The Nexys's DDR3
-  stack answers later than the floor now and then, for 5.31. gen2.5's
+  a longer stream runs at the rate the buffer drains. On the ULX3S at
+  `3539275` that is the bus master's single-beat floor of the time,
+  5.00 cycles a store, with the loop's own instructions hidden under
+  it. The master now takes one every 4
+  ([sustained writes](#sustained-writes-on-the-sdram-stack)), and
+  memspeed on the ULX3S on 2026-11-20 wrote at 4.02 a word and copied
+  from memory at 12.02, its reads unchanged. The
+  Nexys's 5.31 is its DDR3 stack's own rate and stays with the faster
+  master: `sdram_cdc` presents the controller one request at a time
+  and frees its slot only on the controller's ack, which comes to
+  about 7.4 of the controller's 83.33 MHz clocks a write. gen2.5's
   6.4 is its blocking store, about 3 cycles of which are below its
   arbiter ([store latency](#store-latency-below-the-arbiter-chain-b)).
   With the strobe held across writes the SDRAM stack takes a word every
