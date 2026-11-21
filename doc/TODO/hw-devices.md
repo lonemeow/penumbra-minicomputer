@@ -531,9 +531,12 @@ PRE"). Suspects:
 Which one matters beyond the ULX3S: a ULPI PHY on the Nexys Video
 (`hw-nexysvideo.md`, "Devices: no USB host, so no USB storage")
 replaces the clock recovery but not the controller above
-the seam. Open: capture a failing full-speed session with the
-controller's line-capture instrument (`CAP.CAPTURE`,
-`doc/system/devices/usb-host.md`) and tell the two apart.
+the seam. Open: capture a failing full-speed session with a logic
+analyzer on D+/D- between the port and the device, and tell the two
+apart. If the wire is clean where the controller reports an error,
+the receiver has to be watched beside it: its recovered-bit strobe,
+filtered line state, packet window and error strobe, registered out
+to header pins, land on the analyzer's timeline with the wire.
 
 ## Hardware: USBHC v2 — multi-transaction transfers, NAK pacing, PRE
 

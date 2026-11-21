@@ -678,12 +678,12 @@ keeps the USB adapter out of the loop entirely.
 The USB debug and correctness campaign (line capture, input
 synchronizers, arbiter drain and fairness, SOF-delivery counter)
 consumed the gen1 top's historical timing slack: seed sweeps that
-used to reach 28–30 MHz now plateau at ~25–27, with the CPU's
+used to reach 28–30 MHz plateaued at ~25–27, with the CPU's
 single-cycle cone still the critical path — the USB logic pressures
-its placement rather than appearing in it.  Per the
-floorplan-after-features policy, give the USB subsystem the
-deliberate treatment: keep_hierarchy over the usbhc/PHY cluster
-(the capture module already has it) and, if needed, a REGION
+its placement rather than appearing in it.  The line capture is
+removed, and a sweep after it still plateaus there.  Open is the
+deliberate treatment the floorplan-after-features policy asks for:
+keep_hierarchy over the usbhc/PHY cluster and, if needed, a REGION
 constraint pinning the USB complex away from the CPU cone, then
 re-sweep for a pin at or above the 27 MHz floor.
 
