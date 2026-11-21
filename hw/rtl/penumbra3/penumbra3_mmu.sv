@@ -113,7 +113,6 @@ module penumbra3_mmu
 
     // MMU_CONFIG: version 2, this geometry, 4 KB pages, 8-bit ASIDs.
     localparam int ASID_BITS = 8;
-    localparam int PAGE_LOG2 = 12;
     typedef logic [3:0] cfg_ver_t;
     typedef logic [5:0] cfg_pinned_t;
     typedef logic [4:0] cfg_field_t;

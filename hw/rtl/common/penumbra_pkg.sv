@@ -472,6 +472,9 @@ package penumbra_pkg;
         endcase
     endfunction
 
+    // ── Pages ────────────────────────────────────────────────
+    localparam int PAGE_LOG2 = 12;   // 4 KiB: VPN and PPN are an address's [31:12]
+
     // ── TLB entry bit positions (64-bit entry) ────────────────
     // Upper word (TLB_VPN sysreg): {4'b0, VPN[19:0], ASID[7:0]}
     // Lower word (TLB_PTE sysreg): {PPN[19:0], SW[7:0], G, U, X, W, R, C, rsvd, V}
