@@ -454,19 +454,22 @@ stall counters, averaged over each run, split it:
 - **The copy is ~70k instructions a frame,** 4.4 a word with libc's
   two-words-a-pass `memcpy` (`66f1be7`).  The 7 a word in "Instruction
   profile (2026-09-22)" predates it.
-- **The levers in reach are small.**  A stream prefetcher overlapping
-  the source fills with the loop is bounded by the bus, which carries a
-  line read and four framebuffer writes for each line, ~45 cycles
-  against the loop's ~18: at most ~2.5% of the run, estimated.  Faster
+- **The levers in reach are small.**  The stream prefetcher
+  (`96b778f`) overlaps the source fills with the loop, bounded by the
+  bus, which carries a line read and four framebuffer writes for each
+  line, ~45 cycles against the loop's ~18: at most ~2.5% of the run,
+  estimated.  Faster
   store drains reach only the wait behind posted stores, under 1%
   ("Hardware: gen3's bus master drops the strobe between stores" in
   [hw-core.md](hw-core.md)).  Drawing straight into the framebuffer is
   under Ruled out.
 
 Open: whether the ~7 cycles above a fill are the wait behind posted
-stores, which an RTL trace of one copied line shows, and a stream
-prefetcher's reach measured with the store drains sharing its bus,
-which no ISS model does.
+stores, which an RTL trace of one copied line shows, and how much of
+the stream prefetcher's gain on Doom
+(`doc/internals/penumbra3/memory-performance.md`, "Next-line prefetch
+into stream buffers") is the copy's, which a `-noblit` pair on its
+build separates.
 
 ## Compiler: hot-loop code review — software audio mixing
 

@@ -6,12 +6,13 @@ The uncore serves both L1s and the store side on the
 [core-to-uncore port](./uncore-port.md) and drives the external bus.
 It is one pipeline: the choice between the two sides' requests and
 the store buffer's, the L2's lookup, and the
-[bus master](./overview.md#fork-boundary), with the store buffer
-beside it. This document specifies the L2 and the pipeline around it:
-the geometry and storage, what each stage does, what each transaction
-does, the store buffer, replacement, and the L2's cache device.
+[bus master](./overview.md#fork-boundary), with the store buffer and
+the stream buffers beside it. This document specifies the L2 and the
+pipeline around it: the geometry and storage, what each stage does,
+what each transaction does, the store buffer, the stream buffers,
+replacement, and the L2's cache device.
 
-Five terms:
+Seven terms:
 
 - An **operation** is a request the uncore has taken into its
   pipeline. It **issues** in the cycle the uncore takes it.
@@ -20,15 +21,22 @@ Five terms:
   other operation **passes through**: it reads nothing and installs
   nothing.
 - The **bus transaction** is the one the uncore runs on the bus at a
-  time on a side's behalf: a line read the L2 could not serve, or a
-  word read or word write. It is **in flight** from the cycle after
-  the bus master takes it through its `done`.
+  time on a side's behalf: a line read neither the L2 nor a stream
+  buffer could serve, or a word read or word write. It is **in
+  flight** from the cycle after the bus master takes it through its
+  `done`. A line read a stream buffer serves runs as one that never
+  reaches the bus.
+- A **fill** is a line read that looks up and misses, whether the bus
+  or a stream buffer serves it.
 - The **store buffer** holds the cacheable stores that have entered on
   the store side, from their entry until the bus master has written
   them.
 - A **post** is the operation that issues for the store buffer's
   oldest queued store. It writes the store's bytes into the L2 on a
   hit, a **write hit**, and leaves the store owing its bus write.
+- A **prefetch** is a stream buffer's read of a line no side has asked
+  for. It runs on the bus master but is not a bus transaction: the
+  pipeline goes on while it runs.
 
 ```mermaid
 graph LR
@@ -41,7 +49,10 @@ graph LR
     V -->|"done, line"| BOTH["the L1s"]
     V -->|"post"| SB
     V -->|"bus transaction"| BM["bus master"]
+    V -->|"fills, writes"| PF["stream buffers"]
+    PF -->|"held line"| V
     SB -->|"oldest posted"| BM
+    PF -->|"prefetch"| BM
     BM --- BUS["external bus"]
     BM -->|"line, fault"| BOTH
 ```
@@ -122,7 +133,8 @@ changes the operations that issue after it, never one in the pipeline.
 |---|---|---|
 | Post | completes; on a hit the update stage writes its bytes into the line | always |
 | Line read that hits | completes with the hit way's line | no queued store holds its line |
-| Line read that misses, or passes through | takes the bus | no queued store holds its line, no store is posted, and the bus master is idle |
+| Line read that misses, its line in a stream buffer | is served from the buffer | no queued store holds its line |
+| Line read that misses, or passes through | takes the bus | no queued store holds its line, no stream buffer is fetching it, no store is posted, and the bus master is idle |
 | Word read, word write | takes the bus | the store buffer is empty and the bus master idle |
 
 An operation that cannot is **dropped**: its request stays up, and it
@@ -147,7 +159,7 @@ for its way.
 
 | Transaction | Lookup that hits | Lookup that misses, or pass-through |
 |---|---|---|
-| Line read | `done` at i+2, with the hit way's line | a bus transaction: four reads from the line's address. `done` with the bus's line, which a lookup without a fault installs |
+| Line read | `done` at i+2, with the hit way's line | a bus transaction: four reads from the line's address. `done` with the bus's line, which a lookup without a fault installs. A miss a stream buffer serves: `done` at i+3 with the buffer's line, which it installs |
 | Post | the store posted at i+1; its bytes written into the line at i+2 | the store posted at i+1; nothing installed |
 | Word read | — | a bus transaction: one read, its address and byte lanes as they are, the bus's 32 bits in word 0 |
 | Word write | — | a bus transaction: one write, likewise; `done` once the bus has taken it, with its fault |
@@ -179,13 +191,13 @@ its post completes at the first verdict it reaches with no bus
 transaction in flight. A posted store is **unsent** until the bus
 master takes it, then **sent** until its write completes. The bus
 master takes the oldest unsent store whenever it is ready, ahead of
-any bus transaction: the posted stores are older than every operation
-behind them. It is ready while idle and in the cycle it completes a
-write, so a run of posted stores goes out with the strobe low one
-cycle between writes. A posted store's write and a bus transaction
-are never on the bus master at once, as a post completes only while
-no transaction is in flight, and a transaction starts only while no
-store is posted.
+any bus transaction or prefetch: the posted stores are older than
+every operation behind them. It is ready while idle and in the cycle
+it completes a write, so a run of posted stores goes out with the
+strobe low one cycle between writes. A posted store's write and a bus
+transaction are never on the bus master at once, as a post completes
+only while no transaction is in flight, and a transaction that takes
+the bus starts only while no store is posted.
 
 The sides' operations keep the buffer's order at the verdict, so each
 sees every store that entered before it:
@@ -233,7 +245,67 @@ A read that faulted installs nothing, and leaves the set as it was.
 **The victim** is an invalid way of the set, the lowest, or else the
 way the replacement bits name. The valid bits come from the lookup;
 the replacement bits are read in the cycle after the bus master takes
-the read, long before the line arrives.
+the read, long before the line arrives, or after a served read's
+verdict.
+
+## The stream buffers
+
+Two stream buffers beside the L2 each follow one stream of fills and
+keep its **expected line**: the line after the stream's latest fill,
+the one the stream reads next if it goes on. The expected line is the
+only one a buffer wants fetched, fetches or holds. At a fill of line
+X:
+
+- **A buffer holding X serves it,** and X + 1 becomes its expected
+  line, which it wants fetched.
+- **Otherwise a buffer expecting X** has seen two fills to consecutive
+  lines: X + 1 becomes its expected line, which it wants fetched.
+- **Otherwise the buffer used less recently** gives up its stream, and
+  what it held or was fetching, for a new one: X + 1 becomes its
+  expected line, and it wants nothing yet, as one fill alone shows no
+  walk.
+
+A buffer never wants a line in another page than its stream's latest
+fill, since the next physical page is unrelated. With the L2 disabled
+nothing looks up, so nothing fills and no stream goes on.
+
+**A served read** is a bus transaction that never reaches the bus. It
+is in flight from the cycle after its verdict through its `done` at
+i+3, a cycle after an L2 hit's, with the buffer's line, and the line
+installs as a bus read's would. A read whose line a buffer is fetching
+is dropped until the fetch completes, and is then served.
+
+**A prefetch** goes on the bus master only when the bus has nothing
+else to do: no store posted, no operation at the verdict and no bus
+transaction in flight. Of two buffers wanting one, the lower-numbered
+goes first. While it runs the pipeline goes on, hits completing and
+posts posting, and an operation that needs the bus is dropped until
+the bus master is ready, since a read on the bus cannot be abandoned:
+a prefetch delays a side's bus transaction by at most one line read.
+The bus master records what it takes, so its completion goes to the
+posted store, the bus transaction or the prefetch it ran.
+
+**Order.** A prefetch starts only with no store posted, so it reads
+memory after every store older than it. A post or a word write to a
+line a buffer holds drops the line, and one to a line a buffer is
+fetching marks the fetch to be discarded when it arrives: either read
+memory before the write. Fills and writes reach the buffers a cycle
+after their verdict, from registers, which is in time for the next
+verdict: a fill and a word write are transactions, so nothing at the
+verdict acts before their `done`, and nothing issues while a post is
+at the verdict.
+
+**Faults.** A prefetch the bus faults is discarded. No side asked for
+it, so no side hears of it; a read of its line then takes the bus and
+faults on its own.
+
+**Storage.** Each buffer is registers: its expected line's address, a
+line of 16 bytes, and its state. The verdict compares the read's line
+with both expected lines from registers, so the check needs no tag
+compare and stays off the late hit.
+
+How often the buffers serve, and what they save on hardware:
+[next-line prefetch](./memory-performance.md#next-line-prefetch-into-stream-buffers).
 
 ## Replacement
 
@@ -253,8 +325,8 @@ No array is read and written in one cycle, by construction:
   the update stage's data write and an install, and an invalidation
   walk writes valid bits only while nothing looks up.
 - **The replacement bits** are read only in the cycle after a line
-  read takes the bus, when no operation is at the update stage to
-  touch them.
+  read takes the bus or is served, when no operation is at the update
+  stage to touch them.
 
 ## The cache device
 
@@ -271,15 +343,16 @@ L1s do.
   while it waits to start. While it runs, operations issue and pass
   through, which keeps every read and write correct: the L2 is
   write-through, so every byte a line holds is in memory or owed to it
-  by a posted store, which a bus transaction waits for. Software
-  need not wait for the walk:
-  no line can hit from the write on.
+  by a posted store, which a bus transaction waits for. The walk's
+  start also ends every stream buffer's stream, dropping the lines
+  they hold and discarding a running prefetch. Software need not wait
+  for the walk: no line can hit from the write on.
 - **`STATUS.BUSY`** is high from the `INVAL_ALL` write until the walk
   ends.
 - **The counters** count each lookup once, at the verdict where it
-  completes or takes the bus: a line read as a read hit or miss, a
-  post as a write hit or miss. A dropped operation and a pass-through
-  count nothing.
+  completes, takes the bus or is served: a line read as a read hit or
+  miss, a served one as a miss, and a post as a write hit or miss. A
+  dropped operation and a pass-through count nothing.
 
 The same walk runs after reset, so a line left from before a reset
 never hits.
@@ -291,9 +364,10 @@ From the cycle a request issues, with the pipeline free:
 | Operation | `done` |
 |---|---|
 | Line read, L2 hit | i+2 |
+| Line read, served by a stream buffer | i+3 |
 | Bus transaction | the bus master takes it at the end of i+1; `done` a cycle after the bus master completes |
 
 An L2-hit fill then takes the L1 four cycles from its request to its
-own completion, and an L2 miss adds the bus master's transaction to
-that. A post completes at its verdict, i+1, with no `done`, and a
-write hit's bytes are in the line at i+2.
+own completion, a served one five, and an L2 miss adds the bus
+master's transaction to that. A post completes at its verdict, i+1,
+with no `done`, and a write hit's bytes are in the line at i+2.

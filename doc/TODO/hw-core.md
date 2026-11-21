@@ -102,24 +102,27 @@ of its build plan are done (`doc/internals/penumbra3/overview.md`,
 `e52f1d1`, `82df95c` and `b97050e`: the IF2 pre-decode, the direction
 table trained from EX and the return stack. The store buffer (phase 4)
 landed in `dd116d6` and the commit after it, which retires cacheable
-stores into it. What remains is the staged levers, in the order the
-overview ranks them ("Levers ranked by measured benefit").
+stores into it, and stream prefetch beside the L2, the third staged
+lever, in `96b778f`. What remains is the other staged levers, in the
+order the overview ranks them ("Levers ranked by measured benefit").
 
 Each lever is read against a full-top seed sweep. The current one,
-with the bus master taking the next store as a write completes, is of
-the ULX3S top with the line SDRAM stack and no floorplan, the
-placement choices taken over from gen2: 8 of 10 seeds close every
-domain; one misses the CPU clock's 37.5 MHz and one the USB clock's
-60 MHz. The CPU clock is the worst domain on 9. Its critical path is
-the fetch side's on 9: the I-TLB's word through the TLB match into
-IF1's PC (3) or into the fetch buffer (1), or the L1-I's data into the
-fetch buffer (3) or the predictor (2). On the tenth it is the D
-side's: the D-TLB's word through the TLB match into the L1-D's busy
-flag. The bus master, ID's scoreboard and EX's forwarding loop are the
-worst path on none. Against the sweep before it, at `89dc784`, the
-CPU clock's median is the same, and the USB clock, which the change
-does not touch, moves as far from seed to seed as the CPU clock does.
-The next lever's sweep is read against this one.
+with the stream buffers beside the L2, is of the ULX3S top with the
+line SDRAM stack and no floorplan, the placement choices taken over
+from gen2: all 10 seeds close every domain. The CPU clock is the worst
+domain on 8, the USB clock's 60 MHz on the other two. The CPU clock's
+critical path is the fetch side's on 7: the L1-I's data into the fetch
+buffer (4), or the I-TLB's word through the TLB match into the fetch
+buffer (1) or into IF1's PC (2). On 2 it is the D side's: the D-TLB's
+word through the TLB match into the L1-D's held or busy flag. On the
+last it is the bus master's beat count across the bus into the USB
+host's crossing buffer. The stream buffers, ID's scoreboard and EX's
+forwarding loop are the worst path on none. Against the sweep before
+it, with the bus master taking the next store as a write completes,
+the CPU clock's median fell from 38.97 to 38.63 MHz, inside the
+distance it moves from seed to seed; the pinned seed closes it with
+the least margin of the ten. The next lever's sweep is read against
+this one.
 
 ## Hardware: a gen3 divmul's second write stalls the whole back end
 
@@ -1058,3 +1061,10 @@ Open:
   RAM forwarding the install through a write-through port needs the
   true dual-port mode, 18 bits a port on the ECP5 and Artix-7: two
   block RAMs a way for the 20-bit tag, four more for the two L1s.
+- **Two lines per gen3 stream buffer.**  Keeping each buffer two lines
+  ahead of its stream instead of one was analysed and declined: a copy
+  from memory already keeps the shared bus nearly full with its line
+  reads and store writes, so only a read-only stream would gain, and
+  neither Doom nor the kernel paths run one.  Analysis in
+  `doc/internals/penumbra3/memory-performance.md` ("Next-line prefetch
+  into stream buffers").

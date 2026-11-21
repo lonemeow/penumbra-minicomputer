@@ -303,6 +303,9 @@ What a fill adds to a line's four reads, over four L1 hits:
   victim picked by counter some of gen3's pages still hit at 4 MiB, so
   its refills cost somewhat more than that. The refill is the
   benchmark's own handler's, not the kernel's.
+- **Stream prefetch** lowers the read and copy rates from memory on
+  both boards; the table is without it
+  ([next-line prefetch](#next-line-prefetch-into-stream-buffers)).
 
 ## Workload profiles (gen2.5 hardware, 37.5 MHz)
 
@@ -666,9 +669,11 @@ Doom per frame (2,134 frames, 1.165 M instructions each):
   memory fill a larger L2 removes saves ~20 cycles. Per 1000
   instructions on the shell loop / `pbench kernel` / Doom, 64 → 128 KB
   saves ~131 / ~53 / ~38 cycles, 256 KB ~185 / ~95 / ~151 and 512 KB
-  ~221 / ~123 / ~251. A served fill saves 10–20 cycles, as its prefetch
-  arrives in time or not, which the model does not see: 55–110 /
-  31–62 / 63–126 at 64 KB.
+  ~221 / ~123 / ~251. What a served fill saves depends on how long
+  before its read the prefetch lands, which the model does not see;
+  on hardware it is
+  [measured](#next-line-prefetch-into-stream-buffers) against these
+  counts.
 - **Only at the same lookup latency.** The 8 KB L1s fill 95 (shell
   loop), 91 (`pbench kernel`) and 21 (Doom) times per 1000
   instructions, and every fill pays each cycle of L2 lookup. One more
@@ -1072,36 +1077,70 @@ prefetch mostly hides.
 
 ### Next-line prefetch into stream buffers
 
-With the SDRAM idle 97 % of the time in plasma, prefetch is the lever
-that uses the spare bandwidth without making the core non-blocking.
-Naive next-line prefetch can hurt: a useless prefetch occupying the
-single-outstanding path delays the next demand miss, and prefetched
-lines written into the cache evict useful ones. The safe form:
+Two stream buffers beside the L2 follow its memory fills. Once two
+fills land on consecutive lines, the buffer following them reads the
+next line in the background, and a read of it that misses the L2 is
+served from the buffer without the bus, a cycle after an L2 hit would
+be ([the stream buffers](./uncore.md#the-stream-buffers)). A line
+enters the L2 only when a read finds it, so nothing is polluted, and
+a buffer never reads past its page.
 
-- **Prefetch into small stream buffers beside the L2, never into the
-  cache.** A line moves into L2 only when a demand miss finds it, so
-  nothing is polluted. plasma needs two, one per field.
-- **Trigger only on a confirmed stream:** a miss to line N when line N−1
-  was that stream's previous miss. A demand hit in a stream buffer
-  re-arms it (tagged prefetch). Random and pointer-chasing access never
-  confirms.
-- **Stay inside the 4 KB page**; the next physical page is unrelated.
-- **Demand misses win.** An unissued prefetch is cancelled; an issued
-  one delays the demand miss by at most one line fetch — about 5–7
-  cycles once the SDRAM side fetches whole lines.
+**In the uncore, not below the bus.** A line buffer at the SDRAM
+stack's front, on the system clock beside the adapter, would need no
+change above the bus, but every read it served would still pay the
+bus's word walk: it hides only the clock crossing and the DRAM, about
+half a memory fill. In the uncore a served read costs about what an L2
+hit does. That takes a prefetch that runs on the bus master without
+being a bus transaction, so the L2 serves hits and takes posts while
+it runs, which is cheap where hit under miss is not
+([ruled out](#hit-under-miss-in-the-l2--ruled-out)): nothing waits on
+a prefetch, so no line is steered back to a requester and nothing
+installs from it.
 
-The same structure can live on the system-clock side of the SDRAM
-adapter as a small line buffer, needing no change above the bus. It
-comes after the latency fixes, which also shrink its worst case.
+**Measured** 2026-11-21 at `96b778f` against `c4ad80b`, each pair in
+one session:
 
-**Measured reach.** The cache model's shadow of two buffers follows the
-policy above but keeps no time, so it counts what the prefetches would
-serve, not whether they arrive first. It serves 46 % of Doom's memory
-fills behind gen3's 64 KB L2 and 36–43 % on the kernel paths
+| | ULX3S without | ULX3S with | Nexys without | Nexys with |
+|---|--:|--:|--:|--:|
+| memspeed read from memory, cycles a word | 7.15 | 6.26 | 8.18 | 6.87 |
+| memspeed copy from memory | 12.02 | 9.60 | 13.74 | 11.62 |
+| memspeed write | 4.02 | 4.02 | 5.31 | 5.31 |
+| Doom `demo3`, fps | 18.43 | 19.21 | 28.32 | 29.46 |
+| `pbench` `fork_exit`, median ms | 44.36 | 42.72 | 28.93 | 28.22 |
+
+- **Nothing the caches hold changes.** memspeed's L1 and L2 rates are
+  the same with the buffers, and so are `getpid`, `clock_gettime` and
+  `pipe_pingpong`. `fork_exec` moves within its run-to-run spread.
+- **A served read saves what the core does before it.** A buffer reads
+  the next line only once the fill before it is done, and memspeed's
+  read loop reaches that line about 5 cycles later, so its read waits
+  out most of the prefetch. A line's reads save 3.6 cycles on the
+  ULX3S and 5.2 on the Nexys; a copy's, whose four stores a line give
+  the prefetch longer, 9.7 and 8.5. A prefetch landing before its read
+  would save ~19 and ~23: a memory fill less the 5 a served read
+  costs.
+- **Doom saves ~82k cycles a frame on both boards,** about 11 for each
+  fill the model's buffers serve
+  ([L2 size and stream buffers](#l2-size-and-stream-buffers-at-gen3s-geometry)):
+  a half to three fifths of what each could save. Its renderer does
+  more between misses than memspeed does.
+- **A copy from memory is bus-bound.** Each line puts a line read and
+  four store writes on the one-transaction bus: about 35 cycles on the
+  ULX3S, four writes at 4.02 and the ~19 a line read takes on the bus,
+  against the copy's 38.4 a line, and about 44 on the Nexys against
+  46.5. A buffer kept two lines ahead would find little bus time left
+  there. It would bring a read-only stream to about a bus read a line,
+  ~20 cycles on the ULX3S and ~24 on the Nexys against 25.0 and 27.5,
+  but no stream Doom or the kernel paths run is read-only
+  (`doc/TODO/hw-core.md`, "Ruled out"). A native port for on-board RAM
+  takes the reads off the shared bus, which would change that.
+
+**The cache model** counts which fills the two buffers would serve but
+keeps no time
 ([L2 size and stream buffers](#l2-size-and-stream-buffers-at-gen3s-geometry)).
 On Doom a larger L2 takes most of the same misses; on the kernel paths
-the buffers keep their share at every L2 size. `pbench libc`'s 95 %
-of memory fills continuing a stream ([next-line
+the buffers keep their share at every L2 size. `pbench libc`'s 95 % of
+memory fills continuing a stream ([next-line
 structure](#next-line-structure)) is the streaming case.
 
 **The fetch side** is served by a

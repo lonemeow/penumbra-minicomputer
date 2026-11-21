@@ -295,7 +295,7 @@ overlap, so they do not add.
 | L1 4 KB → 8 KB 2-way | ~140 / ~110 / ~40 | none in the line-wide shape | shape |
 | L1 8 KB → 16 KB 4-way | ~135 / ~155 / ~30 | ~10 more block RAMs; two more tag compares in IF2 | Artix-7 |
 | Next-line prediction buffer, L1-I | ~100 / ~105 / ~10 | a line register, a tag compare, a second L2 look-up per fill | staged 2 |
-| Stream prefetch beside L2 | ~55 / ~31 / ~63 | two line buffers and stream detection | staged 3 |
+| Stream prefetch beside L2 | ~55 / ~31 / ~63 | two line buffers and stream detection; a third request into the bus master | staged 3; built |
 | L2 64 KB → 128 KB | ~131 / ~53 / ~38 | ~35 more block RAMs | staged 4, if block RAM allows |
 | L2 64 KB → 256 KB | ~185 / ~95 / ~151 | ~52 more block RAM tiles on an Artix-7; beyond the ECP5 | Artix-7 |
 | Selective `WRSYS`, behind a 256×2 TLB | ~15 / ~10 / ~2 | a serialize bit on the MMU's responses | staged 5 |
@@ -319,8 +319,9 @@ overlap, so they do not add.
   look-ups can take back up to ~30 on the kernel paths.
 - **Stream prefetch** at ~10 cycles for each memory fill the cache
   model's two stream buffers serve behind a 64 KB L2, the low end of
-  the 10–20 a timely prefetch saves. Behind a larger L2 they serve
-  fewer of Doom's.
+  the 10–20 a timely prefetch saves, which Doom's measured gain bears
+  out ([next-line prefetch](./memory-performance.md#next-line-prefetch-into-stream-buffers)).
+  Behind a larger L2 they serve fewer of Doom's.
 - **Selective `WRSYS`** at the ~38 cycles of serialization in each
   refill a 256×2 TLB still takes.
 - **Branch prediction** against resolving every transfer in EX, with

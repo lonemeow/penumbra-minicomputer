@@ -48,8 +48,8 @@ For most decisions the cost class matters more than the exact figure:
 The examples are for the pipelined generations. On `penumbra1` an ALU
 operation costs 2 and a load 4, so its loads are medium. On
 `penumbra3` a store is cheap while its store buffer has room, and so
-is a return its return stack predicts; an L1 miss the L2 serves is
-medium.
+is a return its return stack predicts; an L1 miss the L2 or a stream
+buffer serves is medium.
 
 ## Issue and latency
 
@@ -220,6 +220,14 @@ have:
 
   This is fixed by the design of the core and its L2, whatever size
   of L2 a machine builds.
+- On `penumbra3`, stream buffers beside the L2 read ahead of a stream
+  of L2 misses: once two misses land on consecutive lines, in
+  ascending order, the line after the second is read from memory in
+  the background. An L1 miss a stream buffer serves costs 5 beyond a
+  hit, a cycle more than one the L2 serves, once its line has arrived;
+  a miss that comes while its line is still being read waits for the
+  rest of that read. A stream buffer never reads past the end of a
+  page.
 
 ### What a machine decides
 
@@ -284,3 +292,9 @@ sits.
 - **Lay out hot branches** so that no two share the bits that index
   their generation's predictor: bits 6..2 on the baseline
   `penumbra2_5`, 11..2 on the baseline `penumbra3`.
+- **Walk memory upward, a line after a line.** On `penumbra3` data
+  read in ascending order through memory has each next line read
+  ahead of it; read downward, or skipping lines, it has none. The
+  more work between one line's first load and the next's, the more of
+  each read the stream buffer hides. A copy gains less than a read:
+  its stores share the bus with the reads ahead.

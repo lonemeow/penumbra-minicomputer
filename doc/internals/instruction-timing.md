@@ -234,7 +234,11 @@ set. Run it once around the ring before timing it, so every line is
 in the L2 and none in the L1. Against a chase that
 keeps hitting one line, the difference is the cost of an L1 miss
 served by the L2; with the L2 disabled, the same chase measures the
-memory path instead. Mapping the extra pages takes `TLB_VPN` values
+memory path instead. Its stride keeps gen3's stream buffers out of
+both: no two misses land on consecutive lines. The cost of a miss a
+stream buffer serves comes from the uncore's testbench instead, from
+request to `done`, since a chase would wait out each read ahead
+before its load. Mapping the extra pages takes `TLB_VPN` values
 of the page number shifted left by 8, as [mmu.md](../system/mmu.md)
 lays the register out, not the page's address.
 
