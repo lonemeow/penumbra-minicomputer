@@ -15,11 +15,13 @@
 //     writes must all agree with it -- so a transposed spec response or a
 //     mis-lane'd sub-word write is caught, not a coin-flip.
 //
-//   • Back to back. With the next request always up, the master takes
-//     it in the completion cycle of the one before: every completion
-//     reports its own request's address, the strobe is low exactly one
-//     cycle between transactions, and a read taken that way sees the
-//     write it follows.
+//   • Back to back. A write is taken behind the write on the bus and
+//     goes on with the strobe held, whether it arrives early or in the
+//     ack cycle of the one before; a read is taken in the completion
+//     cycle of the write before it, the strobe low that one cycle, and
+//     sees that write. Every completion reports its own request's
+//     address, and writes arriving at random keep memory as the shadow
+//     says.
 //
 // Clocking: 4 SDRAM cycles per CPU cycle.
 
@@ -83,7 +85,7 @@ static bool do_txn(Vpenumbra3_bus_master_test* d, bool we, bool line,
     }
     if (d->o_rsp_fault) { printf("  [FAIL] unexpected fault @0x%08X\n", addr); errors++; }
     if (rdata) for (int k = 0; k < LINE_WORDS; k++) rdata[k] = d->o_rsp_rline[k];
-    tick(d);                         // M_DONE -> M_IDLE
+    tick(d);                         // past the completion cycle
     return true;
 }
 
@@ -104,33 +106,43 @@ static uint32_t merge(uint32_t old_val, uint32_t val, uint8_t be) {
     return (old_val & ~mask) | (val & mask);
 }
 
-// Single-beat transactions with the next request always up, so the master
-// takes each one in the completion cycle of the one before. Checks that
-// every completion reports its own request's address and that the strobe
-// is low exactly one cycle between transactions; returns each read's word
-// in `rdata` and the cycles from the first completion to the last.
+// Single-beat transactions, each presented as the uncore would: a write
+// while the master is idle or writing with room behind it, a read only
+// while it is idle. AT_ONCE presents each as soon as it may go, AT_ACK a
+// write behind a write only in the cycle the one before is acked, and
+// RANDOM each after a random wait. Checks that every completion reports
+// its own request's address; returns each read's word in `rdata`, the
+// cycles from the first completion to the last, and in `lows` the cycles
+// the strobe was low between the first transaction and the last.
 struct Beat { bool we; uint32_t addr; uint8_t be; uint32_t val; };
+enum Pace { AT_ONCE, AT_ACK, RANDOM };
 static int back_to_back(Vpenumbra3_bus_master_test* d, const Beat* beats, int n,
-                        uint32_t* rdata) {
+                        Pace pace, uint32_t* rdata, int* lows) {
     int w = 0;
     while (!d->o_req_ready) {
         tick(d);
         if (++w > TXN_TIMEOUT) { printf("  [FAIL] master never ready\n"); errors++; return -1; }
     }
     int next = 0, done = 0, cycles = 0, first_done = -1, last_done = -1;
-    int low_run = -1;                     // strobe-low cycles since the last strobe
+    int wait = 0, low_run = -1;
+    *lows = 0;
     while (done < n) {
-        d->i_req_valid = next < n;
-        if (next < n) {
-            d->i_req_we      = beats[next].we;
+        d->i_req_valid = 0;
+        d->eval();
+        if (next < n && wait == 0) {
+            const Beat& b = beats[next];
+            bool may = b.we ? (d->o_req_ready || d->o_behind_ready) : d->o_req_ready;
+            if (pace == AT_ACK && b.we && d->o_behind_ready) may = d->o_bus_ack;
+            d->i_req_valid   = may;
+            d->i_req_we      = b.we;
             d->i_req_line    = 0;
-            d->i_req_addr    = beats[next].addr;
-            d->i_req_byte_en = beats[next].be;
-            d->i_req_wline[0] = beats[next].val;
+            d->i_req_addr    = b.addr;
+            d->i_req_byte_en = b.be;
+            d->i_req_wline[0] = b.val;
             for (int k = 1; k < LINE_WORDS; k++) d->i_req_wline[k] = 0;
         }
         d->eval();
-        bool accepted = d->i_req_valid && d->o_req_ready;
+        bool accepted = d->i_req_valid && (d->o_req_ready || d->o_behind_ready);
         if (d->o_rsp_valid) {
             if (d->o_rsp_addr != beats[done].addr) {
                 printf("  [FAIL] completion %d reports 0x%08X, its request 0x%08X\n",
@@ -144,21 +156,36 @@ static int back_to_back(Vpenumbra3_bus_master_test* d, const Beat* beats, int n,
             done++;
         }
         if (d->o_bus_re || d->o_bus_we) {
-            if (low_run > 0 && low_run != 1) {
-                printf("  [FAIL] strobe low %d cycles before transaction %d, expected 1\n",
-                       low_run, next - 1);
-                errors++;
-            }
+            if (low_run > 0) *lows += low_run;
             low_run = 0;
         } else if (low_run >= 0) {
             low_run++;
         }
         tick(d);
-        if (accepted) next++;
+        if (accepted) {
+            next++;
+            wait = pace == RANDOM ? (int)(rnd() % 6) : 0;
+        } else if (wait > 0) {
+            wait--;
+        }
         if (++cycles > TXN_TIMEOUT) { printf("  [FAIL] back-to-back run stuck\n"); errors++; return -1; }
     }
     d->i_req_valid = 0; d->eval();
     return last_done - first_done;
+}
+
+// Read back each word a run wrote, one transaction at a time.
+static void read_back(Vpenumbra3_bus_master_test* d, const Beat* beats, int n) {
+    for (int i = 0; i < n && errors == 0; i++) {
+        if (!beats[i].we) continue;
+        uint32_t word = beats[i].addr / 4u, rd[LINE_WORDS];
+        if (!do_txn(d, false, false, beats[i].addr, 0xF, nullptr, rd)) break;
+        if (rd[0] != shadow[word]) {
+            printf("  [FAIL] back-to-back word %u got 0x%08X want 0x%08X\n",
+                   word, rd[0], shadow[word]);
+            errors++;
+        }
+    }
 }
 
 int main(int argc, char** argv) {
@@ -234,36 +261,71 @@ int main(int argc, char** argv) {
            line_reads, beat_reads, line_writes, subword_writes);
 
     // Back to back: a run of writes to scattered words, then a read of the
-    // last one, taken in that write's completion cycle.
-    if (errors == 0) {
+    // last one, taken in that write's completion cycle. The writes go out
+    // with the strobe held, whether each arrives as soon as it may or only
+    // in the ack cycle of the one before; the strobe is low only the cycle
+    // before the read.
+    const Pace paces[] = { AT_ONCE, AT_ACK };
+    const char* pace_names[] = { "as soon as each may go", "in the ack cycle before" };
+    for (int p = 0; p < 2 && errors == 0; p++) {
         const int N = 64;
         Beat beats[N + 1];
         uint32_t got[N + 1];
         for (int i = 0; i < N; i++) {
-            uint32_t word = (uint32_t)(i * 37) % NWORDS;
-            uint32_t val  = 0xB2B00000u | (uint32_t)i;
+            uint32_t word = (uint32_t)(i * 37 + p) % NWORDS;
+            uint32_t val  = 0xB2B00000u | (uint32_t)(p << 8) | (uint32_t)i;
             beats[i] = { true, word * 4u, 0xF, val };
             shadow[word] = val;
         }
         beats[N] = { false, beats[N - 1].addr, 0xF, 0 };
-        int span = back_to_back(d, beats, N + 1, got);
+        int lows;
+        int span = back_to_back(d, beats, N + 1, paces[p], got, &lows);
         if (span >= 0) {
+            if (lows != 1) {
+                printf("  [FAIL] strobe low %d cycles in the run %s, expected 1\n",
+                       lows, pace_names[p]);
+                errors++;
+            }
             if (got[N] != beats[N - 1].val) {
                 printf("  [FAIL] read behind the last write got 0x%08X want 0x%08X\n",
                        got[N], beats[N - 1].val);
                 errors++;
             }
-            printf("  %d back-to-back writes: %.2f cycles a write\n", N, (double)span / N);
+            printf("  %d back-to-back writes %s: %.2f cycles a write\n",
+                   N, pace_names[p], (double)span / N);
         }
-        for (int i = 0; i < N && errors == 0; i++) {
-            uint32_t word = beats[i].addr / 4u, rd[LINE_WORDS];
-            if (!do_txn(d, false, false, beats[i].addr, 0xF, nullptr, rd)) break;
-            if (rd[0] != shadow[word]) {
-                printf("  [FAIL] back-to-back word %u got 0x%08X want 0x%08X\n",
-                       word, rd[0], shadow[word]);
-                errors++;
+        read_back(d, beats, N);
+    }
+
+    // Writes and reads arriving at random: some writes go on behind the
+    // one before, some find the master idle, and each read waits for it.
+    if (errors == 0) {
+        const int N = 512;
+        static Beat beats[N];
+        static uint32_t got[N];
+        static uint32_t want[N];
+        for (int i = 0; i < N; i++) {
+            uint32_t word = rnd() % NWORDS;
+            if ((rnd() & 3) == 0) {
+                beats[i] = { false, word * 4u, 0xF, 0 };
+                want[i]  = shadow[word];
+            } else {
+                uint8_t  be  = (uint8_t)(rnd() & 0xF); if (be == 0) be = 0xF;
+                uint32_t val = rnd();
+                beats[i] = { true, word * 4u, be, val };
+                shadow[word] = merge(shadow[word], val, be);
             }
         }
+        int lows;
+        if (back_to_back(d, beats, N, RANDOM, got, &lows) >= 0)
+            for (int i = 0; i < N && errors == 0; i++)
+                if (!beats[i].we && got[i] != want[i]) {
+                    printf("  [FAIL] random-run read %d of word %u got 0x%08X want 0x%08X\n",
+                           i, beats[i].addr / 4u, got[i], want[i]);
+                    errors++;
+                }
+        printf("  %d writes and reads at random\n", N);
+        read_back(d, beats, N);
     }
 
     delete d;

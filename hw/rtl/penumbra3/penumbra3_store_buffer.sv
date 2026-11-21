@@ -203,8 +203,8 @@ module penumbra3_store_buffer #(
     // Registered: the oldest unsent store after this cycle's events. A
     // posted store entered the ring cycles before it posted, so the ring
     // holds it. The master may take it while earlier stores are still
-    // sent, as the oldest sent store's bus write completes, so a send and a
-    // free can share a cycle; each entry frees only with its own bus write.
+    // sent, so a send and a free can share a cycle; each entry frees only
+    // with its own bus write.
     logic   bus_valid_q;
     entry_t bus_out_q;
 

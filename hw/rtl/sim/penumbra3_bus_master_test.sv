@@ -6,8 +6,9 @@
 // prefetch adapter, which a gapped read stream can wedge
 // (doc/TODO/hw-core.md). The master's transaction interface is exposed
 // for the testbench; of the cache-facing bus between master and memory,
-// only the strobes are, so the testbench can time the gaps between
-// transactions.
+// only the strobes and the ack are, so the testbench can time the gaps
+// between transactions and present a write in the ack cycle of the one
+// before it.
 module penumbra3_bus_master_test #(
     parameter int LINE_BYTES = 16,
     parameter int WORD_BYTES = 4
@@ -18,6 +19,7 @@ module penumbra3_bus_master_test #(
 
     input  logic                                     i_req_valid,
     output logic                                     o_req_ready,
+    output logic                                     o_behind_ready,
     input  logic                                     i_req_we,
     input  logic                                     i_req_line,
     input  logic [31:0]                              i_req_addr,
@@ -29,7 +31,8 @@ module penumbra3_bus_master_test #(
     output logic [31:0]                              o_rsp_addr,
 
     output logic                                     o_bus_re,
-    output logic                                     o_bus_we
+    output logic                                     o_bus_we,
+    output logic                                     o_bus_ack
 );
 
     // Master <-> sdram_sim cache-facing bus
@@ -49,6 +52,7 @@ module penumbra3_bus_master_test #(
         .i_rst         (i_rst),
         .i_req_valid   (i_req_valid),
         .o_req_ready   (o_req_ready),
+        .o_behind_ready (o_behind_ready),
         .i_req_we      (i_req_we),
         .i_req_line    (i_req_line),
         .i_req_addr    (i_req_addr),
@@ -68,8 +72,9 @@ module penumbra3_bus_master_test #(
         .i_bus_fault   (1'b0)
     );
 
-    assign o_bus_re = bus_re;
-    assign o_bus_we = bus_we;
+    assign o_bus_re  = bus_re;
+    assign o_bus_we  = bus_we;
+    assign o_bus_ack = bus_ack;
 
     sdram_sim u_mem (
         .i_clk       (i_clk),

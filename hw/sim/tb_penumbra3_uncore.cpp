@@ -12,7 +12,8 @@
 //   - a store entering the buffer and reaching the bus by itself, a bus
 //     fault on its write as a store fault with its address, the store
 //     behind it written meanwhile; posted stores back to back, each
-//     write's ack one cycle more than the slave's latency after the last
+//     write acked the slave's latency after the last, the strobe held
+//     from the first to the last
 //   - the buffer's order: posted stores ahead of every later bus access,
 //     stores written in the order they entered, a line read waiting for a
 //     queued store to its line, a word access for the buffer to empty, a
@@ -412,9 +413,9 @@ int main(int argc, char** argv) {
     }
 
     // ── Posted stores go out back to back ────────────────────────
-    // The bus master takes each write in the completion cycle of the one
-    // before, so with nothing else asking for the bus the writes ack lat + 1
-    // cycles apart: lat with the strobe up, one with it down.
+    // The bus master takes each write behind the one it is writing and puts
+    // it on the bus the cycle after that one's ack, so the writes ack lat
+    // cycles apart with the strobe never dropping between them.
     {
         for (int k = 0; k < 6; k++) store(0x0000E400 + 4 * k, 0xF, 0xBBBB0000 + k);
         drain();
@@ -422,8 +423,9 @@ int main(int argc, char** argv) {
         for (int k = 1; k < 6 && k < (int)beats.size(); k++) {
             char n[32];
             snprintf(n, sizeof(n), "pace_six_gap%d", k);
-            check(n, beats[k].acked_at - beats[k - 1].acked_at, lat + 1);
+            check(n, beats[k].acked_at - beats[k - 1].acked_at, lat);
         }
+        check("pace_six_held", gaps(), 0);
         settle();
     }
 

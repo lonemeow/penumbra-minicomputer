@@ -442,24 +442,39 @@ module penumbra3_uncore
         .o_empty        (sb_empty)
     );
 
+    // What the bus master runs, recorded as it takes it, so its completion
+    // goes to its owner. A store taken behind a store on the bus is a store
+    // too, so taking it changes nothing here.
+    typedef enum logic [1:0] {
+        BM_STORE,        // a posted store's write
+        BM_TRANSACTION,  // the verdict's bus transaction
+        BM_PREFETCH      // a stream buffer's fetch
+    } bm_owner_e;
+    bm_owner_e bm_owner_q;
+
     // A posted store goes first: it is older than the verdict's operation,
-    // which waits for it. A prefetch goes only when the bus has nothing else
+    // which waits for it. It goes behind a store the master is writing, so
+    // a run of stores streams with the strobe held, and otherwise when the
+    // master is idle. A prefetch goes only when the bus has nothing else
     // to do: nothing at the verdict, no transaction in flight, and no store
     // posted, so it reads memory after every older store. Which of the
     // three goes is chosen on registers.
     logic                        bm_req_valid, bm_we, bm_line_req, bm_done, bm_fault;
+    logic                        bm_behind_ready, store_take;
     logic [31:0]                 bm_addr, bm_done_addr;
     logic [3:0]                  bm_byte_en;
     logic [LINE_WORDS-1:0][31:0] bm_wline;
     line_t                       bm_line;
     logic                        pf_valid, pf_take;
     logic [LINE_ADDR_BITS-1:0]   pf_addr;
+    assign store_take = sb_bus_valid
+                     && (bm_ready || (bm_behind_ready && bm_owner_q == BM_STORE));
     assign pf_take = !sb_bus_valid && !s1_valid_q && !bt_busy_q && !sb_posted
                   && pf_valid && bm_ready;
     always_comb begin
         bm_wline = '0;
         if (sb_bus_valid) begin
-            bm_req_valid = bm_ready;
+            bm_req_valid = store_take;
             bm_we        = 1'b1;
             bm_line_req  = 1'b0;
             bm_addr      = sb_bus_addr;
@@ -482,14 +497,6 @@ module penumbra3_uncore
         end
     end
 
-    // What the bus master runs, recorded as it takes it, so its completion
-    // goes to its owner.
-    typedef enum logic [1:0] {
-        BM_STORE,        // a posted store's write
-        BM_TRANSACTION,  // the verdict's bus transaction
-        BM_PREFETCH      // a stream buffer's fetch
-    } bm_owner_e;
-    bm_owner_e bm_owner_q;
     always_ff @(posedge i_clk) begin
         if (i_rst)
             bm_owner_q <= BM_STORE;
@@ -507,6 +514,7 @@ module penumbra3_uncore
         .i_rst         (i_rst),
         .i_req_valid   (bm_req_valid),
         .o_req_ready   (bm_ready),
+        .o_behind_ready (bm_behind_ready),
         .i_req_we      (bm_we),
         .i_req_line    (bm_line_req),
         .i_req_addr    (bm_addr),
@@ -527,12 +535,11 @@ module penumbra3_uncore
     );
 
     // The bus master's completion goes to what it ran. A served read has no
-    // bus: it completes the cycle after its verdict. The buffer offers its
-    // oldest unsent store while the master writes a sent one, for the master
-    // to take as that write completes, so a fault takes the store's address
-    // from the master's completion.
+    // bus: it completes the cycle after its verdict. The master takes a
+    // store while it still writes the one before, so a fault takes the
+    // store's address from the master's completion.
     logic serve_done_q, pf_done;
-    assign sb_bus_taken = sb_bus_valid && bm_ready;
+    assign sb_bus_taken = store_take;
     assign post_done    = bm_done && bm_owner_q == BM_STORE;
     assign pf_done      = bm_done && bm_owner_q == BM_PREFETCH;
     assign bt_done      = (bm_done && bm_owner_q == BM_TRANSACTION) || serve_done_q;
