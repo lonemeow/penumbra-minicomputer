@@ -274,6 +274,21 @@ decode + read + execute + writeback), so the durable fmax lever is the
 gen2 pipeline. Within gen1, prefer small depth-shaving wins that buy
 safety margin over the 25 MHz target rather than campaigns to raise it.
 
+### The USB complex crowds the CPU cone — open
+
+The USB debug and correctness campaign (line capture, input
+synchronizers, arbiter drain and fairness, SOF-delivery counter)
+consumed the gen1 top's historical timing slack: seed sweeps that used
+to reach 28–30 MHz plateaued at ~25–27, with the single-cycle cone
+still the critical path — the USB logic pressures its placement rather
+than appearing in it. The line capture is removed, and a sweep after
+it still plateaus there. Open is the deliberate treatment the
+floorplan-after-features policy asks for: keep_hierarchy over the
+usbhc/PHY cluster and, if needed, a REGION constraint pinning the USB
+complex away from the CPU cone, as "The CPU clock's cone is long, not
+deep — and the fix is a region" did for the audio device on gen2; then
+re-sweep for a pin at or above the 27 MHz floor.
+
 ## Hardware: L2 phase 2 — write-back / write-allocate
 
 The headline remaining cache optimization, and the highest-impact
