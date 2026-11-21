@@ -105,18 +105,6 @@ Neither the keyboard nor the network waits for the card
 (`hw-devices.md`, "Hardware + kernel: PS/2 port (`CLASS_PS2`)" and
 "Hardware + kernel: Ethernet MAC for an onboard PHY").
 
-## Clocking: CPU clock above 60 MHz
-
-The machine runs at 60 MHz. The DDR3 machine top's signoff
-(2026-09-28) met timing with 1.697 ns of slack, an fmax of 66.8 MHz.
-Its worst paths start at EX's `o_fault_pending` and end at MEM's
-`o_wb_value` (14 levels, 79% route: RDSYS reading the main TLB back
-out of its LUT RAM) or at the MMU's fault-status clear (13 levels).
-The DDR3 controller's own clock is not a factor (83.33 MHz, fmax
-98.1 MHz). Open: the next step up. DDR3's latency is fixed in
-nanoseconds, so it costs more CPU cycles as the clock rises: re-read
-the RAM wait LEDs at each step against the 256-cycle bus watchdog.
-
 ## Ruled out
 
 - **Co-simulating the real DDR3 controller as routine verification.**
@@ -136,6 +124,11 @@ the RAM wait LEDs at each step against the 256-cycle bus watchdog.
 - **openXC7 for the Xilinx flow.** nextpnr-xilinx does no static timing
   analysis, and no bitstream is flashed without signoff; Vivado runs
   in a container instead (`DEVELOP.md`, "Vivado (Xilinx boards)").
+- **The gen3 machine top's CPU clock above 80 MHz.** At 100 MHz
+  Vivado missed by 0.938 ns over 934 endpoints (2026-11-21), the worst
+  paths spread over EX, the branch redirect into IF1, the D-side and
+  fetch-side verdicts and the uncore, all near 10.9 ns. 90 MHz was left
+  untried: the remaining step was not worth the time.
 - **USB host on a Pmod, through the ULX3S's fabric PHY.** A USB-A
   socket on a Pmod, driven by `usb_phy_ecp5` as the ULX3S drives its
   port. On the ULX3S that path is unreliable at full speed

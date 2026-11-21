@@ -53,8 +53,9 @@ response fabric with its 256-cycle watchdog.
 The CPU clock comes from the 100 MHz oscillator through an MMCM
 (`nexysvideo_clk_rst`, shared by every top). `xc7_mmcm_pkg` derives
 the dividers from `CPU_HZ`, so the clock is a one-number edit, and the
-build stops when no exact divider set reaches it. The machine tops run
-at 60 MHz. The DDR3 controller has clocks of its own, from a PLL
+build stops when no exact divider set reaches it. The gen3 machine top
+runs at 80 MHz and the gen2 one at 60 MHz. The DDR3 controller has
+clocks of its own, from a PLL
 ([ddr3.md](ddr3.md), "Clocks, the crossing and reset").
 
 The reset holds while the MMCM is unlocked or CPU RESET is pressed,
