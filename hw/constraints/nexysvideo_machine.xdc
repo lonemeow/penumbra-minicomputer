@@ -86,14 +86,18 @@ set_false_path -from [get_ports { cpu_resetn uart_tx_in }]
 set_false_path -to [get_ports { led[*] uart_rx_out }]
 
 # SD MISO answers an SCK edge launched off the CPU clock, and spi.sv
-# samples it two CPU cycles later. It arrives at most 25 ns after the
-# launching edge: clock-to-out, board flight both ways, and the card's
-# 14 ns output delay.
+# samples it on the next SCK edge, half an SCK period later: at its
+# fastest SCK, spi.sv's SCLK_FAST_HZ of 12.5 MHz, at least 40 ns. That
+# is the CPU cycles below, rounded down so a period Vivado rounds to the
+# picosecond never claims a cycle the divider does not give. MISO
+# arrives at most 25 ns after the launching edge: clock-to-out, board
+# flight both ways, and the card's 14 ns output delay.
 set sd_clk [get_clocks -of_objects [get_pins u_clk_rst/u_mmcm/CLKOUT0]]
+set sd_cycles [expr {max(1, int(floor(40.0 / [get_property PERIOD $sd_clk])))}]
 set_input_delay -clock $sd_clk -max 25.0 [get_ports { sd_d[0] }]
 set_input_delay -clock $sd_clk -min 0.0 [get_ports { sd_d[0] }]
-set_multicycle_path -setup 2 -from [get_ports { sd_d[0] }]
-set_multicycle_path -hold 1 -from [get_ports { sd_d[0] }]
+set_multicycle_path -setup $sd_cycles -from [get_ports { sd_d[0] }]
+set_multicycle_path -hold [expr {$sd_cycles - 1}] -from [get_ports { sd_d[0] }]
 
 # The card samples its inputs against SCK; its power switch is static.
 set_false_path -to [get_ports { sd_cclk sd_cmd sd_d[*] sd_reset }]
