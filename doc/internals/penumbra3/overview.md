@@ -295,8 +295,9 @@ overlap, so they do not add.
 | L1 4 KB → 8 KB 2-way | ~140 / ~110 / ~40 | none in the line-wide shape | shape |
 | L1 8 KB → 16 KB 4-way | ~135 / ~155 / ~30 | ~10 more block RAMs; two more tag compares in IF2 | Artix-7 |
 | Next-line prediction buffer, L1-I | ~100 / ~105 / ~10 | a line register, a tag compare, a second L2 look-up per fill | staged 2 |
-| Stream prefetch beside L2 | ~55 / ~35 / ~65 | two line buffers and stream detection | staged 3 |
-| L2 64 KB → 128 KB | ~90 / ~40 / ~30 | ~35 more block RAMs | staged 4, if block RAM allows |
+| Stream prefetch beside L2 | ~55 / ~31 / ~63 | two line buffers and stream detection | staged 3 |
+| L2 64 KB → 128 KB | ~131 / ~53 / ~38 | ~35 more block RAMs | staged 4, if block RAM allows |
+| L2 64 KB → 256 KB | ~185 / ~95 / ~151 | ~52 more block RAM tiles on an Artix-7; beyond the ECP5 | Artix-7 |
 | Selective `WRSYS`, behind a 256×2 TLB | ~15 / ~10 / ~2 | a serialize bit on the MMU's responses | staged 5 |
 | Write combining, L2 posting | ~6 / ~4 / ~7 | a line buffer in the SDRAM adapter and a wider CDC, where placement is tight | staged 6 |
 | Native port for on-board RAM | ~3 | a second memory port and stack front end | stretch |
@@ -304,8 +305,10 @@ overlap, so they do not add.
 
 - **Fills** are priced at gen2.5's measured 16 cycles from L2 and 37
   from memory against the line-wide transfer's estimated ~5 and ~24;
-  L1 and L2 sizes at the line-wide costs, over the 8 KB L1 where it
-  matters.
+  L1 sizes at the line-wide costs, over the 8 KB L1 where it matters.
+  L2 sizes and stream prefetch are counted at gen3's geometry and
+  priced at gen3's measured 4.0 and 24.1
+  ([L2 size and stream buffers](./memory-performance.md#l2-size-and-stream-buffers-at-gen3s-geometry)).
 - **Refills** at the 137–170 cycles gen2.5's handler takes, its own
   fills included. On Doom the as-built shadow undercounts refills, so
   its larger layouts may read optimistic.
@@ -314,8 +317,10 @@ overlap, so they do not add.
   the waits, so the saving is a floor.
 - **The prediction buffer** at ~3 cycles a served miss; unused
   look-ups can take back up to ~30 on the kernel paths.
-- **Stream prefetch** at an estimated ~10 cycles for each memory fill
-  that continues a stream.
+- **Stream prefetch** at ~10 cycles for each memory fill the cache
+  model's two stream buffers serve behind a 64 KB L2, the low end of
+  the 10–20 a timely prefetch saves. Behind a larger L2 they serve
+  fewer of Doom's.
 - **Selective `WRSYS`** at the ~38 cycles of serialization in each
   refill a 256×2 TLB still takes.
 - **Branch prediction** against resolving every transfer in EX, with
@@ -337,7 +342,8 @@ What that means for the ECP5:
 4. **Everything else saves about 150 per 1000 or less,** and the
    workloads disagree on the order: the prediction buffer serves the
    kernel paths, stream prefetch serves Doom's data, and a 128 KB L2
-   costs a sixth of the block RAM. A 16 KB L1 is an Artix-7 lever.
+   costs a sixth of the block RAM. A 16 KB L1 and a 256 KB L2 are
+   Artix-7 levers.
 5. **Take the levers in order, reading a full-top seed sweep after
    each,** and stop adding when the sweep stops closing 37.5 MHz with
    margin.

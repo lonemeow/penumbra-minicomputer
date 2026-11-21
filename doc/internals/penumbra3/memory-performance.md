@@ -493,7 +493,10 @@ keep 2 ways at a cost of 13–25 cycles per 1000.
 
 ### L2 capacity
 
-At line-wide fill costs:
+At line-wide fill costs, with the models' first version: an LRU L2 and
+gen2.5's 32×2 TLB. [L2 size and stream buffers at gen3's
+geometry](#l2-size-and-stream-buffers-at-gen3s-geometry) re-measures
+the 8 KB rows at gen3's.
 
 | L1 | L2 | Doom, M cycles a frame | Doom data L2 misses a frame | `pbench kernel`, cycles / 1000 insns |
 |---|---|---|---|---|
@@ -516,8 +519,7 @@ At line-wide fill costs:
 - **Doom's data working set fits at 512 KB.** That is affordable in
   block RAM on an Artix-7 board and not on the ECP5, whose 208 EBRs are
   142 used by the gen2.5 full top. 128 KB fits, at about 35 EBRs more
-  than 64 KB ([`l2-cache.md`](../l2-cache.md)), and saves 28 (Doom) and
-  38 (`pbench kernel`) cycles per 1000 behind an 8 KB L1.
+  than 64 KB ([`l2-cache.md`](../l2-cache.md)).
 - **Ways past 4 buy nothing** at 128 KB: 2–5 cycles per 1000.
 - **Every cycle of L2 lookup is paid per L1 fill,** hit or miss: 22
   (Doom) and 60 (`pbench kernel`) cycles per 1000 behind an 8 KB L1, 12
@@ -607,6 +609,71 @@ instructions:
 - **The as-built shadow undercounts Doom's refills** — 1.87 per 1000
   against the kernel's 2.62 — though it matches the kernel paths within
   4 %, so the larger layouts may read optimistic on Doom.
+
+### L2 size and stream buffers at gen3's geometry
+
+Measured 2026-11-20 at `+core=penumbra3`, with its 256×2 TLB and a
+tree-PLRU L2, on the same three workloads and the day's multiuser
+image. One run per workload holds every hierarchy side by side: 8 KB
+2-way L1s over 4-way L2s of 64 KB (gen3's), 128, 256 and 512 KB.
+
+The stream buffers are the cache model's two-buffer shadow
+(`sw/sim/cache_model.h`). A buffer starts prefetching once two memory
+fills land on consecutive lines, then prefetches the line after each
+fill it serves. It never crosses a page and never looks in L2 first.
+The buffers change nothing the caches hold, so every hierarchy prices
+them against its own misses.
+
+Memory fills per 1000 instructions, and the share the buffers serve:
+
+| L2 | shell loop | `pbench kernel` | Doom `demo3` |
+|---|---|---|---|
+| 64 KB | 15.48, 36 % | 7.34, 43 % | 13.71, 46 % |
+| 128 KB | 8.97, 38 % | 4.68, 46 % | 11.83, 46 % |
+| 256 KB | 6.30, 40 % | 2.63, 45 % | 6.21, 33 % |
+| 512 KB | 4.49, 41 % | 1.22, 44 % | 1.24, 15 % |
+
+Doom per frame (2,134 frames, 1.165 M instructions each):
+
+| L2 | Memory fills | Data | Instruction | Buffers serve | Prefetches unused |
+|---|--:|--:|--:|--:|--:|
+| 64 KB | 15,972 | 12,198 | 3,775 | 7,315 | 1,567 |
+| 128 KB | 13,791 | 10,964 | 2,827 | 6,401 | 1,332 |
+| 256 KB | 7,242 | 5,844 | 1,398 | 2,386 | 988 |
+| 512 KB | 1,447 | 1,175 | 272 | 216 | 215 |
+
+- **Doom's data needs 256 KB.** Its frame copy reads the 64,000-byte
+  screen buffer through L2 every frame, and the renderer's stores into
+  it never allocate ([Doom](../../TODO/workloads.md), "the frame copy is
+  11% of a gen3 frame"). At 128 KB its data fills fall only 10 %: the
+  screen buffer and the rest of the frame's data do not fit together,
+  so each evicts the other every frame. At 256 KB they halve, and at
+  512 KB nine in ten go.
+- **The kernel paths gain from 128 KB, mostly in fetch.** Instruction
+  fills from memory fall from 9.42 to 4.12 per 1000 on the shell loop
+  and from 3.85 to 1.98 on `pbench kernel`.
+- **The buffers serve a steady ~40 % on the kernel paths at every L2
+  size,** two thirds of it instruction streams on the shell loop at
+  64 KB. On Doom they and capacity reach the same misses: their share
+  falls from 46 % to 15 % as L2 grows, the screen buffer being the
+  stream a large L2 keeps.
+- **A fifth to a third of prefetches go unused** at 64 KB: 18 % on
+  Doom, 25 % on `pbench kernel`, 31 % on the shell loop. Each is a read
+  on gen3's in-order bus that delays whatever follows it.
+- **Priced** at gen3's measured fills, 4.0 cycles from L2 and 24.1 from
+  memory on the ULX3S
+  ([transfer rates](#transfer-rates-by-block-size-on-hardware)), a
+  memory fill a larger L2 removes saves ~20 cycles. Per 1000
+  instructions on the shell loop / `pbench kernel` / Doom, 64 → 128 KB
+  saves ~131 / ~53 / ~38 cycles, 256 KB ~185 / ~95 / ~151 and 512 KB
+  ~221 / ~123 / ~251. A served fill saves 10–20 cycles, as its prefetch
+  arrives in time or not, which the model does not see: 55–110 /
+  31–62 / 63–126 at 64 KB.
+- **Only at the same lookup latency.** The 8 KB L1s fill 95 (shell
+  loop), 91 (`pbench kernel`) and 21 (Doom) times per 1000
+  instructions, and every fill pays each cycle of L2 lookup. One more
+  cycle takes back most of what 128 KB saves the shell loop, more than
+  all of it on `pbench kernel`, and half of it on Doom.
 
 ## Levers for the gen3 uncore
 
@@ -1027,11 +1094,15 @@ The same structure can live on the system-clock side of the SDRAM
 adapter as a small line buffer, needing no change above the bus. It
 comes after the latency fixes, which also shrink its worst case.
 
-**Measured reach** ([next-line structure](#next-line-structure)). Two
-stream buffers could catch 47 % of Doom's L2 misses, 50–54 % on the
-kernel paths and 95 % in `pbench libc`. At about 10 cycles saved per
-caught miss that is roughly 1 % of Doom's cycles: worth it for the
-streaming demos and bulk copies, not a lever for Doom.
+**Measured reach.** The cache model's shadow of two buffers follows the
+policy above but keeps no time, so it counts what the prefetches would
+serve, not whether they arrive first. It serves 46 % of Doom's memory
+fills behind gen3's 64 KB L2 and 36–43 % on the kernel paths
+([L2 size and stream buffers](#l2-size-and-stream-buffers-at-gen3s-geometry)).
+On Doom a larger L2 takes most of the same misses; on the kernel paths
+the buffers keep their share at every L2 size. `pbench libc`'s 95 %
+of memory fills continuing a stream ([next-line
+structure](#next-line-structure)) is the streaming case.
 
 **The fetch side** is served by a
 [next-line prediction buffer](#next-line-prediction-buffer-for-l1-i)
