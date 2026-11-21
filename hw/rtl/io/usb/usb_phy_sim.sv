@@ -58,9 +58,7 @@ module usb_phy_sim (
     input  logic [7:0] i_rx_data,
     input  logic       i_rx_last,    // this byte ends the response packet
     input  logic       i_dev_connect,// a device's pull-up is on the line
-    input  logic [1:0] i_dev_speed,  // usb_speed_e of that pull-up
-    // Receive-chain debug tap: a byte-level model has no line to sample
-    output logic [15:0] o_dbg
+    input  logic [1:0] i_dev_speed   // usb_speed_e of that pull-up
 );
     import usb_pkg::*;
 
@@ -73,7 +71,6 @@ module usb_phy_sim (
     assign o_clk      = i_clk;
     assign o_caps     = 3'b011;   // {hs = never, fs, ls}
     assign o_rx_error = 1'b0;
-    assign o_dbg      = 16'd0;
 
     // The out-of-band drive states, decoded as usb_phy_ecp5 does.
     logic reset_drive;

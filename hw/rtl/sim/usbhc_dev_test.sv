@@ -47,8 +47,6 @@ module usbhc_dev_test (
     logic unused_phy_clk;
     assign unused_phy_clk = phy_clk;
 
-    logic [15:0] phy_dbg;
-
     // A simulation's USB clock is whatever rate the SIE takes it for.
     usbhc #(
         .USB_CLK_HZ    (32'(usb_pkg::USB_SIE_HZ)),
@@ -79,9 +77,8 @@ module usbhc_dev_test (
         .o_term_sel   (term_sel),
         .o_opmode     (opmode),
         /* verilator lint_off PINCONNECTEMPTY */
-        .o_port_power (),
+        .o_port_power ()
         /* verilator lint_on PINCONNECTEMPTY */
-        .i_dbg        (phy_dbg)
     );
 
     usb_phy_sim u_phy (
@@ -111,7 +108,6 @@ module usbhc_dev_test (
         .i_rx_data      (i_rx_data),
         .i_rx_last      (i_rx_last),
         .i_dev_connect  (i_dev_connect),
-        .i_dev_speed    (i_dev_speed),
-        .o_dbg          (phy_dbg)
+        .i_dev_speed    (i_dev_speed)
     );
 endmodule

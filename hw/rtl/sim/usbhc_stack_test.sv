@@ -152,9 +152,6 @@ module usbhc_stack_test (
         .i_rx_data      (i_rx_data),
         .i_rx_last      (i_rx_last),
         .i_dev_connect  (i_dev_connect),
-        .i_dev_speed    (i_dev_speed),
-        /* verilator lint_off PINCONNECTEMPTY */
-        .o_dbg          ()
-        /* verilator lint_on PINCONNECTEMPTY */
+        .i_dev_speed    (i_dev_speed)
     );
 endmodule

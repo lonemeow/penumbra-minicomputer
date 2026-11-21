@@ -439,8 +439,6 @@ module machine_sim
     logic       unused_usb_phy_clk;
     assign unused_usb_phy_clk = usb_phy_clk;
 
-    logic [15:0] usb_phy_dbg;
-
     // A simulation's USB clock is whatever rate the SIE takes it for.
     usbhc #(
         .USB_CLK_HZ (32'(usb_pkg::USB_SIE_HZ))
@@ -469,9 +467,8 @@ module machine_sim
         .o_term_sel   (usb_term_sel),
         .o_opmode     (usb_opmode),
         /* verilator lint_off PINCONNECTEMPTY */
-        .o_port_power (),
+        .o_port_power ()
         /* verilator lint_on PINCONNECTEMPTY */
-        .i_dbg        (usb_phy_dbg)
     );
 
     usb_phy_sim u_usb_phy (
@@ -501,8 +498,7 @@ module machine_sim
         .i_rx_data      (i_usb_rx_data),
         .i_rx_last      (i_usb_rx_last),
         .i_dev_connect  (i_usb_dev_connect),
-        .i_dev_speed    (i_usb_dev_speed),
-        .o_dbg          (usb_phy_dbg)
+        .i_dev_speed    (i_usb_dev_speed)
     );
 
     // ── Autoconfig chain end (after last device) ────────────

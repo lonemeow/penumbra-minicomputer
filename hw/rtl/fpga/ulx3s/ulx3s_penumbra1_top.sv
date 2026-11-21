@@ -813,8 +813,6 @@ module ulx3s_penumbra1_top (
     logic       usb_phy_clk;
     /* verilator lint_on UNUSEDSIGNAL */
 
-    logic [15:0] usb_phy_dbg;
-
     usbhc #(
         .USB_CLK_HZ (32'(CLK60_HZ))
     ) u_usbhc (
@@ -842,9 +840,8 @@ module ulx3s_penumbra1_top (
         .o_term_sel   (usb_term_sel),
         .o_opmode     (usb_opmode),
         /* verilator lint_off PINCONNECTEMPTY */
-        .o_port_power (),
+        .o_port_power ()
         /* verilator lint_on PINCONNECTEMPTY */
-        .i_dbg        (usb_phy_dbg)
     );
 
     usb_phy_ecp5 u_usb_phy (
@@ -869,8 +866,7 @@ module ulx3s_penumbra1_top (
         .o_tx_dn      (usb_tx_dn),
         .o_tx_oe      (usb_tx_oe),
         .o_pull_dp    (usb_pull_dp),
-        .o_pull_dn    (usb_pull_dn),
-        .o_dbg        (usb_phy_dbg)
+        .o_pull_dn    (usb_pull_dn)
     );
 
     // Pin mapping: transmit drives the bidirectional pads only while

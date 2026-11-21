@@ -54,7 +54,6 @@ module usbhc_wire_test (
     logic [2:0] caps;
     logic [1:0] xcvr_sel, opmode;
     logic       term_sel;
-    logic [15:0] phy_dbg;
     logic       a_clk_unused, b_clk_unused;
 
     // A simulation's USB clock is whatever rate the SIE takes it for.
@@ -87,9 +86,8 @@ module usbhc_wire_test (
         .o_term_sel   (term_sel),
         .o_opmode     (opmode),
         /* verilator lint_off PINCONNECTEMPTY */
-        .o_port_power (),
+        .o_port_power ()
         /* verilator lint_on PINCONNECTEMPTY */
-        .i_dbg        (phy_dbg)
     );
 
     logic a_dp, a_dn, a_oe;
@@ -119,9 +117,8 @@ module usbhc_wire_test (
         .o_tx_oe      (a_oe),
         /* verilator lint_off PINCONNECTEMPTY */
         .o_pull_dp    (),
-        .o_pull_dn    (),
+        .o_pull_dn    ()
         /* verilator lint_on PINCONNECTEMPTY */
-        .o_dbg        (phy_dbg)
     );
 
     // ── Device transceiver: PHY B on its seam ────────────────────────
@@ -153,8 +150,7 @@ module usbhc_wire_test (
         .o_tx_oe      (b_oe),
         /* verilator lint_off PINCONNECTEMPTY */
         .o_pull_dp    (),
-        .o_pull_dn    (),
-        .o_dbg        ()
+        .o_pull_dn    ()
         /* verilator lint_on PINCONNECTEMPTY */
     );
 

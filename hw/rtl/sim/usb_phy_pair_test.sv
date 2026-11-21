@@ -105,10 +105,7 @@ module usb_phy_pair_test (
         .o_tx_dn        (a_dn),
         .o_tx_oe        (a_oe),
         .o_pull_dp      (o_a_pull_dp),
-        .o_pull_dn      (o_a_pull_dn),
-        /* verilator lint_off PINCONNECTEMPTY */
-        .o_dbg          ()
-        /* verilator lint_on PINCONNECTEMPTY */
+        .o_pull_dn      (o_a_pull_dn)
     );
 
     usb_phy_ecp5 u_b (
@@ -133,9 +130,6 @@ module usb_phy_pair_test (
         .o_tx_dn        (b_dn),
         .o_tx_oe        (b_oe),
         .o_pull_dp      (unused_b_pull_dp),
-        .o_pull_dn      (unused_b_pull_dn),
-        /* verilator lint_off PINCONNECTEMPTY */
-        .o_dbg          ()
-        /* verilator lint_on PINCONNECTEMPTY */
+        .o_pull_dn      (unused_b_pull_dn)
     );
 endmodule
