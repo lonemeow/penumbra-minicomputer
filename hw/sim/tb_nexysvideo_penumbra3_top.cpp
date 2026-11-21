@@ -6,6 +6,6 @@
 #include <cstdint>
 
 using NexysTop = Vnexysvideo_penumbra3_top;
-static const uint64_t CPU_HZ = 60000000;   // the top's CPU_HZ
+static const uint64_t CPU_HZ = 80000000;   // the top's CPU_HZ
 
 #include "nexysvideo_top_tb.h"
