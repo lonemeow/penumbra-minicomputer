@@ -28,20 +28,28 @@
 // A bus transaction goes from the verdict straight into the bus master, and
 // is in flight from the next cycle through its done, which comes a cycle
 // after the bus master completes and is the cycle its line installs.
+//
+// penumbra3_stream_buffer sits beside the L2: a line read the L2 misses
+// that a stream buffer holds is a transaction with no bus, done at i+3, a
+// cycle after a hit's, and its line installs as a bus read's would.
+// The buffers' prefetches run on the bus master only when the bus has
+// nothing else to do, and are not transactions: the L2 serves hits and
+// takes posts while one runs.
 module penumbra3_uncore
     import penumbra_pkg::*;
     import penumbra3_pkg::*;
 #(
-    parameter  int SETS        = 1024,
-    parameter  int WAYS        = 4,
-    localparam int LINE_WORDS  = UNCORE_LINE_WORDS,
-    localparam int LINE_BYTES  = LINE_WORDS * 4,
-    localparam int OFFSET_BITS = $clog2(LINE_BYTES),
-    localparam int WORD_BITS   = $clog2(LINE_WORDS),
-    localparam int SET_BITS    = $clog2(SETS),
-    localparam int WAY_BITS    = $clog2(WAYS),
-    localparam int TAG_BITS    = 32 - SET_BITS - OFFSET_BITS,
-    localparam int TREE_BITS   = WAYS - 1
+    parameter  int SETS           = 1024,
+    parameter  int WAYS           = 4,
+    localparam int LINE_WORDS     = UNCORE_LINE_WORDS,
+    localparam int LINE_BYTES     = LINE_WORDS * 4,
+    localparam int OFFSET_BITS    = $clog2(LINE_BYTES),
+    localparam int LINE_ADDR_BITS = 32 - OFFSET_BITS,  // a line's address: its offset dropped
+    localparam int WORD_BITS      = $clog2(LINE_WORDS),
+    localparam int SET_BITS       = $clog2(SETS),
+    localparam int WAY_BITS       = $clog2(WAYS),
+    localparam int TAG_BITS       = 32 - SET_BITS - OFFSET_BITS,
+    localparam int TREE_BITS      = WAYS - 1
 ) (
     input  logic                         i_clk,
     input  logic                         i_rst,
@@ -150,7 +158,7 @@ module penumbra3_uncore
     logic data_inpipe_q, fetch_inpipe_q;  // the side's request is in the pipeline
     logic bt_busy_q;               // a bus transaction is in flight
     logic upd_write_q;             // the update stage writes a write hit's word
-    logic enable_q, inval_pending_q, walking_q;
+    logic enable_q, inval_pending_q, walking_q, walk_start;
     logic yield_q;                 // a side waits on the buffer's order: posts go first
 
     // The store buffer's ports; it sits with the bus master, below.
@@ -313,11 +321,17 @@ module penumbra3_uncore
     end
 
     // A line read the L2 does not serve, and every word access, take the
-    // bus; a post never does.
-    logic s1_line_read, s1_fside, s1_bus_op;
+    // bus; a post never does. Nor does a line read a stream buffer holds or
+    // is fetching: the L2 or the buffer serves it, or it waits for the
+    // buffer's fetch. That needs no tag compare, so it stays off the late
+    // hit.
+    logic        pf_hit, pf_pending;
+    stream_buf_t pf_hit_buf;
+    logic s1_line_read, s1_fside, s1_buffered, s1_bus_op;
     assign s1_line_read = s1_cacheable_q && !s1_we_q;
     assign s1_fside     = !s1_dside_q && !s1_post_q;
-    assign s1_bus_op    = !s1_post_q && !(s1_line_read && hit);
+    assign s1_buffered  = s1_lookup_q && s1_line_read && (pf_hit || pf_pending);
+    assign s1_bus_op    = !s1_post_q && !(s1_line_read && hit) && !s1_buffered;
 
     // The buffer's order: a line read waits while a queued store holds its
     // line, so the L2 has every older store to it; a word access waits for
@@ -326,15 +340,18 @@ module penumbra3_uncore
     logic s1_ordered;
     assign s1_ordered = s1_line_read ? !sb_line_queued : sb_empty;
 
-    // Nothing at the verdict acts while a bus transaction is in flight.
+    // Nothing at the verdict acts while a bus transaction is in flight. A
+    // served read is a transaction with no bus: its line comes from the
+    // buffer and installs as a bus read's would.
     logic bm_ready;
-    logic s1_live, s1_read_hit, s1_post, s1_take_bus, s1_complete, s1_drop;
+    logic s1_live, s1_read_hit, s1_post, s1_take_bus, s1_serve, s1_complete, s1_drop;
     assign s1_live     = s1_valid_q && !bt_busy_q;
     assign s1_read_hit = s1_live && s1_line_read && hit && s1_ordered;
     assign s1_post     = s1_live && s1_post_q;
     assign s1_take_bus = s1_live && s1_bus_op && s1_ordered && !sb_posted && bm_ready;
+    assign s1_serve    = s1_live && s1_buffered && pf_hit && !hit && s1_ordered;
     assign s1_complete = s1_read_hit || s1_post;
-    assign s1_drop     = s1_valid_q && !s1_complete && !s1_take_bus;
+    assign s1_drop     = s1_valid_q && !s1_complete && !s1_take_bus && !s1_serve;
 
     // ── In the pipeline: from issue through the done, or to a drop ─
     // A post is in the pipeline only at the verdict, where it blocks issue.
@@ -426,12 +443,19 @@ module penumbra3_uncore
     );
 
     // A posted store goes first: it is older than the verdict's operation,
-    // which waits for it.
+    // which waits for it. A prefetch goes only when the bus has nothing else
+    // to do: nothing at the verdict, no transaction in flight, and no store
+    // posted, so it reads memory after every older store. Which of the
+    // three goes is chosen on registers.
     logic                        bm_req_valid, bm_we, bm_line_req, bm_done, bm_fault;
     logic [31:0]                 bm_addr, bm_done_addr;
     logic [3:0]                  bm_byte_en;
     logic [LINE_WORDS-1:0][31:0] bm_wline;
     line_t                       bm_line;
+    logic                        pf_valid, pf_take;
+    logic [LINE_ADDR_BITS-1:0]   pf_addr;
+    assign pf_take = !sb_bus_valid && !s1_valid_q && !bt_busy_q && !sb_posted
+                  && pf_valid && bm_ready;
     always_comb begin
         bm_wline = '0;
         if (sb_bus_valid) begin
@@ -441,7 +465,7 @@ module penumbra3_uncore
             bm_addr      = sb_bus_addr;
             bm_byte_en   = sb_bus_byte_en;
             bm_wline[0]  = sb_bus_wdata;
-        end else begin
+        end else if (s1_valid_q) begin
             bm_req_valid = s1_take_bus;
             bm_we        = s1_we_q;
             bm_line_req  = s1_line_read;
@@ -449,6 +473,30 @@ module penumbra3_uncore
             else              bm_addr = s1_addr_q;
             bm_byte_en   = s1_byte_en_q;
             bm_wline[0]  = s1_wdata_q;
+        end else begin
+            bm_req_valid = pf_take;
+            bm_we        = 1'b0;
+            bm_line_req  = 1'b1;
+            bm_addr      = {pf_addr, {OFFSET_BITS{1'b0}}};
+            bm_byte_en   = 4'hF;
+        end
+    end
+
+    // What the bus master runs, recorded as it takes it, so its completion
+    // goes to its owner.
+    typedef enum logic [1:0] {
+        BM_STORE,        // a posted store's write
+        BM_TRANSACTION,  // the verdict's bus transaction
+        BM_PREFETCH      // a stream buffer's fetch
+    } bm_owner_e;
+    bm_owner_e bm_owner_q;
+    always_ff @(posedge i_clk) begin
+        if (i_rst)
+            bm_owner_q <= BM_STORE;
+        else if (bm_req_valid && bm_ready) begin
+            if (sb_bus_valid)    bm_owner_q <= BM_STORE;
+            else if (s1_valid_q) bm_owner_q <= BM_TRANSACTION;
+            else                 bm_owner_q <= BM_PREFETCH;
         end
     end
 
@@ -478,14 +526,16 @@ module penumbra3_uncore
         .i_bus_fault   (i_bus_fault)
     );
 
-    // The bus master runs a posted store's write and a bus transaction
-    // never at once, so its completion is the transaction's while one is in
-    // flight. The buffer offers its oldest unsent store while the master
-    // writes a sent one, for the master to take as that write completes, so
-    // a fault takes the store's address from the master's completion.
+    // The bus master's completion goes to what it ran. A served read has no
+    // bus: it completes the cycle after its verdict. The buffer offers its
+    // oldest unsent store while the master writes a sent one, for the master
+    // to take as that write completes, so a fault takes the store's address
+    // from the master's completion.
+    logic serve_done_q, pf_done;
     assign sb_bus_taken = sb_bus_valid && bm_ready;
-    assign bt_done      = bm_done &&  bt_busy_q;
-    assign post_done    = bm_done && !bt_busy_q;
+    assign post_done    = bm_done && bm_owner_q == BM_STORE;
+    assign pf_done      = bm_done && bm_owner_q == BM_PREFETCH;
+    assign bt_done      = (bm_done && bm_owner_q == BM_TRANSACTION) || serve_done_q;
 
     logic store_fault_q;
     logic [31:0] store_fault_addr_q;
@@ -499,27 +549,34 @@ module penumbra3_uncore
     // The bus transaction
     // ══════════════════════════════════════════════════════════
     // bt_install_q: a line read that looked up, so its line installs.
-    logic bt_dside_q, bt_install_q, bt_done_q;
+    // bt_serve_q: a read a stream buffer serves; bt_buf_q the buffer.
+    logic        bt_dside_q, bt_install_q, bt_done_q, bt_serve_q, bt_start;
+    stream_buf_t bt_buf_q;
+    assign bt_start = s1_take_bus || s1_serve;
 
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
-            bt_busy_q   <= 1'b0;
-            bt_done_q   <= 1'b0;
-            victim_rd_q <= 1'b0;
-            fill_q      <= 1'b0;
+            bt_busy_q    <= 1'b0;
+            bt_done_q    <= 1'b0;
+            serve_done_q <= 1'b0;
+            victim_rd_q  <= 1'b0;
+            fill_q       <= 1'b0;
         end else begin
-            if (s1_take_bus)    bt_busy_q <= 1'b1;
+            if (bt_start)       bt_busy_q <= 1'b1;
             else if (bt_done_q) bt_busy_q <= 1'b0;
-            bt_done_q   <= bt_done;
-            victim_rd_q <= s1_take_bus && s1_lookup_q && s1_line_read;
-            fill_q      <= bt_done && bt_install_q && !bm_fault;
+            bt_done_q    <= bt_done;
+            serve_done_q <= s1_serve;
+            victim_rd_q  <= bt_start && s1_lookup_q && s1_line_read;
+            fill_q       <= bt_done && bt_install_q && (bt_serve_q || !bm_fault);
         end
     end
 
     always_ff @(posedge i_clk)
-        if (s1_take_bus) begin
+        if (bt_start) begin
             bt_dside_q   <= s1_dside_q;
             bt_install_q <= s1_lookup_q && s1_line_read;
+            bt_serve_q   <= s1_serve;
+            bt_buf_q     <= pf_hit_buf;
             bt_set_q     <= s1_set;
             bt_tag_q     <= s1_tag;
             bt_valid_q   <= rd_valid;
@@ -558,6 +615,54 @@ module penumbra3_uncore
     end
 
     // ══════════════════════════════════════════════════════════
+    // The stream buffers
+    // ══════════════════════════════════════════════════════════
+    // Each fill and each write reaches the buffers a cycle after its
+    // verdict, from registers. That is in time for the next verdict: a fill
+    // or an uncached write is a transaction, so nothing at the verdict acts
+    // before its done, and nothing issues while a post is at the verdict.
+    // A fill is a line read the L2 looked up and missed, served or not.
+    logic                      pf_fill_q, pf_write_q;
+    logic [LINE_ADDR_BITS-1:0] pf_event_addr_q;
+    line_t                     pf_line;
+
+    always_ff @(posedge i_clk) begin
+        if (i_rst) begin
+            pf_fill_q  <= 1'b0;
+            pf_write_q <= 1'b0;
+        end else begin
+            pf_fill_q  <= bt_start && s1_lookup_q && s1_line_read;
+            pf_write_q <= s1_post || (s1_take_bus && s1_we_q);
+        end
+    end
+
+    always_ff @(posedge i_clk)
+        if (s1_valid_q) pf_event_addr_q <= s1_addr_q[31:OFFSET_BITS];
+
+    penumbra3_stream_buffer #(
+        .LINE_BYTES (LINE_BYTES)
+    ) u_stream (
+        .i_clk         (i_clk),
+        .i_rst         (i_rst),
+        .i_lookup_addr (s1_addr_q[31:OFFSET_BITS]),
+        .o_hit         (pf_hit),
+        .o_hit_buf     (pf_hit_buf),
+        .o_pending     (pf_pending),
+        .i_read_buf    (bt_buf_q),
+        .o_read_line   (pf_line),
+        .i_fill        (pf_fill_q),
+        .i_write       (pf_write_q),
+        .i_event_addr  (pf_event_addr_q),
+        .i_clear       (walk_start),
+        .o_pf_valid    (pf_valid),
+        .o_pf_addr     (pf_addr),
+        .i_pf_taken    (pf_take),
+        .i_pf_done     (pf_done),
+        .i_pf_fault    (bm_fault),
+        .i_pf_line     (bm_line)
+    );
+
+    // ══════════════════════════════════════════════════════════
     // The response
     // ══════════════════════════════════════════════════════════
     logic rsp_fault_q;
@@ -577,8 +682,8 @@ module penumbra3_uncore
             rsp_fault_q <= 1'b0;
             if (hit) line_q <= hit_line;
         end else if (bt_done) begin
-            rsp_fault_q <= bm_fault;
-            line_q      <= bm_line;
+            rsp_fault_q <= !bt_serve_q && bm_fault;
+            line_q      <= bt_serve_q ? pf_line : bm_line;
         end
     end
 
@@ -594,7 +699,6 @@ module penumbra3_uncore
     // ══════════════════════════════════════════════════════════
     // The walk starts with nothing at the verdict and no bus transaction in
     // flight, so no install meets it; issue waits for it to start.
-    logic walk_start;
     assign walk_start = inval_pending_q && !walking_q && !s1_valid_q && !bt_busy_q;
 
     always_ff @(posedge i_clk) begin
@@ -619,7 +723,8 @@ module penumbra3_uncore
         else if (walking_q) walk_set_q <= walk_set_q + 1'b1;
     end
 
-    // ── Counters: each lookup once, where it completes or takes the bus ─
+    // ── Counters: each lookup once, where it completes or its transaction starts ─
+    // A read a stream buffer serves is a miss: the L2 did not hold its line.
     logic ev_read_hit_q, ev_read_miss_q, ev_write_hit_q, ev_write_miss_q;
     always_ff @(posedge i_clk) begin
         if (i_rst) begin
@@ -629,7 +734,7 @@ module penumbra3_uncore
             ev_write_miss_q <= 1'b0;
         end else begin
             ev_read_hit_q   <= s1_read_hit;
-            ev_read_miss_q  <= s1_take_bus && s1_lookup_q && s1_line_read;
+            ev_read_miss_q  <= bt_start && s1_lookup_q && s1_line_read;
             ev_write_hit_q  <= s1_post && s1_lookup_q &&  hit;
             ev_write_miss_q <= s1_post && s1_lookup_q && !hit;
         end
@@ -701,10 +806,15 @@ module penumbra3_uncore
         else $error("penumbra3_uncore: a bus transaction ahead of a posted store");
 
     // A posted store comes only from a post, which never completes while a
-    // bus transaction is in flight, so post_done is a posted store's.
+    // transaction is in flight; one that takes the bus starts with none.
     assert property (@(posedge i_clk) disable iff (i_rst)
-        !(bt_busy_q && sb_posted))
+        !(bt_busy_q && !bt_serve_q && sb_posted))
         else $error("penumbra3_uncore: a posted store while a bus transaction is in flight");
+
+    // A prefetch takes the bus only with nothing else for it.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        !(pf_take && (sb_posted || s1_valid_q || bt_busy_q)))
+        else $error("penumbra3_uncore: a prefetch ahead of a store or a transaction");
 
     // Cacheable writes come only from the store buffer.
     assert property (@(posedge i_clk) disable iff (i_rst)

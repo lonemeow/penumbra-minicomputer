@@ -28,6 +28,14 @@
 //     faulted read installing nothing; the lowest invalid way filled
 //     first, then the tree-PLRU victim; two sides' hits back to back; a
 //     hit dropped under a miss and served after it
+//   - the stream buffers: two fills to consecutive lines fetching the
+//     next line in the background, a read of it served without the bus at
+//     i+3, installed and counted as a miss; L2 hits and posts going on
+//     under a fetch; a read of the line being fetched waiting it out; a
+//     store or an uncached write to a held or fetched line dropping it; no
+//     fetch past a page's end, the stream going on beyond it; a faulting
+//     fetch heard of nowhere; two streams at once, and a third giving up
+//     the one used least recently; INVAL_ALL ending every stream
 //   - the cache device: INFO, CTRL, STATUS through the walk after reset
 //     and after INVAL_ALL, accesses passing through during a walk, and the
 //     counters counting each lookup once
@@ -223,6 +231,18 @@ static void check_line(const char* tag, const Done& r, uint32_t line_addr) {
 }
 
 static uint32_t counter(int reg) { return sys_read(reg); }
+
+// Reads the bus has carried from the line at a.
+static int line_reads(uint32_t a) {
+    int n = 0;
+    for (const Beat& b : beats) if (!b.we && (b.addr & ~15u) == a) n++;
+    return n;
+}
+
+// Run idle until the walk INVAL_ALL started ends.
+static void walk_out() {
+    for (int c = 0; sys_read(REG_STATUS) && c < 2 * SETS; c++) {}
+}
 
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
@@ -665,6 +685,186 @@ int main(int argc, char** argv) {
         drain();
         lat = 2;
         check("pass_all_written", beats.size(), 4);
+        settle();
+    }
+
+    // ── Stream buffers: a stream's next line fetched, then served ─
+    // Two fills to consecutive lines make a stream: the line after them is
+    // fetched in the background, and a read of it is served from the
+    // buffer without the bus, a cycle later than an L2 hit, and installed.
+    {
+        const uint32_t S = 0x00100000;
+        dread(S);
+        Done r = dread(S + 16);
+        check("sb_fills_beats", r.beats_at_done, 8);
+        drain();
+        check("sb_fetched",     line_reads(S + 32), 4);
+        check("sb_fetch_alone", beats.size(), 12);
+        settle();
+        uint32_t rh = counter(REG_READ_HITS), rm = counter(REG_READ_MISSES);
+        r = dread(S + 32);
+        check("sb_served_no_bus", r.beats_at_done, 0);
+        check("sb_served_at",     r.cycles, 3);
+        check("sb_served_fault",  r.fault, 0);
+        check_line("sb_served", r, S + 32);
+        check("sb_served_a_miss", counter(REG_READ_MISSES) - rm, 1);
+        check("sb_served_no_hit", counter(REG_READ_HITS) - rh, 0);
+        drain();
+        check("sb_goes_on", line_reads(S + 48), 4);
+        settle();
+        r = dread(S + 32);
+        check("sb_installed",    beats.size(), 0);
+        check("sb_installed_at", r.cycles, 2);
+        r = dread(S + 48);
+        check("sb_served_next_at", r.cycles, 3);
+        check_line("sb_served_next", r, S + 48);
+        settle();
+    }
+
+    // ── A fetch leaves the L2 free: hits and posts go on under it ─
+    // The line at H is installed above. A slow bus keeps the fetch running
+    // through both; the store's write waits for the fetch.
+    {
+        const uint32_t T = 0x00110000, H = 0x00020040;
+        lat = 10;
+        dread(T);
+        dread(T + 16);                                  // the fetch of T + 32 starts
+        size_t before = beats.size();
+        Done r = dread(H);
+        check("sb_hit_under_fetch_at",  r.cycles, 2);
+        check("sb_hit_under_fetch_ran", r.beats_at_done < before + 4, 1);
+        store(H + 8, 0xF, 0x77777777);
+        r = dread(H);
+        check("sb_post_under_fetch_ran",  r.beats_at_done < before + 4, 1);
+        check("sb_post_under_fetch_seen", r.line[2], 0x77777777);
+        drain();
+        int last_fetch = -1, write_at = -1;
+        for (size_t i = 0; i < beats.size(); i++) {
+            if (!beats[i].we && (beats[i].addr & ~15u) == T + 32) last_fetch = (int)i;
+            if (beats[i].we && beats[i].addr == H + 8) write_at = (int)i;
+        }
+        check("sb_post_written_after", last_fetch >= 0 && write_at > last_fetch, 1);
+        lat = 2;
+        settle();
+    }
+
+    // ── A read of the line being fetched waits for the fetch ─────
+    {
+        const uint32_t U = 0x00120000;
+        lat = 10;
+        dread(U);
+        dread(U + 16);                                  // the fetch of U + 32 starts
+        Done r = dread(U + 32);
+        check("sb_wait_one_read", line_reads(U + 32), 4);
+        check("sb_wait_waited",   r.cycles > 3, 1);
+        check_line("sb_wait", r, U + 32);
+        lat = 2;
+        settle();
+    }
+
+    // ── A write to a held or fetched line drops it ───────────────
+    // A store to a held line; a store posted while its line is fetched,
+    // the fetch discarded and the line read again; an uncached write to a
+    // held line. Each read after sees the write.
+    {
+        const uint32_t V = 0x00130000, W = 0x00140000, Y = 0x00150000;
+        dread(V);
+        dread(V + 16);
+        settle();                                       // V + 32 held
+        store(V + 36, 0xF, 0x5EED0001);
+        settle();
+        Done r = dread(V + 32);
+        check("sb_store_drops_held", r.beats_at_done, 4);
+        check("sb_store_held_seen",  r.line[1], 0x5EED0001);
+        settle();
+
+        lat = 10;
+        dread(W);
+        dread(W + 16);                                  // the fetch of W + 32 starts
+        store(W + 40, 0xF, 0x5EED0002);                 // posted under it
+        r = dread(W + 32);
+        check("sb_store_discards",     line_reads(W + 32), 8);
+        check("sb_store_fetched_seen", r.line[2], 0x5EED0002);
+        lat = 2;
+        settle();
+
+        dread(Y);
+        dread(Y + 16);
+        settle();                                       // Y + 32 held
+        dreq(false, Y + 32, true, 0xF, 0x5EED0003);
+        settle();
+        r = dread(Y + 32);
+        check("sb_uc_write_drops", r.beats_at_done, 4);
+        check("sb_uc_write_seen",  r.line[0], 0x5EED0003);
+        settle();
+    }
+
+    // ── A page's end: no fetch past it, the stream going on ──────
+    {
+        const uint32_t P = 0x00160FE0;                  // a page's last two lines
+        dread(P);
+        dread(P + 16);
+        drain();
+        check("sb_page_end_no_fetch", beats.size(), 8);
+        settle();
+        dread(P + 32);                                  // the next page's first
+        drain();
+        check("sb_page_goes_on", line_reads(P + 48), 4);
+        settle();
+    }
+
+    // ── A faulting fetch is heard of nowhere ─────────────────────
+    {
+        const uint32_t F = 0xFFFE0200;
+        dread(F);
+        dread(F + 16);                                  // the fetch of F + 32 faults
+        int dones = 0;
+        for (int c = 0; c < 200; c++) { dones += d->o_drsp_done + d->o_irsp_done; tick(); }
+        check("sb_fault_fetched", line_reads(F + 32), 4);
+        check("sb_fault_silent",  dones + store_faults, 0);
+        settle();
+        Done r = dread(F + 32);
+        check("sb_fault_not_held", r.beats_at_done, 4);
+        check("sb_fault_demand",   r.fault, 1);
+        settle();
+    }
+
+    // ── Two streams at once; a third gives up the one used least recently ─
+    {
+        const uint32_t A0 = 0x00170000, B0 = 0x00180000, C0 = 0x00190000;
+        dread(A0);
+        dread(B0);
+        dread(A0 + 16);                                 // each stream's fetch starts
+        dread(B0 + 16);
+        settle();
+        Done ra = dread(A0 + 32);
+        Done rb = dread(B0 + 32);
+        check("sb_two_a_at", ra.cycles, 3);
+        check("sb_two_b_at", rb.cycles, 3);
+        check_line("sb_two_a", ra, A0 + 32);
+        check_line("sb_two_b", rb, B0 + 32);
+        settle();                                       // A0 + 48 and B0 + 48 held
+        dread(C0);                                      // takes A's buffer
+        settle();
+        Done r = dread(B0 + 48);
+        check("sb_lru_kept_b", r.cycles, 3);
+        dread(A0 + 48);
+        check("sb_lru_gave_up_a", line_reads(A0 + 48), 4);
+        settle();
+    }
+
+    // ── INVAL_ALL ends every stream ──────────────────────────────
+    {
+        const uint32_t X = 0x001A0000;
+        dread(X);
+        dread(X + 16);
+        settle();                                       // X + 32 held
+        sys_write(REG_INVAL_ALL, 0);
+        walk_out();
+        Done r = dread(X + 32);
+        check("sb_inval_drops_held", r.beats_at_done, 4);
+        drain();
+        check("sb_inval_no_stream", line_reads(X + 48), 0);
         settle();
     }
 

@@ -43,6 +43,13 @@ package penumbra3_pkg;
   // core boundary").
   localparam int STORE_BUFFER_ENTRIES = 16;
 
+  // ── The L2's stream buffers ──────────────────────────────────────
+  // How many streams of memory fills are followed at once, each prefetching
+  // its next line (doc/internals/penumbra3/memory-performance.md,
+  // "Next-line prefetch into stream buffers"); stream_buf_t names one.
+  localparam int STREAM_BUFFERS = 2;
+  typedef logic [$clog2(STREAM_BUFFERS)-1:0] stream_buf_t;
+
   // ── ALU function ─────────────────────────────────────────────────
   // The EX-stage ALU select the decode hands forward. The enumerators take
   // values 0..11 in declaration order, which equals the ISA Format-R op[3:0]

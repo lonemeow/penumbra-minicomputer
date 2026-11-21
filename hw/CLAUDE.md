@@ -144,7 +144,8 @@ exposed external bus.
   `ulx3s_penumbra1_top`) is still to come.
 - `machine_penumbra3.sv` — gen3 core + penumbra3_mmu + 2× penumbra3_l1 +
   penumbra3_uncore (the I/D select, penumbra3_store_buffer, the L2 over
-  penumbra3_l2_store and the bus master;
+  penumbra3_l2_store with penumbra3_stream_buffer beside it, and the bus
+  master;
   `doc/internals/penumbra3/uncore.md`) +
   the sysreg devices (MMU, both L1s, L2, CPU identity and perfctr, BUS,
   TIMER, MACH), behind machine_penumbra2's port list, its cache geometry
