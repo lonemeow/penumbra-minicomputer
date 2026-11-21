@@ -121,7 +121,7 @@ def can_make_namespace():
 
 
 def hierarchy(l1i=(0, 0), l1d=(0, 0, 0, 0), l2=(0, 0, 0, 0), fills=None, prediction=None,
-              after_miss=None):
+              after_miss=None, stream=None):
     """A cache model's expected counts for one hierarchy over one window:
     L1I (read hits, read misses), L1D and L2 (read hits, read misses,
     write hits, write misses), and the L1 fills by (kind, mode) as
@@ -129,13 +129,16 @@ def hierarchy(l1i=(0, 0), l1d=(0, 0, 0, 0), l2=(0, 0, 0, 0), fills=None, predict
     when given, is the next-line buffer's (served once, served continue,
     look-ups, missing L2, unused); `after_miss` the L1-D load misses and
     the instruction after them (misses, filled set, another set, no
-    access)."""
+    access); `stream` the stream buffers' (buffers, fills served,
+    memory fills, served I, served D, prefetches, unused)."""
     want = {"L1I": tuple(l1i) + (0, 0), "L1D": tuple(l1d), "L2": tuple(l2),
             "fills": fills or {}}
     if prediction is not None:
         want["prediction"] = tuple(prediction)
     if after_miss is not None:
         want["after miss"] = tuple(after_miss)
+    if stream is not None:
+        want["stream"] = tuple(stream)
     return want
 
 
@@ -181,6 +184,13 @@ def aftermiss(filled_set, another_set):
 
 
 AFTERMISS = {"penumbra1": aftermiss(3, 2), "penumbra3": aftermiss(2, 3)}
+
+# cache_stream.s (see the program's header): eleven cold load misses, each
+# a memory fill, and one store missing both levels.  The buffers serve
+# four fills, all data, from six prefetches, two of them unused.  No line
+# is loaded twice, so the counts are the same at every geometry.
+STREAM = hierarchy(l1d=(0, 11, 0, 1), l2=(11 * 3, 11, 0, 1), fills={("D", "super"): (0, 11)},
+                   stream=(2, 4, 11, 0, 4, 6, 2))
 
 # cache_window.s: inside the window, 16 re-loaded lines hit and 16 new
 # ones miss in both levels.
@@ -1023,6 +1033,9 @@ CASES = [
          windows=[("reset to exit", {"penumbra1": NEXTLINE, "penumbra2_5": NEXTLINE})]),
     Case("cachemodel after a load miss", "cache_aftermiss.s",
          ["+cachemodel=penumbra1,penumbra3"], windows=[("reset to exit", AFTERMISS)]),
+    Case("cachemodel stream buffers", "cache_stream.s",
+         ["+cachemodel=penumbra1,penumbra3"],
+         windows=[("reset to exit", {"penumbra1": STREAM, "penumbra3": STREAM})]),
     Case("model window", "cache_window.s",
          ["+cachemodel", "+model_start=0xFFFF0800", "+model_stop=0xFFFF0900"],
          windows=[("start PC to stop PC", {"penumbra1": WINDOW_PENUMBRA1})]),
@@ -1292,6 +1305,11 @@ def parse_report(text):
                      r" filled set (\d+), another set (\d+), no memory (\d+)", line)
         if m:
             counts["after miss"] = tuple(int(v) for v in m.groups())
+            continue
+        m = re.match(r"\s+stream bufs\s+(\d+) serve (\d+) of (\d+) memory fills \([\d.]+ %\),"
+                     r" I (\d+), D (\d+); (\d+) prefetches, (\d+) unused", line)
+        if m:
+            counts["stream"] = tuple(int(v) for v in m.groups())
     return windows
 
 
@@ -1348,6 +1366,9 @@ def compare_windows(expected, got):
             if "after miss" in want and have.get("after miss") != want["after miss"]:
                 problems.append(f"{label} after miss {have.get('after miss')}, "
                                 f"expected {want['after miss']}")
+            if "stream" in want and have.get("stream") != want["stream"]:
+                problems.append(f"{label} stream buffers {have.get('stream')}, "
+                                f"expected {want['stream']}")
     return problems
 
 

@@ -356,10 +356,12 @@ rom.ld ──────────────────┘
   replacement, write and enable behaviour, and each window reports the
   counts the cache perfctrs keep plus L1 fills by kind, served from L2
   or from memory, the L1-I misses a next-line prediction buffer
-  (proposed for gen3) would have served, and each L1-D load miss by the
-  instruction after it: a load or store to the filled set, to another
-  set, or no access (gen3 holds a lookup of the filled set across the
-  install).  A window opens at reset or at
+  (proposed for gen3) would have served, the memory fills two stream
+  buffers beside L2 would have served (each prefetching the next line
+  within its page once two memory fills land on consecutive lines), and
+  each L1-D load miss by the instruction after it: a load or store to
+  the filled set, to another set, or no access (gen3 holds a lookup of
+  the filled set across the install).  A window opens at reset or at
   `+model_start=ADDR` and closes at `+model_stop=ADDR` (both first
   user-mode execution, as `+pcprof_start`), on `SIGUSR1` (which opens
   the next), or at exit; `+model_report=file` writes the reports there

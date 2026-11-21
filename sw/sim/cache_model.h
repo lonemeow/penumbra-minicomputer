@@ -35,6 +35,32 @@
 // after every miss.  The buffer never changes what the caches hold or
 // count, and an L1-I INVAL_ALL clears it.
 //
+// Beside each L2 run two stream buffers that no generation builds either
+// (the same doc, "Next-line prefetch into stream buffers"), counting which
+// memory fills they would have served, a memory fill being an L1 fill
+// that L2 misses while L2 is enabled.  Each buffer remembers one line, L:
+// where its stream's latest memory fill went.  It holds at most one
+// prefetched line, always L + 1.  At a memory fill to line X:
+//
+//  - A buffer holding X serves the fill.  X becomes its L, and it
+//    prefetches X + 1.
+//  - Otherwise, a buffer whose L + 1 is X has now seen two memory fills
+//    to consecutive lines, which is what a sequential walk looks like.
+//    The fill goes to memory, X becomes its L, and the buffer starts
+//    prefetching X + 1.  Such a buffer holds nothing: its stream has had
+//    one fill so far, a store dropped its prefetch, or X starts a page.
+//  - Otherwise X continues no buffer's stream.  The buffer whose L was
+//    set least recently gives up its stream, and its prefetch if it held
+//    one, and takes X as its L.  It prefetches nothing yet: one fill
+//    alone shows no walk.
+//
+// A buffer never prefetches across a page, and never looks in L2 first: a
+// prefetch of a line L2 holds goes unused.  A prefetch counts as unused
+// when its buffer gives it up, when a store writes its line, or when an L2
+// INVAL_ALL clears the buffers.  A line a buffer serves goes into the
+// caches as a memory fill does, so the buffers never change what the
+// caches hold or count.
+//
 // Each L1-D load miss is also classified by the instruction after it in
 // program order: a load or store to the set the line goes into, one to
 // another set, or no access at all.  On a pipelined core that instruction
@@ -45,8 +71,10 @@
 // No bubble is modelled between the two instructions.
 //
 // The model sees the architectural stream only: no wrong-path fetches,
-// and nothing that needs time — fill latency, prefetch, overlap.  Its
-// counts are exact for that stream; cycles are not modelled.  What
+// and nothing that needs time — fill latency, prefetch, overlap.  A
+// stream buffer counts the fills its prefetches would have served, not
+// whether they would have arrived in time.  Its counts are exact for that
+// stream; cycles are not modelled.  What
 // served each fetch and load is returned for the store-buffer model
 // (sb_model.h), which does keep a clock.  It indexes
 // every level by physical address, which for a VIPT L1 matches the
@@ -59,6 +87,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -229,6 +258,8 @@ public:
             if (l2_.write(line)) counts_[L2].write_hits++;
             else                 counts_[L2].write_misses++;
         }
+        for (StreamBuffer& b : streams_)
+            if (b.armed && b.last_demand + 1 == line) stream_drop(b);
     }
 
     void invalidate(CacheLevel level) {
@@ -238,6 +269,11 @@ public:
             if (continue_.valid) predicted_.unused++;
             once_.valid = continue_.valid = false;
         }
+        if (level == CacheLevel::L2)
+            for (StreamBuffer& b : streams_) {
+                stream_drop(b);
+                b = StreamBuffer();
+            }
     }
 
     void clear_counts() {
@@ -247,6 +283,7 @@ public:
         i_misses_ = i_next_line_ = memory_fills_ = memory_next_line_ = 0;
         predicted_ = PredictionCounts();
         after_miss_counts_ = AfterMissCounts();
+        stream_counts_ = StreamCounts();
     }
 
     void report(FILE* out, uint64_t insns) const {
@@ -305,6 +342,16 @@ public:
         fprintf(out, "                per 1000 instructions: %.2f; %.2f, %.2f, %.2f\n",
                 k ? b.misses / k : 0.0, k ? b.same_set / k : 0.0, k ? b.other_set / k : 0.0,
                 k ? b.no_access / k : 0.0);
+        const StreamCounts& s = stream_counts_;
+        uint64_t served = s.served[int(Kind::I)] + s.served[int(Kind::D)];
+        fprintf(out, "  stream bufs   %d serve %llu of %llu memory fills (%.1f %%), I %llu, D %llu;"
+                     " %llu prefetches, %llu unused\n",
+                STREAM_BUFFERS, (unsigned long long)served, (unsigned long long)s.fills,
+                s.fills ? 100.0 * served / s.fills : 0.0,
+                (unsigned long long)s.served[int(Kind::I)], (unsigned long long)s.served[int(Kind::D)],
+                (unsigned long long)s.prefetches, (unsigned long long)s.unused);
+        fprintf(out, "                per 1000 instructions: %.2f served; %.2f prefetches, %.2f unused\n",
+                k ? served / k : 0.0, k ? s.prefetches / k : 0.0, k ? s.unused / k : 0.0);
     }
 
 private:
@@ -342,6 +389,7 @@ private:
             if (line == stream_[0] + 1)      { memory_next_line_++; stream_[0] = line; }
             else if (line == stream_[1] + 1) { memory_next_line_++; stream_[1] = line; }
             else                             { stream_[1] = stream_[0]; stream_[0] = line; }
+            if (l2_enabled) stream_fill(line, kind);
         }
         fills_[super][int(kind)][from_l2 ? 0 : 1]++;
         l1.fill(line);
@@ -409,6 +457,70 @@ private:
         return Prediction::Loaded;
     }
 
+    // A stream buffer.  `last_demand` is the header's L, the line of its
+    // stream's latest memory fill, NO_STREAM before it has one; `used`
+    // stamps when L was last set, larger being more recent.
+    static constexpr int      STREAM_BUFFERS = 2;
+    static constexpr uint32_t NO_STREAM = ~0u;
+    struct StreamBuffer {
+        bool     armed = false;   // holds a prefetch of last_demand + 1
+        uint32_t last_demand = NO_STREAM;
+        uint64_t used = 0;
+    };
+    struct StreamCounts {
+        uint64_t fills = 0, served[2] = {0, 0}, prefetches = 0, unused = 0;
+    };
+
+    // The stream buffers at a memory fill of `line` (see the header).
+    void stream_fill(uint32_t line, Kind kind) {
+        stream_counts_.fills++;
+        for (auto &b : streams_) {
+            if (stream_continues(b, line)) {
+                if (b.armed)
+                    stream_counts_.served[int(kind)]++;
+                stream_aim(b, line);
+                return;
+            }
+        }
+
+        StreamBuffer *victim =
+            std::min_element(std::begin(streams_), std::end(streams_),
+                             [](const StreamBuffer &a, const StreamBuffer &b) {
+                                 return a.used < b.used;
+                             });
+        stream_start(*victim, line);
+    }
+
+    // `b`'s stream takes `line` as its latest fill, and its buffer
+    // prefetches the line after it unless that starts another page.
+    void stream_aim(StreamBuffer& b, uint32_t line) {
+        b.last_demand = line;
+        b.used        = ++stream_clock_;
+        b.armed       = ((line + 1) & (page_lines_ - 1)) != 0;
+        if (b.armed) stream_counts_.prefetches++;
+    }
+
+    // `b` lets go of its prefetch, which counts as unused if it held one.
+    void stream_drop(StreamBuffer& b) {
+        if (b.armed) stream_counts_.unused++;
+        b.armed = false;
+    }
+
+    // `b` gives up its stream, and its prefetch if it held one, for a new
+    // stream at `line`; it prefetches nothing until a fill lands on the
+    // line after.
+    void stream_start(StreamBuffer& b, uint32_t line) {
+        stream_drop(b);
+        b.last_demand = line;
+        b.used        = ++stream_clock_;
+    }
+
+    // Whether a fill to `line` lands on the line after `b`'s stream's
+    // latest fill.
+    static bool stream_continues(const StreamBuffer& b, uint32_t line) {
+        return b.last_demand != NO_STREAM && b.last_demand + 1 == line;
+    }
+
     std::string   label_;
     CacheGeometry geom_[3];
     ModelCache    l1i_, l1d_, l2_;
@@ -437,6 +549,10 @@ private:
     uint32_t        miss_set_ = 0;         // the L1-D set its line goes into
     bool            miss_pending_ = false; // the instruction after it not yet counted
     AfterMissCounts after_miss_counts_;
+
+    StreamBuffer streams_[STREAM_BUFFERS];
+    uint64_t     stream_clock_ = 0;
+    StreamCounts stream_counts_;
 };
 
 // ── The model: every hierarchy +cachemodel names ─────────────────
