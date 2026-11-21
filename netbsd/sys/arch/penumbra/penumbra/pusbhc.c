@@ -72,25 +72,8 @@ __KERNEL_RCSID(0, "$NetBSD$");
 #define USBHC_CAP_BUFSZ(c)	(((c) >> 8) & 0xff)
 #define USBHC_CAP_LS		0x00010000
 #define USBHC_CAP_FS		0x00020000
-#define USBHC_CAP_CAPTURE	0x00040000
-
-#define USBHC_CAP_CTRL		0x24
-#define USBHC_CAP_STATUS	0x28
-#define USBHC_CAP_ADDR		0x2C
-#define USBHC_CAP_DATA		0x30
-
-#define USBHC_CC_ARM		0x001
-#define USBHC_CC_TRIG_ERR	0x002
-#define USBHC_CC_TRIG_TIMEOUT	0x004
-#define USBHC_CC_TRIG_STUFF	0x008
-#define USBHC_CC_FORCE		0x100
 
 #define USBHC_SOF_TX		0x34
-
-#define USBHC_CS_ARMED		0x001
-#define USBHC_CS_FROZEN		0x002
-#define USBHC_CS_DEPTH_LOG2(s)	(((s) >> 8) & 0xff)
-#define USBHC_CS_TRIG_ADDR(s)	(((s) >> 16) & 0xffff)
 
 #define USBHC_IRQ_XFER_DONE	0x00000001
 #define USBHC_IRQ_PORT_CHANGE	0x00000002
@@ -193,8 +176,6 @@ struct pusbhc_softc {
 	uint16_t		sc_port_change;	/* accumulated UPS_C_* */
 	bool			sc_connect_view; /* last reported CONNECT */
 	bool			sc_dying;
-	bool			sc_has_capture;	/* CAP advertises the instrument */
-	bool			sc_capfrozen_said; /* frozen-notice printed */
 
 	/* Transfer engine, under sc_intr_lock. */
 	SIMPLEQ_HEAD(, pusbhc_pipe) sc_ready;	/* pipes wanting the port */
@@ -258,7 +239,6 @@ static void	pusbhc_write_data(struct pusbhc_softc *, const uint8_t *,
 static void	pusbhc_read_data(struct pusbhc_softc *, uint8_t *, u_int);
 static bool	pusbhc_stage_isread(struct pusbhc_pipe *);
 static void	pusbhc_update_irqmask(struct pusbhc_softc *);
-static void	pusbhc_capture_dump(struct pusbhc_softc *);
 static void	pusbhc_launch(struct pusbhc_softc *);
 static void	pusbhc_kick(struct pusbhc_softc *);
 static void	pusbhc_pipe_ready(struct pusbhc_softc *,
@@ -343,7 +323,6 @@ pusbhc_attach(device_t parent, device_t self, void *aux)
 
 	cap = PUSBHC_RD4(sc, USBHC_CAP);
 	sc->sc_bufsz = USBHC_CAP_BUFSZ(cap);
-	sc->sc_has_capture = (cap & USBHC_CAP_CAPTURE) != 0;
 
 	aprint_normal(": Penumbra USB host controller (v%u, buf %u%s%s)\n",
 	    USBHC_CAP_VERSION(cap), sc->sc_bufsz,
@@ -414,15 +393,6 @@ pusbhc_attach(device_t parent, device_t self, void *aux)
 
 	pusbhc_update_irqmask(sc);
 
-	/*
-	 * Arm the line-capture instrument on error and timeout: the
-	 * first failing transaction of the boot freezes a line trace,
-	 * which the soft interrupt dumps to the console once.
-	 */
-	if (sc->sc_has_capture)
-		PUSBHC_WR4(sc, USBHC_CAP_CTRL, USBHC_CC_ARM |
-		    USBHC_CC_TRIG_ERR | USBHC_CC_TRIG_TIMEOUT);
-
 	sc->sc_child = config_found(self, &sc->sc_bus, usbctlprint,
 	    CFARGS_NONE);
 
@@ -461,41 +431,6 @@ pusbhc_sysctl_port(SYSCTLFN_ARGS)
 	return sysctl_lookup(SYSCTLFN_CALL(&node));
 }
 
-/*
- * machdep.pusbhc.capdump — write 1 to dump a frozen line capture to
- * the console and re-arm the trigger; write 2 to discard it and
- * re-arm.  Runs from process context, so the multi-second console
- * write does not sit inside USB servicing.
- */
-static int
-pusbhc_sysctl_capdump(SYSCTLFN_ARGS)
-{
-	struct sysctlnode node;
-	struct pusbhc_softc *sc = pusbhc_sysctl_sc;
-	int v = 0, error;
-
-	if (sc == NULL || !sc->sc_has_capture)
-		return ENXIO;
-	node = *rnode;
-	node.sysctl_data = &v;
-	error = sysctl_lookup(SYSCTLFN_CALL(&node));
-	if (error || newp == NULL)
-		return error;
-	if (v == 0)
-		return 0;
-	if ((PUSBHC_RD4(sc, USBHC_CAP_STATUS) & USBHC_CS_FROZEN) == 0)
-		return EBUSY;
-	/* 1 dumps the frozen trace and re-arms; 2 discards it and
-	 * re-arms, keeping the instrument live past an uninteresting
-	 * freeze without the multi-second console write. */
-	if (v == 1)
-		pusbhc_capture_dump(sc);
-	sc->sc_capfrozen_said = false;
-	PUSBHC_WR4(sc, USBHC_CAP_CTRL, USBHC_CC_ARM |
-	    USBHC_CC_TRIG_ERR | USBHC_CC_TRIG_TIMEOUT);
-	return 0;
-}
-
 SYSCTL_SETUP(sysctl_pusbhc_setup, "machdep.pusbhc — USB port debug view")
 {
 	const struct sysctlnode *n = NULL;
@@ -513,35 +448,6 @@ SYSCTL_SETUP(sysctl_pusbhc_setup, "machdep.pusbhc — USB port debug view")
 		"IRQ_STATUS, IRQ_ENABLE}"),
 	    pusbhc_sysctl_port, 0, NULL, 0,
 	    CTL_CREATE, CTL_EOL);
-	sysctl_createv(clog, 0, &n, NULL,
-	    CTLFLAG_PERMANENT | CTLFLAG_READWRITE,
-	    CTLTYPE_INT, "capdump",
-	    SYSCTL_DESCR("Write 1: dump the frozen line capture, re-arm; "
-		"2: discard, re-arm"),
-	    pusbhc_sysctl_capdump, 0, NULL, 0,
-	    CTL_CREATE, CTL_EOL);
-}
-
-/*
- * Dump a frozen line capture to the console, once per boot: header
- * with the trigger index, then the raw samples for offline decoding.
- * Debug instrumentation — the multi-second console write is accepted.
- */
-static void
-pusbhc_capture_dump(struct pusbhc_softc *sc)
-{
-	uint32_t st = PUSBHC_RD4(sc, USBHC_CAP_STATUS);
-	u_int depth = 1u << USBHC_CS_DEPTH_LOG2(st);
-	u_int i;
-
-	printf("%s: line capture frozen, trig=%u depth=%u\n",
-	    device_xname(sc->sc_dev), USBHC_CS_TRIG_ADDR(st), depth);
-	PUSBHC_WR4(sc, USBHC_CAP_ADDR, 0);
-	for (i = 0; i < depth; i++) {
-		printf("%04x%s", PUSBHC_RD4(sc, USBHC_CAP_DATA) & 0xffff,
-		    ((i & 15) == 15) ? "\n" : " ");
-	}
-	printf("%s: capture end\n", device_xname(sc->sc_dev));
 }
 
 /*
@@ -556,6 +462,7 @@ pusbhc_intr(void *arg)
 {
 	struct pusbhc_softc *sc = arg;
 	uint32_t status;
+	uint16_t tx;
 	int claimed = 0;
 
 	mutex_enter(&sc->sc_intr_lock);
@@ -568,13 +475,9 @@ pusbhc_intr(void *arg)
 	 * the update off that branch alone freezes the counter on a
 	 * quiet port and fakes marker loss.
 	 */
-	if (sc->sc_has_capture) {
-		uint16_t tx = PUSBHC_RD4(sc, USBHC_SOF_TX) & 0xffff;
-
-		sc->sc_ev_sof_wire.ev_count +=
-		    (uint16_t)(tx - sc->sc_sof_tx_last);
-		sc->sc_sof_tx_last = tx;
-	}
+	tx = PUSBHC_RD4(sc, USBHC_SOF_TX) & 0xffff;
+	sc->sc_ev_sof_wire.ev_count += (uint16_t)(tx - sc->sc_sof_tx_last);
+	sc->sc_sof_tx_last = tx;
 
 	if (status & USBHC_IRQ_XFER_DONE) {
 		uint32_t xs = PUSBHC_RD4(sc, USBHC_XFER_STATUS);
@@ -672,21 +575,6 @@ pusbhc_softintr(void *arg)
 
 	mutex_enter(&sc->sc_lock);
 	pusbhc_drain_done(sc);
-
-	/*
-	 * A failing transaction froze a line trace.  Announce once and
-	 * leave it frozen: the dump is 20 KB of console output — run
-	 * from interrupt-adjacent context it blocks USB servicing long
-	 * enough to manufacture failures of its own.  Software reads it
-	 * on request (machdep.pusbhc.capdump) from process context.
-	 */
-	if (sc->sc_has_capture && !sc->sc_capfrozen_said &&
-	    (PUSBHC_RD4(sc, USBHC_CAP_STATUS) & USBHC_CS_FROZEN) != 0) {
-		sc->sc_capfrozen_said = true;
-		printf("%s: line capture frozen; "
-		    "sysctl machdep.pusbhc.capdump=1 to dump\n",
-		    device_xname(sc->sc_dev));
-	}
 
 	xfer = sc->sc_intr_xfer;
 
