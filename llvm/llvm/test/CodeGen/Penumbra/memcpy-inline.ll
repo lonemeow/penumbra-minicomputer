@@ -2,7 +2,7 @@
 ; RUN: llc -mtriple=penumbra -global-isel -verify-machineinstrs -mcpu=penumbra2_5 \
 ; RUN:   < %s | FileCheck %s --check-prefixes=CHECK,P25
 ; RUN: llc -mtriple=penumbra -global-isel -verify-machineinstrs -mcpu=generic \
-; RUN:   < %s | FileCheck %s --check-prefixes=CHECK,P25
+; RUN:   < %s | FileCheck %s --check-prefixes=CHECK,P3
 ; RUN: llc -mtriple=penumbra -global-isel -verify-machineinstrs -mcpu=penumbra3 \
 ; RUN:   < %s | FileCheck %s --check-prefixes=CHECK,P3
 

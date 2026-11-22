@@ -369,7 +369,7 @@ its two instructions.  Penumbra/1 (serial) and Penumbra/2.5
 (forwarding) qualify; Penumbra/2 does not, since `LUI` waits three
 cycles for the `LLI` result (`test/CodeGen/Penumbra/wide-constant-tuning.ll`).
 
-For `generic` (Penumbra/2.5) over twelve of Doom's renderer, collision
+Tuned for `penumbra2_5`, over twelve of Doom's renderer, collision
 and fixed-point files it costs 0.75% of text and 117 instructions, and
 saves 41 of 1335 SP-relative loads and stores and 71 copies.
 

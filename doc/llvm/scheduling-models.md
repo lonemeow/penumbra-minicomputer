@@ -14,7 +14,7 @@ counts feed the compiler").
 with an empty architecture list: one ISA, so they differ only in their
 tuning. A `PenumbraTuning` record pairs a model with its tune
 features, so a name that borrows another generation's tuning —
-`generic` borrows `penumbra2_5`'s — borrows both halves together.
+`generic` borrows `penumbra3`'s — borrows both halves together.
 `-mcpu` and `-mtune` accept every name.
 
 Every model shares `PenumbraSchedModel`'s parameters: single issue,
@@ -103,6 +103,14 @@ and 10% fewer than scheduled for `penumbra2_5`. On `penumbra2_5`, the
 `penumbra3` schedule waits 4% more than `penumbra2_5`'s own. Bottom
 up, the code waits 10% more on `penumbra3` than top down, and in both
 directions 25% more.
+
+Measured 2026-11-21 on gen3 hardware, both boards, with Dhrystone,
+CoreMark and Doom built once tuned for `penumbra2_5` and once for
+`penumbra3`. Tuned for `penumbra3`, CoreMark runs 1.5% faster a MHz,
+its hazard stalls down from 14.0% of its cycles to 12.7%; Dhrystone 2
+cycles an iteration faster, about 0.3%; and Doom `demo3` 0.1–0.2%
+slower, 4 realtics of 3,870 on the ULX3S and 3 of 1,765 on the Nexys
+Video.
 
 The dependency graph uses alias analysis (`useAA()`), so a load can
 move above a store it provably does not overlap. Counted the same

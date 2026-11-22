@@ -89,9 +89,9 @@ define i64 @fshl_i64(i64 %a, i64 %b, i64 %sh) {
 ; CHECK-NEXT:    stw r5, [sp + 12] // 4-byte Folded Spill
 ; CHECK-NEXT:    ldw r5, [sp + 16]
 ; CHECK-NEXT:    stw r6, [sp + 8] // 4-byte Folded Spill
+; CHECK-NEXT:    mov r11, r1
 ; CHECK-NEXT:    mov r6, r5
 ; CHECK-NEXT:    and r6, 63
-; CHECK-NEXT:    mov r11, r1
 ; CHECK-NEXT:    cmp r6, 32
 ; CHECK-NEXT:    stw r7, [sp + 4] // 4-byte Folded Spill
 ; CHECK-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill

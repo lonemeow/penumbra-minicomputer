@@ -54,14 +54,14 @@ define void @setup(ptr %aux) {
 ; CHECK-NEXT:  .LPC0_3:
 ; CHECK-NEXT:    add lr, pc
 ; CHECK-NEXT:    stw r5, [sp + 8] // 4-byte Folded Spill
-; CHECK-NEXT:  .LPC0_4:
-; CHECK-NEXT:    mov r3, pc
-; CHECK-NEXT:    add r3, %pcrel(.LJTI0_0-.LPC0_4)
 ; CHECK-NEXT:    ldw r2, [r2 + 0]
 ; CHECK-NEXT:    ldw r4, [r4 + 0]
 ; CHECK-NEXT:    ldw r11, [r11 + 0]
 ; CHECK-NEXT:    ldw r5, [lr + 0]
+; CHECK-NEXT:  .LPC0_4:
+; CHECK-NEXT:    mov r3, pc
 ; CHECK-NEXT:    add r1, 4
+; CHECK-NEXT:    add r3, %pcrel(.LJTI0_0-.LPC0_4)
 ; CHECK-NEXT:    stw r6, [sp + 4] // 4-byte Folded Spill
 ; CHECK-NEXT:    b .LBB0_1
 ; CHECK-NEXT:  .LBB0_7: // %at_phnum

@@ -61,8 +61,8 @@ define i32 @scmp_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    sub sp, 4
 ; CHECK-NEXT:    cmp r3, r1
 ; CHECK-NEXT:    stw r5, [sp + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    cmpc r4, r2
 ; CHECK-NEXT:    lli r5, 1
+; CHECK-NEXT:    cmpc r4, r2
 ; CHECK-NEXT:    blt .LBB2_2
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r5, zero
@@ -89,8 +89,8 @@ define i32 @ucmp_i64(i64 %a, i64 %b) {
 ; CHECK-NEXT:    sub sp, 4
 ; CHECK-NEXT:    cmp r3, r1
 ; CHECK-NEXT:    stw r5, [sp + 0] // 4-byte Folded Spill
-; CHECK-NEXT:    cmpc r4, r2
 ; CHECK-NEXT:    lli r5, 1
+; CHECK-NEXT:    cmpc r4, r2
 ; CHECK-NEXT:    bcc .LBB3_2
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    mov r5, zero

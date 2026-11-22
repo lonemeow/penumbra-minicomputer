@@ -201,7 +201,7 @@ def : PenumbraProcessor<"penumbra3", Penumbra3Tuning>;
 // The name a build uses when it names no core.  It is the most-used variant's
 // tuning under a stable name — never a blend across generations — so moving
 // the default to another variant is exactly a change of this reference.
-def : PenumbraProcessor<"generic", Penumbra2_5Tuning>;
+def : PenumbraProcessor<"generic", Penumbra3Tuning>;
 
 //===----------------------------------------------------------------------===//
 // Assembly printer

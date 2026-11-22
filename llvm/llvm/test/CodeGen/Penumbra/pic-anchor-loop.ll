@@ -29,9 +29,9 @@ define void @lookup_row(ptr %dst, ptr %src, i32 %n) {
 ; CHECK-NEXT:    add lr, r11
 ; CHECK-NEXT:    ldb r5, [lr + 0]
 ; CHECK-NEXT:    mov lr, r1
+; CHECK-NEXT:    add lr, r11
 ; CHECK-NEXT:    add r5, r4
 ; CHECK-NEXT:    ldb r5, [r5 + 0]
-; CHECK-NEXT:    add lr, r11
 ; CHECK-NEXT:    add r11, 1
 ; CHECK-NEXT:    cmp r11, r3
 ; CHECK-NEXT:    stb r5, [lr + 0]
@@ -80,9 +80,9 @@ define void @lookup_row_got(ptr %dst, ptr %src, i32 %n) {
 ; CHECK-NEXT:    add lr, r11
 ; CHECK-NEXT:    ldb r5, [lr + 0]
 ; CHECK-NEXT:    mov lr, r1
+; CHECK-NEXT:    add lr, r11
 ; CHECK-NEXT:    add r5, r4
 ; CHECK-NEXT:    ldb r5, [r5 + 0]
-; CHECK-NEXT:    add lr, r11
 ; CHECK-NEXT:    add r11, 1
 ; CHECK-NEXT:    cmp r11, r3
 ; CHECK-NEXT:    stb r5, [lr + 0]

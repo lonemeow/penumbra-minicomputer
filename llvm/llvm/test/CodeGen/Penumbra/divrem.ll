@@ -69,16 +69,16 @@ define void @sdivrem_i64(i64 %a, i64 %b, ptr %dq, ptr %dr) {
 ; CHECK-NEXT:    bl __moddi3
 ; CHECK-NEXT:    ldw r3, [sp + 4] // 4-byte Folded Reload
 ; CHECK-NEXT:    ldw lr, [sp + 8] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r8, [sp + 20] // 4-byte Folded Reload
 ; CHECK-NEXT:    stw r3, [r9 + 0]
 ; CHECK-NEXT:    ldw r3, [sp + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r8, [sp + 20] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r7, [sp + 24] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r6, [sp + 28] // 4-byte Folded Reload
 ; CHECK-NEXT:    stw r3, [r9 + 4]
 ; CHECK-NEXT:    stw r1, [r10 + 0]
 ; CHECK-NEXT:    stw r2, [r10 + 4]
 ; CHECK-NEXT:    ldw r10, [sp + 12] // 4-byte Folded Reload
 ; CHECK-NEXT:    ldw r9, [sp + 16] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r7, [sp + 24] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r6, [sp + 28] // 4-byte Folded Reload
 ; CHECK-NEXT:    ldw r5, [sp + 32] // 4-byte Folded Reload
 ; CHECK-NEXT:    add sp, 36
 ; CHECK-NEXT:    jmp lr
@@ -117,16 +117,16 @@ define void @udivrem_i64(i64 %a, i64 %b, ptr %dq, ptr %dr) {
 ; CHECK-NEXT:    bl __umoddi3
 ; CHECK-NEXT:    ldw r3, [sp + 4] // 4-byte Folded Reload
 ; CHECK-NEXT:    ldw lr, [sp + 8] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r8, [sp + 20] // 4-byte Folded Reload
 ; CHECK-NEXT:    stw r3, [r9 + 0]
 ; CHECK-NEXT:    ldw r3, [sp + 0] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r8, [sp + 20] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r7, [sp + 24] // 4-byte Folded Reload
+; CHECK-NEXT:    ldw r6, [sp + 28] // 4-byte Folded Reload
 ; CHECK-NEXT:    stw r3, [r9 + 4]
 ; CHECK-NEXT:    stw r1, [r10 + 0]
 ; CHECK-NEXT:    stw r2, [r10 + 4]
 ; CHECK-NEXT:    ldw r10, [sp + 12] // 4-byte Folded Reload
 ; CHECK-NEXT:    ldw r9, [sp + 16] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r7, [sp + 24] // 4-byte Folded Reload
-; CHECK-NEXT:    ldw r6, [sp + 28] // 4-byte Folded Reload
 ; CHECK-NEXT:    ldw r5, [sp + 32] // 4-byte Folded Reload
 ; CHECK-NEXT:    add sp, 36
 ; CHECK-NEXT:    jmp lr

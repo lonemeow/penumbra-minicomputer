@@ -25,7 +25,7 @@
 ; core's scheduling model decides: a core whose multiply is sufficiently
 ; cheaper than its divide takes the magic-number rewrite, and penumbra1, which
 ; multiplies as slowly as it divides, keeps the divide.  "generic" is defined
-; as the most-used variant's tuning (penumbra2_5), so generic -- including a
+; as the most-used variant's tuning (penumbra3), so generic -- including a
 ; run that names no -mcpu -- takes FASTMUL.
 ;
 ; llc has no -mtune, so the per-function route that -mtune actually travels
@@ -94,7 +94,7 @@ define i32 @udiv10_untuned(i32 %a) {
 }
 
 ; A "tune-cpu" attribute overrides the command line, so these decide the same
-; way under every RUN line -- and generic decides as penumbra2_5 does.
+; way under every RUN line -- and generic decides as penumbra3 does.
 define i32 @udiv10_tuned_for_penumbra1(i32 %a) #0 {
 ; CHECK-LABEL: udiv10_tuned_for_penumbra1:
 ; CHECK:         divu r1, r2

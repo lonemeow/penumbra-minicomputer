@@ -620,11 +620,12 @@ claim it changes what a binary may contain.
 
 ### Infrastructure — landed
 
-`Penumbra.td` defines `penumbra1`, `penumbra2` and `penumbra2_5` as
-processors over one shared architecture.  Each carries a
-`PenumbraTuning` record pairing its tune features with its scheduling
-model — `Penumbra1Model`, `Penumbra2Model` and `Penumbra2_5Model` —
-and all feature lists are empty.  `generic` is
+`Penumbra.td` defines `penumbra1`, `penumbra2`, `penumbra2_5` and
+`penumbra3` as processors over one shared architecture.  Each carries
+a `PenumbraTuning` record pairing its tune features with its
+scheduling model — `Penumbra1Model`, `Penumbra2Model`,
+`Penumbra2_5Model` and `Penumbra3Model` — and every architecture list
+is empty.  `generic` is
 not a tuning of its own: it is defined from the
 **most-used variant's** `PenumbraTuning`, so it tunes exactly like
 that core rather than averaging across generations, and moving the
@@ -836,7 +837,7 @@ Lock each knob with lit tests that run one `.ll` under both tune
 targets and CHECK the divergence.  The infrastructure test
 (`mtune.ll`) pins both the code every name emits identically and a
 constant divide that splits by multiply cost, including that `generic`
-decides as penumbra2_5.  Cost *numbers* are a measure-on-hardware
+decides as penumbra3.  Cost *numbers* are a measure-on-hardware
 follow-up: benchmark
 on the ULX3S, not the ISS.
 

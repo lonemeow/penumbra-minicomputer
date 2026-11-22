@@ -192,8 +192,8 @@ define i32 @sum_counted(i32 %n, ...) {
 ; CHECK-NEXT:    mov r2, sp
 ; CHECK-NEXT:    add r2, 8
 ; CHECK-NEXT:    stw r2, [sp + 0]
-; CHECK-NEXT:    cmp r1, 0
 ; CHECK-NEXT:    mov r2, zero
+; CHECK-NEXT:    cmp r1, 0
 ; CHECK-NEXT:    stw r1, [sp + 4]
 ; CHECK-NEXT:    stw r3, [sp + 12]
 ; CHECK-NEXT:    stw r4, [sp + 16]
@@ -203,9 +203,9 @@ define i32 @sum_counted(i32 %n, ...) {
 ; CHECK-NEXT:    ldw r3, [sp + 0]
 ; CHECK-NEXT:    ldw r4, [r3 + 0]
 ; CHECK-NEXT:    add r3, 4
+; CHECK-NEXT:    stw r3, [sp + 0]
 ; CHECK-NEXT:    add r2, r4
 ; CHECK-NEXT:    sub r1, 1
-; CHECK-NEXT:    stw r3, [sp + 0]
 ; CHECK-NEXT:    bne .LBB6_1
 ; CHECK-NEXT:  .LBB6_2: // %done
 ; CHECK-NEXT:    mov r1, r2

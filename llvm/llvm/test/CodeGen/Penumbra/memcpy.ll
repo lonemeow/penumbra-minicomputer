@@ -98,12 +98,22 @@ define void @test_memcpy_small(ptr %dst, ptr %src) {
 ; O1-LABEL: test_memcpy_small:
 ; O1:         .cfi_startproc
 ; O1-NEXT:  // %bb.0:
-; O1-NEXT:    sub sp, 4
-; O1-NEXT:    lli r3, 8
-; O1-NEXT:    stw lr, [sp + 0] // 4-byte Folded Spill
-; O1-NEXT:    bl memcpy
-; O1-NEXT:    ldw lr, [sp + 0] // 4-byte Folded Reload
-; O1-NEXT:    add sp, 4
+; O1-NEXT:    ldb r3, [r2 + 0]
+; O1-NEXT:    stb r3, [r1 + 0]
+; O1-NEXT:    ldb r3, [r2 + 1]
+; O1-NEXT:    stb r3, [r1 + 1]
+; O1-NEXT:    ldb r3, [r2 + 2]
+; O1-NEXT:    stb r3, [r1 + 2]
+; O1-NEXT:    ldb r3, [r2 + 3]
+; O1-NEXT:    stb r3, [r1 + 3]
+; O1-NEXT:    ldb r3, [r2 + 4]
+; O1-NEXT:    stb r3, [r1 + 4]
+; O1-NEXT:    ldb r3, [r2 + 5]
+; O1-NEXT:    stb r3, [r1 + 5]
+; O1-NEXT:    ldb r3, [r2 + 6]
+; O1-NEXT:    stb r3, [r1 + 6]
+; O1-NEXT:    ldb r2, [r2 + 7]
+; O1-NEXT:    stb r2, [r1 + 7]
 ; O1-NEXT:    jmp lr
   call void @llvm.memcpy.p0.p0.i32(ptr %dst, ptr %src, i32 8, i1 false)
   ret void
