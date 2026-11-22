@@ -254,13 +254,15 @@ module nexysvideo_penumbra3_top (
     logic        busctl_bus_rst;
     logic        busctl_cfg_en;
 
-    // The caches and TLB as the ULX3S has them — 8 KB L1s of two ways, a
-    // page a way, a 64 KB L2 of four and a 256-set TLB — so a run here
-    // exercises the machine that board does, at a faster clock. This
-    // board's block RAM would take larger caches.
+    // The L1s and TLB as the ULX3S has them: 8 KB L1s of two ways, a page
+    // a way, and a 256-set TLB. The L2 is 256 KB of four ways, four times
+    // the ULX3S's: the size Doom's frame data needs to stay in it
+    // (doc/internals/penumbra3/memory-performance.md, "L2 size and stream
+    // buffers at gen3's geometry"), and one that leaves this board's block
+    // RAM room for a framebuffer at the display's full resolution.
     machine_penumbra3 #(
         .L1_WAYS    (2),
-        .L2_SETS    (1024),
+        .L2_SETS    (4096),
         .L2_WAYS    (4),
         .TLB_SETS   (256),
         .MACH_NAME0 (32'h7978654E),   // "Nexy"
