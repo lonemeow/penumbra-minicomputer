@@ -376,6 +376,45 @@ which takes 666 / 525. Two rules restrict it:
   with an independent op behind it is among the commonest pairs, and
   Doom's loops are made of them ([ruled out](#ruled-out)).
 
+## What a fused op pairs with
+
+Measured 2026-11-22 behind gen3's TLB on the same windows, from an
+image rebuilt since, on which the design's stage with branches last
+and two reads an op,
+`dual+fuse:lilui:cmpbr:movop:opbr:addmem:addwb+fw:imm+flex+reads:2+last:br`,
+takes 681 / 533. Every other measurement here lets a fused op pair with
+any op its slots allow. The model's `fpair:` restricts that:
+
+- **An op that is not fused** (`fpair:simple`). X issues no fused op,
+  so a fused op takes Y and its partner X, and two fused ops never
+  pair.
+- **Nothing** (`fpair:none`): a cycle issues one fused op, two ops, or
+  one.
+
+| A fused op pairs with | `pbench kernel` | Doom `demo3` |
+|---|---|---|
+| Any op | 681 | 533 |
+| An op that is not fused | 706 | 551 |
+| … without `flex` | 733 | 569 |
+| Nothing | 718 | 602 |
+
+- **A fused op alone costs 37 / 69,** 5.5 % / 12.9 % of the issue
+  cycles: Doom loses 69 of its 240 pairs per 1000 instructions, the
+  kernel paths 37 of 173. 29 % of Doom's ops are fused, against 17 %
+  of theirs.
+- **A partner that is not fused takes back 12 / 51 of it,** leaving
+  it 25 / 18 behind any op. It is what a window of three instructions
+  in ID buys ([structure](./structure.md#open)).
+- **What it cannot serve is a neighbour that needs Y as well:** an
+  access, a branch, or a second fused op. A load or store is the
+  younger op of 8.5 of the 25 pairs per 1000 instructions it gives up on
+  the kernel paths, and of 12 of the 18 on Doom.
+- **`flex` is worth 26 / 18 here,** against 44–70 with branches free
+  to lead ([fusion and dual issue](#fusion-and-dual-issue-together)),
+  whose commonest case was a simple op behind a fused branch. What it
+  serves now is a fused op that is the older of its pair, which pairs
+  only from Y.
+
 ## Precise exceptions
 
 An exception saves the PC of the instruction that faulted, and the
@@ -490,6 +529,10 @@ is one, and Doom fuses 73 accesses per 1000 instructions.
 - **A third register read for a fused store,** a fifth read port or a
   rule that keeps such an op from a partner reading two: it would serve
   0.6 / 0.8 fused stores per 1000 instructions, worth under 1.
+- **A fused op in X, or beside another fused op** (`fpair:all`, which
+  the other measurements here assume): X would need every fused op's
+  datapath, and ID a window of four instructions
+  ([what a fused op pairs with](#what-a-fused-op-pairs-with)).
 
 ## Design
 
@@ -509,6 +552,10 @@ is one, and Doom fuses 73 accesses per 1000 instructions.
   shifts and moves; Y everything. Either op may be the older, but a
   branch is always the younger
   ([branches last](#branches-last-and-two-reads-an-op)).
+- **A fused op takes Y,** beside an op that is not fused, and two fused
+  ops never pair: 706 / 551 with branches last and two reads an op.
+  Where its timing allows no partner, a fused op issues alone, at
+  718 / 602 ([what a fused op pairs with](#what-a-fused-op-pairs-with)).
 - **One forward between the pipelines:** a constant the older op loads,
   wherever the younger reads it.
 - **The youngest flag writer's flags stand.**

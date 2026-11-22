@@ -48,6 +48,9 @@ cycles that 1000 instructions take down to 668–681
 Fusing an add into the load or store it addresses, the base-plus-index
 access the ISA has no encoding for, takes them to 653 and 521 behind
 gen3's TLB ([measured](./issue-pairing.md#address-and-shift-fusions)).
+The design's stage, with a fused op paired only beside one that is not
+fused, takes 706 and 551
+([measured](./issue-pairing.md#what-a-fused-op-pairs-with)).
 
 The two reach different cycles. Fusion takes adjacent instructions
 that depend on each other, a second slot adjacent ones that do not:
@@ -87,7 +90,7 @@ graph LR
 
 | | |
 |---|---|
-| **Slots** | X issues simple ALU ops, shifts and moves. Y is a full pipeline. A pair holds at most one branch, always its younger op, one MUL and one memory access; a second access would double the TLB's and the L1-D's data reads ([ruled out](./issue-pairing.md#ruled-out)). A DIV issues alone. |
+| **Slots** | X issues simple ALU ops, shifts and moves, and no fused op, so two fused ops never pair. Y is a full pipeline. A pair holds at most one branch, always its younger op, one MUL and one memory access; a second access would double the TLB's and the L1-D's data reads ([ruled out](./issue-pairing.md#ruled-out)). A DIV issues alone. |
 | **Order** | Either op of a pair may be the older one. Fixing the older op to X costs 44–70 issue cycles per 1000 instructions once ops are fused. |
 | **Lockstep** | Both ops move together, and a pair commits as a unit. Next to a MUL or a miss, the other op waits; it would have waited behind it in a single-issue core too, so lockstep never loses against one. |
 | **Exceptions** | Precise, as in every generation. X's ops cannot trap, a pair holds one memory access and a DIV issues alone, so at most one op of a pair traps, and the other commits when it is the older. A branch is its pair's younger op, so a redirect never splits a pair ([branches last](./issue-pairing.md#branches-last-and-two-reads-an-op)). A fault in a fused access commits the add and saves the access's PC ([precise exceptions](./issue-pairing.md#precise-exceptions)). |
@@ -143,11 +146,11 @@ arrives with the two-wide front end that dual issue needs anyway.
 
 ## Open
 
-- **The issue stage the targets ask for is not measured.** The pairing
-  measurements let a fused op pair with any op, a fused one included.
-  Neither the floor, where a fused op issues alone, nor the design
-  wanted, where it pairs only with a simple ALU op, has been run, and
-  the [front end](./front-end.md) is sized for the measured stage.
+- **Whether a fused op takes a partner.** One beside an op that is not
+  fused is worth 12 / 51 issue cycles per 1000 instructions over one
+  that issues alone
+  ([measured](./issue-pairing.md#what-a-fused-op-pairs-with)); its
+  timing, on the ECP5 above all, decides.
 - **Stalls.** The pairing measurements count issue slots, and the
   load-use wait is measured for a single-issue core
   ([load-use](./load-use.md)). How waits, misses and redirects interact

@@ -176,12 +176,41 @@ A dash is a stage not measured.
   paying the bubble: a fetch of a line gets ahead of issue between
   taken transfers, and the queue holds what it gets.
 
+## With a fused op in Y
+
+Measured 2026-11-22 behind gen3's TLB, on the stage of
+[issue-pairing](./issue-pairing.md#what-a-fused-op-pairs-with) where X
+issues no fused op and two fused ops never pair:
+`dual+fuse:lilui:cmpbr:movop:opbr:addmem:addwb+fw:imm+flex+reads:2+last:br+fpair:simple`.
+Issue takes 1.42 / 1.81 instructions a cycle, against 1.47 / 1.88 where
+a fused op pairs with any op.
+
+| Front end | Modifiers | Cycles | Over unlimited |
+|---|---|---|---|
+| Unlimited supply | none | 706 / 551 | — |
+| A line (up to 4), 16-entry queue | `fetch:4l+queue:16` | 707 / 551 | under 0.1 % |
+| A line (up to 4) | `fetch:4l` | 709 / 552 | 0.4 % / 0.1 % |
+| 2 a cycle across lines, no bubble | `fetch:2+bubble:0` | 707 / 562 | under 0.1 % / 2.0 % |
+| 2 a cycle across lines | `fetch:2` | 718 / 611 | 1.6 % / 10.9 % |
+| 2 a cycle within a line | `fetch:2l` | 726 / 651 | 2.7 % / 18.1 % |
+
+- **A line into sixteen entries stays within 0.2 %** whatever a
+  fused op pairs with: any op, one that is not fused, or nothing.
+- **Eight entries are nearly enough.** A line into eight loses
+  0.4 % / 0.1 %.
+- **Two a cycle still pays the bubble on Doom:** 10.9 % with it, 2.0 %
+  without. Where a fused op pairs with any op it loses 2.7 % / 13.0 %,
+  and where it issues alone 1.2 % / 2.8 %. Fewer instructions a cycle
+  leave fetch slack, but Doom still issues 1.81 a cycle here, and its
+  loops empty the queue behind every taken transfer.
+
 ## Design
 
 - **Fetch a line a cycle into a 16-entry queue.** With the address
   fusions, two a cycle loses 4–11 % and a line into sixteen entries
   under 0.5 %. Without them two a cycle is within 4 %, and a whole line
-  a refinement worth 1–3 %.
+  a refinement worth 1–3 %. With a fused op in Y, eight entries are
+  within 0.4 % ([with a fused op in Y](#with-a-fused-op-in-y)).
 - **The fuser sees every adjacent pair.** It carries the last
   instruction of a fetch over to the next, or fuses where instructions
   leave the queue. That reach is worth more than fetch width: 56–81

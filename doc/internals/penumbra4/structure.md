@@ -308,7 +308,9 @@ layer.
   only on the instructions, so each can be a bit in the queue entry,
   made before ID: within a line at IF2 or at the L1-I's fill, across
   lines when the next line arrives. ID then chooses by registered bits,
-  beside its hazard compares.
+  beside its hazard compares. The third instruction is worth 12 / 51
+  issue cycles per 1000 instructions
+  ([measured](./issue-pairing.md#what-a-fused-op-pairs-with)).
 - **The fused compare-and-branch's resolve.** Its condition need not
   wait for the sum: a compare's Z is the equality of its operands, the
   Z of an add or a subtract has a test that needs no carry propagation,
