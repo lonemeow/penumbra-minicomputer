@@ -157,7 +157,7 @@ endif
 # <core>/ holds microarch-pinned regressions. Programs carry lit-style
 # "; RUNNER:" / "; REQUIRES:" header tags; hw/tools/run-prog-tests.py
 # scans them, skips unrunnable programs visibly, and reports.
-CORE ?= penumbra2_5
+CORE ?= penumbra3
 
 # A CORE may name a microarch variant of a base generation as
 # penumbra<n>_<sub> (e.g. penumbra2_5 = gen2.5): the same RTL fileset and
@@ -1625,8 +1625,8 @@ SDRAM_STACK_ulx3s_penumbra3_top   := line
 SDRAM_STACK ?= $(or $(SDRAM_STACK_$(TOP)),word)
 
 
-# BOARD/CORE porcelain → TOP derivation (CORE defaults to penumbra2_5
-# in the test-suite section above).
+# BOARD/CORE porcelain → TOP derivation (CORE's default is set in the
+# test-suite section above).
 ifneq ($(strip $(BOARD)),)
 TOP := $(BOARD)_$(CORE)$(if $(VARIANT),_$(VARIANT))_top
 # A microarch variant (e.g. penumbra2_5) is the SAME RTL top as its base,

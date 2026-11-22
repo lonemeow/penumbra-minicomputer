@@ -52,7 +52,7 @@ Penumbra has two simulators: a fast native C++ **ISS** (`sw/sim/penumbra_iss.cpp
 
 ```sh
 make test-iss        # hw/sim/programs/isa/ conformance suite on ISS — fast, no Docker
-make test            # isa/ + per-core suite on RTL via Docker (CORE=penumbra2_5 default)
+make test            # isa/ + per-core suite on RTL via Docker (CORE=penumbra3 default)
 make test CORE=penumbra1          # same, against the gen1 microcoded core
 make test-prog CORE=penumbra2 PROG=test_smoke   # one program
 make test-modules    # Run all module-level Verilator testbenches (alu, regfile, …)
@@ -503,7 +503,7 @@ export PATH="$PWD/hw/tools/oss-cad-suite/bin:$PATH"
 
 ```sh
 make fpga BOARD=ulx3s CORE=penumbra1   # Full flow: sv2v → yosys → nextpnr → ecppack
-make fpga BOARD=ulx3s CORE=penumbra2_5 # Same flow for the default gen2.5 core
+make fpga BOARD=ulx3s CORE=penumbra3   # Same flow for the default gen3 core
 make flash BOARD=ulx3s CORE=penumbra1  # Build + flash to ULX3S over USB (openFPGALoader)
 make fpga-lint                         # Verilator lint check on FPGA sources
 ```

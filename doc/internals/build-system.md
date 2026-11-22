@@ -151,7 +151,7 @@ with a capability the base provides and the variant drops (such as
 
 | Target | Meaning |
 |--------|---------|
-| `make test [CORE=<generation>] [SIM_MEM=sdram\|ddr3]` | `isa/` + `<generation>/` programs on that generation's RTL runner (default `CORE=penumbra2_5`) |
+| `make test [CORE=<generation>] [SIM_MEM=sdram\|ddr3]` | `isa/` + `<generation>/` programs on that generation's RTL runner (default `CORE=penumbra3`) |
 | `make test-iss` | `isa/` on the ISS — the generation-independent ISA reference |
 | `make test-prog CORE=<generation> PROG=<name>` | one program, porcelain for iteration |
 | `make test-modules` | per-module Verilator testbenches (all generations registered in `MODULE_TESTS`) |
