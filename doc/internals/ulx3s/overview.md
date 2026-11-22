@@ -24,7 +24,7 @@ with openFPGALoader, all in containers (`DEVELOP.md`, "FPGA Synthesis
 | `ulx3s_penumbra1_top` | `make fpga BOARD=ulx3s CORE=penumbra1` | the gen1 machine |
 | `ulx3s_penumbra2_top` | `make fpga BOARD=ulx3s CORE=penumbra2_5` (or `penumbra2`) | the gen2 machine |
 | `ulx3s_penumbra2_probe_top` | `VARIANT=probe` | the bare gen2 machine against a block-RAM memory, for timing only |
-| `ulx3s_penumbra3_top` | `make fpga BOARD=ulx3s CORE=penumbra3` | the gen3 machine |
+| `ulx3s_penumbra3_top` | `make fpga BOARD=ulx3s CORE=penumbra3` | the gen3 machine, the default |
 | `ulx3s_penumbra3_probe_*_top` | registered per probe | gen3 timing probes |
 | `ulx3s_video_test_top`, `ulx3s_audio_test_top` | `TOP=` | the display and audio paths alone |
 

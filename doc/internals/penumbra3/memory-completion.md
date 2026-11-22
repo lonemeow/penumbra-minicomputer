@@ -207,10 +207,10 @@ The launch side freezes only while the buffer is full, and the buffer drains
 through the uncore in the background
 ([the store buffer](./uncore.md#the-store-buffer)).
 
-Absorbing stores in a write-back L2, so only evictions reach memory, is the
-further throughput layer the
-[store-traffic strategy](./overview.md#store-traffic-strategy--store-buffer-first-write-back-l2-only-if-it-earns-it)
-keeps open. It would not change this completion contract.
+Absorbing stores in a write-back L2, so only evictions reach memory, is a
+further throughput layer gen3 leaves unbuilt ([the store
+path](./overview.md#the-store-path)). It would not change this completion
+contract.
 
 ## One completion unit, three access shapes
 
@@ -343,7 +343,7 @@ rides the completion, transient, not cached.
 
 ## Write policy is a swappable knob
 
-Write-through / write-no-allocate is the **default** L1-D policy, not a fixed
+Write-through / write-no-allocate is the L1-D policy gen3 builds, not a fixed
 property of this contract. Everything above — the
 [fault-precision carve-out](#fault-precision), single-outstanding
 hold-and-complete, and the verdict-in / completion-out core seam — is
@@ -351,17 +351,17 @@ hold-and-complete, and the verdict-in / completion-out core seam — is
 change. The point is to let the cost vs complexity/fmax trade-offs between them
 be *measured* by swapping the memory-hierarchy side alone.
 
-What makes that hold is the [deferral principle](./overview.md#build-plan) made
-structural: **write policy lives entirely on the bus side of the MEM2 verdict**
-— the L1, the uncore, and the bus master — never in the core's verdict /
-freeze / issue cones. The core sees only a registered hit/miss verdict in
-and a registered completion out; it never learns which policy produced
-them, so experimenting with policy cannot perturb the fmax the
-[structural probes](./phase0-probes.md) prove.
+What makes that hold is the [deferral
+principle](./overview.md#how-it-was-built) made structural: **write policy
+lives entirely on the bus side of the MEM2 verdict** — the L1, the uncore, and
+the bus master — never in the core's verdict / freeze / issue cones. The core
+sees only a registered hit/miss verdict in and a registered completion out; it
+never learns which policy produced them, so experimenting with policy cannot
+perturb the fmax the [structural probes](./phase0-probes.md) prove.
 
-The policy is two orthogonal knobs, each defaulting to the cheap leg:
+The policy is two orthogonal knobs; gen3 builds the cheap leg of each:
 
-| Knob | Default | Alternative | What the alternative adds — all bus-side |
+| Knob | Built | Alternative | What the alternative adds — all bus-side |
 |---|---|---|---|
 | **Store-miss allocate** | no-allocate — write the datum through to memory only | write-allocate — line fill + merge the store lanes + install | reuses the load-miss line-fill path plus a write-merge step |
 | **Store-hit write** | write-through — update L1 *and* memory | write-back — update L1 and mark dirty; memory is written at eviction | per-line dirty bits + an eviction-then-fill sequence in the L1's access to the uncore; the bus master's line-write eviction path (already present, P0.4-validated) |
@@ -386,10 +386,9 @@ the per-line cache-maintenance and full-flush hooks the platform reserves for
 exactly this case. That cost is a property of the *policy*, not of this
 completion contract.
 
-The phased rollout that exercises these knobs — write-through with a store
-buffer first, write-back only if measurement asks for it — is the
-[store-traffic strategy](./overview.md#store-traffic-strategy--store-buffer-first-write-back-l2-only-if-it-earns-it);
-this section specifies the seam it plugs into.
+gen3 takes write-through with a store buffer, and the store buffer left
+write-back nothing to earn ([the store path](./overview.md#the-store-path));
+this section specifies the seam a write-back policy would plug into.
 
 ## Single-beat transactions — the same completion path
 
@@ -428,8 +427,7 @@ forwards from: a load or sysreg read in EX or MEM1, a divmul through MEM2
 ([load hit](#load-hit--a-registered-load-use-hazard)).
 This compare is reg#-equality on already-registered fields — 1–2 LUT
 levels and an OR across the writers, the shape every surveyed core uses,
-never a long path. It is the cone P0.1 and P0.2 share, and the natural place
-for a focused contribution when the RTL lands.
+never a long path. It is the cone P0.1 and P0.2 share.
 
 ALU results stay **bypassable and out of the scoreboard** (biRISC-V), so a
 dependent ALU chain never stalls; only loads, divmul and sysreg reads are

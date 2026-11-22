@@ -2,8 +2,8 @@
 
 > **Applies to:** Penumbra/3 · timing-critical design rationale.
 
-The structural rules gen3 must follow to close a *reliable* 37.5 MHz on the −6
-ULX3S (ECP5) with headroom for its staged features, distilled from the gen2
+The structural rules gen3 follows to close a *reliable* 37.5 MHz on the −6 ULX3S
+(ECP5) with headroom for the levers outside its core, distilled from the gen2
 timing-closure work. Each point is a rule + why + the gen2 mistake it avoids.
 
 The per-cone budgets below are 50 MHz ones (a 20 ns period). A bare cone reads
@@ -17,8 +17,8 @@ detailed per-subsystem design docs (design-decisions, pipeline-stages,
 memory-interface) follow.
 
 The gen2 diagnosis these rules react to is recorded in the
-[gen2 abandonment banner](../penumbra2/overview.md) and the fmax-closure
-round in [the gen2.5 TODO entries](../../TODO/hw-penumbra2.md). The rules are grounded in a
+[gen2 abandonment banner](../penumbra2/overview.md), which summarizes
+gen2.5's fmax-closure round. The rules are grounded in a
 survey of open in-order / pipelined softcores — biriscv, cva6, cvw (Wally),
 mor1kx, vexriscv.
 

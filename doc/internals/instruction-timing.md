@@ -244,7 +244,8 @@ lays the register out, not the page's address.
 
 Store costs and anything past the L2 depend on the machine: the
 testbenches clock the SDRAM at four times the CPU, as the Penumbra/1
-ULX3S board does, while Penumbra/2.5 boards run 2.67 times. The
+ULX3S board does, while the ULX3S runs the pipelined generations at
+2.67 times. The
 programmer's reference records those as typical figures with the
 machine they were measured on. A figure that cannot be measured yet
 is marked there as inferred.

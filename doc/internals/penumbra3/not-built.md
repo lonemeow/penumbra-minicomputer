@@ -37,7 +37,7 @@ stopped before these:
 - **A write-back L2.** Stores never wait on the final builds' Dhrystone
   and CoreMark ([final builds](./memory-performance.md#the-final-builds-on-hardware)),
   so the store buffer left write-back nothing to earn
-  ([store-traffic strategy](./overview.md#store-traffic-strategy--store-buffer-first-write-back-l2-only-if-it-earns-it)).
+  ([the store path](./overview.md#the-store-path)).
 - **16 KB 4-way L1s on the Artix-7** (`doc/TODO/hw-nexysvideo.md`,
   Ruled out).
 

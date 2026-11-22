@@ -2,13 +2,13 @@
 
 > **Applies to:** Penumbra/3 · pre-RTL feasibility gate.
 
-Phase 0 of the [gen3 build plan](./overview.md#build-plan) proves that the
+Phase 0 of [gen3's build](./overview.md#how-it-was-built) proved that the
 four load-bearing structural claims close at the target clock **before** any
-real core RTL is built on them. It is the direct countermeasure to the gen2
-dead-end, where combinational boundaries were wired up as "register later,"
-the machine was built on top, and only at closure did one boundary turn out
-to be a *structural* floor that could not be fixed without rewriting the
-pipeline depending on it.
+real core RTL was built on them. It was the direct countermeasure to the
+gen2 dead-end, where combinational boundaries were wired up as "register
+later," the machine was built on top, and only at closure did one boundary
+turn out to be a *structural* floor that could not be fixed without
+rewriting the pipeline depending on it.
 
 This document specifies each probe: the claim, the RTL to build, the exact
 path to measure, the pass threshold, and the decision to take on failure.

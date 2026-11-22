@@ -72,7 +72,7 @@ subdirectory owns its realization.
 *   **[MMU Internals](./internals/mmu-internals.md)** — TLB hardware structure, discrete-logic mapping, and the VIPT L1 alias-free invariant.
 *   **[MUL/DIV Unit (divmul)](./internals/divmul.md)** — The shared multiply/divide peer unit: algorithm, handshake, datapath, and discrete chip-count.
 *   **[Instruction Timing: Mechanism and Measurement](./internals/instruction-timing.md)** — Where each core's cycles come from, and how the figures in the programmer's timing reference are measured.
-*   **[L2 Cache](./internals/l2-cache.md)** — The unified L2 Penumbra/1 and /2 put between their L1s and the system bus: write-invalidate on a hit, write-back a planned phase. Penumbra/3's L2 is its uncore's.
+*   **[L2 Cache](./internals/l2-cache.md)** — The unified L2 Penumbra/1 and /2 put between their L1s and the system bus: write-through and no-allocate, write-back an open phase. Penumbra/3's L2 is its uncore's.
 *   **[SDRAM Controller v2](./internals/sdram-controller.md)** — The SDR SDRAM controller: composable, on its own clock domain, 100 MHz CL2.
 *   **[SDRAM Optimization](./internals/sdram-optimization.md)** — Controller strategies for bandwidth improvement.
 *   **[Display Adapter](./internals/display.md)** — FPGA microarchitecture of the `CLASS_DISPLAY` adapter: pixel generator + TMDS output PHY.
@@ -138,7 +138,7 @@ with full forwarding and branch prediction designed in from the start,
 a store buffer, and an uncore that holds the L2 and stream prefetch.
 Built on both boards; boots NetBSD.
 
-*   **[Penumbra/3 Overview](./internals/penumbra3/overview.md)** — Start here. The levers ranked by measured benefit, the build plan and where it stopped, and the performance targets with what was built.
+*   **[Penumbra/3 Overview](./internals/penumbra3/overview.md)** — Start here. What gen3 builds and why, the levers ranked by measured benefit, the targets with what was reached, and the order it was built in.
 *   **[Penumbra/3 Timing Outline](./internals/penumbra3/timing-outline.md)** — The structural rules the design follows to close its clock with headroom, each with the gen2 mistake it avoids.
 *   **[Penumbra/3 Memory Stage](./internals/penumbra3/mem-stage.md)** — The MEM1/MEM2 memory stage and the duplicated block-RAM TLB.
 *   **[Penumbra/3 Memory Completion](./internals/penumbra3/memory-completion.md)** — The registered back-end stall, and the load and store completion and fault-precision contract.

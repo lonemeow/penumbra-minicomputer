@@ -33,7 +33,7 @@ The board's larger subsystems have documents of their own:
 | Top | Build | What it is |
 |-----|-------|------------|
 | `nexysvideo_penumbra2_top` | `make fpga BOARD=nexysvideo CORE=penumbra2_5` (or `penumbra2`) | the gen2 machine |
-| `nexysvideo_penumbra3_top` | `make fpga BOARD=nexysvideo CORE=penumbra3` | the gen3 machine, its L1s the ULX3S's and its L2 four times the size |
+| `nexysvideo_penumbra3_top` | `make fpga BOARD=nexysvideo CORE=penumbra3` | the gen3 machine, the default, its L1s the ULX3S's and its L2 four times the size |
 | `nexysvideo_uart_test_top` | `make fpga TOP=nexysvideo_uart_test_top` | the console alone: a banner, an echo, and LEDs for lock, reset, a heartbeat, RX activity and framing errors |
 | `nexysvideo_ddr3_test_top` | `make fpga TOP=nexysvideo_ddr3_test_top` | the DDR3 controller and its whole-chip self-test, no CPU |
 

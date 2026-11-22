@@ -6,8 +6,15 @@
 
 Two parallel lookup structures, combined with pinned-hit-wins priority:
 
-### Main TLB (64-entry, 2-way set-associative)
-1. **Storage:** 64 × 64-bit register file, addressed by {way, set}.
+### Main TLB (2-way set-associative)
+
+The set count is the generation's: gen1 and gen2 hold 32 sets (64
+entries) in a register file, distributed RAM on gen1 and async LUT RAM
+on gen2. gen3 holds `TLB_SETS` sets (256 on both boards) in block RAM,
+one copy per translate port, read in MEM1 and matched in MEM2
+([`penumbra3/mem-stage.md`](penumbra3/mem-stage.md)).
+
+1. **Storage:** one 64-bit entry per {set, way}.
 2. **Lookup:** Parallel 20-bit VPN + 8-bit ASID comparators on both ways, gated by V and G.
 3. **Permission check:** One-hot access type AND with {X,W,R}, plus U check for user mode.
 4. **Sysreg access:** Indexed read/write via `TLB_INDEX` addressing.
@@ -82,5 +89,8 @@ per-generation:
 
 - **Penumbra/1** — distributed-RAM, zero-cycle combinational hit. See
   [`penumbra1/l1-cache.md`](penumbra1/l1-cache.md).
-- **Penumbra/2** — BRAM-backed, registered (one-cycle) hit. Documented
-  under `penumbra2/` once that RTL exists.
+- **Penumbra/2** — BRAM-backed, registered (one-cycle) hit. See
+  [`penumbra2/memory-interface.md`](penumbra2/memory-interface.md).
+- **Penumbra/3** — BRAM-backed, its physical-tag compare beside the TLB
+  match in IF2 and MEM2, 8 KB 2-way. See
+  [`penumbra3/l1-cache.md`](penumbra3/l1-cache.md).

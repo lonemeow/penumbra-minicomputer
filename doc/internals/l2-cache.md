@@ -19,7 +19,7 @@ contract the L2's front-side and back-side ports both honor, in the
 |---|---|---|
 | 0 | Bus shape (`o_mem_cacheable`, build-time gate, `l2_passthrough` stub) | **DONE** (gate later removed) |
 | 1 | Real L2 cache: read+write-invalidate-on-hit, INVAL_ALL | **DONE** (superseded by 1.5) |
-| 1.5 | Write-through, write-no-allocate (WT-WnA): write hits update the cached line via byte-en instead of dropping it | **design** |
+| 1.5 | Write-through, write-no-allocate (WT-WnA): write hits update the cached line via byte-en instead of dropping it | **DONE** |
 | 2 | Write-back, write-allocate, dirty bit, FLUSH ops | pending |
 | 3 | 1-deep writeback buffer (overlapped fill+writeback) | pending |
 | 4 | Perfctrs (READ_HITS / READ_MISSES / WRITE_HITS / WRITE_MISSES on `SYSDEV_L2_CACHE` regs 10-13) | **DONE** |
@@ -29,9 +29,7 @@ What's wired up today:
 - `hw/rtl/soc/l2_cache.sv` — the real module.  64 KiB, 4-way,
   tree-PLRU, `HIT_LATENCY`-cycle hit pipeline (2 by default; the gen2
   machine instantiates it at 3 — see the `HIT_LATENCY` note below).
-  Write policy started as
-  **write-invalidate-on-hit** (phase 1) and is being upgraded to
-  **write-through, write-no-allocate** (phase 1.5) — under WT-WnA
+  Write policy is **write-through, write-no-allocate** (phase 1.5):
   a write hit updates the cached line's data via byte-en and
   also forwards the store to memory, instead of dropping the
   line.  See the "Write Policy" and "Phasing" sections below.
@@ -47,8 +45,7 @@ What's wired up today:
 - `hw/sim/tb_l2_cache.cpp` — standalone Verilator testbench
   covering the L2 contract: INFO presence + unified-layout
   decode (PIPT/WT/WnA), pass-through-when-disabled, miss→hit,
-  write-hit data update (under phase 1.5; was write-invalidate
-  in phase 1), INVAL_ALL walker + implicit fence, uncached
+  write-hit data update, INVAL_ALL walker + implicit fence, uncached
   pass-through, perfctr counts.
 - Boot ROM (`hw/rom/boot_rom.c`) prints `L2 cache: 64kB
   (1024 x 16B, 4-way) unified` in the banner.  The ROM **does

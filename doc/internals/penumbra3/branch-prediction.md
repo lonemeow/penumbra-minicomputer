@@ -137,15 +137,14 @@ model.
 ## What gen2.5's return stack taught
 
 gen2.5 built an 8-deep ring and removed it with its ID-stage
-backward-taken predictor in the fmax-closure round
-([`hw-penumbra2.md`](../../TODO/hw-penumbra2.md), "gen2.5 status: RAS
-landed"). The ring itself cost almost no clock. It redirected from ID,
-and ID's redirect folded in the MEM stall, putting the data-cache tag
-compare on the path into fetch; registering that redirect would have
-fired in the cycle EX resolves the branch anyway. The removal entry
-names what could have restored it: a stack predicting in the fetch
-domain. gen3's pre-decode and return stack sit in IF2, ahead of the
-fetch FIFO, where the back-end stall does not reach.
+backward-taken predictor in the fmax-closure round. The ring itself cost
+almost no clock. It redirected from ID, and ID's redirect folded in the
+MEM stall, putting the data-cache tag compare on the path into fetch;
+registering that redirect would have fired in the cycle EX resolves the
+branch anyway. The removal entry names what could have restored it: a
+stack predicting in the fetch domain. gen3's pre-decode and return stack
+sit in IF2, ahead of the fetch FIFO, where the back-end stall does not
+reach.
 
 ## Design
 

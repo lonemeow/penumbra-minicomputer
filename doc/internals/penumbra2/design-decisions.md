@@ -487,8 +487,8 @@ binding CPI factor for gen2.
   fetch path and became the fmax limiter, and registering it to break
   that path would have fired it the same cycle EX already resolves the
   branch, saving zero cycles. The gen2.5 landing history and
-  per-feature measurements live in
-  [doc/TODO/hw-penumbra2.md](../../TODO/hw-penumbra2.md).)
+  per-feature measurements are in the git history of
+  `doc/TODO/hw-penumbra2.md`.)
 
 > **Note — the flush as built.** The two-entry fetch buffer later placed
 > between IF2 and ID, to keep a back-end stall off the fetch enable,

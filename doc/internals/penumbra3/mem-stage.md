@@ -139,7 +139,7 @@ never see the sweep.
 
 This is the timing-critical compare and the piece [P0.3](./phase0-probes.md)
 exists to measure: after the **5.8 ns BRAM Tco**, the remaining logic +
-routing must fit the period's budget (~14 ns at the 50 MHz target).
+routing must fit the period's budget (~14 ns at the probes' 50 MHz bar).
 
 The verdict module consumes, all registered into MEM2:
 
@@ -216,9 +216,9 @@ LUTs and 137 flops on the BRAM outputs); the pass includes that logic,
 so writing the read/write exclusivity into the RTL is margin, not a
 repair ([timing outline](./timing-outline.md#4-caches)).
 
-## Open parameters
+## Parameters
 
-Settled when the RTL lands, not load-bearing for the contract above:
+Not load-bearing for the contract above:
 
 - **Entry count** per copy: the set count is the machine's `TLB_SETS`,
   the board's to give, and both boards give 256. Measured, the miss rate
@@ -228,5 +228,5 @@ Settled when the RTL lands, not load-bearing for the contract above:
   ([memory-performance](./memory-performance.md#tlb-sets-and-a-cheaper-refill)).
   A copy's BRAM is 512 entries deep at its narrowest, so 256 sets cost no
   EBRs and leave the 2-way compare unchanged.
-- **Index function** (which vaddr bits select the set) — chosen with the
-  cache index so the two BRAM reads launch from the same MEM1 address path.
+- **Index function:** the low VPN bits, `vaddr[12 +: log2(TLB_SETS)]`,
+  so the TLB and cache BRAM reads launch from the same MEM1 address path.

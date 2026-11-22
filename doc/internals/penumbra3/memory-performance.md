@@ -1,20 +1,21 @@
 # Penumbra/3 — Memory-path performance: measurements and levers
 
-> **Applies to:** Penumbra/3 · memory hierarchy and address translation
-> (in design). Measured on the shared SDRAM stacks gen3 reuses, on the
-> gen2 L1↔L2 chain gen3 replaces, and on the software TLB refill gen3
-> inherits.
+> **Applies to:** Penumbra/3 · memory hierarchy and address translation.
+> Measured on the shared SDRAM stacks gen3 reuses, on the gen2 L1↔L2
+> chain gen3 replaces, on the software TLB refill gen3 inherits, and on
+> gen3's final builds.
 
-This records what the memory path costs, cycle by cycle, and what
-gen2.5 hardware workload profiles say about where gen3's cycles will go.
-It then collects the design levers those numbers point to for the gen3
-uncore and TLB. The levers are proposals ranked by evidence, not
-decisions, and every estimate is labeled as one.
+This records what the memory path costs, cycle by cycle, and the gen2.5
+hardware workload profiles gen3's uncore and TLB were sized on. It then
+collects the design levers those numbers point to, ranked by evidence,
+with every estimate labeled as one, and ends with what the final builds
+measure on hardware.
 
-Every lever here must preserve the completion contract in
-[`memory-completion.md`](./memory-completion.md) and the structural rules
-in [`timing-outline.md`](./timing-outline.md). The phase each one lands in
-is set by the [build plan](./overview.md#build-plan).
+Every lever here preserves the completion contract in
+[`memory-completion.md`](./memory-completion.md) and the structural
+rules in [`timing-outline.md`](./timing-outline.md). Which ones gen3
+builds is in the overview's [levers
+table](./overview.md#levers-ranked-by-measured-benefit).
 
 ## Measurement setup
 
@@ -364,7 +365,7 @@ Solving for a zero field-line hit rate reproduces about 60 %.
 
 ### fork / exec / pipe — L2-hit fill bound
 
-`doc/TODO/hw-penumbra2.md` records `ifetch` at 16–20 % of cycles on
+gen2.5's stall counters put `ifetch` at 16–20 % of cycles on
 these paths,
 against about 0 on Dhrystone. Their larger code footprint misses L1-I
 but mostly hits L2, which makes the L2-hit fill (13 cycles in chain B)
@@ -689,6 +690,12 @@ Doom per frame (2,134 frames, 1.165 M instructions each):
   all of it on `pbench kernel`, and half of it on Doom.
 
 ## Levers for the gen3 uncore
+
+gen3 builds the store buffer, the one uncore pipeline with its line-wide
+transfer, the whole-line SDRAM fetch (the line stack), stream prefetch
+and the 256×2 TLB. It leaves a write-back L2, write combining, the
+native port and the next-line prediction buffer
+([not built](./not-built.md)).
 
 ### Store buffer at the core boundary
 
@@ -1506,21 +1513,22 @@ cache size. A 386DX-33 fetched a word from DRAM in about 3–5 clocks,
 with its memory controller on the CPU clock and nothing in between; a
 486DX-33 filled a 16-byte line in 5 clocks from its external cache,
 about 10–15 from DRAM. Both had caches that plasma would overflow, and
-both ran it well. With the line stack Penumbra's L2 read miss costs 38
+both ran it well. With the line stack gen2.5's L2 read miss costs 38
 cycles on hardware at 37.5 MHz, of which the SDRAM chip itself accounts
 for about 5–6; the rest is the stack of hand-offs, clock crossings and
 word-at-a-time bus transfers
 [broken down above](#a-miss-on-the-line-stack-gen25-machine-hardware-checked).
 
-That makes a 486-like L2-miss line of about 20–25 cycles the target for
-gen3's uncore — reachable with the whole-line SDRAM fetch and the single
-uncore pipeline, within the word-at-a-time bus contract. The contract
-also sets the floor under it: two cycles a word on the bus, six of them
-after the line has landed, and about 19 cycles from raising the bus
-request to holding the line, which leaves roughly 5 for everything the
-uncore does around it. At 50 MHz the SDRAM leg grows by 2–3 cycles,
-since the DRAM's time and the SDRAM-side synchronizers are fixed in
-nanoseconds.
+That made a 486-like L2-miss line of about 20–25 cycles the target for
+gen3's uncore, which the whole-line SDRAM fetch and the single uncore
+pipeline reach within the word-at-a-time bus contract: 24.1 cycles on
+the ULX3S ([transfer rates](#transfer-rates-by-block-size-on-hardware)).
+The contract also sets the floor under it: two cycles a word on the bus,
+six of them after the line has landed, and about 19 cycles from raising
+the bus request to holding the line, which leaves roughly 5 for
+everything the uncore does around it. At 50 MHz the SDRAM leg grows by
+2–3 cycles, since the DRAM's time and the SDRAM-side synchronizers are
+fixed in nanoseconds.
 
 ## Open measurements
 

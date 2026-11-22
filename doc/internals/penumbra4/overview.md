@@ -157,5 +157,5 @@ arrives with the two-wide front end that dual issue needs anyway.
 - **The cost side:** the two-write-port register file, the forwarding
   network, the fused compare-and-branch's path and the fused access's
   address adder, each to be timed on
-  the full top before anything is built on it, as gen3's
-  [build plan](../penumbra3/overview.md#build-plan) does.
+  the full top before anything is built on it, as gen3's were
+  ([how gen3 was built](../penumbra3/overview.md#how-it-was-built)).

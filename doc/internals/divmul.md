@@ -1,10 +1,10 @@
 # Penumbra CPU — MUL/DIV Unit (divmul)
 
 > **Applies to:** all generations · shared peer unit. The algorithm,
-> handshake, and internal datapath are identical on both cores; *how a
+> handshake, and internal datapath are identical on every core; *how a
 > core drives the unit* — microcode on Penumbra/1, an EX-stage start
-> plus a sequenced two-write commit on Penumbra/2 — lives in that
-> core's docs.
+> plus a sequenced two-write commit on Penumbra/2 and Penumbra/3 —
+> lives in that core's docs.
 
 ## Overview
 
@@ -53,7 +53,7 @@ expresses the driving differs — see
 | `o_flag_n`, `o_flag_z` | divmul → SR | Flag outputs (latched on `flag_w_en` in writeback)        |
 
 The op encoding is the gen1 microcode ALU field, carried directly by
-the micro-word; gen2's EX stage decodes its 2-bit ISA sub-opcode
+the micro-word; the pipelined cores decode its 2-bit ISA sub-opcode
 selector into the same 5-bit codes before driving the unit.
 
 Operand latching is single-cycle: the CPU drives `i_a` and `i_b`
@@ -251,6 +251,11 @@ that core's docs. What every generation shares is the rule in
 - **Penumbra/2** — started in EX, with `Rd` and `Rdh` committed across
   two consecutive writeback cycles through the single write port. See
   [`penumbra2/regfile.md`](./penumbra2/regfile.md).
+- **Penumbra/3** — started in EX, which holds until the unit is done,
+  with `Rd` and `Rdh` committed across two writeback cycles. See the
+  [pipeline shape](./penumbra3/overview.md#pipeline-shape), and for
+  what the second write costs,
+  [`penumbra3/not-built.md`](./penumbra3/not-built.md).
 
 The unit itself is unchanged between them: it presents `o_result_lo`
 and `o_result_hi` from the cycle `o_done` rises until the next accepted
@@ -389,6 +394,7 @@ worth it for the first build.
   start/done handshake, decoding the 2-bit ISA sub-opcode selector
   into the 5-bit op codes; the two result halves sequence through the
   single regfile write port at WB.
+- **Penumbra/3 driving:** the same, from its own EX stage and WB.
 - **ISS:** implements MUL/MULU/DIV/DIVU end-to-end with both halves and
   `VEC_ARITH` (`sw/sim/penumbra_iss.cpp`).
 - **LLVM backend:** lowers s32 multiply/divide to the unit — `G_MUL`
