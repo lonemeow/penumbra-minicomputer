@@ -31,9 +31,11 @@ project-wide conventions and pointers to architectural specs.
 ```
 hw/
 ├── rtl/
-│   ├── common/    # penumbra_pkg.sv + shared cells (tlb_pinned, ...) — both cores
+│   ├── common/    # penumbra_pkg.sv + shared cells (tlb_pinned, ...) — every core
 │   ├── penumbra1/ # gen1 CPU core: datapath, regfile, ALU, sequencer, ROM, MMU, ...
 │   ├── penumbra2/ # gen2 6-stage pipelined core + its MMU / L1 / arbiter / fill modules
+│   ├── penumbra2_5/ # gen2.5's forks of gen2's core and stages, + BTB, forwarding
+│   ├── penumbra3/ # gen3 7-stage pipelined core + its MMU, L1s and uncore
 │   ├── machine/   # machine integrations (machine_<generation>.sv)
 │   ├── soc/       # Bus controller, autoconfig, caches (L1 VIPT, L1 PIPT, L2), boot ROM, cpuid/machid
 │   ├── io/        # Real UART, real SPI, SDRAM v2 controller/adapter/PHY/CDC
@@ -62,12 +64,12 @@ source — the source is the authoritative description; this table is
 purely a "where does this thing live?" index.
 
 ### Shared package and modules (`rtl/common/`)
-Generation-neutral: everything here is used by both CPU cores. A
+Generation-neutral: everything here is used by several CPU cores. A
 module instantiated by more than one generation lives here, never
 cross-referenced from another generation's directory.
 - `penumbra_pkg.sv` — shared constants (REG_*, ALU_*, COND_*, SR_*,
   VEC_*, FAULT_*, SYSDEV_*, SYSREG_*, CACHE_ADDR_*, UART_*, SPR_*,
-  ACFG_*, base addresses). Imported by both CPU cores and every
+  ACFG_*, base addresses). Imported by every CPU core and every
   peripheral; the ISA contract for the whole system. Kept here, not
   under a generation directory, so it isn't generation-scoped.
 - `cond_eval.sv` — 16 ARM-style condition codes.
@@ -76,13 +78,76 @@ cross-referenced from another generation's directory.
 - `divmul.sv` — MUL/DIV peer unit (sequential ~32-cycle iteration,
   own start/busy handshake; see `doc/internals/divmul.md`).
 - `tlb_pinned.sv` — 8-entry FA pinned TLB, pinned-hit-wins. Parameterized
-  for one or two translate ports (`DUAL_TRANSLATE`); both cores use it.
+  for one or two translate ports (`DUAL_TRANSLATE`); every MMU uses it.
 - `build_check.sv` — elaboration-time configuration check that stops
   every build tool; use it for any build-time check, never `initial
   assert` or a generate-block `$error`, which sv2v defuses
   (`doc/internals/coding-standards.md`).
 
-### Penumbra/2 core (`rtl/penumbra2/`)
+### Penumbra/3 core (`rtl/penumbra3/`)
+The gen3 7-stage pipelined core, the default (design in
+`doc/internals/penumbra3/`), with its own MMU, L1s and uncore: it shares
+only `common/`, the `soc/` devices and `io/` with the other generations.
+`rtl/machine/machine_penumbra3.sv` composes it.
+- `penumbra3_pkg.sv` — gen3-internal constants: the scoreboard's entries,
+  the control-bundle encodings and the packed `ctrl_bundle_t`.
+- `penumbra3_core.sv` — the bare core: IF1/IF2 through the fetch buffer
+  onto the spine, plus the branch predictor, fetch replay and the
+  exception-path units.
+- `penumbra3_if1_stage.sv` — owns the PC; drives the L1-I's fetch address.
+- `penumbra3_if2_stage.sv` — takes the L1-I and MMU verdicts, composes the
+  fetch fault, and decodes the slot onto the fetch-buffer enqueue.
+- `penumbra3_fetch_buffer.sv` — elastic IF2→ID FIFO of pre-decoded bundles;
+  keeps the back-end stall off the fetch enable.
+- `penumbra3_fetch_replay.sv` — replays a fetch the L1-I had no word for.
+- `penumbra3_decode.sv` — word → `ctrl_bundle_t`, combinational, on the
+  enqueue path.
+- `penumbra3_predecode.sv` — IF2's control-transfer classification and
+  direct target, one per L1-I way.
+- `penumbra3_branch_predictor.sv` — each IF2 slot's prediction, over
+  `penumbra3_direction_table.sv` (bimodal counters in block RAM, trained
+  from EX) and `penumbra3_return_stack.sv` (the return-address ring).
+- `penumbra3_spine.sv` — ID→EX→MEM1→MEM2→WB integration around the
+  register, SPR and scratch files.
+- `penumbra3_id_stage.sv` — issue: register mapping, the scoreboard query
+  and `penumbra3_issue.sv`, the issue gate on registered state.
+- `penumbra3_regmap.sv` — register field → scoreboard index, R14 banked by
+  live SR.S.
+- `penumbra3_scoreboard.sv` — whether a source still has a late writer in
+  flight, from the pipeline's registered state.
+- `penumbra3_ex_stage.sv` — operand forwarding, the ALU (`penumbra3_alu.sv`)
+  and flag forwarding (`penumbra3_flag_bypass.sv`), transfer resolution and
+  the mispredict redirect, the divmul launch, drain-commit sequencing.
+- `penumbra3_mem1_stage.sv` / `penumbra3_mem2_stage.sv` — the memory launch
+  (EA, alignment, TLB and L1-D index, `RDSYS`) and resolve (the verdicts,
+  load extract, fault merge, the L1's store strobe).
+- `penumbra3_mem_completion.sv` — parks a load the L1-D had no word for, or
+  an uncached store, and completes it on the L1-D's done.
+- `penumbra3_wb_stage.sv` — the commit point: regfile, SPR and flag writes.
+- `penumbra3_regfile.sv` (2R/1W, the GPRs and banked R14),
+  `penumbra3_spr_file.sv` (SR, EPC, ESR), `penumbra3_scratch_file.sv`
+  (SCR0..3).
+- `penumbra3_irq.sv` — interrupt recognition and the deferred bus fault,
+  injected at the EX frontier. `penumbra3_vecfetch.sv` — the
+  exception vector-fetch FSM.
+- `penumbra3_perfctr.sv` — the CPU device's performance and
+  stall-attribution counters.
+- `penumbra3_mmu.sv` — I and D `penumbra3_translate.sv` copies over one
+  install stream, and a dual-port `tlb_pinned`; each copy's
+  `penumbra3_tlb_store.sv` (block RAM, read in MEM1) and
+  `penumbra3_tlb_verdict.sv` (the MEM2 verdict cone).
+  `penumbra3_tlb_inval.sv` — `MMU_CONFIG` version 2's invalidation sweep.
+- `penumbra3_l1.sv` — one L1: `penumbra3_l1_store.sv` (block-RAM arrays),
+  `penumbra3_l1_match.sv` (the physical-tag verdict), replacement, its
+  cache device, and `penumbra3_requester.sv` (its side's access to the
+  uncore and the install of the line it brings back).
+- `penumbra3_uncore.sv` — the I/D select, the L2's lookup over
+  `penumbra3_l2_store.sv` and its cache device, with
+  `penumbra3_store_buffer.sv`, `penumbra3_stream_buffer.sv` and
+  `penumbra3_bus_master.sv`, the registered external-bus master
+  (`doc/internals/penumbra3/uncore.md`).
+
+### Penumbra/2 core (`rtl/penumbra2/`, abandoned)
 The gen2 6-stage pipelined core (design in `doc/internals/penumbra2/`)
 and its generation-bound memory-system modules. The bare core exposes
 fetch/dmem front ports (launch / level-held request / busy-drop
@@ -131,6 +196,9 @@ shared L2.
   combinational read; the verdict resolves in the access launch cycle).
 - `penumbra2_tlb_perm.sv` — the 2-way match + permission verdict cone, one
   instance per translate port.
+- `rtl/penumbra2_5/` — gen2.5's forks of the core, spine, IF2, ID and EX
+  stages, plus its BTB and forwarding network, composed over the rest of
+  this directory (`hw/rtl/penumbra2_5/README.md`).
 
 ### Machine integrations (`rtl/machine/`)
 One module per generation: the board-independent computer
@@ -186,10 +254,10 @@ exposed external bus.
   `i_req_accepted` handshake.
 - `cache.sv` — original PIPT cache, retained for the L2-style use
   case (`doc/internals/l2-cache.md`). Not currently instantiated.
-- `l2_cache.sv` — L2 phase 1: 64 KiB, 4-way, 16 B lines, tree-PLRU,
-  `HIT_LATENCY`-cycle hit pipeline (2 by default; the gen2 machine
-  sets 3 to register the read verdict off the L1-fill cone).
-  Write-invalidate-on-hit (write-back is a planned phase). Disabled at reset; software enables via
+- `l2_cache.sv` — the gen1 and gen2 L2: 64 KiB, 4-way, 16 B lines,
+  tree-PLRU, `HIT_LATENCY`-cycle hit pipeline (2 by default; the gen2
+  machine sets 3 to register the read verdict off the L1-fill cone).
+  Write-through, write-no-allocate. Disabled at reset; software enables via
   `WRSYS SYSDEV_L2_CACHE CTRL=1`.
 - `busctl.sv` — SYSDEV_BUS sysreg device: RST (sticky) + CFG_EN for
   autoconfig.
@@ -450,12 +518,13 @@ the shared module.
   single-ended D+/D- on the `usb_fpga_bd` pads), display adapter on
   the GPDI connector (autoconfig; dedicated video PLL, splash preload),
   boot ROM, `btn[1]` reset.
-- `ulx3s/ulx3s_penumbra3_top.sv` — gen3 system on the ULX3S: a fork of
-  the gen2 top (`ulx3s_penumbra2_top.sv`) with `machine_penumbra3` in
-  its place, the same devices, clocks and SDRAM stack, and the cache
-  geometry as the machine's parameters (two-way L1s, a 1024-set four-way
-  L2). No floorplan: gen2's regions were measured against its own
-  core's placement.
+- `ulx3s/ulx3s_penumbra3_top.sv` — gen3 system on the ULX3S, the default
+  (devices in `doc/internals/ulx3s/overview.md`): a fork of the gen2 top
+  (`ulx3s_penumbra2_top.sv`, built as gen2 or gen2.5) with
+  `machine_penumbra3` in its place, the same devices, clocks and SDRAM
+  stack, and the cache geometry as the machine's parameters (two-way
+  L1s, a 1024-set four-way L2). No floorplan: gen2's regions were
+  measured against its own core's placement.
 - `ulx3s/ulx3s_penumbra2_probe_top.sv` — gen2 machine timing probe
   (`VARIANT=probe`): `machine_penumbra2` + a BRAM bus memory at
   25 MHz, terminal outputs folded onto the LEDs so synthesis keeps the
@@ -475,9 +544,12 @@ the shared module.
   xc7 flow refuses a bitstream without it (thermal gate in
   `hw/tools/vivado/gates.tcl`). Its DRP port is where a kernel-visible
   sensor device attaches (`doc/TODO/hw-devices.md`).
-- `nexysvideo/nexysvideo_penumbra2_top.sv` — gen2 machine on the Nexys
-  Video (`BOARD=nexysvideo CORE=penumbra2[_5]`), growing one device per
-  bring-up step: boot ROM, UART, the microSD slot over SPI (autoconfig,
+- `nexysvideo/nexysvideo_penumbra3_top.sv` — gen3 machine on the Nexys
+  Video (`BOARD=nexysvideo CORE=penumbra3`), the default: its cache
+  geometry as the machine's parameters (the ULX3S's two-way L1s, and a
+  4096-set four-way L2, four times the ULX3S's), and the board system
+  both Nexys machine tops share (`SRC_SYSTEM_nexysvideo` in the
+  Makefile): boot ROM, UART, the microSD slot over SPI (autoconfig,
   card power off during the reset hold), the display adapter on the
   HDMI output (autoconfig; its own MMCM, an ODDR and a TMDS_33 OBUFDS
   per pair), the audio device in front of the ADAU1761 codec
@@ -503,12 +575,9 @@ the shared module.
   the RGMII transmit pins and back in at the receive pins, with an
   EEPROM model on the I2C pins and a PHY model on the management pins,
   and exchanges bytes with a keyboard model on the PS/2 pins.
-- `nexysvideo/nexysvideo_penumbra3_top.sv` — gen3 machine on the Nexys
-  Video (`BOARD=nexysvideo CORE=penumbra3`): a fork of the gen2 top with
-  `machine_penumbra3` in its place, the board around it the same, and
-  its cache geometry as the machine's parameters: the ULX3S's two-way
-  L1s, and a 4096-set four-way L2, four times the ULX3S's. The board
-  system both tops share is `SRC_SYSTEM_nexysvideo` in the Makefile.
+- `nexysvideo/nexysvideo_penumbra2_top.sv` — gen2 machine on the same
+  board system (`BOARD=nexysvideo CORE=penumbra2[_5]`); the gen3 top is
+  a fork of it with `machine_penumbra3` in its place.
 - `nexysvideo/nexysvideo_uart_test_top.sv` — console bring-up top
   (`make fpga TOP=nexysvideo_uart_test_top`): banner and echo on the
   UART port, LEDs for lock, reset, a 1 Hz heartbeat, RX activity and

@@ -356,12 +356,12 @@ rom.ld ──────────────────┘
   replacement, write and enable behaviour, and each window reports the
   counts the cache perfctrs keep plus L1 fills by kind, served from L2
   or from memory, the L1-I misses a next-line prediction buffer
-  (proposed for gen3) would have served, the memory fills two stream
-  buffers beside L2 would have served (each prefetching the next line
-  within its page once two memory fills land on consecutive lines), and
-  each L1-D load miss by the instruction after it: a load or store to
-  the filled set, to another set, or no access (gen3 holds a lookup of
-  the filled set across the install).  A window opens at reset or at
+  (a lever gen3 left unbuilt) would have served, the memory fills two
+  stream buffers beside L2 would have served (each prefetching the next
+  line within its page once two memory fills land on consecutive lines),
+  and each L1-D load miss by the instruction after it: a load or store
+  to the filled set, to another set, or no access (gen3 holds a lookup
+  of the filled set across the install).  A window opens at reset or at
   `+model_start=ADDR` and closes at `+model_stop=ADDR` (both first
   user-mode execution, as `+pcprof_start`), on `SIGUSR1` (which opens
   the next), or at exit; `+model_report=file` writes the reports there
@@ -380,7 +380,7 @@ rom.ld ──────────────────┘
   what software invalidates in the real TLB, so ones larger than it
   read slightly optimistic.
 - **Store-buffer model** (`+sbmodel[=list]`, `sw/sim/sb_model.h`) —
-  runs every store through shadow store buffers of gen3's planned shape,
+  runs every store through shadow store buffers shaped like gen3's,
   each on its own estimated clock: `+sbmodel_cpi=` cycles an
   instruction (1 by default) plus fill and uncached-access costs, with
   fills taken from the first `+cachemodel` hierarchy (so it needs
@@ -497,7 +497,7 @@ rom.ld ──────────────────┘
   UART holds one byte, so a script piped into stdin loses characters.
   `--windows` gives each workload its own model window (`SIGUSR1`
   around the command) and says which window is which; ISS options pass
-  through `--iss-arg` (`--iss-arg +core=penumbra2_5 --iss-arg
+  through `--iss-arg` (`--iss-arg +core=penumbra3 --iss-arg
   +cachemodel`).  The run writes to the image, so drive a copy.
 - **LLVM toolchain** (`build/llvm/bin/`) — clang, llvm-mc, ld.lld,
   llvm-objcopy. Details in
