@@ -23,16 +23,15 @@ architecture and its standard peripherals.
 *   **[MMU & TLB](./system/mmu.md)** — Software-managed translation, protection, and dirty tracking.
 *   **[System Registers](./system/sysregs.md)** — Device-mapped control registers (Device Map).
 *   **[Bus & Address Map](./system/bus.md)** — Physical memory layout and the autoconfig software flow.
-*   **[Device Classes](./system/device-classes.md)** — The autoconfig class contract: what claiming a class *requires*.
+*   **[Device Classes](./system/bus.md#device-class-codes)** — The autoconfig class codes, and the base protocol a class can define.
 *   **[Boot Protocol](./system/boot-protocol.md)** — The three-stage ROM → Loader → Kernel handoff.
 
 ### Device Drivers
 *   **[UART](./system/devices/uart.md)** — Word-strided NS16550A console.
 *   **[SPI / SD Card](./system/devices/spi.md)** — Register map and driver flow for storage.
-*   **[USB host controller](./system/devices/usb-host.md)** — register interface and transaction contract; carries storage, HID, hubs, and the `ure(4)` Ethernet adapter that gives the machine its network.
 *   **[Display Adapter](./system/devices/display.md)** — Character-cell console + optional framebuffer (`CLASS_DISPLAY`).
 *   **[Audio Device](./system/devices/audio.md)** — Pushed-PCM output with optional mixing channels (`CLASS_AUDIO`).
-*   **[USB Host Controller](./system/devices/usb-host.md)** — Transaction-level USB host (`CLASS_USBHC`).
+*   **[USB Host Controller](./system/devices/usb-host.md)** — Transaction-level USB host (`CLASS_USBHC`): register interface and transaction contract; carries storage, HID, hubs, and the `ure(4)` Ethernet adapter.
 *   **[Ethernet Adapter](./system/devices/ethernet.md)** — Whole frames through slot rings in device memory (`CLASS_ETHERNET`).
 *   **[PS/2 Port](./system/devices/ps2.md)** — Bytes to and from one keyboard or pointing device (`CLASS_PS2`).
 
@@ -57,23 +56,24 @@ forms) and related hardware interfaces.
 ## 🔬 [Penumbra Internals](./internals)
 **Target:** RTL/FPGA engineers working on the Penumbra core.
 
-Detailed design of the CPU core and internal FPGA logic. These docs
+Detailed design of the CPU cores and internal FPGA logic. These docs
 are organized by **which design they describe**: *shared* internals
-(both generations), *Penumbra/1* (microcoded core), and *Penumbra/2*
-(pipelined core). Every internals doc carries an **Applies to:** banner
-so its scope is clear at a glance. The governing rule: a root doc
+(every generation), then each generation's own: *Penumbra/1*
+(microcoded), *Penumbra/2* (the first pipeline), *Penumbra/3* (the
+current core) and *Penumbra/4* (ideas). Every internals doc carries
+an **Applies to:** banner so its scope is clear at a glance. The governing rule: a root doc
 states the architectural invariant or contract; each generation's
 subdirectory owns its realization.
 
 ### Shared internals (all generations)
 
-*   **[CPU-Internal Bus](./internals/cpu-bus.md)** — Contracts inside `cpu_core` (core ↔ MMU ↔ caches ↔ private sysreg devices) that both cores satisfy.
+*   **[CPU-Internal Bus](./internals/cpu-bus.md)** — The contracts inside the CPU, between the core, the MMU, the caches and the CPU-private sysreg devices.
 *   **[System Bus Implementation](./internals/system-bus.md)** — How the machine tops realise the sync-form Penumbra Bus: device decode, the response fabric, and the simple-device handshake cell.
 *   **[MMU Internals](./internals/mmu-internals.md)** — TLB hardware structure, discrete-logic mapping, and the VIPT L1 alias-free invariant.
 *   **[MUL/DIV Unit (divmul)](./internals/divmul.md)** — The shared multiply/divide peer unit: algorithm, handshake, datapath, and discrete chip-count.
 *   **[Instruction Timing: Mechanism and Measurement](./internals/instruction-timing.md)** — Where each core's cycles come from, and how the figures in the programmer's timing reference are measured.
-*   **[L2 Cache](./internals/l2-cache.md)** — Design plan and phase status for the optional unified L2 cache (currently write-invalidate-on-hit; write-back is a planned phase) between `cpu_core.o_mem_*` and the system bus.
-*   **[SDRAM Controller v2](./internals/sdram-controller.md)** — Design plan for the rewrite (composable, dual-domain, 100 MHz CL2).
+*   **[L2 Cache](./internals/l2-cache.md)** — The unified L2 Penumbra/1 and /2 put between their L1s and the system bus: write-invalidate on a hit, write-back a planned phase. Penumbra/3's L2 is its uncore's.
+*   **[SDRAM Controller v2](./internals/sdram-controller.md)** — The SDR SDRAM controller: composable, on its own clock domain, 100 MHz CL2.
 *   **[SDRAM Optimization](./internals/sdram-optimization.md)** — Controller strategies for bandwidth improvement.
 *   **[Display Adapter](./internals/display.md)** — FPGA microarchitecture of the `CLASS_DISPLAY` adapter: pixel generator + TMDS output PHY.
 *   **[USB Host Controller](./internals/usb-host-controller.md)** — FPGA microarchitecture of the `CLASS_USBHC` controller: SIE, transaction FSM, and the NetBSD HCD mapping.
@@ -108,8 +108,8 @@ honors.
 > 37.5 MHz on the ULX3S's ECP5 with no headroom for the remaining
 > gen2.5 features — a
 > fundamental in-order pure-stall floor. The docs below are retained as the
-> **historical record**; gen3 is a fresh redo of the same in-order pipeline
-> to clear that floor. See the abandonment note in
+> **historical record**; gen3, a fresh redo of the same in-order pipeline,
+> cleared that floor and replaced it. See the abandonment note in
 > [the gen2 overview](./internals/penumbra2/overview.md).
 
 The project's first major **CPU design era transition** — from
@@ -129,6 +129,27 @@ correctness over performance; gen2.5 added the early-1990s polish
 *   **[Penumbra/2 Exception Flow](./internals/penumbra2/exception-flow.md)** — Taking and returning from exceptions/traps/interrupts in the pipeline: fault detection by stage, precise-exception commit at WB, save-state pulse, vector-fetch FSM, ERET, and interrupt recognition (SR.I, ei_shadow, EI/DI).
 *   **[Penumbra/2 Control Decode](./internals/penumbra2/control-decode.md)** — Turning the instruction word into control: hardwired per-stage decode, the four instruction formats, the ID control bundle, register/immediate extraction, branch-condition evaluation, and the IR[15:12] aliasing hazard.
 *   **[Penumbra/2 Register File](./internals/penumbra2/regfile.md)** — The 2R/1W register file: storage organisation, R0/R15 overrides, R14 (USP/SSP) banking and cross-bank access, and how divmul sequences its two-register result through the single write port.
+*   **[Penumbra/2 Memory Interface](./internals/penumbra2/memory-interface.md)** — The boundary between the split L1s and the shared L2: how the two miss streams share the L2's port, the line fill path, the transaction taxonomy, and the path on to the system bus.
+
+### Penumbra/3 (gen3 — the current core)
+
+The default core: a fresh redo of the in-order pipeline, seven stages,
+with full forwarding and branch prediction designed in from the start,
+a store buffer, and an uncore that holds the L2 and stream prefetch.
+Built on both boards; boots NetBSD.
+
+*   **[Penumbra/3 Overview](./internals/penumbra3/overview.md)** — Start here. The levers ranked by measured benefit, the build plan and where it stopped, and the performance targets with what was built.
+*   **[Penumbra/3 Timing Outline](./internals/penumbra3/timing-outline.md)** — The structural rules the design follows to close its clock with headroom, each with the gen2 mistake it avoids.
+*   **[Penumbra/3 Memory Stage](./internals/penumbra3/mem-stage.md)** — The MEM1/MEM2 memory stage and the duplicated block-RAM TLB.
+*   **[Penumbra/3 Memory Completion](./internals/penumbra3/memory-completion.md)** — The registered back-end stall, and the load and store completion and fault-precision contract.
+*   **[Penumbra/3 L1 Caches](./internals/penumbra3/l1-cache.md)** — The two L1s as their clients see them: lookups, stores, and the accesses each L1 carries past it.
+*   **[Penumbra/3 Uncore Port](./internals/penumbra3/uncore-port.md)** — The port between the core and the uncore: the L1s' three transactions, the store side, handshake and faults.
+*   **[Penumbra/3 Uncore](./internals/penumbra3/uncore.md)** — Behind that port: the L2's geometry and pipeline, the store buffer, the stream buffers, the bus transaction, and the L2's cache device.
+*   **[Penumbra/3 Machine](./internals/penumbra3/machine.md)** — How the core, MMU, L1s, uncore and sysreg devices compose into the machine, and the program-end pulse.
+*   **[Penumbra/3 Memory Performance](./internals/penumbra3/memory-performance.md)** — Measured memory-path costs, the workload profiles behind the uncore's levers, and the final builds on hardware.
+*   **[Penumbra/3 Branch Prediction](./internals/penumbra3/branch-prediction.md)** — Each prediction component measured on real workloads, and the front-end design it points to.
+*   **[Penumbra/3 Phase 0 Probes](./internals/penumbra3/phase0-probes.md)** — The timing probes that proved the load-bearing structural claims close at the target clock before any core RTL was built on them.
+*   **[Penumbra/3 Not Built](./internals/penumbra3/not-built.md)** — What gen3 analysed and left, with the evidence each has, for a later generation to weigh.
 
 ### Penumbra/4 (gen4 — ideas and measurements)
 
@@ -137,6 +158,7 @@ after gen3, on the same ISA. Nothing is built; these collect the ideas
 and the measurements behind them.
 
 *   **[Penumbra/4 Overview](./internals/penumbra4/overview.md)** — Start here. Why dual issue, the shape of the two pipelines, what carries over from gen3, and what is open.
+*   **[Penumbra/4 Structure](./internals/penumbra4/structure.md)** — The modules gen4 is built from: what each owns, the signals at each boundary and when they settle, the smallest form of each, and the order the machine comes up in.
 *   **[Penumbra/4 Fusion and Pairing](./internals/penumbra4/issue-pairing.md)** — What each instruction fusion and each pairing rule is worth on real workloads, measured with the ISS's pairing model, and the issue stage the numbers point to.
 *   **[Penumbra/4 Load-Use Wait](./internals/penumbra4/load-use.md)** — What the two-cycle wait behind a load costs on real workloads, and what a second ALU behind the memory stages would take back.
 *   **[Penumbra/4 Register File](./internals/penumbra4/regfile.md)** — The structures that give a register file four read ports and two write ports, compared on the ECP5 and the Artix-7, and the one chosen.

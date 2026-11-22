@@ -6,9 +6,9 @@ from `netbsd-10` in `netbsd/`. MD code in `sys/arch/penumbra/`.
 ## Current State
 
 **Boots to single-user shell with full dynamically-linked userland
-on real hardware --- the ULX3S with the Penumbra/1 or Penumbra/2 CPU
-core, the Nexys Video with Penumbra/2 or Penumbra/3 --- and on the
-ISS.**  ROM autoconfig --> bootloader --> kernel
+on real hardware --- the ULX3S with the Penumbra/1, Penumbra/2 or
+Penumbra/3 CPU core, the Nexys Video with Penumbra/2 or Penumbra/3 ---
+and on the ISS.**  ROM autoconfig --> bootloader --> kernel
 --> device drivers --> FFS root mount --> exec `/sbin/init` -->
 interactive shell with console I/O.
 

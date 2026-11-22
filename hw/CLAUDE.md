@@ -506,9 +506,9 @@ the shared module.
 - `nexysvideo/nexysvideo_penumbra3_top.sv` — gen3 machine on the Nexys
   Video (`BOARD=nexysvideo CORE=penumbra3`): a fork of the gen2 top with
   `machine_penumbra3` in its place, the board around it the same, and
-  the ULX3S's cache geometry as the machine's parameters (two-way L1s, a
-  1024-set four-way L2). The board system both tops share is
-  `SRC_SYSTEM_nexysvideo` in the Makefile.
+  its cache geometry as the machine's parameters: the ULX3S's two-way
+  L1s, and a 4096-set four-way L2, four times the ULX3S's. The board
+  system both tops share is `SRC_SYSTEM_nexysvideo` in the Makefile.
 - `nexysvideo/nexysvideo_uart_test_top.sv` — console bring-up top
   (`make fpga TOP=nexysvideo_uart_test_top`): banner and echo on the
   UART port, LEDs for lock, reset, a 1 Hz heartbeat, RX activity and

@@ -28,15 +28,19 @@ The primary spark for this project was Bill Buzbee's [Magic-1](https://homebrewc
 
 ## ⚡ Quick Start
 
-```sh
-# 1. Clone with submodules
-git clone --recurse-submodules https://github.com/<user>/penumbra-minicomputer.git
-cd penumbra-minicomputer
+From a checkout:
 
-# 2. Run hardware tests (no LLVM required)
+```sh
+# 1. The ISA conformance suite on the instruction-set simulator
+#    (Python and a C++ compiler; no Docker, no LLVM)
+make test-iss
+
+# 2. The same suite and the default core's own on its RTL, in
+#    Verilator (needs Docker)
 make test
 
-# 3. Build boot ROM and run interactive simulation (requires LLVM, see DEVELOP.md)
+# 3. Build the boot ROM and run the machine on the simulator
+#    (needs the LLVM toolchain, see DEVELOP.md)
 make simulate
 ```
 
@@ -44,63 +48,86 @@ make simulate
 
 ## 🏗️ Architecture
 
-One ISA, several cores.
+One ISA, several cores, two boards.
 
 - **ISA:** 32-bit load-store RISC, little-endian. 16 GPRs, 4
-  instruction formats.
+  instruction formats, NZCV condition flags.
 - **Arithmetic:** MUL/DIV in hardware. Floating point in software.
-- **MMU:** software-managed TLB with ASIDs. 64-entry 2-way main TLB
-  plus 4 pinned entries.
-- **Caches:** split VIPT L1, write-through. Shared 64 KB 4-way L2.
-- **Bus:** asynchronous 4-phase Penumbra Bus, Zorro-style
+- **MMU:** software-managed TLB with ASIDs: a set-associative main
+  TLB, its geometry each core's own, plus 8 pinned entries.
+- **Caches:** split VIPT L1s, write-through, and a shared 4-way L2.
+  Each build chooses the sizes; software reads them from the
+  hardware.
+- **Bus:** the Penumbra Bus, an asynchronous 4-phase handshake with a
+  synchronous form, which the FPGA builds use. Zorro-style
   autoconfig.
-- **Memory:** 32 MB SDRAM on its own clock domain.
+- **Memory:** on its own clock domain: SDRAM on the ULX3S, DDR3 on the
+  Nexys Video.
 
 Cores:
 
-- **Penumbra/1:** microcoded, 3-bus datapath, 25 MHz. The 74xx
+- **Penumbra/1:** microcoded, 3-bus datapath. The 74xx
   discrete-logic reference. 1 KB direct-mapped L1s.
-- **Penumbra/2:** 6-stage hardwired pipeline, 37.5 MHz. 4 KB 2-way
-  L1s.
-- **Penumbra/2.5:** Penumbra/2 plus forwarding and a BTB, 37.5 MHz.
-  The default core, and the fastest.
-- **Penumbra/3:** in-order pipeline redo, aimed at 50 MHz. Under
-  construction.
+- **Penumbra/2 and /2.5:** a 6-stage hardwired pipeline with 4 KB
+  2-way L1s; /2.5 adds forwarding and a BTB. Superseded by
+  Penumbra/3.
+- **Penumbra/3:** a 7-stage in-order pipeline with full forwarding,
+  branch prediction at fetch, a store buffer, and stream prefetch
+  beside the L2. 8 KB 2-way L1s and a 256×2 main TLB. The default
+  core, and the fastest.
+- **Penumbra/4:** an in-order core issuing two instructions a cycle.
+  Ideas and measurements; nothing is built.
 
-Specs live in the **[Documentation Index](doc/README.md)**.
+How fast each one is, beside the machines of its era: the
+**[Dhrystone Comparison](doc/dhrystone-comparison.md)**. Specs live in
+the **[Documentation Index](doc/README.md)**.
 
 ---
 
 ## 📈 Status
 
-Runs on a Radiona ULX3S (Lattice ECP5-85F). Also runs in a fast
-instruction-level simulator and in cycle-accurate Verilator.
+Runs on two FPGA boards. Also runs in a fast instruction-level
+simulator and in cycle-accurate Verilator.
 
-**Hardware**, all built from scratch:
+| | Radiona ULX3S | Digilent Nexys Video |
+|---|---|---|
+| FPGA | Lattice ECP5-85F | AMD Artix-7 200T |
+| Cores | Penumbra/1 at 25 MHz; /2, /2.5 and /3 at 37.5 MHz | Penumbra/2 and /2.5 at 60 MHz; /3 at 80 MHz |
+| Memory | 32 MB SDRAM | 512 MiB DDR3 |
+| Penumbra/3's L2 | 64 KB | 256 KB |
+| Keyboard | USB | PS/2 |
+| Network | USB Ethernet adapters | on-board Ethernet, 10/100 |
+| Audio | the 3.5 mm jack | the ADAU1761 codec's jacks |
+
+**Hardware**, all built from scratch but the DDR3 controller
+(UberDDR3):
 
 - CPU, MMU, caches, SDRAM controller.
 - UART console.
 - SD card over SPI.
 - USB 1.1 host controller, down to the PHY. Drives real flash
   drives, keyboards, hubs and Ethernet adapters.
+- Ethernet adapter on the Nexys Video's RTL8211E PHY.
+- PS/2 port.
 - HDMI display: text console plus a framebuffer.
-- 4-channel audio mixer on the 3.5 mm jack.
+- 4-channel audio mixer.
 - Performance counters: stalls, cache hits and misses.
 
 **Software:**
 
 - LLVM backend: clang, lld, llvm-mc. PIE, TLS, C++ exceptions.
 - Boot ROM in C: FAT32, ELF loader, monitor.
-- NetBSD 10.1 with its full userland, on Penumbra/1 and /2:
+- NetBSD 10.1 with its full userland, on Penumbra/1, /2 and /3:
   - Root filesystem on SD card.
-  - USB disks and keyboards, with hot-plug.
-  - Networking over USB Ethernet: ping, ssh.
-  - Local console on HDMI and a USB keyboard.
+  - USB disks and keyboards on the ULX3S, with hot-plug.
+  - Networking over USB Ethernet (`ure(4)`) or the Nexys Video's own
+    adapter (`peth`): ping, ssh.
+  - Local console on HDMI, with a USB or PS/2 keyboard.
   - Audio through `audio(4)` and a multi-voice `/dev/pmusic`.
   - Dynamic linking, fork/exec, signals, core dumps.
 - Runs Doom, graphics demos and a ProTracker MOD player.
-- SD images: single-user, multiuser, and an unattended exhibit
-  kiosk.
+- SD images: single-user, multiuser, an unattended exhibit kiosk, and
+  a guest machine others log into over the network.
 
 ---
 
@@ -113,7 +140,7 @@ instruction-level simulator and in cycle-accurate Verilator.
 - `llvm/` — Penumbra backend for the LLVM compiler infrastructure.
 - `doc/` — Comprehensive architecture and system documentation.
 - `netbsd/` — NetBSD kernel and userland source tree.
-- `benchmark/` — Bare-metal benchmarks (Dhrystone, membench, memspeed, memtest) and the NetBSD-hosted `pbench` microbenchmark suite.
+- `benchmark/` — Bare-metal benchmarks (Dhrystone, CoreMark, membench, memspeed, memtest) and the NetBSD-hosted `pbench` microbenchmark suite.
 
 ---
 

@@ -1,6 +1,8 @@
 # L2 Cache — Design Plan
 
-> **Applies to:** all generations · shared hardware.
+> **Applies to:** Penumbra/1 and Penumbra/2 · shared hardware.
+> Penumbra/3's L2 is part of its uncore
+> ([`penumbra3/uncore.md`](penumbra3/uncore.md)).
 
 This document specifies the design for an optional L2 cache that sits
 between the CPU's `o_mem_*` port and the system bus.
