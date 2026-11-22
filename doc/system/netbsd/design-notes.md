@@ -1027,7 +1027,8 @@ Files modified outside `sys/arch/penumbra/`:
   crtbegin, crtend)
 - `lib/libc/arch/penumbra/` -- SYS.h, cerror, syscall wrappers,
   setjmp, softfloat, gdtoa, makecontext, mulsi3
-- `lib/libpthread/arch/penumbra/pthread_md.h` -- minimal stubs
+- `lib/libpthread/arch/penumbra/pthread_md.h` -- stack-pointer
+  accessors, all libpthread needs from the port
 - `lib/libkvm/kvm_penumbra.c` -- kvm support
 
 **Dynamic linker:**

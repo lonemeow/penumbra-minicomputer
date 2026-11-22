@@ -263,7 +263,10 @@ among them — core dumps work.
 - **C++ / ATF:** `MKCXX=yes`, `MKLIBCXX=yes`.  libunwind ported
   (in-tree, built into libc).  libc++ and libcxxrt link as shared
   libraries.  libatf-c available for the ATF test suite.
-- **Limitations:** libpthread is minimal stubs.
+- **Threads:** NetBSD's libpthread, one kernel LWP per thread.
+  Creating and joining threads, mutexes, condition variables, and fork
+  and exec from a threaded process work; `pbench-pthread`'s `pthread`
+  category exercises them.
 
 ## Kernel Configs
 

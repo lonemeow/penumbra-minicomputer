@@ -744,8 +744,8 @@ benchmark output to stay clean of trademark misuse.
    and NOTICE files verbatim.
 2. Add `builds/penumbra/netbsd32/` as a copy of
    `builds/linux/linux32/` with cross-compiler invocation tweaked
-   (`clang --target=penumbra-unknown-netbsd --sysroot=…`) and
-   pthreads omitted (default `num_contexts=1`).
+   (`clang --target=penumbra-unknown-netbsd --sysroot=…`).  Its
+   pthreads wiring stays as EEMBC ship it: libpthread works.
 3. Drive EEMBC's Makefile from a new top-level
    `make benchmark-coremark-pro` target, output into
    `build/coremark-pro/`.
@@ -754,9 +754,6 @@ benchmark output to stay clean of trademark misuse.
    parser, zip) into `/usr/local/bin/coremark-pro/`.
 
 **Prerequisites / risks:**
-- libpthread is currently minimal stubs.  Need to verify single-
-  context mode links cleanly without pulling in unimplemented
-  thread primitives before committing to the build integration.
 - FP-heavy workloads (`linear_alg`, `loops-all`, `nnet`, `radix2`)
   will be dominated by soft-float cost on the current CPU.  Numbers
   are still meaningful as a baseline but the suite gets a lot more
