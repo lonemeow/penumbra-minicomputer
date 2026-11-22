@@ -3,8 +3,10 @@
 /*
  * Penumbra machine-dependent pthread definitions.
  *
- * Minimal implementation — enough for libpthread to compile and link.
- * Full thread support requires makecontext/setcontext (not yet implemented).
+ * The stack pointer, live and as saved in a ucontext, is all libpthread
+ * asks of this header: threads are kernel LWPs, created through
+ * _lwp_makecontext and _lwp_create, so nothing switches context in
+ * user space.
  */
 
 #ifndef _LIB_PTHREAD_PENUMBRA_MD_H
