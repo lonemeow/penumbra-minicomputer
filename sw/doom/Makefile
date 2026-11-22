@@ -62,6 +62,7 @@ PORT_SRCS    := $(HERE)m_fixed_penumbra.c \
                 $(HERE)i_input_netbsd.c \
                 $(HERE)i_timer_netbsd.c \
                 $(HERE)i_joystick_null.c \
+                $(HERE)i_sound_penumbra.c \
                 $(HERE)i_sound_null.c \
                 $(HERE)net_launch_headless.c \
                 $(HERE)i_main_netbsd.c \

@@ -1,10 +1,11 @@
-// No audio hardware on this machine.
+// The sound and music modules this port does not build.
 //
 // i_sound.c picks a back-end by searching each module's sound_devices
 // list for the configured device; a module advertising none is never
-// chosen, which is the whole mechanism needed to have no sound.  These
-// exist because i_sound.c's module tables name them, and the settings
-// because m_config.c binds them and a config file must round-trip.
+// chosen, which is the whole mechanism needed to leave one out.  Sound
+// effects come from i_sound_penumbra.c.  These exist because i_sound.c's
+// module tables name them, and the settings because m_config.c binds
+// them and a config file must round-trip.
 
 #include <stddef.h>
 

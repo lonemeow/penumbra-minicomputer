@@ -88,6 +88,9 @@ static const sound_module_t *sound_modules[] =
 #ifndef DISABLE_SDL2MIXER
     &sound_sdl_module,
 #endif // DISABLE_SDL2MIXER
+#ifdef __penumbra__
+    &sound_penumbra_module,
+#endif
     &sound_pcsound_module,
     NULL,
 };
