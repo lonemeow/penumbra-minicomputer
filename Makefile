@@ -1038,12 +1038,12 @@ image: netbsd-overlay bench-elfs demoscene-elfs
 # /usr/local/bin via the netbsd-overlay step; run this target on its own
 # only to build/measure the binaries standalone.
 #
-#   make benchmark-netbsd   — build dynamic + static binaries
+#   make benchmark-netbsd   — build pbench and pbench-pthread, dynamic + static
 .PHONY: benchmark-netbsd
 benchmark-netbsd:
 	@$(MAKE) -C benchmark/netbsd-bench LLVM_PREFIX=$(LLVM_PREFIX) \
 		DESTDIR=$(abspath $(DESTDIR))
-	@echo "pbench binaries: $(NETBSD_BENCH_DIR)/pbench{,-static}"
+	@echo "pbench binaries: $(NETBSD_BENCH_DIR)/pbench{,-pthread}{,-static}"
 
 # ── Benchmark SD image and runners ───────────────────────────
 # Builds benchmark ELFs and creates an SD image containing them.

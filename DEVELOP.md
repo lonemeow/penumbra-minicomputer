@@ -227,7 +227,7 @@ make benchmark COPT="-Os"      # Override benchmark optimization level
 **NetBSD-hosted** (`pbench` — runs under the real userland against libc, dynamic + static):
 
 ```sh
-make benchmark-netbsd                              # Build pbench{,-static} for NetBSD
+make benchmark-netbsd                              # Build pbench{,-pthread}{,-static} for NetBSD
 make image                                         # Stage all custom utilities into the rootfs
 make simulate SDCARD=build/boot.img                # Boot, log in, run pbench
 ```
@@ -235,8 +235,11 @@ make simulate SDCARD=build/boot.img                # Boot, log in, run pbench
 `make image` automatically builds and overlays the benchmark suite and
 the graphics demos into `/usr/local/bin/` (see § 8). Inside the running
 NetBSD: `pbench list`, `pbench libc memcpy`, etc. Use `pbench -o FILE`
-to dump machine-readable `RESULT key=value` lines. The demos are under `sw/demos/`
-and build with `make demos`.
+to dump machine-readable `RESULT key=value` lines. `pbench-pthread` is
+the same suite linked with libpthread, plus a `pthread` category (thread
+switches, mutexes); libpthread makes the whole process threaded from
+startup, so a case run under both binaries shows what that costs it.
+The demos are under `sw/demos/` and build with `make demos`.
 
 ---
 

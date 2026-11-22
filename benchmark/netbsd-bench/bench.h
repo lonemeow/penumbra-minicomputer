@@ -77,12 +77,31 @@ void bench_set_result_file(void *fp);
 int bench_time(const char *category, const char *name, const char *config,
                bench_fn f, void *ctx);
 
-/* Registry entry — one per benchmark, listed in pbench.c. */
+/* Registry entry — one per benchmark, listed in a category's registry. */
 struct bench_entry {
-    const char *category;       /* "kernel" or "libc" */
+    const char *category;       /* "kernel", "libc", … */
     const char *name;           /* unique within category */
     void (*run)(void);          /* benchmark entry; calls bench_time() */
 };
+
+/* A registry: entries in the order they run. */
+struct bench_table {
+    const struct bench_entry *entries;
+    size_t len;
+};
+
+/* registry.c: the categories every pbench binary carries. */
+extern const struct bench_table pbench_base;
+/* pthread/registry.c: benchmarks that need libpthread. */
+extern const struct bench_table pbench_pthread;
+
+/* What a binary carries, defined by the one suite file it links
+ * (suite.c, suite_pthread.c): its registries in run order, ending at
+ * NULL, and the name its output header gives it.  The suite is a link
+ * decision rather than a build flag, so every other object is the same
+ * code in every binary, and two binaries differ only in what they link. */
+extern const struct bench_table *const pbench_suite[];
+extern const char pbench_suite_name[];
 
 /* Force the compiler to treat a value as observed.  Prevents the optimizer
  * from deleting dead stores / proving loop-invariant computations.  Used by

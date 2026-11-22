@@ -15,13 +15,19 @@
  *             cache hit rates) under each benchmark.  Off by default; adds
  *             one extra measured batch per benchmark.
  *
- * Every run starts with a "# pbench on <CPU> @ <clock>" header so saved
+ * Every run starts with a "# <binary> on <CPU> @ <clock>" header so saved
  * outputs are self-describing when comparing files.
  *
  * Categories:
  *   kernel    Syscall / context-switch / process-creation costs.
  *   libc      memcpy / memset / strlen / qsort etc., size-swept.
  *   audio     Software mixing of tracker voices.
+ *   pthread   Thread switches and mutexes (pbench-pthread only).
+ *
+ * pbench-pthread runs the same objects as pbench, linked with libpthread.
+ * libpthread starts before main() and makes the whole process threaded:
+ * libc takes its locks for real and fork runs its handlers.  A case run in
+ * both binaries therefore prices what linking libpthread costs it.
  */
 
 #include "bench.h"
@@ -53,65 +59,36 @@ static const char *resolve_self_path(const char *argv0) {
     return argv0;  /* best effort; fork_exec's child-status check catches a bad path */
 }
 
-/* --- Benchmark entry-point declarations.  Each benchmark .c defines one
- *     of these and registers it below. */
-
-extern void bench_kernel_getpid(void);
-extern void bench_kernel_clock_gettime(void);
-extern void bench_kernel_pipe_pingpong(void);
-extern void bench_kernel_fork_exit(void);
-extern void bench_kernel_fork_exec(void);
-
-extern void bench_libc_memcpy_sweep(void);
-extern void bench_libc_memcpy_align(void);
-extern void bench_libc_memset_sweep(void);
-extern void bench_libc_strlen_sweep(void);
-extern void bench_libc_qsort_int(void);
-
-extern void bench_audio_mix(void);
-
-/* --- Registry.  Add new benchmarks by appending an entry here. */
-
-static const struct bench_entry registry[] = {
-    /* Kernel benchmarks: cross-cutting cost signals. */
-    { "kernel", "getpid",         bench_kernel_getpid },
-    { "kernel", "clock_gettime",  bench_kernel_clock_gettime },
-    { "kernel", "pipe_pingpong",  bench_kernel_pipe_pingpong },
-    { "kernel", "fork_exit",      bench_kernel_fork_exit },
-    { "kernel", "fork_exec",      bench_kernel_fork_exec },
-
-    /* libc benchmarks: hot routines, size-swept where applicable. */
-    { "libc",   "memcpy",         bench_libc_memcpy_sweep },
-    { "libc",   "memcpy_align",   bench_libc_memcpy_align },
-    { "libc",   "memset",         bench_libc_memset_sweep },
-    { "libc",   "strlen",         bench_libc_strlen_sweep },
-    { "libc",   "qsort_int",      bench_libc_qsort_int },
-
-    /* Audio benchmarks: what playing music costs the CPU. */
-    { "audio",  "mix",            bench_audio_mix },
-};
-
-static const size_t registry_len = sizeof(registry) / sizeof(registry[0]);
-
 /* --- CLI helpers ---------------------------------------------------- */
 
 static void print_help(const char *argv0) {
     fprintf(stderr,
         "usage: %s [-o FILE] [help|list|<category> [<name>]]\n"
         "  no args                  run every benchmark\n"
-        "  <category>               run all benchmarks in category (kernel|libc|audio)\n"
+        "  <category>               run all benchmarks in category (",
+        argv0);
+    /* Each registry holds one or more whole categories, in order. */
+    const char *last_cat = NULL;
+    for (const struct bench_table *const *t = pbench_suite; *t; t++)
+        for (size_t i = 0; i < (*t)->len; i++) {
+            const char *cat = (*t)->entries[i].category;
+            if (last_cat && strcmp(cat, last_cat) == 0) continue;
+            fprintf(stderr, "%s%s", last_cat ? "|" : "", cat);
+            last_cat = cat;
+        }
+    fprintf(stderr, ")\n"
         "  <category> <name>        run one benchmark\n"
         "  list                     list registered benchmarks\n"
         "  help                     show this help\n"
         "options:\n"
         "  -o FILE                  also write machine-readable RESULT lines to FILE\n"
-        "  -p                       dump CPU + cache perfctrs per benchmark (slower)\n",
-        argv0);
+        "  -p                       dump CPU + cache perfctrs per benchmark (slower)\n");
 }
 
-/* Emit a one-line header naming the CPU model and clock, so a saved run is
- * self-describing when comparing result files.  Reads the kernel's hw.model
- * and machdep.cpu.freq; degrades gracefully if either is missing. */
+/* Emit a one-line header naming the binary, the CPU model and the clock, so
+ * a saved run is self-describing when comparing result files: pbench and
+ * pbench-pthread report the same cases differently.  Reads the kernel's
+ * hw.model and machdep.cpu.freq; degrades gracefully if either is missing. */
 static void print_system_header(FILE *out) {
     char model[64];
     size_t len = sizeof(model);
@@ -124,7 +101,7 @@ static void print_system_header(FILE *out) {
     len = sizeof(freq);
     (void)sysctlbyname("machdep.cpu.freq", &freq, &len, NULL, 0);
 
-    fprintf(out, "# pbench on %s", model);
+    fprintf(out, "# %s on %s", pbench_suite_name, model);
     if (freq)
         fprintf(out, " @ %llu.%03llu MHz",
                 (unsigned long long)(freq / 1000000ull),
@@ -136,13 +113,15 @@ static void print_system_header(FILE *out) {
 static void list_benchmarks(void) {
     printf("Registered benchmarks:\n");
     const char *last_cat = "";
-    for (size_t i = 0; i < registry_len; i++) {
-        if (strcmp(registry[i].category, last_cat) != 0) {
-            printf("\n  %s:\n", registry[i].category);
-            last_cat = registry[i].category;
+    for (const struct bench_table *const *t = pbench_suite; *t; t++)
+        for (size_t i = 0; i < (*t)->len; i++) {
+            const struct bench_entry *e = &(*t)->entries[i];
+            if (strcmp(e->category, last_cat) != 0) {
+                printf("\n  %s:\n", e->category);
+                last_cat = e->category;
+            }
+            printf("    %s\n", e->name);
         }
-        printf("    %s\n", registry[i].name);
-    }
 }
 
 static void run_one(const struct bench_entry *e) {
@@ -153,14 +132,16 @@ static void run_one(const struct bench_entry *e) {
 
 static int run_filtered(const char *category, const char *name) {
     int matched = 0;
-    for (size_t i = 0; i < registry_len; i++) {
-        if (category && strcmp(category, registry[i].category) != 0) continue;
-        if (name     && strcmp(name,     registry[i].name)     != 0) continue;
-        run_one(&registry[i]);
-        matched++;
-    }
+    for (const struct bench_table *const *t = pbench_suite; *t; t++)
+        for (size_t i = 0; i < (*t)->len; i++) {
+            const struct bench_entry *e = &(*t)->entries[i];
+            if (category && strcmp(category, e->category) != 0) continue;
+            if (name     && strcmp(name,     e->name)     != 0) continue;
+            run_one(e);
+            matched++;
+        }
     if (matched == 0) {
-        fprintf(stderr, "pbench: no benchmark matches");
+        fprintf(stderr, "%s: no benchmark matches", pbench_suite_name);
         if (category) fprintf(stderr, " category=%s", category);
         if (name)     fprintf(stderr, " name=%s", name);
         fprintf(stderr, "\n");
