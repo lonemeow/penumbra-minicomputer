@@ -55,13 +55,15 @@ order of pain:
 
 ## Placement: re-pin the default seeds
 
-The default nextpnr seeds (`DEFAULT_SEED_ulx3s_*` in the Makefile)
-were swept on main's RTL as of 5356037. Three later commits change
-what yosys builds on the ULX3S tops: 2920dbc gives each L2 tag way a
-memory of its own (4 block RAMs where the packed array took 8, on
-every top), fe677f1 gives the gen2 L1 data arrays one explicit write
-port (with 2920dbc, the gen2 machine is 75 LUT4s, 150 PFUMXes and 4
-block RAMs smaller), and 265db02 moves the UART FIFOs into block RAM.
-A seed chosen for one netlist says nothing about the next. Open:
-sweep the three default tops, pin the best seed of each, and run each
-on the board.
+The gen1 and gen2 tops' default nextpnr seeds (`DEFAULT_SEED_ulx3s_*`
+in the Makefile) were swept on main's RTL as of 5356037. Three later
+commits change what yosys builds on those tops: 2920dbc gives each L2
+tag way a memory of its own (4 block RAMs where the packed array took
+8, on every top), fe677f1 gives the gen2 L1 data arrays one explicit
+write port (with 2920dbc, the gen2 machine is 75 LUT4s, 150 PFUMXes
+and 4 block RAMs smaller), and 265db02 moves the UART FIFOs into
+block RAM. A seed chosen for one netlist says nothing about the next.
+gen3's seed comes from its own sweep at 0cb08b8, after all three
+(`doc/internals/penumbra3/overview.md`, "Where the build stopped").
+Open: sweep the gen1 top, pin its best seed, and run it on the board;
+the gen2 tops' seeds matter only if one is built again.

@@ -199,18 +199,19 @@ complex away from the CPU cone, as "The CPU clock's cone is long, not
 deep — and the fix is a region" did for the audio device on gen2; then
 re-sweep for a pin at or above the 27 MHz floor.
 
-## Hardware: L2 phase 2 — write-back / write-allocate
+## Hardware: gen1 L2 phase 2 — write-back / write-allocate
 
-The headline remaining cache optimization, and the highest-impact
-item left in this section.  Today every L1-D store under WT-WnA
-still pays a full SDRAM round-trip — Dhrystone shows 1.22M writes
-per run, each ~20-30 cycles, ~25-37M cycles of write traffic on a
-45M-cycle run.  Phase 2 absorbs writes into L2 entirely until
-eviction.
+gen1's L2 (`l2_cache.sv`) is write-through, write-no-allocate, so
+every L1-D store on gen1 pays a full SDRAM round-trip — Dhrystone
+shows 1.22M writes per run, each ~20-30 cycles, ~25-37M cycles of
+write traffic on a 45M-cycle run.  Phase 2 absorbs writes into L2
+entirely until eviction.  gen3's uncore takes store latency off the
+core with a store buffer instead, and leaves a write-back L2 unbuilt
+([the store path](../internals/penumbra3/overview.md#the-store-path)).
 
 The per-store figure predates `doc/system/instruction-timing.md`,
-which puts a write-through store at a typical 8 cycles on penumbra1
-and 6 on penumbra2_5; re-measure before sizing the win on it.
+which puts a write-through store at a typical 8 cycles on penumbra1;
+re-measure before sizing the win on it.
 
 Upper-bound win (from current measurements): the 841K Dhrystone
 write hits become zero-bus-traffic dirty marks (~25M cycles saved
@@ -244,17 +245,14 @@ Forward-looking note on perfctrs: the reserved slots at
 `WRITEBACKS` post-phase-2, directly answering "did WA's read-fill
 cost pay back via intra-line locality."
 
-gen2 note: the L1↔L2 interface is designed to not foreclose this — it
-stays neutral about L2's write policy (the arbiter is L1-facing; WB/WA
-are L2-internal and L2↔memory concerns). See the write-policy-neutrality
-section of `doc/internals/penumbra2/memory-interface.md`.
-
-## Hardware: L2 write buffer (latency-hiding alternative)
+## Hardware: gen1 L2 write buffer (latency-hiding alternative)
 
 A smaller, orthogonal option to WB phase 2: a 1-4 word write
-buffer at the L2's downstream port.  Hides write latency (CPU
-stops stalling on the SDRAM round-trip) without reducing SDRAM
-write traffic.
+buffer at gen1's L2 downstream port.  gen3's store buffer, with the
+L2 posting its write-through, is the same idea at the core boundary
+([the store buffer](../internals/penumbra3/uncore.md#the-store-buffer)).
+Hides write latency (CPU stops stalling on the SDRAM round-trip) without
+reducing SDRAM write traffic.
 
 For the single-master system (nothing else contending for SDRAM
 bandwidth) latency hiding and traffic elimination are nearly
@@ -285,15 +283,9 @@ When phase 2 is required instead:
 They compose: WB phase 2 + write buffer (= phase 3 in the L2 doc)
 is the maximally aggressive design.
 
-gen2 note: `doc/internals/penumbra2/memory-interface.md` keeps writes
-a distinct single-beat shape so a buffer drops in cleanly, and leans
-its placement *after* L2 for exactly the byte-en-update reason above;
-it lists the buffer as a deferred fill-speed direction gated on gen2
-measurements.
+## Hardware: gen1's read-miss fills pay 1-2 unnecessary cycles re-classifying
 
-## Hardware: read-miss fills pay 1-2 unnecessary cycles re-classifying
-
-Both L1 (`cache_vipt.sv`) and L2 (`l2_cache.sv`) caches complete a
+gen1's L1 (`cache_vipt.sv`) and L2 (`l2_cache.sv`) both complete a
 read miss by transitioning `S_FILL → S_IDLE` and then waiting for the
 CPU's still-asserted request to be re-latched and re-classified as a
 hit on the just-installed line.  That re-classification costs 1 extra
@@ -322,25 +314,8 @@ Two layered variants on the same idea:
    re-serve, whichever word was requested — see "partial-line
    delivery for fills" under Ruled out.
 
-Per-cycle savings are modest against the ~30-cycle SDRAM round-trip
-on the single-issue microcoded CPU we run today.  For the planned
-pipelined Penumbra/2 each saved cycle is one fewer dependent-chain
-stall, and the higher target clock makes each cycle more expensive
-in wall time, so the optimization is higher-leverage there than the
-bare cycle counts suggest now.
-
-**Update — Penumbra/2 design settled.** gen2's L1↔L2 interface takes
-an *atomic full-line* fill (Decision 14 in
-`doc/internals/penumbra2/design-decisions.md`; spec in
-`doc/internals/penumbra2/memory-interface.md`), which splits the two
-variants above by gen2-compatibility. **Variant 1 (skip
-re-classification)** keeps the whole line present, so it is compatible
-— gen2 may take it. **Variant 2 (early restart)** is deferred to the
-non-blocking phase: serving a word before the line completes punctures
-the transaction-atomicity invariant the gen2 arbiter and fill path
-rely on (it forces per-word presence, hit-under-fill stalls, and
-fill-vs-store / fill-vs-flush handling). So for gen2, early restart is
-explicitly not the win the preceding paragraph assumed.
+Per-cycle savings are modest against gen1's ~30-cycle SDRAM
+round-trip.
 
 The L1-side win is more impactful than the raw cycle counts imply,
 in a way that scales with L2 hit rate.  An L1 miss that hits in L2
@@ -558,36 +533,9 @@ audio device consumed what was left.
 The chain is unregistered because a fault must be known in the same
 cycle as the access, to squash and trap. That is an architectural
 choice rather than an oversight, and a design resolving faults a cycle
-later would not have this shape — worth deciding deliberately in a
-future core rather than inheriting by default.
-
-## Hardware: main TLB geometry -- associativity against fmax
-
-The main TLB is 32 sets of 2 ways with the victim chosen from a
-`CPU_CYCLES` bit.  Replaying a real access stream through shadow
-models says the shape, not the capacity, is where the misses are: 16
-sets of 4 ways at the *same* 64 entries takes 62% fewer, and an LRU
-victim at the existing shape takes 22% fewer.  The models and the full
-table are in [kernel.md](kernel.md), "Kernel: count TLB refills".
-
-By measured cost this is the largest item on the list.  The refill
-handler is 39% of every instruction executed on a shell and filesystem
-workload, and nothing on the software side reaches it: link-time
-placement of hot pages is bounded at low single digits ("What pinning
-can reach", same entry), and a third to a half of kernel refills fall
-on runtime allocations no arrangement can touch.
-
-Capacity is not on the table on gen2.5: neither a larger L1 nor a
-larger TLB fits the ECP5, so re-shaping the 64 entries is the only
-form this can take there, and anything else waits for gen3.
-
-What is unknown is whether the machine can afford even that.  The TLB
-sits on the address path of every access, and the fetch/TLB path is
-already the limiter on more than one top, so the honest experiment is
-to build the main TLB 16x4 and read fmax from the full board top
-rather than the bare-core probe.  If it costs clock it is not a lever,
-and that is the expected answer.  A seed sweep is needed either way,
-since one seed says nothing about placement.
+later does not have this shape: gen3 launches the TLB read in MEM1 and
+takes its verdict in MEM2
+([mem-stage](../internals/penumbra3/mem-stage.md)).
 
 ## Hardware: memories must map the same way under yosys and Vivado
 

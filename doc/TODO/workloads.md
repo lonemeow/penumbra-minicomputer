@@ -703,9 +703,9 @@ Open:
 - Whether an eight-case switch should be a jump table on these cores.
   The dispatch is 8 instructions with a load and an indirect jump,
   9.2 % of all instructions here, and neither penumbra2_5's predictor
-  nor the one planned for gen3 predicts the jump, so each costs a
-  redirect.  A compare tree is about 6 instructions with conditional
-  branches a direction table can learn.  Unmeasured.
+  nor gen3's predicts the jump, so each costs a redirect.  A compare
+  tree is about 6 instructions with conditional branches a direction
+  table can learn.  Unmeasured.
 
 ## Benchmark: CoreMark-Pro under NetBSD
 

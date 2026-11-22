@@ -531,19 +531,21 @@ Beyond the fold's cost-blindness:
   `cmp; lli C1; beq; lli C2` is 4 instructions.
 
 Against that 4-instruction form the measured costs
-([Branch costs](#branch-costs)) favour the branch on both cores for
+([Branch costs](#branch-costs)) favour the branch on every core for
 `x == 2 ? 3 : 4`:
 
 | Core | Branch form | Branchless (7 instructions) |
 |---|---|---|
 | penumbra1 | 6–8 cycles, deterministic | 14 cycles |
 | penumbra2_5 | 4 cycles, +4 when mispredicted | 7 cycles |
+| penumbra3 | 4 cycles, +3 when mispredicted | 7 cycles |
 
-On penumbra2_5 the branch loses only above a 75% misprediction rate, and
-the BTB predicts each site's last outcome, so even random data sits near
-50%.  The branch form is also the shorter code, so the I-cache effects
-the cycle figures leave out point the same way, and the decision does
-not wait on a hardware A/B.
+On penumbra3 the branch at worst ties, at a 100% misprediction rate.
+On penumbra2_5 it loses only above 75%, and the BTB predicts each
+site's last outcome, so even random data sits near 50%.  The branch form
+is also the shorter code, so the I-cache effects the cycle figures leave
+out point the same way, and the decision does not wait on a hardware
+A/B.
 
 In order:
 
@@ -551,13 +553,13 @@ In order:
    `convertSelectOfConstantsToMath`, and write the upstream doc.
    Penumbra's override weighs the tuned core's costs the way
    `isIntDivCheap()` does: penumbra1 decides on instruction counts
-   alone, since a `Bcc` costs as much as an ALU operation; penumbra2_5
-   adds the misprediction penalty at one named, assumed misprediction
-   rate.  That needs branch costs in the scheduling models, which
-   [instruction-timing.md](../system/instruction-timing.md) already
-   records.  With today's costs the override answers false on both
-   cores, which also removes the branch-plus-arithmetic shapes; the cost
-   check pays once a core (gen3) moves the numbers.
+   alone, since a `Bcc` costs as much as an ALU operation; the
+   pipelined cores add the misprediction penalty at one named, assumed
+   misprediction rate.  That needs branch costs in the scheduling models,
+   which [instruction-timing.md](../system/instruction-timing.md)
+   already records.  With these costs the override answers false on
+   every core, gen3 included, and so removes the branch-plus-arithmetic
+   shapes; the cost check pays only once a core moves the numbers.
 2. Select a select of two constants as `cmp; lli; bcc; lli`, so the
    check compares against the branch form actually emitted.
 3. Separately, InstCombine already delivers `sext(icmp)` for
@@ -663,7 +665,7 @@ rather than two:
 |---|---|---|
 | No overlap | gen1 (microcoded, single-issue) | Separating a use from its producer buys nothing and costs live range |
 | Overlap, full interlock | gen2 (no GPR forwarding, no write-through) | Every producer/consumer pair wants distance |
-| Overlap, forwarded | gen2.5 | Only loads want distance, and only one slot |
+| Overlap, forwarded | gen2.5, gen3 | Only loads want distance: one slot on gen2.5, two on gen3 |
 
 The gen2 figures are in
 [penumbra2/overview.md](../internals/penumbra2/overview.md): load-use
@@ -679,24 +681,21 @@ generation whose dependence behaviour differs needs its own processor
 entry — that is the argument for splitting a name, and the only one
 that requires it.
 
-The models are `CompleteModel = 0`, state `WriteRes` latencies for ALU
-operations, MUL and DIV, and carry no `ReadAdvance` entries.  Nothing
-schedules against them yet: MachineScheduler runs only for a subtarget
-that returns true from `enableMachineScheduler()`, which defaults to
-false and Penumbra does not override, so the model's `IssueWidth`,
-`MicroOpBufferSize` and `LoadLatency` have never influenced code
-generation.  What does read the model today is Penumbra's own cost
-code (`PenumbraSubtarget::getALUCycles` and friends, feeding
+The models are `CompleteModel = 0` and state latencies for ALU
+operations, loads, stores, MUL and DIV
+([scheduling-models.md](../llvm/scheduling-models.md)).  The scheduler
+after register allocation reads them on the pipelined generations.
+The MachineScheduler before allocation runs only for a subtarget that
+returns true from `enableMachineScheduler()`, which defaults to false
+and Penumbra does not override.  Penumbra's own cost code also reads
+the model (`PenumbraSubtarget::getALUCycles` and friends, feeding
 `getArithmeticInstrCost`, `isIntDivCheap()` and the constant-multiply
 combine); upstream, `SelectOptimize` reads `MispredictPenalty` (see
 [Branch costs](#branch-costs)).  The other consumers of scheduling data
 — MachineCombiner, EarlyIfConversion, MachineLICM's high-latency
 hoisting — need target patterns, a target that adds the pass, or a
-hook override, and none apply.  Writing a real dependence model
-therefore means enabling MachineScheduler as well, annotating every
-instruction's reads, and measuring what the pass costs in compile time
-and register pressure.  `generic` takes the most-used variant's side
-once a second model exists, so a generic build schedules for a
+hook override, and none apply.  `generic` takes the most-used
+variant's side, `penumbra3`'s, so a generic build schedules for a
 forwarding core; an interlocked or single-issue core that wants its own
 schedule is built with its explicit name.
 
@@ -744,26 +743,26 @@ Counted by the ISS's load-use model (`+loadusemodel=ex,ex+wait:1`), a
 single-issue core with every access a hit, those waits come to 131
 cycles per 1000 instructions on `pbench kernel` and 147 on Doom
 `demo3`, against 59 and 71 at gen2.5's one cycle
-([penumbra4/load-use.md](../internals/penumbra4/load-use.md)).  In a
-model that is gen2.5's line with the wait doubled,
-`ReadAdvance<ReadGPR, -2, [WriteLoad]>`.  The count is the most a
+([penumbra4/load-use.md](../internals/penumbra4/load-use.md)).
+`Penumbra3Model` states it as a load that issues in one cycle with a
+latency of 3, where gen2.5's issues in two.  The count is the most a
 schedule could hide, not what one would.  A schedule made for
 `penumbra2_5` hides 30% of Doom's gen3 waits, by a count of adjacent
-load-use pairs; what one made for gen3's own wait hides is not
-measured
-([the costs the compiler is not told](#compiler-the-costs-the-compiler-is-not-told)).
+load-use pairs; one made for `penumbra3` leaves 10% fewer than that
+([scheduling-models.md](../llvm/scheduling-models.md#what-the-scheduler-moves)).
 
 ### Branch costs
 
 Measured on the RTL testbenches
 ([instruction-timing.md](../system/instruction-timing.md)):
 
-| Control transfer | gen1 | gen2.5 |
-|---|---:|---:|
-| `Bcc` not taken | 2 | 1 |
-| `Bcc` taken / `B`, BTB-predicted on gen2.5 | 2 | 2 |
-| mispredicted, or indirect `JMP` / return | 2 | 5 |
-| `BL` | 3 | 2 predicted, 5 otherwise |
+| Control transfer | gen1 | gen2.5 | gen3 |
+|---|---:|---:|---:|
+| `Bcc` not taken | 2 | 1 | 1 |
+| `Bcc` taken / `B`, predicted | 2 | 2 | 2 |
+| mispredicted, or indirect `JMP` | 2 | 5 | 4 |
+| return | 2 | 5 | 2 predicted, 4 otherwise |
+| `BL` | 3 | 2 predicted, 5 otherwise | 2 |
 
 gen1 has no prediction: a control transfer is one µop like an ALU
 operation.  On gen2.5 the fetch-time BTB (32-entry direct-mapped,
@@ -775,28 +774,19 @@ slots behind the branch in IF1, IF2, the fetch buffer and ID
 ([instruction-timing.md](../internals/instruction-timing.md#control-transfers-on-penumbra25)).
 gen2.5's `MispredictPenalty` is therefore **4**.  gen2 has no BTB, so
 every taken branch there costs the redirect; branch behaviour is a
-second reason gen2 and gen2.5 cannot share a model.
+second reason gen2 and gen2.5 cannot share a model.  gen3 predicts from
+the instruction word at IF2, with a bimodal table for direction and a
+return stack for returns
+([branch prediction](../internals/penumbra3/branch-prediction.md#design));
+a misprediction redirects from EX and costs 4.
 
-**A correct prediction still costs a slot.**  The BTB was designed to
-make a correctly predicted taken branch free, but it steers IF1 as the
-branch enters IF2, by which time IF1 has launched the sequential fetch.
-Reaching zero would take launching the target fetch in the same cycle
-as the branch — worth weighing for gen3's front end, where every taken
-branch in a hot loop pays it.
-
-The compiler can hide that slot on gen2.5: a load, store, `MUL` or
-`DIV` among the two instructions directly before a predicted taken
-branch absorbs the discarded fetch
-([instruction-timing.md](../system/instruction-timing.md#taken-branches-beside-a-stall)).
-In the `-O2` IR corpus (2026-11-16), 505 of Doom's 2,301 backward
-branches and 7,624 of the kernel's 17,638 have a memory operation
-earlier in their block but none in those two slots.  That is an
-upper bound: every ALU operation sets the flags, so the one a `Bcc`
-reads stays directly before it, and a store ahead of its base's
-increment moves past it only with its offset rewritten.  A
-preference in the scheduler after register allocation would express
-it, since no model field does.  gen3 hides nothing this way, so the
-work pays only while gen2.5 is the board in use.
+**A correct prediction still costs a slot.**  gen2.5's BTB steers IF1
+as the branch enters IF2, by which time IF1 has launched the
+sequential fetch, and gen3's IF2 redirect discards the same fetch, so
+every taken branch in a hot loop pays it on both.  Reaching zero would
+take launching the target fetch in the same cycle as the branch, a
+front-end question for gen4
+([penumbra4/front-end.md](../internals/penumbra4/front-end.md)).
 
 No scheduling-model field expresses "a predicted taken branch still
 costs a cycle", and setting `MispredictPenalty` changes nothing: the
@@ -1243,7 +1233,15 @@ corpus and estimate of
   2.3% in `test-compiler`.  For `penumbra3` it saves 1.0–1.2% in Doom
   and 0.3–0.5% in the kernel, and costs 0.5–0.9% in `test-compiler`;
   the saving is an upper bound, since it prices a spill store at the
-  store buffer's one cycle.  Worth an A/B once gen3 runs NetBSD.
+  store buffer's one cycle.  Not measured on gen3's hardware, where
+  the estimate favours it.
+
+- **Hiding a predicted taken branch's discarded fetch behind a memory
+  operation.**  On gen2.5 a load, store, `MUL` or `DIV` in the two
+  instructions before the branch absorbs it; on gen3 a load or store
+  that hits hides nothing
+  ([instruction-timing.md](../system/instruction-timing.md#taken-branches-beside-a-stall)),
+  so a scheduler preference for it pays only on a retired core.
 
 - **Turning every select into a branch before selection.**  With no
   conditional move a `select` ends as a branch either way, and

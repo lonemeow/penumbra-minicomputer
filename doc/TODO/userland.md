@@ -58,15 +58,15 @@ dispatch a hand-written implementation would use.  Decide per-library
 whether the reachover/MD configuration offers a clean hook before
 touching dist code.
 
-## Libc: string routines shaped for gen2.5's costs
+## Libc: string routines are byte loops sized for gen2.5
 
 `strcmp` and `strcpy`, and `memcpy` when its operands are misaligned,
 run unrolled byte loops
-(`common/lib/libc/arch/penumbra/string/`). That shape suits gen2.5:
-more heavily unrolled variants, and `str*` routines unrolled into word
-loads, lost overall there, because its 4 KiB L1s and expensive misses
-charge more for the extra code than the fewer instructions save. gen3
-and gen4 weigh the two the other way.
+(`common/lib/libc/arch/penumbra/string/`). That shape was chosen on
+gen2.5: more heavily unrolled variants, and `str*` routines unrolled
+into word loads, lost overall there, because its 4 KiB L1s and
+expensive misses charge more for the extra code than the fewer
+instructions save. gen3 and gen4 weigh the two the other way.
 
 - **gen3** has 8 KiB L1s in front of the same 64 KiB L2 on the ULX3S
   (256 KiB on the Nexys Video), with cheaper L1 misses, so a longer
@@ -97,9 +97,7 @@ footprint can take back on short strings; on gen4 it saves about
 60 %. On Dhrystone (2026-11-11 build) `strcpy`, `strcmp` and `memcpy`
 are 58 % of the timed loop's 599 instructions per iteration.
 
-**Gated on gen2.5's retirement.** One libc serves every generation, so
-while gen2.5 runs it, a shape that wins on gen3 and gen4 costs gen2.5.
-Once gen2.5 is historical, gen3 is the floor to protect.
+One libc serves every generation, and gen3 is the floor it protects.
 
 Open:
 
@@ -129,4 +127,4 @@ Open:
   `common/lib/libc/arch/penumbra/string/{strcmp,strcpy}.S`.  This
   weighed a co-aligned-only word path by path length; a shift-merge
   word path weighed on gen3's and gen4's costs is open under "Libc:
-  string routines shaped for gen2.5's costs".
+  string routines are byte loops sized for gen2.5".
