@@ -23,15 +23,26 @@ decides), and nothing else.
 
 ## Penumbra's figures
 
-Samples of 2026-10-03, 100,000 iterations each, from the harness's
+Samples of 2026-10-03, and of 2026-11-21 for Penumbra/3 on the ULX3S
+at `0cb08b8`, 100,000 iterations each, from the harness's
 performance-counter line. Like every figure of this kind in the
 repository they are dated samples, not reference numbers.
+
+The harness reads the counters over the interval Dhrystone itself
+times, from `Begin_Time` to `End_Time`. The 2026-10-03 samples come
+from a harness that read them around the whole program, so they also
+hold the wait for Dhrystone's 1,815 characters of output at 115200
+baud and the instructions of the loop that polls for it: about 39
+cycles an iteration at Penumbra/1's 25 MHz and 59 at the others'
+37.5 MHz, which puts Penumbra/1 1.6 % low, Penumbra/2 3.3 % and
+Penumbra/2.5 4.6 %.
 
 | Generation | Cycles / iteration | Instructions / iteration | CPI | DMIPS/MHz |
 |---|---|---|---|---|
 | Penumbra/1 | 2475 | 611 | 4.05 | 0.230 |
 | Penumbra/2 | 1772 | 612 | 2.90 | 0.321 |
 | Penumbra/2.5 | 1276 | 619 | 2.06 | 0.446 |
+| Penumbra/3 | 723 | 599 | 1.21 | 0.787 |
 
 To re-measure, run `DHRYSTON.ELF` on the board and put the cycle count
 of its `CPU perfctrs` line, over the iteration count, into the formula
@@ -92,15 +103,15 @@ They compare with each other better than with the 1990s rows.
 | ARM3 | 3-stage, 4 KB unified cache | 0.42 | netlib 241 |
 | **Penumbra/2.5** | Penumbra/2 plus result forwarding and a BTB for direct branches | **0.45** | [measured](#penumbras-figures) |
 | VexRiscv | 5-stage RV32IM soft core | 0.52–1.44 ¹ | VexRiscv README |
-| **Penumbra/3** | 7-stage, store buffer, branch prediction; in design | 0.56–0.58 ² | estimate |
-| i486DX | 5-stage pipelined CISC, 8 KB unified cache | 0.58 ³ | netlib 205 |
+| i486DX | 5-stage pipelined CISC, 8 KB unified cache | 0.58 ² | netlib 205 |
 | ARM610 | 3-stage, 4 KB unified cache, MMU | 0.61 | netlib 214 |
 | SPARC MB86900 | 4-stage, register windows, gate array, off-chip cache | 0.63 | netlib 254 |
 | SPARC CY7C601 | 4-stage, register windows, 64 KB off-chip cache | 0.72 | netlib 165 |
 | Nios II/s | 5-stage soft core | 0.74 | Altera |
 | MC68040 | 6-stage pipelined CISC, 4 KB + 4 KB caches | 0.77 | netlib 197 |
+| **Penumbra/3** | 7-stage, full forwarding, branch prediction at fetch, store buffer, 8 KiB 2-way L1s | **0.79** | [measured](#penumbras-figures) |
 | Cortex-M0 | 3-stage, no cache | 0.84–0.9 | Arm |
-| R3000 | 5-stage, delayed branches, off-chip caches | 0.89 ⁴ | netlib 194 |
+| R3000 | 5-stage, delayed branches, off-chip caches | 0.89 ³ | netlib 194 |
 | ARM7TDMI | 3-stage, no cache | 0.9 | Arm |
 | microSPARC-II | 5-stage, 16 KB I + 8 KB D caches, MMU on chip | 0.91 | netlib 112 |
 | StrongARM SA-110 | 5-stage, 16 KB + 16 KB caches | 1.02 | netlib 016 |
@@ -118,15 +129,10 @@ They compare with each other better than with the 1990s rows.
 no bypass, 0.82 "small and productive", 1.21 "full" with 4 KB caches
 and static branch prediction, 1.44 with nearly every feature on.
 
-² An estimate, not a measurement: the
-[gen3 estimate](./internals/penumbra3/memory-performance.md#estimated-effect-at-375-mhz)
-of CPI 1.6–1.65 with a store buffer, at the path length
-[measured](#penumbras-figures) on the built generations.
-
-³ Row 155, MetaWare High C -O4 on the same 33 MHz part, reads 1.01
+² Row 155, MetaWare High C -O4 on the same 33 MHz part, reads 1.01
 and carries the maintainer's "too high" mark.
 
-⁴ Row 194 records no compiler. Row 163, a DECstation 5000/133 with
+³ Row 194 records no compiler. Row 163, a DECstation 5000/133 with
 cc -O4, reads 0.88.
 
 ## In-order dual issue
@@ -167,13 +173,15 @@ R10000 1.10 (netlib 015), K5 1.01 (netlib 092).
 
 ## What the comparison says
 
-**The generations differ by CPI alone.** All three run the same
-611–619 instructions an iteration, so the step from 0.23 to 0.32 to
-0.45 is the step in CPI from 4.05 to 2.90 to 2.06.
+**The generations differ by CPI alone.** All four run the same loop
+of 599 instructions an iteration, the 611–619 of the older samples
+counting the output's polling as well, so the step from 0.23 to 0.32
+to 0.45 to 0.79 is the step in CPI from 4.05 to 2.90 to 2.06 to 1.21.
+Penumbra/3 passes the i486DX and the MC68040.
 
 **Path length sets the ceiling.** At CPI 1.0 those instructions score
-0.92–0.93, which is the most a single-issue Penumbra can reach and
-about where the R3000 sits.
+0.95, which is the most a single-issue Penumbra can reach, a little
+above the R3000. Penumbra/3 is at 83 % of it.
 
 **The peers above 1.0 run shorter paths.** VexRiscv's 1.44 is 395
 cycles an iteration in all. PicoRV32 has Penumbra/1's CPI and scores
@@ -185,7 +193,7 @@ routines', not the core's.
 [gen4 pairing measurements](./internals/penumbra4/issue-pairing.md#fusion-and-dual-issue-together)
 put 1000 instructions at 617–681 issue cycles on `pbench kernel` and
 Doom. If Dhrystone paired the same way, the same path length would
-reach about 1.35–1.5, among the Pentium and the PA-7100LC.
+reach about 1.4–1.55, among the Pentium and the PA-7100LC.
 
 ## The netlib rows
 

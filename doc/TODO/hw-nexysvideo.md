@@ -129,6 +129,12 @@ Neither the keyboard nor the network waits for the card
   paths spread over EX, the branch redirect into IF1, the D-side and
   fetch-side verdicts and the uncore, all near 10.9 ns. 90 MHz was left
   untried: the remaining step was not worth the time.
+- **16 KB 4-way L1s on the gen3 machine top.** At gen3's 4-cycle
+  L2-hit fill the cache model puts the step from 8 KB 2-way at about
+  3 % of a Doom frame and 5–6 % of the kernel paths' cycles, most of it
+  the L1-I's (`doc/internals/penumbra3/memory-performance.md`, "L1
+  geometry"). Each way adds a tag compare to IF2's and MEM2's cones,
+  which set the CPU clock; declined.
 - **USB host on a Pmod, through the ULX3S's fabric PHY.** A USB-A
   socket on a Pmod, driven by `usb_phy_ecp5` as the ULX3S drives its
   port. On the ULX3S that path is unreliable at full speed

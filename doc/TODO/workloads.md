@@ -458,18 +458,24 @@ stall counters, averaged over each run, split it:
   (`96b778f`) overlaps the source fills with the loop, bounded by the
   bus, which carries a line read and four framebuffer writes for each
   line, ~45 cycles against the loop's ~18: at most ~2.5% of the run,
-  estimated.  Faster
-  store drains reach only the wait behind posted stores, under 1%
-  ("Hardware: gen3's bus master drops the strobe between stores" in
-  [hw-core.md](hw-core.md)).  Drawing straight into the framebuffer is
-  under Ruled out.
+  estimated.  The strobe held across posted stores (`0cb08b8`)
+  reaches only the wait behind them, under 1%.  Drawing straight into
+  the framebuffer is under Ruled out.
+
+On the final Nexys build, at 80 MHz with a 256 KB L2 (`d92e4de`,
+2026-11-21), the copy is 10.7% of the run: 1,765 realtics against
+1,577 with `-noblit`, about 201k cycles a frame or 50 a line. A memory
+fill costs a third more cycles at 80 MHz, so the line costing less
+points to the larger L2 holding more of the source; the stall counters
+were not read on that run.
 
 Open: whether the ~7 cycles above a fill are the wait behind posted
 stores, which an RTL trace of one copied line shows, and how much of
 the stream prefetcher's gain on Doom
 (`doc/internals/penumbra3/memory-performance.md`, "Next-line prefetch
-into stream buffers") is the copy's, which a `-noblit` pair on its
-build separates.
+into stream buffers") is the copy's, which a `-noblit` pair on the
+prefetcher's build (`96b778f`) separates, run as the 2026-11-17 pair
+was: 60 MHz, a 64 KB L2.
 
 ## Compiler: hot-loop code review — software audio mixing
 

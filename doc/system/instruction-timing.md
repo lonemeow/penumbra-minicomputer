@@ -19,9 +19,8 @@ How the cycles arise inside each core, and how every figure here was
 measured, is in
 [`internals/instruction-timing.md`](../internals/instruction-timing.md).
 
-The `penumbra3` figures were measured before that generation's design
-was settled, each in the commit that last changed it. A change to its
-RTL can move them; re-measure them after one.
+The `penumbra3` figures are those of its final design, each measured
+in the commit that last changed it.
 
 ## Facts and typical figures
 
@@ -114,9 +113,9 @@ Measured in RTL simulation of the ULX3S machine, SDRAM clocked at four
 times the CPU. Back-to-back stores can cost more on a memory system
 that cannot accept writes as fast as they come. On `penumbra3` a store
 enters a store buffer and costs its one issue cycle while the buffer
-has room. The buffer writes a store through to memory in about 4
-cycles, so stores closer together than that fill it, and then each
-one waits that long.
+has room. The buffer writes a run of stores through to memory at
+about 3 cycles each on the ULX3S, so stores closer together than that
+fill it, and then each one waits that long.
 
 ⁴ To the CPU's own devices: the MMU, the caches and the CPU's
 identification and performance counters.

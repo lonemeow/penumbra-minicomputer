@@ -179,8 +179,10 @@ Measured 2026-09-29 in Verilator with scratch wrappers around
 unmodified RTL: the bus port of `sdram_sim` driven as a registered
 master (held strobe, address advanced after each `ack`), and
 `penumbra3_bus_master` issuing each transaction the cycle it is ready
-again. The two rows through the bus master are re-measured 2026-11-20,
-with the master taking its next request in the cycle it completes one.
+again. The line-write row through the bus master is re-measured
+2026-11-20, with the master taking its next request in the cycle it
+completes one, and the single-beat rows 2026-11-21 at `0cb08b8`, with
+it holding its strobe across a run of them.
 The word and line stacks share the write path and measure the same.
 CPU cycles; the middle column runs the clocks at the hardware's
 37.5 : 100 MHz.
@@ -192,7 +194,8 @@ CPU cycles; the middle column runs the clocks at the hardware's
 | Write burst, a new row every word, per word | 3.00 | 3.65 | 4.56 |
 | Separate writes, strobe dropped between, per word | 4.0 | 4.0 | 4.0 |
 | Line writes through `penumbra3_bus_master`, per line | 11.1 | 12.2 | 14.2 |
-| Single-beat writes through `penumbra3_bus_master`, per store | 4.0 | 4.0 | 4.05 |
+| Single-beat writes through `penumbra3_bus_master`, sequential, per store | 2.54 | 3.03 | 3.54 |
+| … a new row every word | 3.02 | 3.63 | 4.55 |
 | Line read (line stack) behind 1–16 posted writes, cycles added | 0–1 | 0–1 | 2 |
 
 - **The CDC paces a word stream.** Acknowledgements come in pairs
@@ -201,12 +204,13 @@ CPU cycles; the middle column runs the clocks at the hardware's
   own time for a word written to the open row, six SDRAM clocks or
   2.25 CPU cycles, sits under that; a row change on every word adds
   only 0.6.
-- **The bus master runs separate writes at the stack's floor.** It
-  takes its next request in the cycle it completes one, so its strobe
-  drops one cycle between transactions, and a single-beat write costs
-  what the stack's separate writes cost. A line write runs at the
-  held-strobe burst's rate but for that dropped cycle, which shows
-  only at 4:1; the CDC's pacing hides it at the slower ratios.
+- **The bus master writes a run of stores as one burst.** It takes a
+  single-beat write behind the one it is writing and puts it on the bus
+  the cycle after that one's ack, so the strobe stays up and the run
+  costs what the held-strobe burst does. Between any other two
+  transactions the strobe drops a cycle: a line write runs at the
+  burst's rate but for that cycle, which shows only at 4:1; the CDC's
+  pacing hides it at the slower ratios.
 - **Posted writes barely delay a read.** The CDC holds at most two,
   and the controller finishes them while the read is crossing.
 
@@ -261,19 +265,17 @@ What a fill adds to a line's four reads, over four L1 hits:
   a longer stream runs at the rate the buffer drains. On the ULX3S at
   `3539275` that is the bus master's single-beat floor of the time,
   5.00 cycles a store, with the loop's own instructions hidden under
-  it. The master now takes one every 4
+  it. The master now holds its strobe across a run of stores
   ([sustained writes](#sustained-writes-on-the-sdram-stack)), and
-  memspeed on the ULX3S on 2026-11-20 wrote at 4.02 a word and copied
-  from memory at 12.02, its reads unchanged. The
-  Nexys's 5.31 is its DDR3 stack's own rate and stays with the faster
-  master: `sdram_cdc` presents the controller one request at a time
-  and frees its slot only on the controller's ack, which comes to
-  about 7.4 of the controller's 83.33 MHz clocks a write. gen2.5's
-  6.4 is its blocking store, about 3 cycles of which are below its
-  arbiter ([store latency](#store-latency-below-the-arbiter-chain-b)).
-  With the strobe held across writes the SDRAM stack takes a word every
-  2.5–3.6 cycles, which bounds what a drain keeping the strobe up
-  between consecutive posted stores could reach.
+  memspeed on the ULX3S on 2026-11-21 at `0cb08b8` wrote at 3.04 a
+  word and copied from memory at 9.00, against 4.02 and 9.60 on the
+  build before it, its reads unchanged. The Nexys's 5.31 is its DDR3
+  stack's own rate and stays with the faster master: `sdram_cdc`
+  presents the controller one request at a time and frees its slot
+  only on the controller's ack, which comes to about 7.4 of the
+  controller's 83.33 MHz clocks a write. gen2.5's 6.4 is its blocking
+  store, about 3 cycles of which are below its arbiter
+  ([store latency](#store-latency-below-the-arbiter-chain-b)).
 - **A copy from a cache costs its writes alone on gen3.** Its loads and
   its L2 fills need no bus, so they run under the drain. gen2.5's
   blocking stores make every copy cost its reads plus its writes.
@@ -674,6 +676,12 @@ Doom per frame (2,134 frames, 1.165 M instructions each):
   on hardware it is
   [measured](#next-line-prefetch-into-stream-buffers) against these
   counts.
+- **Measured on the Nexys Video,** at 80 MHz on 2026-11-21: Doom
+  `demo3` ran at 38.01 fps with a 64 KB L2 and 42.75 with 256 KB
+  (`d92e4de`), 233 k cycles a frame fewer, about 27 for each memory
+  fill the model has 256 KB remove. Each fill costs more cycles there
+  than on the ULX3S, DDR3 latency being fixed in nanoseconds, and some
+  of the removed ones were fills the stream buffers served.
 - **Only at the same lookup latency.** The 8 KB L1s fill 95 (shell
   loop), 91 (`pbench kernel`) and 21 (Doom) times per 1000
   instructions, and every fill pays each cycle of L2 lookup. One more
@@ -778,7 +786,7 @@ graph LR
 #### The store buffer in the model
 
 Measured 2026-09-30 with the ISS's `+sbmodel` (`sw/sim/sb_model.h`)
-over the ECP5's planned 8 KB 2-way L1s and 64 KB L2
+over the ECP5's 8 KB 2-way L1s and 64 KB L2
 (`+cachemodel=8k/2:8k/2:64k/4`), on the shell loop, `pbench kernel`
 and Doom `demo3` ([workloads](#miss-profiles-from-the-shadow-models)).
 Each buffer runs its own estimated clock: 1 or 2 cycles an instruction,
@@ -1319,9 +1327,8 @@ the MMU instead; how they stay off the lookup path is in the
   costs several percent of cycles at these refill rates, more at gen3's
   lower base CPI, which argues for the selective form there.
 - **The vector fetch is uncached**, an SDRAM round trip per trap unless
-  the adapter still holds that line; making it cacheable is recorded
-  in `doc/TODO/hw-core.md`, "Hardware: a gen3 exception's vector read
-  always goes to memory".
+  the adapter still holds that line; making it cacheable was left
+  unbuilt ([not built](./not-built.md#an-exceptions-vector-read-always-goes-to-memory)).
 
 ## Synchronous CPU/SDRAM clocking — ruled out
 
@@ -1397,6 +1404,56 @@ wanted, for the
 [prediction buffer](#next-line-prediction-buffer-for-l1-i), not for
 concurrency.
 
+## The final builds, on hardware
+
+Measured 2026-11-21 on each board's last gen3 build: the ULX3S top at
+`0cb08b8` (37.5 MHz, 8 KB 2-way L1s, a 64 KB L2), whose RTL is
+unchanged since, and the Nexys Video's at `d92e4de` (80 MHz, the same
+L1s, a 256 KB L2). Both prefetch into stream buffers and hold the bus
+master's strobe across a run of stores. The benchmarks are built with
+the compiler tuned for `penumbra3`, its default.
+
+memspeed, CPU cycles per word, at the largest block each cache holds
+and at 512 KiB for memory:
+
+| Board | L1 | L2 | Read, memory | Write | Copy, memory |
+|---|--:|--:|--:|--:|--:|
+| ULX3S | 1.12 | 2.12 | 6.26 | 3.04 | 9.00 |
+| Nexys Video | 1.12 | 2.12 | 7.85 | 7.09 | 13.81 |
+
+- **In time the Nexys reads memory faster and writes it no faster:**
+  98 ns a word read against the ULX3S's 167, and 89 ns a word written
+  against 81. Its write rate is its DDR3 stack's, 89 ns a word at
+  80 MHz as at 60 ([transfer rates](#transfer-rates-by-block-size-on-hardware)),
+  the crossing freeing a slot only on the controller's ack, so the
+  faster clock buys its store drain nothing.
+- **Its L2 serves blocks up to 256 KiB** at the L2 rate, where the
+  ULX3S reaches memory past 64 KiB.
+
+Benchmarks:
+
+| Benchmark | ULX3S | Nexys Video |
+|---|---|---|
+| Dhrystone 2.1 | 29.52 DMIPS, 0.787 a MHz, CPI 1.21 | 62.97 DMIPS, 0.787 a MHz, CPI 1.21 |
+| CoreMark 1.0 | 1.637 a MHz, CPI 1.56 | 1.636 a MHz, CPI 1.56 |
+| Doom `demo3` | 19.28 fps | 42.25 fps |
+
+- **Dhrystone runs in the L1s,** 723 cycles an iteration on both
+  boards, within 906 cycles over the 100,000. Its stalls are hazards
+  at 8.8 % of its cycles and flushes at 8.2 %. Its loads wait 634
+  cycles in the whole run and its stores none: it misses the L1-D on
+  18 reads, and the store buffer takes every store.
+- **CoreMark runs at the same rate a MHz on both boards,** its code and
+  data held in the L1s. Its largest stall is the multiplier, `funit` at
+  15.5 % of its cycles, then hazards at 12.7 % and flushes at 7.7 %
+  (`doc/TODO/hw-core.md`, "Hardware: MUL and DIV iterate over every
+  bit, whatever the operands").
+- **Doom's frame copy** is 10.7 % of the Nexys run, from a `-noblit`
+  pair built tuned for `penumbra2_5`, which ran `demo3` 3 realtics
+  faster than this build
+  ([workloads](../../TODO/workloads.md), "Doom: the frame copy is 11%
+  of a gen3 frame").
+
 ## Estimated effect at 37.5 MHz
 
 Estimates, not measurements. They assume every stall class not named
@@ -1410,6 +1467,10 @@ per-transaction registration overhead.
 | Blocking write-through | ≥ 0.56 | ≥ 2.13 | ≤ 15.4 |
 | + write-back L2, stores still blocking | ~0.45–0.56 | ~2.0–2.13 | ~15.4–16.4 |
 | + 8-entry store buffer | ~0.03–0.08 | ~1.6–1.65 | ~20 |
+
+gen3 as built is measured in [the final builds](#the-final-builds-on-hardware):
+its stores never wait, below even the last row, and the rest of the
+design takes its CPI well under that row's.
 
 **plasma** (per output word, 32.9 fps on gen2.5):
 
@@ -1470,9 +1531,6 @@ nanoseconds.
   than a ~10-instruction inner loop should cost. The per-frame syscalls
   (the keypress poll, `clock_gettime`) sweeping the 4 KB L1-I are a
   guess, not a finding.
-- **gen3 blocking-store latency.** Once the uncore exists, the Phase-1
-  store cost is the baseline the store buffer is measured against;
-  gen3's extra registered hand-offs may put it above gen2.5's 6 cycles.
 - **Refill cost on hardware.** The ~137–170 cycles come from the machine
   trace with a replica handler. Nothing counts refills on hardware yet
   ("Kernel: count TLB refills" in `doc/TODO/kernel.md`); a counter would
@@ -1494,6 +1552,3 @@ nanoseconds.
   a characterization test, alongside `tb_l2_cache`'s back-to-back
   read-throughput test, would let the rest be re-measured after each
   change.
-- **Prediction-buffer costs.** The buffer-hit and look-up cycles are
-  estimates until the uncore exists; the counts they multiply are
-  `+cachemodel`'s.

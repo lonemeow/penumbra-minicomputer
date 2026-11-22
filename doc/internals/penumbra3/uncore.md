@@ -192,9 +192,10 @@ transaction in flight. A posted store is **unsent** until the bus
 master takes it, then **sent** until its write completes. The bus
 master takes the oldest unsent store whenever it is ready, ahead of
 any bus transaction or prefetch: the posted stores are older than
-every operation behind them. It is ready while idle and in the cycle
-it completes a write, so a run of posted stores goes out with the
-strobe low one cycle between writes. A posted store's write and a bus
+every operation behind them. It takes one while idle, and one behind a
+store it is writing, which goes on the bus the cycle after that
+store's ack: a run of posted stores goes out with the strobe held from
+the first write to the last. A posted store's write and a bus
 transaction are never on the bus master at once, as a post completes
 only while no transaction is in flight, and a transaction that takes
 the bus starts only while no store is posted.
@@ -224,8 +225,8 @@ compared against every one at once.
 The bus faulting a posted store's write is a `store_fault` with the
 store's address, in the cycle after the bus master completes it
 ([faults](./uncore-port.md#faults)). The address is the one the bus
-master completed, since by then the buffer may be offering the next
-unsent store. The entry frees with the write, faulted or not.
+master completed, since by then it may be writing the next store. The
+entry frees with the write, faulted or not.
 
 ## The bus transaction
 

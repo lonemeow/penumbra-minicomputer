@@ -68,9 +68,9 @@ loads, lost overall there, because its 4 KiB L1s and expensive misses
 charge more for the extra code than the fewer instructions save. gen3
 and gen4 weigh the two the other way.
 
-- **gen3** has 8 KiB L1s in front of the same 64 KiB L2, with cheaper
-  L1 misses, so a longer routine takes half the share of the L1-I and
-  costs less per miss.
+- **gen3** has 8 KiB L1s in front of the same 64 KiB L2 on the ULX3S
+  (256 KiB on the Nexys Video), with cheaper L1 misses, so a longer
+  routine takes half the share of the L1-I and costs less per miss.
 - **gen4** issues every load, store and branch in its Y slot, one
   access and one branch a pair
   ([gen4 issue pairing](../internals/penumbra4/issue-pairing.md#design)).

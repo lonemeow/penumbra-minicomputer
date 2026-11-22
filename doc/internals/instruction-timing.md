@@ -128,10 +128,10 @@ jump's target alike. `RDSYS` takes the same path.
 
 **Stores** enter the store buffer (`penumbra3_store_buffer`,
 [uncore.md](penumbra3/uncore.md)) at MEM2 and cost their issue cycle
-while it has room. The bus master writes each posted store as a
-transaction of its own — accept, presentation and ack, with its
-completion the cycle it takes the next store — which is the ~4 cycles
-a store takes in a run
+while it has room. The bus master takes each posted store behind the
+one it is writing and holds its strobe across the run, so a run drains
+at the SDRAM stack's rate for a held-strobe burst, about 3 cycles a
+store at the ULX3S's clocks
 ([memory-performance.md](penumbra3/memory-performance.md#sustained-writes-on-the-sdram-stack));
 a full buffer holds MEM2.
 

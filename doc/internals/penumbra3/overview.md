@@ -293,14 +293,14 @@ overlap, so they do not add.
 | Store buffer: word entries, line search, L2 posting | ~340 / ~510 / ~355 | ~1.1 kbit of entries, 16 line compares; outside the core cones | staged 1; posting is an L2 shape |
 | Branch prediction: IF2 pre-decode, 1K bimodal table, 4–8-deep return ring | ~205 / ~205 / ~200 | a block RAM for the table, a ring of return addresses, the IF2 redirect into the next PC | Phase 2 |
 | L1 4 KB → 8 KB 2-way | ~140 / ~110 / ~40 | none in the line-wide shape | shape |
-| L1 8 KB → 16 KB 4-way | ~135 / ~155 / ~30 | ~10 more block RAMs; two more tag compares in IF2 | Artix-7 |
-| Next-line prediction buffer, L1-I | ~100 / ~105 / ~10 | a line register, a tag compare, a second L2 look-up per fill | staged 2 |
+| L1 8 KB → 16 KB 4-way | ~135 / ~155 / ~30 | ~10 more block RAMs; two more tag compares in IF2 | Artix-7; not built |
+| Next-line prediction buffer, L1-I | ~100 / ~105 / ~10 | a line register, a tag compare, a second L2 look-up per fill | staged 2; not built |
 | Stream prefetch beside L2 | ~55 / ~31 / ~63 | two line buffers and stream detection; a third request into the bus master | staged 3; built |
-| L2 64 KB → 128 KB | ~131 / ~53 / ~38 | ~35 more block RAMs | staged 4, if block RAM allows |
-| L2 64 KB → 256 KB | ~185 / ~95 / ~151 | ~52 more block RAM tiles on an Artix-7; beyond the ECP5 | Artix-7 |
-| Selective `WRSYS`, behind a 256×2 TLB | ~15 / ~10 / ~2 | a serialize bit on the MMU's responses | staged 5 |
-| Write combining, L2 posting | ~6 / ~4 / ~7 | a line buffer in the SDRAM adapter and a wider CDC, where placement is tight | staged 6 |
-| Native port for on-board RAM | ~3 | a second memory port and stack front end | stretch |
+| L2 64 KB → 128 KB | ~131 / ~53 / ~38 | ~35 more block RAMs | staged 4; not built |
+| L2 64 KB → 256 KB | ~185 / ~95 / ~151 | ~52 more block RAM tiles on an Artix-7; beyond the ECP5 | Artix-7; built on the Nexys Video |
+| Selective `WRSYS`, behind a 256×2 TLB | ~15 / ~10 / ~2 | a serialize bit on the MMU's responses | staged 5; not built |
+| Write combining, L2 posting | ~6 / ~4 / ~7 | a line buffer in the SDRAM adapter and a wider CDC, where placement is tight | staged 6; not built |
+| Native port for on-board RAM | ~3 | a second memory port and stack front end | stretch; not built |
 | Merging from the store buffer | under 0.5 | an entry read and byte merge on the fill path | ruled out |
 
 - **Fills** are priced at gen2.5's measured 16 cycles from L2 and 37
@@ -344,26 +344,29 @@ What that means for the ECP5:
    workloads disagree on the order: the prediction buffer serves the
    kernel paths, stream prefetch serves Doom's data, and a 128 KB L2
    costs a sixth of the block RAM. A 16 KB L1 and a 256 KB L2 are
-   Artix-7 levers.
+   Artix-7 levers; the Nexys Video builds the L2
+   ([measured](./memory-performance.md#l2-size-and-stream-buffers-at-gen3s-geometry)).
 5. **Take the levers in order, reading a full-top seed sweep after
    each,** and stop adding when the sweep stops closing 37.5 MHz with
-   margin.
+   margin. gen3 stopped after stream prefetch; what it left is in
+   [not built](./not-built.md).
 
 ## Performance targets
 
-Targets, not measurements.
+The targets the design was built to, and what the built machine
+reached.
 
-| Metric | gen3 target | Reference |
-|---|---|---|
-| Fmax | ULX3S: reliable 37.5 MHz across a seed sweep, with headroom for the staged features; Artix-7: whatever the full top closes at | gen2 topped at barely-37.5 |
-| CPI, cache-hot tight loop | ~1.1–1.3 (forwarding from day one) | gen2 ~2.5–3.0 unforwarded |
-| CMP+Bcc heavy | ~1.0–1.1 (flags forwarded, branch prediction) | — |
-| L1 size | per board: ECP5 8 KB 2-way (gen2's hit logic); Artix-7 16 KB, with 4 ways on the fetch side if MEM2 cannot take them ([geometry data](./memory-performance.md#l1-geometry)) | gen2 4 KB (then 2-way) |
-| Main TLB | 256×2 in BRAM ([refill data](./memory-performance.md#tlb-sets-and-a-cheaper-refill)) | gen2 32×2 |
-| L2-hit fill | ~5 cycles ([line-wide transfer](./memory-performance.md#the-line-wide-transfer)) | gen2.5 16 |
-| L2-miss fill | ~20–25 cycles ([design target](./memory-performance.md#design-target-memory-latency-in-cpu-cycles)) | gen2.5 38 with the line stack |
-| Load-use stall | 1 (forwarded) | gen2 4 |
-| Taken-branch bubbles | 1 predicted at IF2 / 4 mispredicted | gen2 3; gen2.5 1 predicted |
+| Metric | gen3 target | Reference | Built |
+|---|---|---|---|
+| Fmax | ULX3S: reliable 37.5 MHz across a seed sweep, with headroom for the staged features; Artix-7: whatever the full top closes at | gen2 topped at barely-37.5 | ULX3S: 37.5 MHz on most seeds of a full-top sweep, not all ([sweep](#where-the-build-stopped)); Nexys Video: 80 MHz ([Ruled out](../../TODO/hw-nexysvideo.md#ruled-out)) |
+| CPI, cache-hot tight loop | ~1.1–1.3 (forwarding from day one) | gen2 ~2.5–3.0 unforwarded | met on Dhrystone; above it on CoreMark, whose multiplies stall it most ([final builds](./memory-performance.md#the-final-builds-on-hardware)) |
+| CMP+Bcc heavy | ~1.0–1.1 (flags forwarded, branch prediction) | — | not measured |
+| L1 size | per board: ECP5 8 KB 2-way (gen2's hit logic); Artix-7 16 KB, with 4 ways on the fetch side if MEM2 cannot take them ([geometry data](./memory-performance.md#l1-geometry)) | gen2 4 KB (then 2-way) | 8 KB 2-way on both boards ([Ruled out](../../TODO/hw-nexysvideo.md#ruled-out)) |
+| Main TLB | 256×2 in BRAM ([refill data](./memory-performance.md#tlb-sets-and-a-cheaper-refill)) | gen2 32×2 | as targeted |
+| L2-hit fill | ~5 cycles ([line-wide transfer](./memory-performance.md#the-line-wide-transfer)) | gen2.5 16 | met ([transfer rates](./memory-performance.md#transfer-rates-by-block-size-on-hardware)) |
+| L2-miss fill | ~20–25 cycles ([design target](./memory-performance.md#design-target-memory-latency-in-cpu-cycles)) | gen2.5 38 with the line stack | met on the ULX3S; more cycles on the Nexys Video, its DDR3 slower in nanoseconds ([transfer rates](./memory-performance.md#transfer-rates-by-block-size-on-hardware)) |
+| Load-use stall | 1 (forwarded) | gen2 4 | 2: the load completes through a register ([memory completion](./memory-completion.md#load-hit--a-registered-load-use-hazard)) |
+| Taken-branch bubbles | 1 predicted at IF2 / 4 mispredicted | gen2 3; gen2.5 1 predicted | met ([instruction timing](../../system/instruction-timing.md#control-transfers)) |
 
 ## Build plan
 
@@ -453,12 +456,49 @@ The **one-time** floorplan pass — once, after all features land, never
 per-feature. It turns structural headroom into a 37.5 MHz close across
 the seed sweep, not into a higher clock.
 
+### Where the build stopped
+
+Phases 0 to 4 are built. The machine landed in `0d7e47c` and its board
+tops in `94682ef` and `09e8433`; branch prediction in `e52f1d1`,
+`82df95c` and `b97050e`, the IF2 pre-decode, the direction table
+trained from EX and the return stack; and the store buffer in
+`dd116d6` and the commit after it, which retires cacheable stores into
+it. Of the staged levers, stream prefetch beside the L2 landed in
+`96b778f`, and the bus master holds its strobe across a run of posted
+stores since `0cb08b8`. On the Nexys Video the top runs at 80 MHz
+(`0841a60`) with a 256 KB L2 (`d92e4de`). Phase 5 is not done: the
+full top closes on most seeds without a floorplan, and the RTL is
+settled. What was analysed and left is in [not built](./not-built.md).
+
+The last full-top sweep is of the ULX3S top at `0cb08b8`, with the
+line SDRAM stack and no floorplan, the placement choices taken over
+from gen2. 7 of 10 seeds close every domain, and on the other three
+only the CPU clock falls short, at 36.68 to 37.25 MHz. Its median is
+38.40 MHz, the USB clock's 60 MHz closes on all ten, and the pinned
+seed, 8, closes at 38.30 MHz. The sweep before it, which differed only
+by the held strobe, closed 5 of 10 at a median of 37.75: nothing points
+to the strobe costing timing.
+
+In that sweep before, the CPU clock was the worst domain on 9 seeds,
+and the USB clock's 60 MHz on the tenth (`doc/TODO/hw-core.md`,
+"Hardware: the USB receive path is a placement lottery"). The CPU
+clock's critical path was the fetch side's on 6: the L1-I's data into
+the predictor (3) or the fetch buffer (1), or the I-TLB's word through
+the TLB match into IF1's PC (1) or the predictor (1). On 4 it was the D
+side's: the D-TLB's word through the TLB match into the L1-D's busy,
+request or held flag (3), or on through the L1-D's data into MEM2's
+writeback payload (1). The stream buffers, ID's scoreboard and EX's
+forwarding loop were the worst path on none. The sweep before that,
+which differed only by the USB host's line capture, had a median of
+38.63 MHz and closed every domain on all ten: removing the capture
+bought neither clock any margin.
+
 ## Reading guide
 
 1. **This document** — overview + build plan (you are here).
 2. [`timing-outline.md`](./timing-outline.md) — the structural
    rules (Rule Zero, per-subsystem design points) this plan rests on.
-3. Per-area gen3 specs written so far:
+3. Per-area gen3 specs:
    - [`mem-stage.md`](./mem-stage.md) — the MEM1/MEM2 memory stage and the
      duplicated BRAM TLB.
    - [`memory-completion.md`](./memory-completion.md) — the registered
@@ -480,9 +520,8 @@ the seed sweep, not into a higher clock.
    - [`branch-prediction.md`](./branch-prediction.md) — each prediction
      component measured on real workloads, and the front-end design it
      points to.
-4. Further per-area gen3 specs — *to be written as each subsystem is
-   designed* (design-decisions, pipeline-stages, hazard-model,
-   memory-interface), following the gen2 doc layout under `penumbra2/`.
+4. [`not-built.md`](./not-built.md) — what gen3 analysed and left, with
+   the evidence each has, for a later generation.
 
 For the system the gen3 core attaches to but does not change — ISA, ABI,
 exception model, bus protocol, autoconfig, peripherals — the

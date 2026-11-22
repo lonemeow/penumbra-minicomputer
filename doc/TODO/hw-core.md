@@ -1,7 +1,7 @@
 # Hardware: cores, memory system and timing
 
-CPU cores (gen3 build, cross-generation ISA work), the bus, caches
-and SDRAM path, and fmax / placement findings. Kept in one file
+CPU cores and cross-generation ISA work, the bus, caches and SDRAM
+path, and fmax / placement findings. Kept in one file
 because these items gate each other: memory-system work is sized
 against the core generation and the logic budget timing leaves.
 
@@ -92,96 +92,6 @@ Open:
   parameter. It needs a write-to-`PRECHARGE` check, and
   `tb_sdram_test` a stream of writes to the open row that asserts the
   commands follow back to back.
-
-## Hardware: gen3 (Penumbra/3) features still to build
-
-The gen3 machine passes `isa/` and boots NetBSD, so phases 0, 1 and 3
-of its build plan are done (`doc/internals/penumbra3/overview.md`,
-"Build plan"); the machine landed in `0d7e47c`, its board tops in
-`94682ef` and `09e8433`. Branch prediction (phase 2) landed in
-`e52f1d1`, `82df95c` and `b97050e`: the IF2 pre-decode, the direction
-table trained from EX and the return stack. The store buffer (phase 4)
-landed in `dd116d6` and the commit after it, which retires cacheable
-stores into it, and stream prefetch beside the L2, the third staged
-lever, in `96b778f`. What remains is the other staged levers, in the
-order the overview ranks them ("Levers ranked by measured benefit").
-
-Each lever is read against a full-top seed sweep. The current one,
-with the stream buffers beside the L2 and the USB host's line capture
-removed, is of the ULX3S top with the line SDRAM stack and no
-floorplan, the placement choices taken over from gen2: 5 of 10 seeds
-close every domain. The CPU clock is the worst domain on 9. On the
-tenth it is the USB clock's 60 MHz, which the receive chain into the
-host's crossing buffer misses ("Hardware: the USB receive path is a
-placement lottery"). The CPU clock's critical path is the fetch side's
-on 6: the L1-I's data into the predictor (3) or the fetch buffer (1),
-or the I-TLB's word through the TLB match into IF1's PC (1) or the
-predictor (1). On 4 it is the D side's: the D-TLB's word through the
-TLB match into the L1-D's busy, request or held flag (3), or on
-through the L1-D's data into MEM2's writeback payload (1). The stream
-buffers, ID's scoreboard and EX's forwarding loop are the worst path
-on none.
-Against the sweep before it, which differs from it only by the line
-capture, the CPU clock's median fell from 38.63 to 37.75 MHz and the
-seeds closing every domain from 10 to 5: removing the capture bought
-neither clock any margin. The next lever's sweep is read against this
-one.
-
-## Hardware: a gen3 divmul's second write stalls the whole back end
-
-The divmul's two-cycle WB writeback makes WB occupy two cycles, and
-that hold (`wb_local_stall`) ripples up the pure-stall chain
-WB->MEM2->MEM1->EX->ID. It is 1-bit and flop-shallow -- no cache/TLB
-verdict in it, so it is correct and within the "1-bit ready crosses
-backward" allowance -- but it is the longest-*reach* combinational
-stall and may bind at 50 MHz on routing distance alone. Floorplanning
-is NOT the remedy (placement cannot be the fix for a structural reach).
-
-The structural fix is localized and does not touch the core shape:
-retire the divmul writeback through the **load-completion path**
-rather than the WB stage. divmul holds in EX until it is the oldest
-in-flight -- `drained` = `~mem1_valid & ~mem2_valid & ~memwb_valid &
-~mem_pending` (the drain-commit condition extended with `mem_pending`)
--- then writes Rd/Rdh over two cycles through the completion
-write-port mux. The port is free **by the in-order single-outstanding
-invariant** (oldest => no older writer; younger blocked behind the held
-divmul), NOT by any cycle count -- so a slow uncached MMIO access ahead
-of the divmul simply makes it wait in EX, never write early or out of
-order. WB then never sees a divmul: the dual-write FSM and
-`wb_local_stall` both delete, and back-pressure reduces to the
-`mem_pending` fan-out plus the one-hop EX->ID stall.
-
-Open: land it as its own increment if a full-top sweep shows the reach
-binding. Until then the WB dual-write is correct (WB is the oldest by
-pipeline position, so it is already drain-gated -- only the reach is
-suboptimal).
-
-## Hardware: a gen3 exception's vector read always goes to memory
-
-`penumbra3_vecfetch` reads the vector table uncached. It is the CPU's
-only fetch by physical address, so threading a PA index into the VIPT
-caches is awkward; the read has to bypass the MMU but not the caches.
-Making it L2-cacheable saves a full SDRAM round-trip per trap.
-
-Behind gen3's 256×2 TLB, traps are rare. Counted 2026-11-17 by the
-ISS's `+opstats` at `+core=penumbra3`, over the windows of "Hardware: a
-gen3 load miss holds the launch side a cycle past its done":
-
-| Per 1000 instructions | shell loop | `pbench kernel` | Doom `demo3` |
-|---|---:|---:|---:|
-| Exceptions | 0.823 | 1.668 | 0.053 |
-| … TLB misses | 0.600 | 0.603 | 0.049 |
-| … system calls | 0.216 | 1.056 | 0.001 |
-| … interrupts | 0.004 | 0.004 | 0.004 |
-| … TLB protection faults | 0.003 | 0.005 | — |
-
-At an estimated 10–20 cycles saved a trap, that is about 8–16, 17–33
-and under 1 cycle per 1000 instructions: a kernel-path lever the size
-of selective `WRSYS` (`doc/internals/penumbra3/overview.md`, "Levers
-ranked by measured benefit"), and nothing for Doom.
-
-Open: what a trap's vector read costs on gen3 against an L2 hit, which
-prices the saving, and the L2-cacheable read itself.
 
 ## Hardware: FPU
 
@@ -692,215 +602,30 @@ same. The gen2 caches, the gate and the declarations landed in
   ECP5-side crossing is being reworked; `slot_we` maps to flip-flops
   under yosys and LUT RAM under Vivado.
 
-## Hardware: gen3 sysreg accesses act on their target at a fixed cycle
+## Hardware: the store-buffer model trails gen3's bus master
 
-A gen3 `WRSYS` lands in its device on the cycle it commits from EX,
-and an `RDSYS` takes its response from the device in MEM2. Neither
-lets the target say when it can take the access, so whatever the
-target is doing in that cycle has to be reconciled in logic.
+gen3's bus master holds its strobe across a run of posted stores
+(`0cb08b8`), which took a run's drain on the ULX3S from 4 cycles a
+word to about 3 (`doc/internals/penumbra3/memory-performance.md`,
+"Sustained writes on the SDRAM stack"). The ISS's `+sbmodel`
+(`sw/sim/sb_model.h`) prices a gen3 store path that differs from the
+built one:
 
-The main-TLB install shows the cost. A `TLB_PTE` commit writes both
-copies of `penumbra3_tlb_store` while their read ports keep reading;
-the I-copy is serving the fetches behind the `WRSYS`. yosys cannot
-prove that the write and a read never meet on one set, so it keeps
-the RTL's read-first result with a read-during-write bypass: the
-write delayed a cycle through flip-flops, and a compare and mux on
-the block RAM outputs, inside the verdict cone after the EBR
-(`doc/internals/penumbra3/mem-stage.md`, "The MEM2 verdict cone").
-`synth_ecp5` puts it at 134 LUTs and 137 flip-flops per copy: 313
-LUTs and 203 flip-flops against 179 and 66 without it.
-
-`penumbra3_tlb_store` now gates each copy's read off in the install
-cycle, and yosys drops the bypass. That is free only because no
-overlapping lookup is consumed today: the `WRSYS` commits with the
-pipe drained behind it, and the resync re-fetches its successor the
-next cycle, discarding every lookup the install overlapped. It stays
-free only while TLB installs serialize, and the refill path wants them
-not to (`doc/internals/penumbra3/timing-outline.md`, "Multi-cycle and
-serializing instructions (div/mul, WRSYS, ERET)"). A non-serializing
-install makes the I-copy's overlapping lookup live, and that lookup
-then has to wait a cycle rather than read the block RAM mid-write.
-
-`RDSYS` has the mirror problem: the response is taken from the
-device in a fixed cycle, so a device whose status is not already
-registered puts its status logic in the core's result path.
-
-Open: a sysreg access the target paces. The target accepts a write
-in a cycle of its choosing and answers a read from a register once
-it is ready, so an install lands in a cycle with no lookup launched
-and a status read leaves the device registered. This fits the gen3
-rule that rare and slow operations pay cycles, never critical-path
-logic.
-
-## Hardware: the gen3 L1's valid bits are most of its logic
-
-`penumbra3_l1_store` keeps its 512 valid bits in flops, as gen2's L1
-does, so that reset and `INVAL_ALL` clear them in one cycle. Synthesized
-for the ECP5 on its own (yosys, out of context), the store is 1719 LUT4
-with them and 509 without: about 1200 LUT4 and 512 flops for the write
-decode, the clear and two 256:1 read muxes. The store bypass beside
-them is about 80 LUT4. Each L1 pays this, and the PLRU bits in
-`penumbra3_l1` are a second flop array of the same shape, not measured
-apart.
-
-Open: the only timing evidence is the P0.5 probe, which holds both L1s
-whole and clears 37.5 MHz with 13–19 % slack over ten seeds
-(`doc/internals/penumbra3/phase0-probes.md`, "P0.5 -- physical-tag
-compare behind the TLB verdict"). That covers the cones through the L1,
-not what the arrays cost a full machine's routing. No replacement has
-been looked at.
-
-## Hardware: a gen3 load miss holds the launch side a cycle past its done
-
-A load's completion takes the MEM2/WB register in the cycle of the
-L1-D's `done`, so the launch side resumes a cycle after the done rather
-than with it (`doc/internals/penumbra3/memory-completion.md`, "Load
-miss"). A miss with anything but a lookup of the filled set behind it,
-an ALU op, a branch, an access to another set, pays that cycle alone.
-When the load or store held in MEM2 behind the miss has its lookup in
-the set the line went into, the L1-D's busy covers the same cycle, as
-the L1 shows a held lookup an install a cycle late
-(`doc/internals/penumbra3/l1-cache.md`, "Busy and done"). Every install
-is a load miss's, so that cycle always falls in a completion's: taking
-it out alone saves nothing.
-
-memspeed shows the overlap. Each of its misses has a load of the same
-line behind it, which paid the busy cycle before the completion moved
-into MEM2/WB, and its Nexys rates at `7797ec8` match those at `3539275`
-to the hundredth: 2.12 cycles a word from L2, 8.18 from memory.
-Modelled on libc's `memcpy` word loop, where an add follows each load
-and so holds no lookup, the cycle costs a quarter cycle a word: 6.25
-against 6.00 from L2.
-
-The fix takes the cycle out wherever the instruction after the miss
-holds no lookup of the filled set. **The completion forwards in its own
-cycle:** a leg of its own in EX's operand mux, its select formed from
-the L1-D's `done` ahead of the youngest-first compare. A build of that,
-swept before `854284a`, closed every domain on 2 of 10 seeds against 6,
-but on 8 of them its critical path ended in the zero flag's chain that
-commit removed, so the leg's own cost is not measured.
-
-Counted 2026-11-17 by the ISS cache model at `+core=penumbra3` (an
-8 KB 2-way L1-D), the instruction after each L1-D load miss. The
-workloads are the multiuser image's shell loop and `pbench kernel`
-(`doc/internals/penumbra3/memory-performance.md`, "Miss profiles from
-the shadow models") and Doom `demo3` from its first
-`R_RenderPlayerView` to `G_CheckDemoStatus`:
-
-| Per 1000 instructions | shell loop | `pbench kernel` | Doom `demo3` |
-|---|---:|---:|---:|
-| Load misses | 10.09 | 6.39 | 12.91 |
-| … then no access | 7.03 | 4.44 | 10.73 |
-| … then an access to another set | 2.31 | 1.38 | 1.72 |
-| … then an access to the filled set | 0.74 | 0.58 | 0.46 |
-
-The leg takes the cycle out of 91–96 % of misses: about 9.3, 5.8 and
-12.5 cycles per 1000 instructions. The model runs no clock, so it never
-sees a bubble between a miss and the instruction after it, and an empty
-slot holds no lookup either: the figures are floors. The rest, a
-lookup of the filled set seeing the install at once, is under Ruled
-out ("Showing a held gen3 lookup the install at once").
-
-Open: a sweep of the leg on top of `854284a`.
-
-## Hardware: a gen3 drain-commit's wait sits on the issue stall
-
-ERET, WRSYS, EI and DI commit from EX, so EX holds one until nothing
-older is unfinished. That test is an OR over EX/MEM1, MEM2, WB, a
-pending access and its completion. It feeds `ex_local_stall` and so
-ID's stall, which every instruction's issue reads, though only these
-four need it. No measurement says what it costs: no full-top sweep has
-been read without the gate, and a path's place in a sweep attributes
-nothing.
-
-Two other shapes avoid the gate. Neither is built.
-
-- **A registered `drained`.** While a drain-commit waits in EX nothing
-  enters behind it, so the back end only empties. A flop sampling the
-  gate with the drain-commit already in EX therefore cannot go stale.
-  It costs a cycle per drain-commit and no new flush logic.
-- **Commit at WB.** The instruction flows down the pipe like any other
-  and commits as the oldest, so there is nothing to wait for. Whatever
-  entered behind it ran on the old state, so the commit flushes it,
-  reusing the fault commit's flush and adding a redirect. Each one then
-  costs a refetch where EX waits only for the back end, and they are
-  not rare: `_real_miss_handler` runs at least three WRSYS and an ERET
-  per TLB refill.
-
-Open: the gate's weight in a full-top seed sweep, with and without it,
-and how often real workloads run these four against what a refetch
-costs. The test any shape has to keep is the `dc_*` group in
-`tb_penumbra3_spine`.
-
-## Hardware: gen3's bus master drops the strobe between stores
-
-`penumbra3_bus_master` writes each posted store as a transaction of
-its own. It takes the next store in the cycle it completes one, so its
-strobe drops a cycle between writes and a stream of stores drains at 4
-cycles a word, the SDRAM stack's floor for separate writes; under a
-held strobe the stack takes them closer together
-(`doc/internals/penumbra3/memory-performance.md`, "Sustained writes on
-the SDRAM stack"). Taking the next store in the completion cycle, 5
-cycles a word to 4, landed in "hw: let gen3's bus master take the next
-store as a write completes". On the Nexys Video the DDR3 stack sets
-the drain whatever the master does (the same doc, "Transfer rates by
-block size, on hardware"), so this is a ULX3S lever.
-
-Modelled 2026-11-17 with `+sbmodel` at `+core=penumbra3` on that day's
-multiuser image, over the shell loop, `pbench kernel` and Doom `demo3`:
-gen3's buffer (sixteen word entries, fills waiting for the entries up
-to their line) and its uncore's ordering, in which a fill from memory
-waits for every buffered write (`/post/inorder`). Cycles per 1000
-instructions the core waits on the buffer, CPI 1 / CPI 2:
-
-| Buffer | shell loop | `pbench kernel` | Doom `demo3` |
-|---|---|---|---|
-| Drain 5 cycles a word | 92.9 / 45.9 | 63.9 / 34.9 | 36.2 / 10.0 |
-| … 4 (as built) | 67.2 / 31.2 | 51.2 / 28.2 | 16.6 / 3.8 |
-| … 3 | 48.9 / 23.4 | 43.1 / 24.9 | 9.2 / 2.5 |
-| 5, a fill from memory passing writes to other lines | 75.8 / 40.4 | 55.5 / 32.4 | 25.1 / 8.5 |
-| 8 line entries, write combining | 88.8 / 68.2 | 49.6 / 37.4 | 64.3 / 58.3 |
-
-- **The drain rate sets fills' waits as well as full-buffer stalls.**
-  A fill from memory waits for every buffered write, so each cycle off
-  a drain comes off it too.
-- **I fills waiting on L2 barely move:** 45 → 35 and 41 → 36 per 1000
-  at CPI 1 on the kernel paths. Each posted write holds L2 for the
-  model's assumed 2 cycles, whatever the bus does.
-- **Doom on hardware gains little.** On the Nexys Video its `store`
-  stalls are 0.2%, and its frame copy waits at most ~7 cycles a line
-  behind posted stores ([workloads.md](workloads.md), "Doom: the frame
-  copy is 11% of a gen3 frame"): under 1% of the run. The model costs
-  every drain at the ULX3S's SDRAM rates, and Doom's framebuffer
-  stores go to the display's block RAM. The case rests on the kernel
-  paths on the ULX3S.
-- **Passing posted writes saves less than the drain going from 5 to
-  4,** and needs the line search extended to posted entries and the
-  uncore's rule for taking the bus changed.
-- **Line entries lose under the in-order bus:** a fill from memory
-  waits for every line entry, the open one included, to drain as a
-  burst.
-
-The change left: **~3 cycles a word**, the strobe held across
-consecutive writes, which the sync bus allows
-(`doc/hardware/bus-protocol.md`, "Sync burst"). The master latches the
-next write before the current `ack` and completes each beat on its
-own. The store buffer already lets the master take a store while
-earlier ones are sent, any number of them.
-
-Open:
-
-- L2's occupancy per posted write on the RTL, against the model's 2
-  cycles.
-- Drain costs by target in the model: the framebuffer is block RAM on
-  the bus, not SDRAM.
-- The model's `bus` drain preset (`sw/sim/sb_model.h`) still costs a
-  single word at 5 cycles.
+- Its `bus` drain preset still costs a single word at 5 cycles.
+- It costs every drain at the ULX3S's SDRAM rates, though Doom's
+  framebuffer stores go to the display's block RAM on the bus.
+- It holds L2 for 2 cycles a posted write. The uncore holds issue for
+  2 when the post misses L2 and 3 when it hits
+  (`doc/internals/penumbra3/uncore.md`, "The pipeline").
 - `memory-performance.md`'s "Line or word entries" table and the
   overview's write-combining lever (`doc/internals/penumbra3/overview.md`,
   "Levers ranked by measured benefit") were modelled with fills from
-  memory passing posted writes. Under gen3's ordering both need
-  redoing with `/inorder`.
+  memory passing posted writes. Under gen3's ordering, `/inorder`, a
+  fill waits for every buffered write, so line entries lose: the fill
+  waits for every line entry, the open one included, to drain as a
+  burst. Both need redoing with `/inorder`.
+
+Open: those four, before the model prices another store-path lever.
 
 ## Hardware: an L2 INVAL_ALL write is dropped or drops a strobe
 
@@ -1071,9 +796,9 @@ Open:
   that miss's cycle in place.  Such misses are 0.74, 0.58 and 0.46 per
   1000 instructions on the shell loop, `pbench kernel` and Doom
   `demo3`, so taking their cycle out too saves under 1 cycle per 1000
-  ("Hardware: a gen3 load miss holds the launch side a cycle past its
-  done").  The valid bit and word can be given off the hit path; the
-  tag cannot.  A mux after the tag block RAM sits in front of the
+  (`doc/internals/penumbra3/not-built.md`, "A load miss holds the
+  launch side a cycle past its done").  The valid bit and word can be
+  given off the hit path; the tag cannot.  A mux after the tag block RAM sits in front of the
   compare, on a path that binds (`doc/internals/penumbra3/phase0-probes.md`,
   "P0.5 -- physical-tag compare behind the TLB verdict"), and the block
   RAM forwarding the install through a write-through port needs the
