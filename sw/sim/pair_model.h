@@ -82,6 +82,13 @@
 //  - last:LIST: classes whose op is always the younger of its pair, as
 //    x: and y: list them: an older op of one issues with no younger op
 //    beside it ("order"), as a taken transfer does.
+//  - fpair:all | fpair:simple | fpair:none: what a fused op pairs with.
+//    All: whatever the rules above allow.  Simple: an op that is not
+//    fused, as X issues no fused op: the fused op takes Y and the other
+//    X, and two fused ops never pair.  None: nothing, so a cycle issues
+//    one fused op, two ops, or one.  A pair this keeps apart is charged
+//    "fused": under simple when its classes alone would have slots,
+//    under none whenever either op is fused.  All unless given.
 //  - mem:1 | mem:ld2 | mem:2: memory accesses a cycle.
 //  - flex: either op may take either slot.
 //  - yflags: only the younger op of a pair commits flags.
@@ -170,12 +177,16 @@ enum : uint32_t {
     CAUSE_SLOT_OLDER = 1 << 0, CAUSE_SLOT_YOUNGER = 1 << 1, CAUSE_UNIT = 1 << 2,
     CAUSE_MEMORY     = 1 << 3, CAUSE_FLAGS        = 1 << 4, CAUSE_OPERAND = 1 << 5,
     CAUSE_BASE       = 1 << 6, CAUSE_DATA         = 1 << 7, CAUSE_TARGET  = 1 << 8,
-    CAUSE_PORTS      = 1 << 9,  CAUSE_ORDER        = 1 << 10,
+    CAUSE_PORTS      = 1 << 9,  CAUSE_ORDER        = 1 << 10, CAUSE_FUSED  = 1 << 11,
 };
-static constexpr int CAUSES = 11;
+static constexpr int CAUSES = 12;
 static const char* const CAUSE_NAMES[CAUSES] =
     { "slot-older", "slot-younger", "unit", "memory", "flags", "operand", "base", "data", "target",
-      "ports", "order" };
+      "ports", "order", "fused" };
+
+// What a fused op may pair with (fpair:): whatever the other rules
+// allow, only an op that is not fused and takes X, or nothing.
+enum class FusedPairs { All, Simple, None };
 
 // Register writes a cycle: the register file's write ports.
 static constexpr int WRITE_PORTS = 2;
@@ -305,6 +316,7 @@ struct IssueConfig {
     int         agu_inputs = 3;     // agu:N — the address adder's inputs in an address fusion
     int         op_reads = 3;       // reads:N — the most registers one op reads
     uint32_t    last = 0;           // last:LIST — classes whose op is always the younger of a pair
+    FusedPairs  fused_pairs = FusedPairs::All;  // fpair: — what a fused op may pair with
     MemoryLimit memory = MemoryLimit::One;
     bool        flex = false;       // the older op may take Y and the younger X
     bool        younger_commits_flags = false;  // yflags: the flag state takes only the younger op's write
@@ -389,6 +401,7 @@ private:
     static bool accesses_memory(const IssueOp& op) {
         return op.cls == IssueClass::Load || op.cls == IssueClass::Store;
     }
+    static bool is_fused(const IssueOp& op) { return op.insns > 1; }
 
     // `younger` is the instruction after `older` on the sequential path.
     static bool follows(const IssueOp& older, const IssueOp& younger) {
@@ -611,6 +624,36 @@ private:
     }
 
     // ── Whether this stage issues it ──
+    // X issues a fused op only under fpair:all.  Under none no fused op
+    // pairs at all, so it takes no slot beside another.
+    bool x_takes_fused() const { return cfg_.fused_pairs == FusedPairs::All; }
+
+    // What keeps X from issuing `op`, 0 when nothing does: its class,
+    // charged as `cause`, or its being fused.
+    uint32_t x_refuses(const IssueOp& op, uint32_t cause) const {
+        if (!(cfg_.x & class_bit(op.cls))) return cause;
+        if (is_fused(op) && !x_takes_fused()) return CAUSE_FUSED;
+        return 0;
+    }
+
+    // What keeps Y from issuing `op`, 0 when nothing does: its class,
+    // charged as `cause`.
+    uint32_t y_refuses(const IssueOp& op, uint32_t cause) const {
+        return (cfg_.y & class_bit(op.cls)) ? 0 : cause;
+    }
+
+    // What keeps the two ops from slots in this stage, 0 when they have
+    // them: the older in X and the younger in Y, or with flex the other
+    // way round.  Two fused ops have none when X takes no fused op.
+    uint32_t slot_causes(const IssueOp& older, const IssueOp& younger) const {
+        uint32_t in_order = x_refuses(older, CAUSE_SLOT_OLDER) | y_refuses(younger, CAUSE_SLOT_YOUNGER);
+        if (!in_order || !cfg_.flex) return in_order;
+        uint32_t swapped = y_refuses(older, CAUSE_SLOT_OLDER) | x_refuses(younger, CAUSE_SLOT_YOUNGER);
+        if (!swapped) return swapped;
+        if (swapped == CAUSE_FUSED) return swapped;
+        return in_order;
+    }
+
     Verdict judge(const IssueOp& older, const IssueOp& younger) const {
         Verdict v;
         if (older.trapped || older.interrupted || younger.trapped)
@@ -621,12 +664,10 @@ private:
         if (!follows(older, younger))                { v.alone = Alone::Break;  return v; }
         v.candidate = true;
 
-        uint32_t a = class_bit(older.cls), b = class_bit(younger.cls);
-        bool fits = ((cfg_.x & a) && (cfg_.y & b)) || (cfg_.flex && (cfg_.y & a) && (cfg_.x & b));
-        if (!fits) {
-            if (!(cfg_.x & a)) v.causes |= CAUSE_SLOT_OLDER;
-            if (!(cfg_.y & b)) v.causes |= CAUSE_SLOT_YOUNGER;
-        }
+        v.causes |= slot_causes(older, younger);
+
+        if (cfg_.fused_pairs == FusedPairs::None && (is_fused(older) || is_fused(younger)))
+            v.causes |= CAUSE_FUSED;
 
         if (older.cls == younger.cls
             && (older.cls == IssueClass::Branch || older.cls == IssueClass::MulDiv))
@@ -880,6 +921,9 @@ private:
             else if (part == "agu:2")           c.agu_inputs = 2;
             else if (part == "reads:3")         c.op_reads = 3;
             else if (part == "reads:2")         c.op_reads = 2;
+            else if (part == "fpair:all")       c.fused_pairs = FusedPairs::All;
+            else if (part == "fpair:simple")    c.fused_pairs = FusedPairs::Simple;
+            else if (part == "fpair:none")      c.fused_pairs = FusedPairs::None;
             else if (!list("last:").empty())    ok = parse_classes(list("last:"), c.last);
             else if (!list("x:").empty())       ok = parse_classes(list("x:"), c.x);
             else if (!list("y:").empty())       ok = parse_classes(list("y:"), c.y);
@@ -910,7 +954,7 @@ private:
             if (!ok) {
                 err = "unknown modifier '" + part + "' (x:CLASSES, y:CLASSES, fw:FORWARDS,"
                       " fuse:FUSIONS, reach:any|line|pair, agu:3|2, reads:3|2, last:CLASSES,"
-                      " mem:1|ld2|2, flex, yflags,"
+                      " fpair:all|simple|none, mem:1|ld2|2, flex, yflags,"
                       " fetch:N[l], bubble:N, queue:N)";
                 return false;
             }

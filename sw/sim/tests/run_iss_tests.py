@@ -634,6 +634,40 @@ PAIR_WB = {
         alone={"system": 19, "end": 1}, one={"ports": 1, "base": 1}),
 }
 
+# pair_fused.s: 27 instructions, 8 of them DI or BREAK.  Every stage
+# fuses P's and R's LLI+LUI, Q's, R's and S's CMP+BNE, and T's MOV+ADD.
+#   +flex:                 P Q R T U pair; R as two fused ops, T with the
+#                          fused op in X.  S's fused branch and its load
+#                          have no slots: neither goes in X.
+#   +flex+fpair:all:       the same.
+#   +flex+fpair:simple:    P (the fused op in Y, by flex) Q U pair.  R is two
+#                          fused ops; T's load would need X once the fused
+#                          op leaves it.  S as before, with no "fused".
+#   +flex+fpair:none:      U alone pairs.  S is kept out twice over.
+#   +fpair:simple:         without flex P's fused op, the older, cannot take
+#                          Y; Q U pair.
+PAIR_FUSED_FUSIONS = {"lilui": 2, "cmpbr": 3, "movop": 2}
+PAIR_FUSED_ALL = pairing(
+    31, 6, fused=PAIR_FUSED_FUSIONS, forward={"none": 6},
+    younger={"alu": 2, "br": 2, "ld": 1, "mov": 1}, alone={"system": 10, "end": 1},
+    one={"slot-older": 1}, sizes={"one": 11, "two": 2, "three": 4, "four": 1})
+PAIR_FUSED = {
+    "pairing dual+fuse:lilui:cmpbr:movop+flex": PAIR_FUSED_ALL,
+    "pairing dual+fuse:lilui:cmpbr:movop+flex+fpair:all": PAIR_FUSED_ALL,
+    "pairing dual+fuse:lilui:cmpbr:movop+flex+fpair:simple": pairing(
+        31, 3, fused=PAIR_FUSED_FUSIONS, forward={"none": 3},
+        younger={"alu": 1, "br": 1, "mov": 1}, alone={"system": 13, "end": 1},
+        one={"fused": 3, "slot-older": 1}, sizes={"one": 13, "two": 6, "three": 2}),
+    "pairing dual+fuse:lilui:cmpbr:movop+flex+fpair:none": pairing(
+        31, 1, fused=PAIR_FUSED_FUSIONS, forward={"none": 1}, younger={"mov": 1},
+        alone={"system": 15, "end": 1}, one={"fused": 5},
+        several=(1, {"slot-older": 1, "fused": 1}), sizes={"one": 15, "two": 8}),
+    "pairing dual+fuse:lilui:cmpbr:movop+fpair:simple": pairing(
+        31, 2, fused=PAIR_FUSED_FUSIONS, forward={"none": 2}, younger={"br": 1, "mov": 1},
+        alone={"system": 14, "end": 1}, one={"fused": 3, "slot-older": 2},
+        sizes={"one": 14, "two": 7, "three": 1}),
+}
+
 # pair_limits.s: 31 instructions, 11 of them DI or BREAK.
 #   single+fuse:addmem:          A B C D: three reads is the default.
 #   +reads:3:                    the same.
@@ -1096,6 +1130,7 @@ CASES = [
     pair_case("pairmodel extension fusion", "pair_ext.s", PAIR_EXT),
     pair_case("pairmodel write-back fusions and write ports", "pair_wb.s", PAIR_WB),
     pair_case("pairmodel read limit and pair order", "pair_limits.s", PAIR_LIMITS),
+    pair_case("pairmodel fused op's partner", "pair_fused.s", PAIR_FUSED),
     pair_case("pairmodel fuser reach", "pair_reach.s", PAIR_REACH),
     pair_case("pairmodel fetch stage", "pair_fetch.s", PAIR_FETCH),
     pair_case("pairmodel fusion behind a fetch stage", "pair_reach.s", PAIR_FETCH_FUSE),
@@ -1131,6 +1166,8 @@ CASES = [
          error=r"unknown modifier 'agu:4'"),
     Case("pairmodel unknown reads", "pair_limits.s", ["+pairmodel=dual+reads:4"],
          error=r"unknown modifier 'reads:4'"),
+    Case("pairmodel unknown fpair", "pair_fused.s", ["+pairmodel=dual+fpair:some"],
+         error=r"unknown modifier 'fpair:some'"),
     Case("pairmodel unknown last class", "pair_limits.s", ["+pairmodel=dual+last:br:fpu"],
          error=r"unknown modifier 'last:br:fpu'"),
     Case("pairmodel fetch of nothing", "pair_fetch.s", ["+pairmodel=dual+fetch:0"],

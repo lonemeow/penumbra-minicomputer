@@ -426,7 +426,9 @@ rom.ld ──────────────────┘
   takes the access's offset), `reads:3|2` (whether a fused op may read
   three registers, as an add of two fused into a store of a third
   does), `last:` class list (classes whose op is always the younger of
-  its pair), `mem:1|ld2|2`, `flex` (either op in either slot),
+  its pair), `fpair:all|simple|none` (what a fused op pairs with: any
+  op, only an unfused one in X, or nothing), `mem:1|ld2|2`, `flex`
+  (either op in either slot),
   `yflags` (only the younger op commits flags), and a fetch stage:
   `fetch:N` or `fetch:Nl` (up to N instructions a cycle into a queue,
   `l` ending a fetch at the end of its line), with `bubble:N` (cycles
