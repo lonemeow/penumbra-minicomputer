@@ -198,10 +198,10 @@ $(BUILDDIR)/dhry_1.o: dhrystone/dhry_1.c dhrystone/dhry.h $(DHRY_STAMP) | $(BUIL
 $(BUILDDIR)/dhry_2.o: dhrystone/dhry_2.c dhrystone/dhry.h | $(BUILDDIR)
 	$(CC) $(DHRY_CFLAGS) -c $< -o $@
 
-$(BUILDDIR)/dhry_shim.o: dhrystone/shim.c common/bench.h common/mmu.h $(DHRY_STAMP) | $(BUILDDIR)
+$(BUILDDIR)/dhry_shim.o: dhrystone/shim.c dhrystone/window.h common/bench.h common/mmu.h $(DHRY_STAMP) | $(BUILDDIR)
 	$(CC) $(STATIC_CFLAGS) -DDHRYSTONE_ITERATIONS=$(DHRYSTONE_ITERATIONS) -c $< -o $@
 
-$(BUILDDIR)/dhry_entry.o: dhrystone/entry.c common/bench.h common/mmu.h $(DHRY_STAMP) | $(BUILDDIR)
+$(BUILDDIR)/dhry_entry.o: dhrystone/entry.c dhrystone/window.h common/bench.h common/mmu.h $(DHRY_STAMP) | $(BUILDDIR)
 	$(CC) $(STATIC_CFLAGS) -DDHRYSTONE_ITERATIONS=$(DHRYSTONE_ITERATIONS) -c $< -o $@
 
 dhrystone: $(BUILDDIR)/DHRYSTON.ELF

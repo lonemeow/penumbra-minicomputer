@@ -9,10 +9,12 @@
  *         Dhrystone's result output).
  * scanf:  Returns a fixed iteration count (no interactive input).
  * malloc: Bump allocator (Dhrystone calls it exactly twice).
- * time:   Returns elapsed seconds from bench_timer.
+ * time:   Opens and closes the measured window (window.h), at the
+ *         two readings Dhrystone takes around its loop.
  */
 
 #include "bench.h"
+#include "window.h"
 
 /* ── malloc: static bump allocator ─────────────────────────────── *
  * Returns char* to match the K&R declaration in dhry_1.c:
@@ -32,13 +34,29 @@ char *malloc(unsigned long size) {
     return p;
 }
 
-/* ── time: return elapsed seconds ──────────────────────────────── */
+/* ── time: the measured window's start and end ─────────────────── *
+ * Built with -DTIME, dhry_1.c calls time() exactly twice: Begin_Time
+ * just before its loop and End_Time just after.  The value it returns
+ * is seconds, which Dhrystone subtracts for its own (soft-float, so
+ * unprinted) result.
+ */
+
+static int time_call_count = 0;
 
 long time(long *p) {
-    uint32_t us = bench_timer_elapsed_us();
-    long sec = (long)(us / 1000000);
-    if (p) *p = sec;
-    return sec;
+    switch (time_call_count++) {
+        case 0:
+            dhry_window_open();
+            return 0;
+        case 1:
+            return dhry_window_close() / bench_timer_freq_hz();
+
+        default:
+            bench_puts("Unexpected time() call\n");
+            asm volatile("break");
+            for (;;)
+                ;
+    }
 }
 
 /* ── printf: minimal formatter ─────────────────────────────────── */
