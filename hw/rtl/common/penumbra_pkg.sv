@@ -482,5 +482,128 @@ package penumbra_pkg;
     localparam int TLB_U   = 6;   // User-accessible
     localparam int TLB_G   = 7;   // Global (skip ASID match)
 
+    // ── Typed views of the ISA ──────────────────────────────────
+    // The types modules in the typed style declare their ports and
+    // payloads in (doc/internals/coding-standards.md, "Rules for new
+    // modules"). The constants above keep their bare widths, so a typed
+    // field compares against them unchanged.
+    typedef logic [31:0] word_t;          // a register's or a memory word's value
+    typedef logic [31:0] vaddr_t;
+    typedef logic [31:0] paddr_t;
+    typedef logic [3:0]  reg_index_t;     // a register as an instruction names it
+    typedef logic [3:0]  spr_index_t;     // SPR_*
+    typedef logic [3:0]  sysdev_t;        // SYSDEV_*
+    typedef logic [3:0]  sysreg_index_t;  // SYSREG_*, within its device
+    typedef logic [3:0]  cond_t;          // COND_*
+    typedef logic [1:0]  mem_size_t;      // MEM_SZ_*
+    typedef logic [2:0]  access_t;        // ACC_*, one-hot
+    typedef logic [3:0]  vector_t;        // VEC_*
+    typedef logic [3:0]  fault_type_t;    // FAULT_*
+
+    // NZCV, in SR[3:0]'s order.
+    typedef struct packed {
+        logic v;
+        logic c;
+        logic z;
+        logic n;
+    } flags_t;
+
+    typedef struct packed {
+        logic        s;
+        logic        i;
+        logic [25:0] reserved;   // reads as zero
+        flags_t      flags;
+    } sr_t;
+
+    // ── Instruction layouts ─────────────────────────────────────
+    // A struct for each layout doc/system/instruction-encoding.md gives,
+    // and insn_t, the one word seen through any of them. Every layout
+    // starts with the format prefix, so insn.head.fmt reads it whatever
+    // the word holds.
+    typedef struct packed {
+        logic [1:0]  fmt;          // FMT_*
+        logic [29:0] body;
+    } insn_head_t;
+
+    typedef struct packed {
+        logic [1:0]  fmt;
+        logic [4:0]  op;           // OP_R_*
+        reg_index_t  rd;
+        reg_index_t  rs;
+        logic        flags_only;   // F: the flags are kept, the result dropped
+        logic [15:0] spare;
+    } insn_r_t;
+
+    // MUL, MULU, DIV, DIVU
+    typedef struct packed {
+        logic [1:0]  fmt;
+        logic [4:0]  op;
+        reg_index_t  rd;
+        reg_index_t  rs;
+        logic        flags_only;   // must be 0
+        reg_index_t  rdh;          // write-only: the high half, or the remainder
+        logic [11:0] spare;
+    } insn_divmul_t;
+
+    // RDSYS, WRSYS
+    typedef struct packed {
+        logic [1:0]    fmt;
+        logic [4:0]    op;
+        reg_index_t    rd;
+        reg_index_t    rs;
+        logic          flags_only;
+        sysdev_t       dev;
+        sysreg_index_t sysreg;
+        logic [7:0]    spare;
+    } insn_sys_t;
+
+    // RDSPR, WRSPR
+    typedef struct packed {
+        logic [1:0]  fmt;
+        logic [4:0]  op;
+        reg_index_t  rd;
+        reg_index_t  rs;
+        logic        flags_only;
+        spr_index_t  spr;
+        logic [11:0] spare;
+    } insn_spr_t;
+
+    typedef struct packed {
+        logic [1:0]  fmt;
+        logic [3:0]  op;           // OP_L_*
+        reg_index_t  rd;
+        logic [5:0]  spare;
+        logic [15:0] imm16;
+    } insn_l_t;
+
+    typedef struct packed {
+        logic [1:0]  fmt;
+        logic        load;         // else a store
+        mem_size_t   size;
+        logic        sign_extend;  // a sub-word load's
+        reg_index_t  rd;
+        reg_index_t  rb;
+        logic [15:0] offset16;     // signed bytes
+        logic [1:0]  spare;
+    } insn_m_t;
+
+    typedef struct packed {
+        logic [1:0]  fmt;
+        cond_t       cond;
+        logic [21:0] offset22;     // signed words, from the branch itself
+        logic [3:0]  spare;
+    } insn_b_t;
+
+    typedef union packed {
+        insn_head_t   head;
+        insn_r_t      r;
+        insn_divmul_t divmul;
+        insn_sys_t    sys;
+        insn_spr_t    spr;
+        insn_l_t      l;
+        insn_m_t      m;
+        insn_b_t      b;
+    } insn_t;
+
 endpackage
 /* verilator lint_on UNUSEDPARAM */
