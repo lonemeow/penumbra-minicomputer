@@ -117,6 +117,60 @@ Open:
   with "Compiler: per-generation tuning — models and their consumers"
   in compiler-pipeline.md.
 
+## Libpthread: an uncontended mutex is mostly calls
+
+Linking libpthread replaces libc's stub mutexes before `main()`, so a
+threaded process runs `pthread_mutex_lock` and `pthread_mutex_unlock`
+for every lock it takes, libc's own (stdio, malloc) among them.
+`pbench-pthread pthread mutex` times one uncontended pair: on the
+ULX3S gen3 at 37.5 MHz (2026-11-22), 5.97 µs, 228 cycles and 137
+instructions a pair, at CPI 1.67 with 22.8 % of cycles in flush
+stalls.
+
+Counted from the binaries, the path the dynamically linked benchmark
+runs is 134 instructions and 23 taken control transfers:
+
+| Part | Instructions |
+|---|---|
+| The benchmark's loop and its two PLT stubs | 17 |
+| `pthread_mutex_lock` and `pthread_mutex_unlock` | 77 |
+| libpthread's PLT stubs, five calls into libc | 25 |
+| `atomic_cas_ptr`, twice: the RAS sequence | 12 |
+| `membar_exit` once and `membar_enter` twice | 3 |
+
+The work is two 6-instruction compare-and-swaps, the magic check, the
+owner read from TLS and the waiter test; most of the rest is getting
+to it.
+
+- **The barriers do nothing and cost 21 instructions and 9 of the
+  transfers.** libc builds every `membar_*` as one `jmp lr`
+  (`membar_ops_nop.c`), and libpthread calls three a pair, each
+  through a PLT stub. Declaring `PTHREAD__ATOMIC_IS_MEMBAR` in
+  `lib/libpthread/arch/penumbra/pthread_md.h` drops the calls, and
+  follows from what libc's empty barriers follow from: the
+  architecture needs no barriers
+  ([Memory Ordering](../system/architecture.md#memory-ordering)), so
+  every atomic operation already orders as one would. sh3 and m68k declare it too, as ports that
+  will not go SMP.
+- **Each compare-and-swap reaches libc through the PLT**: 5
+  instructions and an indirect jump each, 10 a pair. A copy of the
+  sequence in libpthread, called directly, skips the stub, but it is
+  a second `rasctl(2)` region, and `userret()` walks the region list
+  on every return to user mode from an interrupt or exception
+  (`sys/arch/penumbra/include/userret.h`).
+
+Open:
+
+- Run `pbench-pthread-static` on the board beside `pbench-pthread`.
+  The static link calls the same routines with no PLT stubs, which
+  prices the stubs in cycles rather than instructions. The
+  benchmark's `all` target builds it; `overlay` installs only the
+  dynamic binaries.
+- Declare `PTHREAD__ATOMIC_IS_MEMBAR`, and time the pair before and
+  after.
+- Weigh a libpthread-local compare-and-swap against what a second RAS
+  region adds to every interrupt return.
+
 ## Ruled out
 
 - **Word-at-a-time `strcmp` and `strcpy`.**  Tried and measured

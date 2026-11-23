@@ -14,7 +14,8 @@ SRCS+=	atomic_add_32_cas.c atomic_add_32_nv_cas.c \
 	atomic_or_32_cas.c atomic_or_32_nv_cas.c \
 	atomic_swap_32_cas.c
 
-# Memory barriers are no-ops on uniprocessor with no store buffer.
+# Memory barriers are no-ops: the architecture needs none, whatever
+# buffering a core does (doc/system/architecture.md, Memory Ordering).
 SRCS+=	membar_ops_nop.c
 
 # Sub-word CAS emulation on top of 32-bit CAS.

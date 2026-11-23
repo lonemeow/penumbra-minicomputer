@@ -572,8 +572,9 @@ copy.  Four boundaries keep R12 == curlwp whenever kernel C runs:
   handler resumes and restarts indistinguishably, so it is not a
   negative control.
 
-Generic CAS-based inc/dec/add/and/or built on top.  No-op
-memory barriers (uniprocessor, no store buffer reordering).
+Generic CAS-based inc/dec/add/and/or built on top.  Memory
+barriers are no-ops: the architecture needs none, whatever buffering
+a core does ([Memory Ordering](../architecture.md#memory-ordering)).
 
 ## PIC Reach Limitation
 
