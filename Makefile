@@ -39,7 +39,7 @@ OPT_BUILD ?= -O2
 VERILATOR_BASE_FLAGS = --cc --exe --build -Wall --assert \
                        $(if $(VCD),--trace) \
                        -CFLAGS "-std=c++17 $(OPT_BUILD)"
-VERILATOR_INCLUDES   = -Ihw/rtl/common -Ihw/rtl/penumbra1 -Ihw/rtl/penumbra2 -Ihw/rtl/penumbra3 -Ihw/rtl/machine -Ihw/rtl/bus -Ihw/rtl/io -Ihw/rtl/io/audio -Ihw/rtl/io/i2c -Ihw/rtl/io/sdram -Ihw/rtl/io/video -Ihw/rtl/io/usb -Ihw/rtl/io/eth -Ihw/rtl/io/ps2 -Ihw/rtl/soc -Ihw/rtl/sim
+VERILATOR_INCLUDES   = -Ihw/rtl/common -Ihw/rtl/penumbra1 -Ihw/rtl/penumbra2 -Ihw/rtl/penumbra3 -Ihw/rtl/penumbra4 -Ihw/rtl/machine -Ihw/rtl/bus -Ihw/rtl/io -Ihw/rtl/io/audio -Ihw/rtl/io/i2c -Ihw/rtl/io/sdram -Ihw/rtl/io/video -Ihw/rtl/io/usb -Ihw/rtl/io/eth -Ihw/rtl/io/ps2 -Ihw/rtl/soc -Ihw/rtl/sim
 
 # A core build (program runners, interactive sim) puts its variant's
 # directory first, so the variant's forks shadow the base modules they
@@ -72,7 +72,7 @@ TB   ?= tb_$(MOD)
 # Shared packages — always included. --top-module tells Verilator which
 # module is the DUT (otherwise it picks the first file = a package).
 # Add new packages here as the design grows.
-PKG_SV = hw/rtl/common/penumbra_pkg.sv hw/rtl/penumbra2/penumbra2_pkg.sv hw/rtl/penumbra3/penumbra3_pkg.sv hw/rtl/io/sdram/sdram_pkg.sv hw/rtl/io/video/video_pkg.sv hw/rtl/io/usb/usb_pkg.sv hw/rtl/fpga/ecp5_pll_pkg.sv hw/rtl/fpga/xc7/xc7_mmcm_pkg.sv
+PKG_SV = hw/rtl/common/penumbra_pkg.sv hw/rtl/penumbra2/penumbra2_pkg.sv hw/rtl/penumbra3/penumbra3_pkg.sv hw/rtl/penumbra4/penumbra4_pkg.sv hw/rtl/io/sdram/sdram_pkg.sv hw/rtl/io/video/video_pkg.sv hw/rtl/io/usb/usb_pkg.sv hw/rtl/fpga/ecp5_pll_pkg.sv hw/rtl/fpga/xc7/xc7_mmcm_pkg.sv
 
 # Resolving a module by name (module sims, test-modules) must not pick up a
 # fork, which redefines a module under the same name in its own directory: a
@@ -238,6 +238,12 @@ RUNNER_MOD_penumbra3      = machine_penumbra3_sim
 RUNNER_TBS_penumbra3      = tb_penumbra3_prog
 RUNNER_PROVIDES_penumbra3 = mmu mmu-d mmu-i cache l2 wrspr machid perfctr timer irq uart bus bus-fault
 
+# gen4 provides a capability once the part behind it runs in its machine;
+# a program that requires one it lacks is skipped, and the skip is listed.
+RUNNER_MOD_penumbra4      = machine_penumbra4_sim
+RUNNER_TBS_penumbra4      = tb_penumbra4_prog
+RUNNER_PROVIDES_penumbra4 =
+
 # Runner config keys on the base generation, so a variant inherits the
 # DUT wrapper, testbenches, and capability set unchanged. A variant whose
 # behavior diverges from its base attaches its capability delta here
@@ -260,7 +266,7 @@ ISS_PROVIDES = $(RUNNER_PROVIDES_penumbra1)
 .PHONY: test
 test:
 	@test -n "$(strip $(RUNNER_MOD))" || \
-		{ echo "ERROR: unknown CORE '$(CORE)' — known bases: penumbra1 penumbra2 penumbra3 (+ variants, e.g. penumbra2_5)"; exit 1; }
+		{ echo "ERROR: unknown CORE '$(CORE)' — known bases: penumbra1 penumbra2 penumbra3 penumbra4 (+ variants, e.g. penumbra2_5)"; exit 1; }
 	@mkdir -p $(BUILD_DIR) $(WAVE_DIR) $(BUILD_DIR)/hex
 	@# Build each runner testbench once (binaries keyed by core + testbench:
 	@# a variant sets a different PENUMBRA_CPU_VARIANT, so it needs its own)

@@ -13,17 +13,23 @@
 package penumbra4_pkg;
     import penumbra_pkg::*;
 
-    // ── Register references ─────────────────────────────────────
-    // R14 is two entries of the file, USP and SSP. R15 is the PC and no
-    // entry at all, so SSP takes its number; a read of R15 takes the op's
-    // own PC where its operand is captured. Every op in flight was issued
-    // under the committed SR.S, since only a trap's entry and ERET change
-    // it and both kill every op behind them, so a reference maps to its
-    // entry by that one bit wherever it is read or written.
-    typedef logic [3:0] rf_index_t;
+    // ── Architectural and physical registers ────────────────────
+    // A reference names an architectural register, the ISA's R0 to R15; a
+    // physical register is one the register file holds. R14 is two
+    // physical registers, USP and SSP. R15 is the PC and none at all, so
+    // SSP takes its number; a read of R15 takes the op's own PC where its
+    // operand is captured.
+    //
+    // Which physical register R14 names is SR.S as the status holds it,
+    // which only commit writes. Every op in flight was issued under that
+    // bit: only a trap's entry and ERET change it, and the kill that clears
+    // every op behind them takes effect at the same edge as their SR. So a
+    // reference maps to its physical register by the one bit wherever it is
+    // read or written.
+    typedef logic [3:0] phys_reg_t;
 
-    localparam rf_index_t RF_USP = REG_SP;
-    localparam rf_index_t RF_SSP = REG_PC;
+    localparam phys_reg_t PHYS_USP = REG_SP;
+    localparam phys_reg_t PHYS_SSP = REG_PC;
 
     typedef struct packed {
         logic       en;
@@ -31,11 +37,11 @@ package penumbra4_pkg;
         reg_index_t index;
     } reg_ref_t;
 
-    // en says whether an op uses the reference, not where it lands.
+    // en says whether an op uses the reference, not which register it is.
     /* verilator lint_off UNUSEDSIGNAL */
-    function automatic rf_index_t rf_index_of(reg_ref_t ref_, logic supervisor);
+    function automatic phys_reg_t phys_reg_of(reg_ref_t ref_, logic supervisor);
         if (ref_.index == REG_SP && supervisor && !ref_.user) begin
-            return RF_SSP;
+            return PHYS_SSP;
         end
         return ref_.index;
     endfunction
@@ -125,6 +131,7 @@ package penumbra4_pkg;
         sysdev_t       sysdev;
         sysreg_index_t sysreg;
         spr_index_t    spr;
+        logic          irq_enable;   // OPC_IRQ_MASK's: EI, else DI
         logic          privileged;   // issue faults it in user mode
         vaddr_t        pc;
         prediction_t   prediction;
@@ -161,6 +168,95 @@ package penumbra4_pkg;
         slot_t y;
         slot_e older;         // meaningful when both slots hold an op
     } pair_t;
+
+    // ── A register write ────────────────────────────────────────
+    // What commit gives the register file through each write port.
+    typedef struct packed {
+        logic      en;
+        phys_reg_t phys;
+        word_t     value;
+    } reg_write_t;
+
+    // ── Redirects ───────────────────────────────────────────────
+    typedef struct packed {
+        logic   valid;
+        vaddr_t target;
+    } redirect_t;
+
+    // Commit's redirect: to a target, or to the handler whose vector it
+    // names, which the fetch unit reads before it fetches.
+    typedef struct packed {
+        logic    valid;
+        logic    to_vector;
+        vector_t vector;
+        vaddr_t  target;
+    } commit_redirect_t;
+
+    // ── Lines ───────────────────────────────────────────────────
+    // 16 bytes at a 16-byte-aligned address, the unit every cache level
+    // and the core-to-uncore port move. Word k holds the bytes at the
+    // line's address plus 4k.
+    localparam int LINE_WORDS = 4;
+
+    typedef logic [$clog2(LINE_WORDS)-1:0]   line_word_t;
+    typedef logic [$clog2(LINE_WORDS+1)-1:0] line_count_t;  // 0 to LINE_WORDS words
+    typedef word_t [LINE_WORDS-1:0]          line_t;
+
+    /* verilator lint_off UNUSEDSIGNAL */
+    function automatic line_word_t line_word_of(vaddr_t addr);
+        return addr[2 +: $clog2(LINE_WORDS)];
+    endfunction
+    /* verilator lint_on UNUSEDSIGNAL */
+
+    // ── The front end ───────────────────────────────────────────
+    // A fetch in IF2. from_access says the L1-I's last access answers it,
+    // in place of its lookup's verdict.
+    typedef struct packed {
+        logic   valid;
+        vaddr_t pc;
+        logic   from_access;
+    } fetch_slot_t;
+
+    // IF2 asking the fetch unit to fetch pc again: the fetch it had no
+    // word for, once the access it requested is done, or the rest of a
+    // line a word read left.
+    typedef struct packed {
+        logic   valid;
+        vaddr_t pc;
+        logic   from_access;
+    } relaunch_t;
+
+    // ── Commit's effects on the status ──────────────────────────
+    typedef struct packed {
+        logic       flags_en;
+        flags_t     flags;
+        logic       trap;          // entry: EPC takes epc, ESR the SR; S set, I clear
+        vaddr_t     epc;
+        logic       eret;          // the SR takes ESR's image
+        logic       spr_en;        // WRSPR of EPC, ESR or a scratch register
+        spr_index_t spr;
+        word_t      spr_value;
+        logic       irq_mask_en;   // EI or DI
+        logic       irq_enable;
+    } status_write_t;
+
+    // ── The core-to-uncore port ─────────────────────────────────
+    // A requester's request (doc/internals/penumbra3/uncore-port.md): a
+    // line read when cacheable, else a word read or, with we, a word
+    // write.
+    typedef struct packed {
+        logic       cacheable;
+        paddr_t     addr;
+        logic       we;
+        logic [3:0] byte_en;
+        word_t      wdata;
+    } uncore_req_t;
+
+    /* verilator lint_off UNUSEDSIGNAL */
+    function automatic logic is_line_read(uncore_req_t req);
+        return req.cacheable && !req.we;
+    endfunction
+    /* verilator lint_on UNUSEDSIGNAL */
 
 endpackage
 /* verilator lint_on UNUSEDPARAM */

@@ -36,6 +36,7 @@ hw/
 │   ├── penumbra2/ # gen2 6-stage pipelined core + its MMU / L1 / arbiter / fill modules
 │   ├── penumbra2_5/ # gen2.5's forks of gen2's core and stages, + BTB, forwarding
 │   ├── penumbra3/ # gen3 7-stage pipelined core + its MMU, L1s and uncore
+│   ├── penumbra4/ # gen4 in-order dual-issue core (bring-up; design in doc/internals/penumbra4/)
 │   ├── machine/   # machine integrations (machine_<generation>.sv)
 │   ├── soc/       # Bus controller, autoconfig, caches (L1 VIPT, L1 PIPT, L2), boot ROM, cpuid/machid
 │   ├── io/        # Real UART, real SPI, SDRAM v2 controller/adapter/PHY/CDC
@@ -43,7 +44,7 @@ hw/
 │   │              #   usb/ (SIE cells + MAC + host controller), video/,
 │   │              #   eth/ (the Ethernet adapter's cells),
 │   │              #   ps2/ (the PS/2 port)
-│   ├── sim/       # machine_sim + machine_penumbra{2,3}_sim, sim devices, memory models
+│   ├── sim/       # machine_sim + machine_penumbra{2,3,4}_sim, sim devices, memory models
 │   └── fpga/      # FPGA helpers (ECP5 PLL package, lint stubs); board tops under <board>/,
 │                  #   Xilinx 7-series helpers under xc7/ (MMCM package, lint stubs)
 ├── microcode/   # microcode.uasm (single source — assemble via uasm.py)
@@ -147,6 +148,43 @@ only `common/`, the `soc/` devices and `io/` with the other generations.
   `penumbra3_bus_master.sv`, the registered external-bus master
   (`doc/internals/penumbra3/uncore.md`).
 
+### Penumbra/4 core (`rtl/penumbra4/`)
+The gen4 in-order dual-issue core, coming up module by module in the
+order `doc/internals/penumbra4/structure.md` ("Bring-up") gives.
+`rtl/machine/machine_penumbra4.sv` composes it.
+- `penumbra4_pkg.sv` — the payloads that cross gen4's stages: `op_t`,
+  `slot_t`, `pair_t`, and the register reference, ALU function, op class,
+  prediction and fault inside them; the line, the core-to-uncore request,
+  redirects, register writes and commit's status writes. The ISA's typed
+  views (`insn_t`, `sr_t`, address and register types) are
+  `penumbra_pkg`'s.
+- `penumbra4_core.sv` — only connects: the stages, their units, the
+  register file and the status.
+- `penumbra4_fetch.sv` — IF1, the one place that steers: commit's
+  redirect, the vector read, execute's, IF2's relaunch, the next line.
+- `penumbra4_line.sv` — IF2: the L1-I's line (or its last access's) into
+  ops for the queue through four `penumbra4_decode.sv` units; a fetch
+  with no word requests the access and relaunches.
+- `penumbra4_fetch_queue.sv` — ops between IF2 and issue; the entry type
+  is a parameter.
+- `penumbra4_issue.sv` — ID: one op into Y, its hazards read from the
+  stage registers, its operands captured.
+- `penumbra4_execute.sv` — EX: `penumbra4_alu.sv` and
+  `penumbra4_resolve.sv` (over `cond_eval`) for slot Y, the
+  misprediction redirect.
+- `penumbra4_mem_launch.sv`, `penumbra4_mem_resolve.sv` — MEM1 and MEM2,
+  which pass ops through; an access or a sysreg op stops the sim.
+- `penumbra4_commit.sv` — WB: registers every effect (register writes,
+  status writes, the redirect and kill, program end) a cycle ahead of
+  where it lands.
+- `penumbra4_regfile.sv` (4R/2W, flops), `penumbra4_status.sv` (SR, EPC,
+  ESR, SCR0..3).
+- `penumbra4_icache.sv` — the L1-I with no arrays: every lookup misses,
+  every fetch and vector read is an access.
+- `penumbra4_mmu.sv` — fetch translation, off.
+- `penumbra4_uncore.sv` — the fetch side over `penumbra4_bus_master.sv`,
+  which runs line reads, word reads and word writes on the bus.
+
 ### Penumbra/2 core (`rtl/penumbra2/`, abandoned)
 The gen2 6-stage pipelined core (design in `doc/internals/penumbra2/`)
 and its generation-bound memory-system modules. The bare core exposes
@@ -219,6 +257,10 @@ exposed external bus.
   TIMER, MACH), behind machine_penumbra2's port list, its cache geometry
   the board's parameters; the program-end pulse is a BREAK's trap commit
   (`doc/internals/penumbra3/machine.md`).
+- `machine_penumbra4.sv` — the gen4 machine: gen3's bus, interrupt and
+  bus-control ports, and gen4's own observability ports (a commit's two
+  register writes, its retire count) and program-end pulse; the core, the
+  L1-I, the MMU's fetch side and the uncore inside.
 
 ### Penumbra/1 core (`rtl/penumbra1/`)
 - `cpu_core.sv` — full CPU integration: datapath + sequencer + ROM
@@ -419,6 +461,9 @@ exposed external bus.
   the gen2 program-runner wrapper (`make test CORE=penumbra2`).
 - `machine_penumbra3_sim.sv` — fork of the gen2 wrapper with
   `machine_penumbra3` in its place (`make test CORE=penumbra3`).
+- `machine_penumbra4_sim.sv` — fork of the gen3 wrapper with
+  `machine_penumbra4` and its commit ports in its place
+  (`make test CORE=penumbra4`, runner `hw/sim/tb_penumbra4_prog.cpp`).
 - `unified_bus_mem.sv` — bus-shaped unified ROM/RAM device (region-
   compressed map, simple bus device, `+rom_hex=`).
 - `unified_mem.sv` — dual-port flat stand-in for core-level bring-up
