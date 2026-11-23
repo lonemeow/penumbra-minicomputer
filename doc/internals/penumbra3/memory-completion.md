@@ -122,8 +122,7 @@ graph LR
   needs multi-outstanding tracking and a completion-driven wakeup of waiting
   dependents — a match/CAM landing squarely on the issue cone this design
   works to keep shallow. It trades the fmax gen3 exists to protect for IPC
-  only on miss-heavy code, and going multi-outstanding would also cost the
-  precise-fault property below. It is out of scope by design, not deferred.
+  only on miss-heavy code. It is out of scope by design, not deferred.
 - **The fill is requested once.** The L1-D takes the load's access as it
   parks and holds a line read up on the
   [core-to-uncore port](./uncore-port.md) until it completes, and the
@@ -295,7 +294,7 @@ A memory fault is taken on the held, oldest-in-flight access. Whether it is
   fault:** any **load** bus fault, any **uncached store** bus fault, and all
   MMU-born faults (alignment, TLB miss, protection). The alignment/TLB/permission
   faults resolve at MEM2 *before* any bus transaction, so they are precise by
-  construction. A load and an uncached store are not deferrable — the load's
+  construction. gen3 defers neither a load nor an uncached store — the load's
   consumer waits on the value, and an uncached (device) store is ordered and
   unbuffered — so each is the oldest in flight when its transaction resolves.
 - **Deferred — a trap at a later instruction:** a **cacheable store** bus

@@ -301,11 +301,11 @@ trap(struct trapframe *tf)
 
 	case EXC_BUSFAULT: {
 		/*
-		 * A deferred bus fault is a cacheable store's write faulting
-		 * after the store completed: nothing names the store, and
-		 * FAULT_ADDR is the write's physical address.  It stops the
-		 * kernel whatever the mode.  Taken on the vector page before
-		 * a handler saved its state, it stops in _trap_common's
+		 * A deferred bus fault is a cacheable access faulting after
+		 * its instruction completed: nothing names the instruction,
+		 * and FAULT_ADDR is the access's physical address.  It stops
+		 * the kernel whatever the mode.  Taken on the vector page
+		 * before a handler saved its state, it stops in _trap_common's
 		 * double-fault guard instead.
 		 */
 		bool deferred = (tf->tf_fault_status & FSTAT_TYPE_MASK)

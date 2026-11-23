@@ -103,13 +103,14 @@ The kernel reads these via [sysregs](./sysregs.md#device-0-mmu).
 `bus_space_peek`/`bus_space_poke` use this mechanism to probe for
 optional devices: install a fault-returning trap handler, perform the
 probe, and catch the fault if nothing responded. The probe goes
-through an uncacheable mapping, or with the MMU off, so that its fault
-is precise.
+through an uncacheable mapping, or with the MMU off, because only an
+uncacheable access is promised a precise fault.
 
-A store to a cacheable page may fault after it has completed. Its
-fault is then [deferred](./architecture.md#deferred-bus-faults): taken
-at a later instruction, with the write's physical address in
-`FAULT_ADDR`, and not resumable.
+An access to a cacheable page may fault after its instruction has
+completed. Its fault is then
+[deferred](./architecture.md#deferred-bus-faults): taken at a later
+instruction, with the access's physical address in `FAULT_ADDR`, and
+not resumable.
 
 **RAM sizing.** Base RAM (at physical 0) has an unknown installed
 size, but is guaranteed to be at least 8 KB (see above). The boot ROM

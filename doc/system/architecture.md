@@ -332,7 +332,7 @@ On any interrupt, exception, or trap the hardware:
 - **External interrupts:** saved PC is the next instruction
   (the interrupted one completed).
 - **Deferred bus faults:** saved PC is the next instruction; the
-  store whose write faulted completed earlier
+  access that faulted was an earlier instruction's
   ([Deferred Bus Faults](#deferred-bus-faults)).
 - **Software traps** (`SYSCALL`, `BREAK`): saved PC is the trapping
   instruction itself. The handler advances `EPC` by 4 before `ERET`
@@ -390,30 +390,39 @@ priority: if both are pending simultaneously, the timer is taken first.
 
 ### Deferred Bus Faults
 
-A store to a cacheable page may complete once its write is accepted
-for later delivery: posted, buffered, or held in a write-back cache.
-When the bus then faults the write, because no device answers its
-address or the device refuses it, the store has already completed,
-and the fault is taken at a later instruction as a **deferred bus
-fault**:
+Only an access to an uncacheable page is promised a precise bus
+fault. That is where bus faults are useful: device registers are
+mapped uncacheable, and every access with the MMU in bypass mode is
+uncached, so a probe for hardware faults precisely. A cacheable
+access that faults has reached address space with no memory behind
+it, which software does not recover from, so an implementation may
+let it run on past its instruction: a store once its write is
+accepted for later delivery (posted, buffered, or held in a
+write-back cache), and a load or a fetch while its data is on its
+way, so that only a use of the data waits for it.
+
+When the bus faults such an access, because no device answers its
+address or the device refuses it, the instruction that made it may
+have completed, and the fault is then taken at a later instruction
+as a **deferred bus fault**:
 
 - **Vector 0** (`VEC_BUS_FAULT`), at the first instruction boundary
   after the bus reports the fault, ahead of any interrupt pending
   there.
 - **The saved PC is the next instruction to execute,** as for an
-  interrupt. Nothing identifies the store whose write faulted.
-- **`FAULT_STATUS`** reads `TYPE` = `0101` with `W` set, and
-  **`FAULT_ADDR`** holds the write's physical address
-  ([FAULT_STATUS](./mmu.md#fault_status-layout)).
+  interrupt. Nothing identifies the instruction whose access faulted,
+  and a load whose fault is deferred leaves its destination register
+  undefined.
+- **`FAULT_STATUS`** reads `TYPE` = `0101` with `R`, `W` or `X`
+  giving the access's kind, and **`FAULT_ADDR`** holds its physical
+  address ([FAULT_STATUS](./mmu.md#fault_status-layout)).
 - **Not maskable.** Neither `SR.I` nor `ei_shadow` holds it off.
 - **One at a time.** The CPU holds one deferred fault until it takes
   it; a fault the bus reports while one is held is not recorded.
 
-Every other bus fault is precise: loads, instruction fetches, and
-stores to uncacheable pages (device registers are mapped uncacheable)
-fault on their own instruction, with `TYPE` = `0100` and the access's
-virtual address. A CPU may also hold a cacheable store until its write
-completes and fault it precisely; software handles both.
+A precise bus fault is taken on its access's own instruction, with
+`TYPE` = `0100` and the access's virtual address. A cacheable access
+may fault either way; software handles both.
 
 A deferred fault can arrive at any instruction, a handler's first ones
 included, before the handler has saved `EPC` and `ESR`. Taken there,
@@ -422,7 +431,7 @@ the context that handler interrupted cannot be resumed. A synchronous
 fault never arrives there, because handlers are written not to fault
 before they save their state. Software therefore treats a deferred
 bus fault as fatal: a cacheable mapping has reached address space
-that does not take the write.
+that does not answer it.
 
 ### Software Trap Instructions
 
@@ -472,3 +481,28 @@ The 32-bit value `0x44434241` stored at `0x1000`:
 `0x44434241`. The assembler's `.asciz` and `.byte` directives pack
 data in this order, so sequential byte loads read characters in string
 order. This matches x86, RISC-V, and ARM in LE mode.
+
+### Memory Ordering
+
+The architecture has one CPU, and nothing else on the bus reads or
+writes memory ([One Master](../hardware/bus-protocol.md#one-master)),
+so ordering is promised only where software can observe it.
+
+- **A program sees its own accesses in program order.** A load
+  returns what the program's latest earlier store to that address
+  left there. Beyond that, nothing is promised about how cacheable
+  accesses reach the bus: an implementation may buffer, merge,
+  reorder or repeat them, and a store has no fixed point at which it
+  reaches memory. A bus fault on one may be taken at a later
+  instruction ([Deferred Bus Faults](#deferred-bus-faults)).
+- **Uncacheable accesses land exactly as issued,** which is what
+  device registers need. Each is performed on the bus once, never
+  repeated or merged with another, in program order with the
+  program's other uncacheable accesses, and a bus fault on one is
+  precise, taken on its own instruction. A page that was mapped
+  cacheable first has its lines invalidated
+  ([Uncached Access](./mmu.md#uncached-access)).
+
+No instruction orders memory, because no software needs one: what a
+program can observe is already in order, so software's memory
+barriers are empty.

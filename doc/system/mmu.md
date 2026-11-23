@@ -87,7 +87,7 @@ Accessed via `WRSYS`/`RDSYS` with device ID 0.
   bus fault ([Deferred Bus Faults](./architecture.md#deferred-bus-faults)).
 - **R/W/X** (bits 8/9/10): Access type that faulted (one-hot).
 - **USR** (bit 11): 1 = the faulting access ran in user mode. A
-  deferred bus fault does not report its write's mode and reads 0.
+  deferred bus fault does not report its access's mode and reads 0.
 
 ### MMU_CONFIG Layout
 
