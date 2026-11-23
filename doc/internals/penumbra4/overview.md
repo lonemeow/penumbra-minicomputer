@@ -105,7 +105,7 @@ graph LR
 | | |
 |---|---|
 | **Slots** | X issues simple ALU ops, shifts and moves, and no fused op, so two fused ops never pair. Y is a full pipeline. A pair holds at most one branch, always its younger op, one MUL and one memory access; a second access would double the TLB's and the L1-D's data reads ([ruled out](./issue-pairing.md#ruled-out)). A DIV issues alone. |
-| **Order** | Either op of a pair may be the older one. Fixing the older op to X costs 44–70 issue cycles per 1000 instructions once ops are fused. |
+| **Order** | Either op of a pair may be the older one, but a branch is always the younger. Fixing the older op to X costs 26 / 18 issue cycles per 1000 instructions at the design's stage, since an older fused op could then never pair ([measured](./issue-pairing.md#what-a-fused-op-pairs-with)). |
 | **Lockstep** | Both ops move together, and a pair commits as a unit. Next to a MUL or a miss, the other op waits; it would have waited behind it in a single-issue core too, so lockstep never loses against one. |
 | **Exceptions** | Precise, as in every generation. X's ops cannot trap, a pair holds one memory access and a DIV issues alone, so at most one op of a pair traps, and the other commits when it is the older. A branch is its pair's younger op, so a redirect never splits a pair ([branches last](./issue-pairing.md#branches-last-and-two-reads-an-op)). A fault in a fused access commits the add and saves the access's PC ([precise exceptions](./issue-pairing.md#precise-exceptions)). |
 | **Flags** | Nearly every ALU op writes them. The flag state takes the write of the pair's youngest flag writer, a mux whose select is known at decode. |
