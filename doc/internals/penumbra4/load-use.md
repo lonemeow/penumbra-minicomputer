@@ -109,6 +109,12 @@ Who waits, at the 2-cycle wait:
   same register has to win over it, and the load's bus fault becomes
   deferred. The stall at the use is the easy part; that machinery
   belongs to a later generation.
+- **A one-cycle wait, for gen4.** Worth 71–76 with one ALU, but the
+  load's word would reach EX's operand mux in the cycle the L1-D
+  produces it, chaining MEM2's block-RAM read, way select and extend
+  into EX's ALU and address adder. The wait stays registered, as in
+  gen3, to keep the clock up; the compiler's schedule is the lever
+  that hides it ([open](#open)).
 
 ## What it means for pairing
 
@@ -137,12 +143,14 @@ need one model that holds both.
 ## Open
 
 - **One model for pairing and waits.** A pair whose younger op waits on
-  a load holds both ops.
+  a load holds both ops; gen4's counters measure it
+  ([overview](./overview.md#open)).
 - **The compiler's share.** A schedule that moves an independent
-  instruction between a load and its reader hides the same cycles, and
-  the machine scheduler is not enabled
-  ([per-generation tuning](../../TODO/compiler-pipeline.md#the-largest-divergence-dependence-distance)).
-  How often such an instruction is there to move is not measured.
-- **A one-cycle wait.** Worth 71–76 with one ALU, but it means the
-  load's data reaching EX's operand mux a cycle sooner, the path gen3
-  keeps registered.
+  instruction between a load and its reader hides the same cycles,
+  worth two slots each under dual issue. The scheduler before register
+  allocation is not enabled; that work is tracked with the compiler's
+  ([per-generation tuning](../../TODO/compiler-pipeline.md#the-largest-divergence-dependence-distance)),
+  and serves gen3's two-slot wait as well. What waits on gen4 is its
+  own scheduling model: two slots, X and Y as resources, a load two
+  cycles behind. How often such an instruction is there to move is not
+  measured.

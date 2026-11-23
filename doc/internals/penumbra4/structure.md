@@ -37,6 +37,12 @@ problem with it.
   copy of what an op in flight will write.
 - **Each operand has one stage that captures it,** named in that
   stage's contract.
+- **Issue chooses each operand's source.** It compares every register
+  an op reads against the writers in flight for its hazards anyway, so
+  it registers with the pair which input each operand takes: the file,
+  a result in either slot of a pipeline register, or commit's write.
+  Execute's operand mux then has registered selects, and an operand
+  whose pair holds in EX takes its value as it arrives.
 - **The core module only connects.** It instantiates the stages and
   units and wires them; every decision belongs to one of them.
 - **Smallest first.** Each module first exists in the smallest form
@@ -148,7 +154,7 @@ graph LR
 | `penumbra4_decode` | an instruction's fields | IF2 or the queue's read side ([open](#open)) |
 | `penumbra4_fuser` | forms ops from adjacent instructions | IF2 or the queue's read side ([open](#open)) |
 | `penumbra4_alu` | one op's result and flags | EX, one a slot |
-| `penumbra4_operands` | each of the four operands and the flags, from the register file or a result in flight | EX |
+| `penumbra4_operands` | each of the four operands and the flags, from the register file or a result in flight, by the sources issue chose | EX |
 | `penumbra4_resolve` | whether a transfer went where fetch predicted, and where it goes | EX, slot Y |
 | `cond_eval` | whether a condition holds for the flags | EX, in resolve |
 | `byte_ext`, `byte_rep` | a loaded sub-word extended, a stored one placed in its lanes | MEM2, MEM1 |
@@ -181,8 +187,9 @@ they are to start.
 | A system write with a lasting effect | the device raises busy; the fetch unit launches nothing while it is up | busy |
 
 The fetch unit is the one place that steers. Its sources, in priority:
-commit's redirect, execute's, the vector read, a relaunch after a
-miss, the prediction for the line in IF2, and the next line.
+commit's redirect, MEM1's for a fused branch resolved there
+([open](#open)), execute's, the vector read, a relaunch after a miss,
+the prediction for the line in IF2, and the next line.
 
 **A missed load holds its pair at commit.** The pair is the oldest in
 flight, so nothing older is left to drain around it. Its hold travels
@@ -254,12 +261,13 @@ another stage's operand mux would.
 | predictor → fetch | the line's predicted exit, its word and target | L, ending in the fetch address |
 | IF2 → queue | up to four instructions and their count | L, ending in the queue |
 | queue → IF2 | room for a line | R |
-| queue → issue | the instructions at the head | E |
+| queue → issue | the three instructions at the head, with their fuse and pair bits | E |
 | issue → queue | the instructions taken | E |
 | issue ↔ register file | four read indices, four values | E |
 | stage registers → issue | the writers in flight and when each result can be forwarded | R |
-| issue → execute | the pair | R |
+| issue → execute | the pair, and each operand's source | R |
 | execute → fetch, queue, issue | a misprediction's redirect and kill | L ([open](#open)) |
+| MEM1 → fetch, queue, issue, execute | a fused branch's redirect and kill, when it resolves there | E |
 | execute → predictor | the transfer's PC, outcome and target, for training | R |
 | execute → MEM1 | the pair and the access's address | R |
 | MEM1 → MMU, L1-D | the access's launch | R |
@@ -353,10 +361,32 @@ layer.
    outside the cones, but it changes the boundary between the machine
    and the board top, so it comes once the machine behind it is whole.
 
+## Beyond the baseline
+
+The bring-up builds the smallest gen4 the targets accept. What may be
+worth more is tried on the running machine after it, and kept where
+it costs no fmax:
+
+- **`incmem`, with a third input to the address adder:** an `ADD` or
+  `SUB #imm` fused into the access through its register, worth about
+  11 / 3 issue cycles per 1000 instructions on `pbench kernel` / Doom
+  ([measured](./issue-pairing.md#address-and-shift-fusions)). Nearly
+  every such access has an offset, so the adder takes it as a third
+  input, and the `ADD`'s flags need an add of their own beside the
+  address. The baseline's adder has two inputs, and its one sum is
+  both the address and the flags. Nearly every such access is a
+  prologue's save behind `SUB SP, #frame`, so a second variant keeps
+  the two inputs: the compiler places one callee-saved register's slot
+  at `[SP + 0]`, where the save slots now sit at the frame's far end,
+  and each prologue fuses its allocation with that save.
+
 ## Open
 
-- **Where decode and the fuser sit:** in IF2 or at the queue's read side
-  ([room for the fuser](./front-end.md#open)).
+- **Where decode and the fuser sit:** in IF2, with the L1-I's fill
+  bits, or at the queue's read side
+  ([room for the fuser](./front-end.md#open)). If none meets the
+  clock, a stage of their own comes next, and an aligned fuser only
+  after that ([front end](./front-end.md#design)).
 - **ID's window:** three instructions when a fused op pairs with a
   simple one, two when it issues alone. Whether the head fuses with
   the instruction behind it, and which of those shapes pair, depend
@@ -365,15 +395,34 @@ layer.
   lines when the next line arrives. ID then chooses by registered bits,
   beside its hazard compares. The third instruction is worth 12 / 51
   issue cycles per 1000 instructions
-  ([measured](./issue-pairing.md#what-a-fused-op-pairs-with)).
-- **The fused compare-and-branch's resolve.** Its condition need not
-  wait for the sum: a compare's Z is the equality of its operands, the
-  Z of an add or a subtract has a test that needs no carry propagation,
-  and N, C and V come off the carry chain. The probe decides whether
-  the resolve and its redirect fit in EX. If they do not, the fused
-  branch resolves in MEM1, the cycle it would resolve unfused, or every
-  EX redirect is registered. A shift's Z comes after the shifter, so a
-  shift may have to stay apart from its `Bcc`.
+  ([measured](./issue-pairing.md#what-a-fused-op-pairs-with)). The
+  queue presents three entries for now, so the choice stays inside
+  issue; that width is itself provisional.
+- **The fused compare-and-branch's resolve.** The design resolves it
+  in EX. The path runs from the carry chain through the condition and
+  the misprediction to IF1's address select, ending in the L1-I's
+  block-RAM address, and the probe decides whether it fits. Before any
+  fallback, it can be made shorter:
+    - **The condition from the operands, not the flags:** equality for
+      `EQ`/`NE`, the subtract's carry-out and top bits for the
+      less-than conditions. A compare's Z is the equality of its
+      operands, and an add's or a subtract's has a test that needs no
+      carry propagation.
+    - **`BEQ`/`BNE` in EX and the other conditions in MEM1.**
+    - **Only the select late:** the redirect's targets, the predicted
+      path and the fall-through, are known early, so the late signal
+      picks between inputs settled a cycle before.
+
+  The fallback resolves a fused branch in MEM1, the cycle it would
+  resolve unfused. Its issue slot is still saved; what it gives up is
+  a cycle on each mispredicted fused branch, at most the 11 / 6 EX
+  redirects per 1000 instructions gen3's predictor leaves on
+  `pbench kernel` / Doom, since 86–88 % of conditional branches are
+  fused. The fetch unit has a redirect input from MEM1 for it from the
+  start. Registering every EX redirect instead is ruled out: it costs
+  about as much and slows the branches that never needed it. A
+  shift's Z comes after the shifter, so the measured `opbr` fuses no
+  shift with its `Bcc`.
 - **Another stage between IF1 and EX,** an ID1 for decode and the
   fuser, or a later resolve. Either adds a cycle to each redirect from
   EX or commit, and none to a predicted taken branch, which IF2

@@ -69,7 +69,9 @@ together they take 92–98 % of what each takes alone, added
 - **Fuse or pair, at the least.** A cycle issues one fused op, two
   ops, or one. A fused op paired with a simple ALU op is the design
   wanted, where its timing allows; the ECP5 is where it is least
-  likely to. Two fused ops never pair.
+  likely to. Two fused ops never pair. The aim is a pair or a fused
+  op on most cycles, not the best schedule of them: a rule that finds
+  a better one costs issue logic for little.
 - **A native port for on-board RAM.** The uncore reaches the board's
   own memory through a burst port beside the Penumbra bus, and sends
   every other address to the bus, which keeps serving the devices and
@@ -133,9 +135,11 @@ gen4's own modules. Dual issue changes what sits around them:
   fuser has to see across fetches ([front end](./front-end.md)). Issue
   takes 1.5 to 1.9 a cycle on average.
 - **An address adder for the fused accesses** in EX, ahead of the
-  registered address the TLB and the cache read, taking two registers,
-  and the access's offset as a third input for a pre-incremented one
-  ([the address adder](./issue-pairing.md#the-address-adder)).
+  registered address the TLB and the cache read, taking two registers
+  ([the address adder](./issue-pairing.md#the-address-adder)). The
+  access's offset as a third input, for a pre-incremented access, is
+  tried once the baseline runs
+  ([beyond the baseline](./structure.md#beyond-the-baseline)).
 - **The MMU and the L1-D keep one data port each:** a pair makes one
   access ([ruled out](./issue-pairing.md#ruled-out)).
 - **The register file needs two write ports** and four read ports
@@ -170,14 +174,18 @@ arrives with the two-wide front end that dual issue needs anyway.
   timing, on the ECP5 above all, decides.
 - **Stalls.** The pairing measurements count issue slots, and the
   load-use wait is measured for a single-issue core
-  ([load-use](./load-use.md)). How waits, misses and redirects interact
-  with pairing needs one pipeline model.
-- **Fetch after a misprediction or a miss,** when the queue is empty
-  ([front end](./front-end.md#open)).
-- **What the native port is worth at gen4's rate.** gen3's ~3 cycles
-  per 1000 instructions is the figure at one instruction a cycle. The
-  store-buffer model prices drains at any rate (`+sbmodel_cpi=`), and
-  the cache model's fills can be priced at the port's costs.
+  ([load-use](./load-use.md)), so how waits, misses and redirects
+  interact with pairing, the refill of an empty queue after a
+  misprediction or a miss among them, and the CPI they give, is
+  unmeasured. No
+  decision ahead of RTL waits on it: gen4's own counters measure it.
+  Where a forward source has to go, the pairing model gains a ready
+  time for each register to price the stalls, and nothing more.
+- **The native port's shape,** which what routes and closes on both
+  boards decides, the ULX3S at 25 MHz if need be. gen3's ~3 cycles per
+  1000 instructions is its worth at one instruction a cycle; the
+  store-buffer model can price drains at gen4's rate
+  (`+sbmodel_cpi=`), but a gain says nothing of what is feasible.
 - **The memory stack behind the port.** The line stack keeps one
   request outstanding ([line
   stack](../sdram-controller.md#line-stack-a-held-line)), and gen3's

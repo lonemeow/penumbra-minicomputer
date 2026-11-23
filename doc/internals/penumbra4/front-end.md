@@ -219,9 +219,16 @@ a fused op pairs with any op.
   cycle that fetches the transfer is within 1.0–3.4 %, and needs taken
   transfers predicted at fetch.
 
-An aligned fuser is the fallback if carrying an instruction over costs
-the clock. The same-cycle forwards would then earn the place
-[issue-pairing rules them out of](./issue-pairing.md#ruled-out).
+If decode and the fuser cost the clock where they sit, a stage of
+their own ahead of issue comes first. It costs a cycle on each
+redirect from EX or commit, about 11 / 6 per 1000 instructions
+([structure](./structure.md#open)), where an aligned fuser gives up
+56–81. The aligned fuser is the last resort, and the same-cycle
+forwards would then earn the place
+[issue-pairing rules them out of](./issue-pairing.md#ruled-out). The
+compiler could then help it: which word a pair starts on is a property
+of the code, so a pass could move pairs onto even words by swapping
+one with an independent neighbour.
 
 ## Open
 
@@ -239,13 +246,9 @@ the clock. The same-cycle forwards would then earn the place
     - **The queue's read side,** where pairing compares registered
       fields beside the scoreboard's compares rather than behind them.
 
-  A probe of the front end decides, and the aligned fuser is the
-  fallback.
+  A probe of the front end decides. A stage of its own is the
+  fallback, and the aligned fuser the last resort ([design](#design)).
 - **Mispredictions and misses.** Each empties the queue, and refilling
-  it favours a wider fetch; neither is in the model.
-- **Waiting for a partner.** Issue here takes the op at the queue's
-  head at once. Holding it a cycle for an instruction it could fuse
-  with was not tried.
-- **The compiler's side of an aligned fuser.** Which word a pair starts
-  on is a property of the code, so a pass could move pairs onto even
-  words by swapping one with an independent neighbour.
+  it favours a wider fetch, which the line a cycle already is; neither
+  is in the model, and gen4's counters measure them
+  ([overview](./overview.md#open)).

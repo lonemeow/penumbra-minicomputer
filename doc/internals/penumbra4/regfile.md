@@ -151,5 +151,7 @@ top, beside the stage that reads it.
 
 - **Inside a full top.** A file placed alone closes far above what it
   does beside the logic that reads it, and the order may not survive.
-- **MUL and DIV** write two registers and sequence them through one
-  port today; with two ports they could write both at once.
+- **MUL and DIV** write two registers. With two ports they can write
+  both in one cycle when they issue alone, which
+  [structure](./structure.md#open) leaves to whichever is simplest in
+  RTL.

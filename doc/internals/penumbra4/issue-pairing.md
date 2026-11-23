@@ -529,6 +529,17 @@ is one, and Doom fuses 73 accesses per 1000 instructions.
 - **A third register read for a fused store,** a fifth read port or a
   rule that keeps such an op from a partner reading two: it would serve
   0.6 / 0.8 fused stores per 1000 instructions, worth under 1.
+- **Pairing that looks past the next op,** in place of the greedy rule
+  that joins an op to the one ahead of it whenever it may. With `flex`
+  a store ahead of a compare takes the compare and leaves its branch
+  alone, but the cycle count comes out the same on these loops, and a
+  look further widens issue's window, its tightest path. The aim is a
+  pair or a fused op on most cycles, not the best schedule of them.
+- **Holding an op for a fusion partner still in flight.** Behind a line
+  fetch into sixteen entries, issue idles 0.1 / 0.3 cycles per 1000
+  instructions with a fused op in Y
+  ([front end](./front-end.md#with-a-fused-op-in-y)), so the
+  instruction behind the head is nearly always there already.
 - **A fused op in X, or beside another fused op** (`fpair:all`, which
   the other measurements here assume): X would need every fused op's
   datapath, and ID a window of four instructions
@@ -542,9 +553,11 @@ is one, and Doom fuses 73 accesses per 1000 instructions.
 - **Fuse an add into the access it addresses** (`addmem`, `addwb`): a
   base-plus-index load or store, writing its address back when a load
   does not overwrite it. A two-input address adder takes 98–99 % of
-  `addmem`'s accesses; a pre-incremented access (`incmem`) needs the
-  offset as a third input. A fault in the access commits the add
-  ([a fused access](#a-fused-access)).
+  `addmem`'s accesses, and the baseline has two. A pre-incremented
+  access (`incmem`) needs the offset as a third input, which is tried
+  once the baseline runs
+  ([beyond the baseline](./structure.md#beyond-the-baseline)). A fault
+  in the access commits the add ([a fused access](#a-fused-access)).
 - **Two reads an op.** An `ADD` of two registers fuses into no store of
   a third, so no op reads more than two registers, and a pair no more
   than the register file's four ports.
@@ -568,22 +581,19 @@ is one, and Doom fuses 73 accesses per 1000 instructions.
 
 ## Open
 
-- **The address adder:** three inputs or two, and the `ADD`'s flags
-  beside the address, to be timed in EX, ahead of the register the TLB
-  and the cache read. Two inputs cost 11 / 7 issue cycles
-  ([the address adder](#the-address-adder)).
-- **The prologue's save at an offset.** A frame with a callee-saved
-  register's slot at `[SP + 0]` would let a two-input adder fuse the
-  frame's allocation with that save; the compiler places the slots.
-- **A fused access behind a load.** Fusing an add into its access
-  leaves a base that a load writes still waiting for the load, and the
-  load-use model fuses nothing ([load-use](./load-use.md)).
+- **The address adder,** two inputs in the baseline, to be timed in EX
+  ahead of the register the TLB and the cache read. Two inputs cost
+  11 / 7 against three with every fusion, nearly all of it `incmem`,
+  which waits for a third input
+  ([beyond the baseline](./structure.md#beyond-the-baseline)).
+- **A fused access behind a load.** The fused op waits for a base a
+  load writes as its `ADD` would have, so fusion neither adds that wait
+  nor removes it; the load-use model fuses nothing, and gen4's counters
+  measure it with the other stalls ([overview](./overview.md#open)).
 - **Stalls.** A pair whose younger op waits on a load holds both ops,
-  and the load-use distance decides how often.
-- **Greedy pairing.** With `flex`, a store ahead of a compare takes the
-  compare and leaves its branch alone. The cycle count is the same
-  either way on these loops, but a rule that looks one op further might
-  not be.
+  and the load-use distance decides how often; gen4's counters measure
+  it ([overview](./overview.md#open)).
 - **The fused compare-and-branch's path:** adder, flags, condition and
-  resolve in one cycle, to be timed.
+  resolve in one cycle, to be timed, with its fallbacks in
+  [structure](./structure.md#open).
 - **Other workloads.** The shell loop was not run.
