@@ -141,6 +141,11 @@ top, beside the stage that reads it.
   pairs, and the older one nearly always does. A split down the middle
   would refuse a large share of them; how many was not counted.
 - **One write port,** for the same reason.
+- **A third write port.** Four reads and two writes are already the
+  expensive part of the file on both parts. What would write a third
+  register in a cycle pairs with less or takes a cycle more instead,
+  as a fused op that writes two registers does, and as `MUL` and `DIV`
+  may ([structure](./structure.md#open)).
 
 ## Open
 

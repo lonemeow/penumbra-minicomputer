@@ -173,7 +173,7 @@ they are to start.
 | A fetch the L1-I has no word for | the L1-I takes the access; the fetch unit launches the address again when it is done | busy, done |
 | A prediction | the predictor predicts the line's exit; the fetch unit steers by it | the predicted exit word and target |
 | A misprediction | execute's resolve finds it; the fetch unit steers; each younger stage clears | redirect, kill |
-| A load the L1-D has no word for | MEM2 hands the access to the L1-D as the pair leaves; the pair waits at commit until the L1-D is done | busy, done, word, fault |
+| A load the L1-D has no word for | MEM2 hands the access to the L1-D as the pair leaves; the pair waits at commit until the L1-D is done, and retires whole with the word | busy, done, word, fault |
 | Entry to an exception | commit decides it and saves the state; the fetch unit reads the vector and fetches from it | the commit redirect and its vector |
 | `ERET`, and a resync after a system write | commit redirects | the commit redirect |
 | An interrupt | issue injects an op in place of the queue's head; commit takes it as a trap | SR.I, the lines, the injected op |
@@ -183,6 +183,17 @@ they are to start.
 The fetch unit is the one place that steers. Its sources, in priority:
 commit's redirect, execute's, the vector read, a relaunch after a
 miss, the prediction for the line in IF2, and the next line.
+
+**A missed load holds its pair at commit.** The pair is the oldest in
+flight, so nothing older is left to drain around it. Its hold travels
+back through MEM2, MEM1, EX and issue as any hold does, and fetch goes
+on filling the queue. The L1-D's word enters the load's slot in the
+waiting commit register, so a dependent takes it as it takes a hit's
+value, and the pair retires as a unit through its own write ports: a
+pair writes at most two registers, since a fused op that writes two
+pairs only with one that writes none. Retiring the pair before its
+load completes, so that only a use waits, is
+[ruled out](./load-use.md#ruled-out) for gen4.
 
 **An interrupt is an op.** When an interrupt is pending and SR.I lets
 it in, issue puts an op of its own in place of the queue's head. The
@@ -280,7 +291,9 @@ The package holds one type for each thing that crosses a stage:
   immediate, its first PC, its prediction and its fault.
 - **A slot:** an op in a stage, a valid bit, and what the stages so
   far have computed for it.
-- **A pair:** slots X and Y, and which is older.
+- **A pair:** slots X and Y, which share the type, and which is older.
+  The fields only Y uses, such as a fault, an access or a second
+  register written, stay constant in X, where synthesis can drop them.
 
 Each is a packed struct, and the values inside them have types of
 their own: a virtual and a physical address, a register number, an
@@ -389,12 +402,11 @@ layer.
   bus adapter, the ULX3S's SDRAM line stack and the Nexys Video's
   DDR3. The stack itself may change, to keep several requests in
   flight ([the memory stack](./overview.md#open)).
-- **A missed load at commit:** whether the pair waiting there holds
-  only the stages behind it, and whose write port the load's word
-  takes when it arrives.
-- **Where a pair waits for `divmul`'s result:** in EX, or at commit
-  beside a missed load.
-- **The commit trace:** a pair commits up to three instructions in a
-  cycle, so the trace needs a lane an op, each naming the instructions
-  it holds, or a lane an instruction. The board tops leave it
-  unconnected; the sim wrappers read it.
+- **How `MUL` and `DIV` retire,** whichever is simplest in RTL: they
+  are 2–3 per 1000 instructions on the measured workloads, so every
+  option costs at most a cycle or two each. A pair waits for `divmul`
+  in EX or at commit beside a missed load, and either:
+    - **the op issues alone,** and commit writes `Rd` and `Rdh` through
+      both pipelines' write ports; or
+    - **it pairs,** and commit takes a cycle more for `Rdh` when the
+      pair has more than two registers to write.

@@ -141,7 +141,8 @@ gen4's own modules. Dual issue changes what sits around them:
 - **The register file needs two write ports** and four read ports
   ([register file](./regfile.md)): no op reads more than two registers,
   since an add of two fuses into no store of a third
-  ([two reads an op](./issue-pairing.md#branches-last-and-two-reads-an-op)).
+  ([two reads an op](./issue-pairing.md#branches-last-and-two-reads-an-op)),
+  and no cycle writes more than two.
 - **Forwarding** reaches four operands from the results of two
   pipelines.
 - **Branch redirects and stalls cost two slots a cycle,** so prediction

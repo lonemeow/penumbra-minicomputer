@@ -102,6 +102,13 @@ Who waits, at the 2-cycle wait:
   above charges the late branches 5–6 cycles, but it sees every access
   hit and nothing stall. It is a candidate for a later generation,
   weighed on gen4's own counters.
+- **Retiring a missed load's pair before its word arrives, for gen4,**
+  so that only a use of the word waits. The ISA allows it for a
+  cacheable load, but the load then completes apart from the pipeline:
+  the word needs a write port when it lands, a younger write to the
+  same register has to win over it, and the load's bus fault becomes
+  deferred. The stall at the use is the easy part; that machinery
+  belongs to a later generation.
 
 ## What it means for pairing
 
