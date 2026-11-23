@@ -85,7 +85,8 @@ Open:
 
 - Count the write recovery separately, return to idle straight after
   the write, and have the precharge paths wait for the count. Worth
-  doing with the native port or a deeper CDC, not before.
+  doing with gen4's native port (`doc/internals/penumbra4/overview.md`,
+  "Targets") or a deeper CDC, not before.
 - The idle cycle that accepts each request is a smaller, separate cost
   per request.
 - Regression: `sdram_model` checks command legality but no timing

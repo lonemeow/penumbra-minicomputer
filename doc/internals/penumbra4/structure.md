@@ -47,13 +47,15 @@ which the machine comes up. The design it divides is the
 
 ## The machine
 
-The machine keeps the gen2 machine's external port list
-([the machine layer](../build-system.md#the-machine-layer)), so a
-board top and a sim wrapper attach devices to gen4 as they do to gen3,
-and the machine's first build can be flashed with the board's devices,
-memory stack and shell as they are. Inside it, the timer and the
-machine-identity device are the shared ones, and the MMU's pinned TLB
-is the shared `tlb_pinned`.
+The machine keeps the gen2 machine's external port list ([the machine
+layer](../build-system.md#the-machine-layer)), so a board top and a
+sim wrapper attach devices to gen4 as they do to gen3, and the
+machine's first build can be flashed with the board's devices, memory
+stack and shell as they are. The one port it adds is the native port
+to the board's own RAM ([targets](./overview.md#targets)), and it
+comes last: until then RAM is on the bus, as it is for gen3. Inside
+the machine, the timer and the machine-identity device are the shared
+ones, and the MMU's pinned TLB is the shared `tlb_pinned`.
 
 ```mermaid
 graph LR
@@ -65,6 +67,7 @@ graph LR
     UC["uncore<br/>select, L2, bus master"]
     DEV["sysreg devices"]
     BUS["external bus"]
+    RAM["on-board RAM"]
     CORE -->|"fetch lookup,<br/>access"| L1I
     CORE -->|"data lookup,<br/>store, access"| L1D
     CORE -->|"translate"| MMU
@@ -75,6 +78,7 @@ graph LR
     L1D --- UC
     SB --- UC
     UC --- BUS
+    UC ---|"native port"| RAM
     CORE ---|"RDSYS, WRSYS"| DEV
 ```
 
@@ -84,7 +88,7 @@ graph LR
 | `penumbra4_icache` | answers fetch lookups with a line, carries the fetch side's accesses | its arrays, replacement, enable, its side's request on the port |
 | `penumbra4_dcache` | answers data lookups with a word, takes stores that hit, carries the data side's accesses | the same, for the data side |
 | `penumbra4_store_buffer` | holds cacheable stores until memory has them | its entries and their order |
-| `penumbra4_uncore` | serves the L1s and the store buffer from the L2 and the external bus | the select, the L2, the bus master, sysreg device 9 |
+| `penumbra4_uncore` | serves the L1s and the store buffer from the L2, on-board RAM and the external bus | the select, the L2, the bus master, the native port's master, sysreg device 9 |
 
 The two L1s are separate modules over one storage leaf. The fetch side
 reads a line and never stores; the data side reads a word and takes
@@ -97,7 +101,7 @@ The L1s, the store buffer and the uncore keep gen3's designs: the
 [uncore](../penumbra3/uncore.md) and the
 [store buffer](../penumbra3/memory-performance.md#store-buffer-at-the-core-boundary).
 What changes is the fetch side's lookup, which answers with the hit
-way's line.
+way's line, and the uncore's native port beside its bus master.
 
 ## The core
 
@@ -267,7 +271,7 @@ queue.
 | execute, slot X | nothing: issue never fills it | simple ALU ops, shifts and moves |
 | MMU | the full sysreg interface over a small TLB | the board's geometry |
 | store buffer | one entry, held until memory has it | the buffer |
-| uncore | the select and the bus master | with the L2 |
+| uncore | the select and the bus master | with the L2 and the native port |
 | perfctr | cycles and retirements | the pairing and wait counters |
 
 The other modules have one form. The smallest machine is single-issue
@@ -296,6 +300,10 @@ layer.
 4. **The rest outside the cones:** the predictor, the queue's depth,
    the store buffer, the L2. These change cycle counts, not
    boundaries.
+5. **The native port.** The machine's one new port, and on each board
+   a front end on its memory stack beside the bus adapter. It is
+   outside the cones, but it changes the boundary between the machine
+   and the board top, so it comes once the machine behind it is whole.
 
 ## Open
 
@@ -330,6 +338,23 @@ layer.
   and what is left of each row is the EX redirects at four cycles
   each. A stage ahead of issue holds no op in flight, so adding one
   changes only which stages a kill clears.
+- **The native port's contract,** which has to move a word a cycle or
+  a wider transfer ([targets](./overview.md#targets)). Two shapes:
+    - **Two requests outstanding,** on channels with a valid and a
+      ready each: the RAM's side releases the request channel once it
+      has latched a request, the uncore drives the next while the last
+      is served, and a held line's words follow one a cycle.
+    - **A burst of known length,** a strobe a word, with one request
+      at a time. Within a line it serves the same rate, but each line
+      still waits the ~10 cycles the line stack takes from a request to
+      its first word
+      ([a miss on the line stack](../penumbra3/memory-performance.md#a-miss-on-the-line-stack-gen25-machine-hardware-checked))
+      unless the next request is already in flight.
+
+  Beside it, the front end each board's memory stack needs next to its
+  bus adapter, the ULX3S's SDRAM line stack and the Nexys Video's
+  DDR3. The stack itself may change, to keep several requests in
+  flight ([the memory stack](./overview.md#open)).
 - **Where an interrupt joins the stream:** on the op entering issue, or
   at EX. Commit takes it as a trap either way.
 - **A missed load at commit:** whether the pair waiting there holds

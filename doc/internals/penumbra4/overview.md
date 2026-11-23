@@ -70,6 +70,20 @@ together they take 92–98 % of what each takes alone, added
   ops, or one. A fused op paired with a simple ALU op is the design
   wanted, where its timing allows; the ECP5 is where it is least
   likely to. Two fused ops never pair.
+- **A native port for on-board RAM.** The uncore reaches the board's
+  own memory through a burst port beside the Penumbra bus, and sends
+  every other address to the bus, which keeps serving the devices and
+  RAM on add-on boards as it does for gen3. Software sees the same
+  machine: on-board RAM keeps its addresses, and the ROM's probe still
+  finds its top by a bus fault. gen3 leaves the port unbuilt, since a
+  single-issue core is bound by its pipeline and the port is worth ~3
+  cycles per 1000 instructions there
+  ([gen3's levers](../penumbra3/overview.md#levers-ranked-by-measured-benefit)).
+  At 1.4–1.8 instructions a cycle the loads, stores and fills come that
+  much closer together, and memory binds again. The port moves a word a
+  cycle, or a wider transfer, where the bus's handshake moves a word
+  every two cycles at best
+  ([the bus floor](../penumbra3/memory-performance.md#a-miss-on-the-line-stack-gen25-machine-hardware-checked)).
 
 ## The shape
 
@@ -132,6 +146,8 @@ issue changes what sits around them:
   pipelines.
 - **Branch redirects and stalls cost two slots a cycle,** so prediction
   and the memory path matter more than they do for gen3, not less.
+- **On-board RAM gets a port of its own** beside the bus
+  ([targets](#targets)).
 
 ## Fusion belongs to gen4
 
@@ -157,6 +173,23 @@ arrives with the two-wide front end that dual issue needs anyway.
   with pairing needs one pipeline model.
 - **Fetch after a misprediction or a miss,** when the queue is empty
   ([front end](./front-end.md#open)).
+- **What the native port is worth at gen4's rate.** gen3's ~3 cycles
+  per 1000 instructions is the figure at one instruction a cycle. The
+  store-buffer model prices drains at any rate (`+sbmodel_cpi=`), and
+  the cache model's fills can be priced at the port's costs.
+- **The memory stack behind the port.** The line stack keeps one
+  request outstanding ([line
+  stack](../sdram-controller.md#line-stack-a-held-line)), and gen3's
+  stream buffers prefetch only when the bus is idle, so a prefetch can
+  hold a demand read back by a line read ([stream
+  buffers](../penumbra3/uncore.md#the-stream-buffers)). Reaching most
+  of the RAM's throughput for speculative reads, without delaying the
+  reads and writes the core waits on, may take several requests in
+  flight. One shape: a second, low-priority port through the CDC,
+  which the stream buffers drive and the RAM's side serves only when
+  the primary port has nothing pending, so the RAM runs back to back.
+  Its feasibility, its cost in timing and complexity, and what it
+  gains are all open.
 - **The cost side:** the two-write-port register file, the forwarding
   network, the fused compare-and-branch's path and the fused access's
   address adder, each to be timed on
