@@ -124,9 +124,9 @@ decision off the kind of combinational path that bounded gen2
 
 gen4 is a new implementation, and none of gen3's RTL carries over.
 What carries over is design, where gen3 measured it: the uncore, the
-store buffer, the split memory stage, branch prediction and the
-pre-decoded fetch FIFO, each built again in gen4's own modules. Dual
-issue changes what sits around them:
+store buffer, stream prefetch beside the L2, the split memory stage,
+branch prediction and the pre-decoded fetch FIFO, each built again in
+gen4's own modules. Dual issue changes what sits around them:
 
 - **Fetch has to supply a line a cycle into a 16-entry queue,** or two
   instructions a cycle with no bubble after a taken transfer, and the

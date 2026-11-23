@@ -9,6 +9,10 @@ the smallest form of each that keeps its contract, and the order in
 which the machine comes up. The design it divides is the
 [overview](./overview.md)'s.
 
+All of it is a proposal. A module, a boundary or a cell taken from
+earlier work changes when the board's timing or a measurement shows a
+problem with it.
+
 ## Rules
 
 - **A module is a part of the machine, with one purpose.** It is named
@@ -40,9 +44,10 @@ which the machine comes up. The design it divides is the
   it. The full form then replaces it behind the same ports, one module
   at a time ([bring-up](#bring-up)). Nothing selects between the two
   forms: the smallest is the module's first version, not a mode of it.
-- **What fits is used as it is.** The devices and the shared cells
+- **What fits starts as it is.** The devices and the shared cells
   that fit a boundary here unchanged are instantiated as they are, in
-  their own style. Every module written for gen4 follows the
+  their own style, until timing or a measurement asks for more. Every
+  module written for gen4 follows the
   [rules for new modules](../coding-standards.md#rules-for-new-modules).
 
 ## The machine
@@ -54,8 +59,9 @@ machine's first build can be flashed with the board's devices, memory
 stack and shell as they are. The one port it adds is the native port
 to the board's own RAM ([targets](./overview.md#targets)), and it
 comes last: until then RAM is on the bus, as it is for gen3. Inside
-the machine, the timer and the machine-identity device are the shared
-ones, and the MMU's pinned TLB is the shared `tlb_pinned`.
+the machine, the timer and the CPU and machine identity devices are
+the shared ones, the MMU's pinned TLB is the shared `tlb_pinned`, and
+each cache keeps its counters in the shared `cache_perfctr`.
 
 ```mermaid
 graph LR
@@ -63,8 +69,7 @@ graph LR
     MMU["MMU<br/>I and D translation"]
     L1I["L1-I"]
     L1D["L1-D"]
-    SB["store buffer"]
-    UC["uncore<br/>select, L2, bus master"]
+    UC["uncore<br/>select, store buffer, L2,<br/>stream buffers, bus master"]
     DEV["sysreg devices"]
     BUS["external bus"]
     RAM["on-board RAM"]
@@ -73,10 +78,9 @@ graph LR
     CORE -->|"translate"| MMU
     MMU -->|"candidate frames"| L1I
     MMU -->|"candidate frames"| L1D
-    CORE -->|"cacheable stores"| SB
+    CORE -->|"cacheable stores"| UC
     L1I --- UC
     L1D --- UC
-    SB --- UC
     UC --- BUS
     UC ---|"native port"| RAM
     CORE ---|"RDSYS, WRSYS"| DEV
@@ -87,19 +91,20 @@ graph LR
 | `penumbra4_mmu` | translates fetch and data addresses | the main and pinned TLBs, the invalidation sweep, the fault registers, sysreg device 0 |
 | `penumbra4_icache` | answers fetch lookups with a line, carries the fetch side's accesses | its arrays, replacement, enable, its side's request on the port |
 | `penumbra4_dcache` | answers data lookups with a word, takes stores that hit, carries the data side's accesses | the same, for the data side |
-| `penumbra4_store_buffer` | holds cacheable stores until memory has them | its entries and their order |
-| `penumbra4_uncore` | serves the L1s and the store buffer from the L2, on-board RAM and the external bus | the select, the L2, the bus master, the native port's master, sysreg device 9 |
+| `penumbra4_uncore` | serves the L1s' accesses and the cacheable stores from the L2, on-board RAM and the external bus | the select, the store buffer, the L2, the stream buffers, the bus master, the native port's master, sysreg device 9 |
 
 The two L1s are separate modules over one storage leaf. The fetch side
 reads a line and never stores; the data side reads a word and takes
 stores. A module serving both would tie off half its ports on each
 side.
 
-The L1s, the store buffer and the uncore keep gen3's designs: the
+The L1s and the uncore start from gen3's designs: the
 [L1s' contract with their clients](../penumbra3/l1-cache.md), the
-[core-to-uncore port](../penumbra3/uncore-port.md), the
-[uncore](../penumbra3/uncore.md) and the
-[store buffer](../penumbra3/memory-performance.md#store-buffer-at-the-core-boundary).
+[core-to-uncore port](../penumbra3/uncore-port.md), whose store side
+carries a cacheable store from MEM2 into the uncore, and the
+[uncore](../penumbra3/uncore.md) with its
+[store buffer](../penumbra3/uncore.md#the-store-buffer) and
+[stream buffers](../penumbra3/uncore.md#the-stream-buffers).
 What changes is the fetch side's lookup, which answers with the hit
 way's line, and the uncore's native port beside its bus master.
 
@@ -148,8 +153,8 @@ graph LR
 | `cond_eval` | whether a condition holds for the flags | EX, in resolve |
 | `byte_ext`, `byte_rep` | a loaded sub-word extended, a stored one placed in its lanes | MEM2, MEM1 |
 
-`cond_eval`, `byte_ext` and `byte_rep` are the shared cells, used as
-they are.
+`cond_eval`, `byte_ext` and `byte_rep` are the shared cells, taken as
+they are to start.
 
 **Storage and peers.**
 
@@ -158,7 +163,7 @@ they are.
 | `penumbra4_predictor` | predicts where each fetched line goes | the direction table, the return stack |
 | `penumbra4_regfile` | the general registers | four read ports, two write ports |
 | `penumbra4_status` | the status and save state | SR, EPC, ESR, the scratch registers |
-| `divmul` | multiplies and divides; the shared unit, used as it is | its sequence |
+| `divmul` | multiplies and divides; the shared unit, taken as it is to start | its sequence |
 | `penumbra4_perfctr` | counts what the core does | the CPU device's counters |
 
 ## Behaviours and the parts that carry them
@@ -171,13 +176,39 @@ they are.
 | A load the L1-D has no word for | MEM2 hands the access to the L1-D as the pair leaves; the pair waits at commit until the L1-D is done | busy, done, word, fault |
 | Entry to an exception | commit decides it and saves the state; the fetch unit reads the vector and fetches from it | the commit redirect and its vector |
 | `ERET`, and a resync after a system write | commit redirects | the commit redirect |
-| An interrupt | commit takes it as a trap ([open](#open)) | |
-| A cacheable store's bus fault | the store buffer reports it; commit takes it at a later instruction | fault and address |
+| An interrupt | issue injects an op in place of the queue's head; commit takes it as a trap | SR.I, the lines, the injected op |
+| A cacheable store's bus fault | the uncore holds it until its trap; issue injects an op that carries it; commit takes it as a deferred bus fault | fault and address |
 | A system write with a lasting effect | the device raises busy; the fetch unit launches nothing while it is up | busy |
 
 The fetch unit is the one place that steers. Its sources, in priority:
 commit's redirect, execute's, the vector read, a relaunch after a
 miss, the prediction for the line in IF2, and the next line.
+
+**An interrupt is an op.** When an interrupt is pending and SR.I lets
+it in, issue puts an op of its own in place of the queue's head. The
+op carries the head's PC, makes no access and writes no register, and
+issues alone and serializes, as a system instruction does; commit
+takes it as a trap and saves that PC, so the head runs after `ERET`.
+It reuses the trap path whole:
+
+- **The saved PC is real.** An older trap or misprediction kills the
+  op as it kills any younger one, so by commit every op older than it
+  has resolved, and none younger has reached MEM.
+- **SR.I is read as committed.** Only instructions that serialize
+  change it, so issue never sees a write to it in flight. The op that
+  issues right after `EI` is never replaced, which keeps `EI`'s
+  one-instruction delay
+  ([`EI`](../../system/architecture.md#ei--enable-interrupts)); a
+  fused op or a pair there runs masked whole, which the delay allows.
+- **It waits for a head,** so it has a PC to carry; an empty queue
+  delays it a cycle or two.
+- **Commit takes it whatever the line does meanwhile.** A device holds
+  its request until software clears it, and either outcome of a
+  request withdrawn in flight is within the ISA.
+
+A cacheable store's bus fault rides the same op, with its address,
+ahead of any interrupt and whatever SR.I and `EI`'s delay say
+([deferred bus faults](../../system/architecture.md#deferred-bus-faults)).
 
 ## The stage contract
 
@@ -222,14 +253,17 @@ another stage's operand mux would.
 | execute → MEM1 | the pair and the access's address | R |
 | MEM1 → MMU, L1-D | the access's launch | R |
 | MMU, L1-D → MEM2 | the translation verdict, the hit and the word | L |
-| MEM2 → L1-D, store buffer | a store's write, an access | L, ending in the receivers' registers |
+| MEM2 → L1-D, uncore | a store's write, on the L1-D and the store side; an access | L, ending in the receivers' registers |
+| uncore → MEM2 | the store buffer is full | R |
 | MEM2 → commit | the pair, its results and faults, whether it waits on an access | R |
 | L1-D → commit | busy, done, the access's word and fault | R |
 | commit → register file, status | two register writes, the flags, the save state | R |
 | commit → fetch, every stage | a trap's, `ERET`'s or a resync's redirect, and its kill | R |
 | commit → MMU | the fault that carries an address, for the fault registers | R |
-| store buffer → commit | a store's bus fault and its address | R |
-| L1s, store buffer ↔ uncore | the [core-to-uncore port](../penumbra3/uncore-port.md) | R |
+| uncore → issue | a store's bus fault and its address, held until its trap | R |
+| status → issue | SR.I | R |
+| interrupt lines → issue | the requests, registered at the machine | R |
+| L1s ↔ uncore | the [core-to-uncore port](../penumbra3/uncore-port.md) | R |
 | MEM1 → sysreg device → MEM2 | an `RDSYS`'s read, and its data a cycle later | R |
 | execute ↔ `divmul` | start; busy, done and the results | R |
 
@@ -240,7 +274,8 @@ The package holds one type for each thing that crosses a stage:
 - **An instruction** in the queue: the word or its decoded fields, its
   PC, what fetch did after it (went on, or took a predicted target),
   and its fetch fault.
-- **An op:** one instruction or two fused. Its class, up to two
+- **An op:** one instruction or two fused, or the op issue injects
+  for an interrupt or a deferred bus fault. Its class, up to two
   registers read and two written, its flag reads and writes, its
   immediate, its first PC, its prediction and its fault.
 - **A slot:** an op in a stage, a valid bit, and what the stages so
@@ -271,7 +306,7 @@ queue.
 | execute, slot X | nothing: issue never fills it | simple ALU ops, shifts and moves |
 | MMU | the full sysreg interface over a small TLB | the board's geometry |
 | store buffer | one entry, held until memory has it | the buffer |
-| uncore | the select and the bus master | with the L2 and the native port |
+| uncore | the select, the store buffer and the bus master | with the L2, the stream buffers and the native port |
 | perfctr | cycles and retirements | the pairing and wait counters |
 
 The other modules have one form. The smallest machine is single-issue
@@ -298,8 +333,8 @@ layer.
    clock changes its contract here, before the modules around it take
    their full forms.
 4. **The rest outside the cones:** the predictor, the queue's depth,
-   the store buffer, the L2. These change cycle counts, not
-   boundaries.
+   the store buffer, the L2, the stream buffers. These change cycle
+   counts, not boundaries.
 5. **The native port.** The machine's one new port, and on each board
    a front end on its memory stack beside the bus adapter. It is
    outside the cones, but it changes the boundary between the machine
@@ -307,7 +342,6 @@ layer.
 
 ## Open
 
-- **The cut itself.** Every module and boundary here is a proposal.
 - **Where decode and the fuser sit:** in IF2 or at the queue's read side
   ([room for the fuser](./front-end.md#open)).
 - **ID's window:** three instructions when a fused op pairs with a
@@ -355,8 +389,6 @@ layer.
   bus adapter, the ULX3S's SDRAM line stack and the Nexys Video's
   DDR3. The stack itself may change, to keep several requests in
   flight ([the memory stack](./overview.md#open)).
-- **Where an interrupt joins the stream:** on the op entering issue, or
-  at EX. Commit takes it as a trap either way.
 - **A missed load at commit:** whether the pair waiting there holds
   only the stages behind it, and whose write port the load's word
   takes when it arrives.
