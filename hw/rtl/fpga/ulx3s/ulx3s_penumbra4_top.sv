@@ -385,9 +385,13 @@ module ulx3s_penumbra4_top (
     logic busctl_cfg_en;
 
     // ══════════════════════════════════════════════════════════
-    // The machine: core + MMU + L1s + the uncore
+    // The machine: core + MMU + L1s + the uncore + sysregs
     // ══════════════════════════════════════════════════════════
-    machine_penumbra4 u_machine (
+    machine_penumbra4 #(
+        .MACH_NAME0 (32'h33584C55),   // "ULX3"
+        .MACH_NAME1 (32'h00000053),   // "S\0\0\0"
+        .CPU_FREQ   (CLK_FREQ)
+    ) u_machine (
         .i_clk         (clk),
         .i_rst         (rst),
 

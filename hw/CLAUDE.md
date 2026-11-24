@@ -171,20 +171,24 @@ order `doc/internals/penumbra4/structure.md` ("Bring-up") gives.
   stage registers, its operands captured.
 - `penumbra4_stage_ex.sv` — EX: `penumbra4_alu.sv` and
   `penumbra4_resolve.sv` (over `cond_eval`) for slot Y, the
-  misprediction redirect.
+  misprediction redirect; MUL and DIV stop the sim, and on a board take
+  the illegal-instruction trap.
 - `penumbra4_stage_mem1.sv` — MEM1: an access's alignment fault, byte
   lanes and store data in them, and its translation and L1-D lookup
-  launched as the pair leaves; a sysreg op stops the sim, and on a board
-  takes the illegal-instruction trap, as MUL and DIV do in EX.
+  launched as the pair leaves; an `RDSYS` or `WRSYS` asks the machine's
+  sysreg devices.
 - `penumbra4_stage_mem2.sv` — MEM2: the verdicts; a load the L1-D had no
   word for, or an uncacheable store, handed to the L1-D, its word or bus
-  fault taken into the waiting slot at the L1-D's done.
+  fault taken into the waiting slot at the L1-D's done; a sysreg device's
+  answer, or the illegal-instruction trap for a device not built yet.
 - `penumbra4_stage_wb.sv` — WB: registers every effect (register writes,
   status writes, the redirect and flush, program end) a cycle ahead of
   where it lands; holds while its pair's access is pending or while it
-  decides a flush.
+  decides a flush; resyncs after a `WRSYS`.
 - `penumbra4_regfile.sv` (4R/2W, flops), `penumbra4_status.sv` (SR, EPC,
   ESR, SCR0..3).
+- `penumbra4_perfctr.sv` — the CPU device's counters: cycles and
+  retirements; the stall counters read 0.
 - `penumbra4_icache.sv` — the L1-I with no arrays: every lookup misses,
   every fetch and vector read is an access.
 - `penumbra4_dcache.sv` — the L1-D with no arrays: every load and every
@@ -269,7 +273,10 @@ exposed external bus.
 - `machine_penumbra4.sv` — the gen4 machine: gen3's bus, interrupt and
   bus-control ports, and gen4's own observability ports (a commit's two
   register writes, its retire count) and program-end pulse; the core, the
-  two L1s, the MMU and the uncore inside.
+  two L1s, the MMU, the uncore and the sysreg devices inside (CPU and
+  machine identity, the perfctr, the bus controller; an access to the
+  MMU's or the timer's, not built yet, stops the sim and traps on a
+  board).
 
 ### Penumbra/1 core (`rtl/penumbra1/`)
 - `cpu_core.sv` — full CPU integration: datapath + sequencer + ROM

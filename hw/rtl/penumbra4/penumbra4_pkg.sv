@@ -243,6 +243,25 @@ package penumbra4_pkg;
         logic       irq_enable;
     } status_write_t;
 
+    // ── A system register access ────────────────────────────────
+    // What MEM1 asks of the machine's sysreg devices as an RDSYS or a
+    // WRSYS leaves: a read, or with write, a write of wdata.
+    typedef struct packed {
+        logic          valid;
+        logic          write;
+        sysdev_t       dev;
+        sysreg_index_t sysreg;
+        word_t         wdata;
+    } sysreg_req_t;
+
+    // The machine's answer, held from the cycle after a request until the
+    // next: the register's value, or that the device is one the machine
+    // has not built yet.
+    typedef struct packed {
+        word_t rdata;
+        logic  unbuilt;
+    } sysreg_rsp_t;
+
     // ── The core-to-uncore port ─────────────────────────────────
     // A requester's request (doc/internals/penumbra3/uncore-port.md): a
     // line read when cacheable, else a word read or, with we, a word

@@ -1,9 +1,9 @@
 // penumbra4_core — the gen4 core: its stages, their units and its storage.
 //
 // Only connects (doc/internals/penumbra4/structure.md, "The core"): every
-// decision belongs to a stage or a unit. The L1s and the MMU are the
-// machine's; the core reaches them through the fetch side's ports and the
-// data side's.
+// decision belongs to a stage or a unit. The L1s, the MMU and the sysreg
+// devices are the machine's; the core reaches them through the fetch
+// side's ports, the data side's and MEM1's sysreg request.
 //
 // A redirect's flush: EX's clears what is behind the transfer, the queue,
 // IF2 and the op issuing; WB's clears every stage.
@@ -53,6 +53,10 @@ module penumbra4_core
     input  paddr_t           i_data_paddr,
     input  logic             i_data_cacheable,
     input  fault_type_t      i_data_fault,
+
+    // ── The sysreg devices ───────────────────────────────────────
+    output sysreg_req_t      o_sysreg,
+    input  sysreg_rsp_t      i_sysreg,
 
     // ── Observability ────────────────────────────────────────────
     output reg_write_t [1:0] o_reg_write,
@@ -194,6 +198,7 @@ module penumbra4_core
         .o_hold         (mem1_hold),
         .o_launch       (o_data_launch),
         .o_launch_vaddr (o_data_vaddr),
+        .o_sysreg       (o_sysreg),
         .o_pair         (mem1_pair)
     );
 
@@ -214,6 +219,7 @@ module penumbra4_core
         .i_access_done  (i_dcache_done),
         .i_access_word  (i_dcache_access_word),
         .i_access_fault (i_dcache_access_fault),
+        .i_sysreg       (i_sysreg),
         .o_pair         (mem2_pair)
     );
 

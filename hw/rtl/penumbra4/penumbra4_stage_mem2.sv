@@ -13,6 +13,11 @@
 // A loaded sub-word is extracted and extended here, from the hit's word or
 // the access's.
 //
+// An RDSYS takes the value its device answered MEM1's request with. A
+// sysreg op whose device the machine has not built yet takes the
+// illegal-instruction trap: the simulation stops at the request, and a
+// board never runs on with a value no device gave.
+//
 // The output register is the pair WB takes.
 
 module penumbra4_stage_mem2
@@ -41,6 +46,9 @@ module penumbra4_stage_mem2
     input  word_t       i_access_word,
     input  logic        i_access_fault,
 
+    // ── The answer to MEM1's sysreg request ──────────────────────
+    input  sysreg_rsp_t i_sysreg,
+
     output pair_t       o_pair
 );
 
@@ -57,12 +65,15 @@ module penumbra4_stage_mem2
     slot_t y;
     slot_t y_out;
     logic  is_access;
+    logic  is_sysreg;
     logic  needs_access;
     logic  leaving;
     word_t hit_value;
 
     assign y         = i_pair.y;
     assign is_access = y.valid && (y.op.op_class == OPC_MEM) && !y.op.fault.valid;
+    assign is_sysreg = y.valid && (y.op.op_class inside {OPC_RDSYS, OPC_WRSYS})
+                    && !y.op.fault.valid;
     assign leaving   = y.valid && !i_hold && !i_flush;
 
     byte_ext u_extract_hit (
@@ -87,6 +98,15 @@ module penumbra4_stage_mem2
             end else begin
                 needs_access         = 1'b1;
                 y_out.access_pending = 1'b1;
+            end
+        end
+        if (is_sysreg) begin
+            if (i_sysreg.unbuilt) begin
+                y_out.op.fault.valid    = 1'b1;
+                y_out.op.fault.vector   = VEC_ILLEGAL;
+                y_out.op.fault.mmu_type = FAULT_NONE;
+            end else if (y.op.op_class == OPC_RDSYS) begin
+                y_out.result = i_sysreg.rdata;
             end
         end
     end

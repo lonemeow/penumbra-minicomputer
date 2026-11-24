@@ -14,8 +14,11 @@
 //
 // A fault takes its trap: the status saves the op's PC and SR, and fetch
 // reads the vector. ERET takes ESR's image for the SR and redirects to EPC.
-// A BREAK's trap pulses program end
-// (doc/internals/build-system.md, "The machine layer").
+// A WRSYS resyncs: WB redirects to the instruction after it and flushes
+// what was fetched before its write landed, since every later instruction
+// must observe the write, its own fetch included (doc/system/sysregs.md).
+// A BREAK's trap pulses program end (doc/internals/build-system.md, "The
+// machine layer").
 
 module penumbra4_stage_wb
     import penumbra_pkg::*;
@@ -108,6 +111,11 @@ module penumbra4_stage_wb
                         effects_d.redirect.valid    = 1'b1;
                         effects_d.redirect.target   = vaddr_t'(i_epc);
                         effects_d.flush             = 1'b1;
+                    end
+                    OPC_WRSYS: begin
+                        effects_d.redirect.valid  = 1'b1;
+                        effects_d.redirect.target = y.op.pc + vaddr_t'(4);
+                        effects_d.flush           = 1'b1;
                     end
                     default: begin
                     end

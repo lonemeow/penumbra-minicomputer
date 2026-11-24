@@ -242,7 +242,7 @@ RUNNER_PROVIDES_penumbra3 = mmu mmu-d mmu-i cache l2 wrspr machid perfctr timer 
 # a program that requires one it lacks is skipped, and the skip is listed.
 RUNNER_MOD_penumbra4      = machine_penumbra4_sim
 RUNNER_TBS_penumbra4      = tb_penumbra4_prog
-RUNNER_PROVIDES_penumbra4 = wrspr uart bus-fault
+RUNNER_PROVIDES_penumbra4 = wrspr uart bus bus-fault machid perfctr
 
 # Runner config keys on the base generation, so a variant inherits the
 # DUT wrapper, testbenches, and capability set unchanged. A variant whose
@@ -1358,9 +1358,11 @@ SRC_MACHINE_penumbra3 = hw/rtl/machine/machine_penumbra3.sv \
                         hw/rtl/soc/timer.sv hw/rtl/soc/busctl.sv \
                         hw/rtl/soc/cache_perfctr.sv
 
-# The gen4 machine's closure beyond penumbra4/: the integration module
-# alone, until it binds sysreg devices.
-SRC_MACHINE_penumbra4 = hw/rtl/machine/machine_penumbra4.sv
+# The gen4 machine's closure beyond penumbra4/: the integration module and
+# the sysreg devices it binds from soc/.
+SRC_MACHINE_penumbra4 = hw/rtl/machine/machine_penumbra4.sv \
+                        hw/rtl/soc/cpuid.sv hw/rtl/soc/machid.sv \
+                        hw/rtl/soc/busctl.sv
 
 # Board-common helpers only — each registry entry names its own top
 # file, so sibling tops never leak into each other's builds. The PLL
@@ -1449,10 +1451,11 @@ FPGA_SRC_ulx3s_penumbra3_top = $(SRC_COMMON) $(SRC_CORE_penumbra3) \
                                hw/rtl/machine/machine_penumbra3.sv \
                                $(FPGA_RTL)/ulx3s/ulx3s_penumbra3_top.sv
 
-# The gen4 machine in the same board system.
+# The gen4 machine in the same board system, its closure beyond penumbra4/
+# being soc/, which SRC_FABRIC already covers.
 FPGA_SRC_ulx3s_penumbra4_top = $(SRC_COMMON) $(SRC_CORE_penumbra4) \
                                $(SRC_FABRIC) $(SRC_BOARD_ulx3s) \
-                               $(SRC_MACHINE_penumbra4) \
+                               hw/rtl/machine/machine_penumbra4.sv \
                                $(FPGA_RTL)/ulx3s/ulx3s_penumbra4_top.sv
 
 # gen3 Phase-0 probe P0.3: the MEM1/MEM2 + BRAM-TLB translate cone in front

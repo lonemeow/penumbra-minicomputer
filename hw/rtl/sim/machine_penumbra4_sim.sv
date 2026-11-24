@@ -76,7 +76,14 @@ module machine_penumbra4_sim
     logic        ac_spi_ack, ac_spi_sel, spi_irq;
     logic        spi_dev_we, spi_dev_re, spi_dev_ack;
 
-    machine_penumbra4 u_machine (
+    // Sim machine identity: name "Simulator", 25 MHz, which matches the
+    // runners' clock and what isa/test_machid checks.
+    machine_penumbra4 #(
+        .MACH_NAME0 (32'h756D6953),   // "Simu"
+        .MACH_NAME1 (32'h6F74616C),   // "lato"
+        .MACH_NAME2 (32'h00000072),   // "r\0\0\0"
+        .CPU_FREQ   (32'd25_000_000)
+    ) u_machine (
         .i_clk          (i_clk),
         .i_rst          (i_rst),
         .i_irq          (irq_combined),

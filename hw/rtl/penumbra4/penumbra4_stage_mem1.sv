@@ -8,9 +8,10 @@
 // (doc/system/architecture.md): a halfword at an odd address, a word at one
 // not a multiple of four.
 //
-// RDSYS and WRSYS are not launched. One that reaches MEM1 stops the
-// simulation, and on a board takes the illegal-instruction trap, so the
-// machine never runs on with a read MEM1 did not make.
+// An RDSYS or a WRSYS that carries no fault asks the machine's sysreg
+// devices as its pair leaves, and MEM2 takes the answer a cycle later.
+// Both serialize, so the answer is still the one asked for when MEM2 takes
+// it, however long MEM2 holds.
 //
 // The output register is the pair MEM2 resolves.
 
@@ -18,19 +19,22 @@ module penumbra4_stage_mem1
     import penumbra_pkg::*;
     import penumbra4_pkg::*;
 (
-    input  logic   i_clk,
-    input  logic   i_rst,
+    input  logic        i_clk,
+    input  logic        i_rst,
 
-    input  pair_t  i_pair,
-    input  logic   i_flush,
-    input  logic   i_hold,
-    output logic   o_hold,
+    input  pair_t       i_pair,
+    input  logic        i_flush,
+    input  logic        i_hold,
+    output logic        o_hold,
 
     // ── The access's translation and lookup ──────────────────────
-    output logic   o_launch,
-    output vaddr_t o_launch_vaddr,
+    output logic        o_launch,
+    output vaddr_t      o_launch_vaddr,
 
-    output pair_t  o_pair
+    // ── A system register access ─────────────────────────────────
+    output sysreg_req_t o_sysreg,
+
+    output pair_t       o_pair
 );
 
     // offset is the address's byte within its word, addr[1:0].
@@ -91,15 +95,16 @@ module penumbra4_stage_mem1
                 end
             end
         end
-        if (is_sysreg && !y.op.fault.valid) begin
-            y_out.op.fault.valid    = 1'b1;
-            y_out.op.fault.vector   = VEC_ILLEGAL;
-            y_out.op.fault.mmu_type = FAULT_NONE;
-        end
     end
 
     assign o_launch       = leaving && is_access;
     assign o_launch_vaddr = y.addr;
+
+    assign o_sysreg.valid  = leaving && is_sysreg && !y.op.fault.valid;
+    assign o_sysreg.write  = (y.op.op_class == OPC_WRSYS);
+    assign o_sysreg.dev    = y.op.sysdev;
+    assign o_sysreg.sysreg = y.op.sysreg;
+    assign o_sysreg.wdata  = y.b;
 
     pair_t pair_q, pair_d;
 
@@ -123,14 +128,5 @@ module penumbra4_stage_mem1
 
     assign o_hold = i_hold;
     assign o_pair = pair_q;
-
-    // ── Contract ─────────────────────────────────────────────────
-    always_ff @(posedge i_clk) begin
-        if (!i_rst && i_pair.y.valid) begin
-            assert (!(i_pair.y.op.op_class inside {OPC_RDSYS, OPC_WRSYS}))
-                else $fatal(1, "penumbra4_stage_mem1: a sysreg op at 0x%08x, which MEM1 does not launch",
-                            i_pair.y.op.pc);
-        end
-    end
 
 endmodule

@@ -254,7 +254,12 @@ module nexysvideo_penumbra4_top (
     logic        busctl_bus_rst;
     logic        busctl_cfg_en;
 
-    machine_penumbra4 u_machine (
+    machine_penumbra4 #(
+        .MACH_NAME0 (32'h7978654E),   // "Nexy"
+        .MACH_NAME1 (32'h69562073),   // "s Vi"
+        .MACH_NAME2 (32'h006F6564),   // "deo\0"
+        .CPU_FREQ   (32'(CPU_HZ))
+    ) u_machine (
         .i_clk         (cpu_clk),
         .i_rst         (rst),
 

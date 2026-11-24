@@ -10,14 +10,27 @@
 // makes, up to two a cycle, the instructions it retires, and the
 // program-end pulse as a BREAK's trap commits.
 //
-// The machine has no sysreg devices: nothing drives the bus controller's
-// outputs or takes an interrupt.
+// The sysreg devices are the CPU's identity and counters, the board's
+// identity and the bus controller. The caches have no arrays and read as
+// absent. The MMU's and the timer's devices are not built yet: an access
+// to one stops the simulation, and on a board takes the illegal-instruction
+// trap. Nothing takes an interrupt.
 
 module machine_penumbra4
     import penumbra_pkg::*;
     import penumbra4_pkg::*;
 #(
-    parameter vaddr_t RESET_PC = 32'hFFFF_0000
+    parameter vaddr_t      RESET_PC        = 32'hFFFF_0000,
+
+    // Machine identity (SYSDEV_MACH): the board's, which the wrapper or
+    // board top supplies. The defaults describe an unnamed machine at an
+    // unknown clock.
+    parameter logic [31:0] MACH_FEAT_VALUE = 32'd0,
+    parameter logic [31:0] MACH_NAME0      = 32'h00000000,
+    parameter logic [31:0] MACH_NAME1      = 32'h00000000,
+    parameter logic [31:0] MACH_NAME2      = 32'h00000000,
+    parameter logic [31:0] MACH_NAME3      = 32'h00000000,
+    parameter logic [31:0] CPU_FREQ        = 32'd0
 )(
     input  logic                 i_clk,
     input  logic                 i_rst,
@@ -91,6 +104,9 @@ module machine_penumbra4
     logic        uc_fault;
     line_t       uc_line;
 
+    sysreg_req_t sysreg_req;
+    sysreg_rsp_t sysreg_rsp_q;
+
     reg_write_t [1:0] reg_write;
 
     penumbra4_core #(
@@ -127,6 +143,8 @@ module machine_penumbra4
         .i_data_paddr            (data_paddr),
         .i_data_cacheable        (data_cacheable),
         .i_data_fault            (data_fault),
+        .o_sysreg                (sysreg_req),
+        .i_sysreg                (sysreg_rsp_q),
         .o_reg_write             (reg_write),
         .o_retire_count          (o_retire_count),
         .o_prog_end              (o_prog_end)
@@ -218,12 +236,97 @@ module machine_penumbra4
         end
     end
 
-    assign o_bus_rst    = 1'b0;
-    assign o_bus_cfg_en = 1'b0;
+    // ══════════════════════════════════════════════════════════
+    // Sysreg devices
+    // ══════════════════════════════════════════════════════════
+    // Each answers in the request's cycle, and the answer is registered for
+    // MEM2, which takes it a cycle later. Every unassigned device reads 0,
+    // which is how the caches, with no arrays, read as absent.
+    word_t cpuid_rdata, perfctr_rdata, machid_rdata, busctl_rdata;
+    logic  busctl_we;
+
+    assign busctl_we = sysreg_req.valid && sysreg_req.write && (sysreg_req.dev == SYSDEV_BUS);
+
+    cpuid #(
+        .CPU_NAME2 (32'h0000342F)    // "/4\0\0"
+    ) u_cpuid (
+        .i_sys_reg   (sysreg_req.sysreg),
+        .o_sys_rdata (cpuid_rdata)
+    );
+
+    penumbra4_perfctr u_perfctr (
+        .i_clk          (i_clk),
+        .i_rst          (i_rst),
+        .i_retire_count (o_retire_count),
+        .i_sysreg       (sysreg_req.sysreg),
+        .o_rdata        (perfctr_rdata)
+    );
+
+    machid #(
+        .MACH_FEAT_VALUE (MACH_FEAT_VALUE),
+        .MACH_NAME0      (MACH_NAME0),
+        .MACH_NAME1      (MACH_NAME1),
+        .MACH_NAME2      (MACH_NAME2),
+        .MACH_NAME3      (MACH_NAME3),
+        .CPU_FREQ        (CPU_FREQ)
+    ) u_machid (
+        .i_sys_reg   (sysreg_req.sysreg),
+        .o_sys_rdata (machid_rdata)
+    );
+
+    busctl u_busctl (
+        .i_clk       (i_clk),
+        .i_rst       (i_rst),
+        .i_sys_reg   (sysreg_req.sysreg),
+        .i_sys_wdata (sysreg_req.wdata),
+        .i_sys_we    (busctl_we),
+        .o_sys_rdata (busctl_rdata),
+        .o_bus_rst   (o_bus_rst),
+        .o_cfg_en    (o_bus_cfg_en)
+    );
+
+    function automatic logic unbuilt_device(sysdev_t dev);
+        return dev inside {SYSDEV_MMU, SYSDEV_TIMER};
+    endfunction
+
+    sysreg_rsp_t sysreg_rsp_d;
+
+    always_comb begin
+        sysreg_rsp_d.unbuilt = unbuilt_device(sysreg_req.dev);
+        case (sysreg_req.dev)
+            SYSDEV_CPU: begin
+                if (sysreg_req.sysreg <= SYSREG_CPU_NAME3) begin
+                    sysreg_rsp_d.rdata = cpuid_rdata;
+                end else begin
+                    sysreg_rsp_d.rdata = perfctr_rdata;
+                end
+            end
+            SYSDEV_BUS:  sysreg_rsp_d.rdata = busctl_rdata;
+            SYSDEV_MACH: sysreg_rsp_d.rdata = machid_rdata;
+            default:     sysreg_rsp_d.rdata = '0;
+        endcase
+    end
+
+    always_ff @(posedge i_clk) begin
+        if (i_rst) begin
+            sysreg_rsp_q <= '0;
+        end else if (sysreg_req.valid) begin
+            sysreg_rsp_q <= sysreg_rsp_d;
+        end
+    end
 
     /* verilator lint_off UNUSEDSIGNAL */
     logic unused_inputs;
     assign unused_inputs = ^{i_irq, i_timer_irq};
     /* verilator lint_on UNUSEDSIGNAL */
+
+    // ── Contract ─────────────────────────────────────────────────
+    always_ff @(posedge i_clk) begin
+        if (!i_rst && sysreg_req.valid) begin
+            assert (!unbuilt_device(sysreg_req.dev))
+                else $fatal(1, "machine_penumbra4: a sysreg access to device %0d, which the machine does not build yet",
+                            sysreg_req.dev);
+        end
+    end
 
 endmodule
