@@ -1,21 +1,21 @@
-// penumbra4_mem_resolve — MEM2: takes the access's verdicts and finishes
+// penumbra4_stage_mem2 — MEM2: takes the access's verdicts and finishes
 // the access or hands it to the L1-D.
 //
 // A translation fault is the access's, unless MEM1 found one first. A load
 // the L1-D hit takes its word. Any other access, a load the L1-D had no
 // word for or an uncacheable store's write, is handed to the L1-D as the
-// pair leaves, and the slot says so: commit holds the pair, so the pair
-// waits in this stage's register, which is the one commit decides from.
-// The L1-D's word, or its bus fault, enters the slot there at its done
+// pair leaves, and the slot says so: WB holds the pair, so the pair waits
+// in this stage's register, which is the one WB decides from. The L1-D's
+// word, or its bus fault, enters the slot there at its done
 // (doc/internals/penumbra4/structure.md, "A missed load holds its pair at
-// commit").
+// WB").
 //
 // A loaded sub-word is extracted and extended here, from the hit's word or
 // the access's.
 //
-// The output register is the pair commit takes.
+// The output register is the pair WB takes.
 
-module penumbra4_mem_resolve
+module penumbra4_stage_mem2
     import penumbra_pkg::*;
     import penumbra4_pkg::*;
 (
@@ -23,7 +23,7 @@ module penumbra4_mem_resolve
     input  logic        i_rst,
 
     input  pair_t       i_pair,
-    input  logic        i_kill,
+    input  logic        i_flush,
     input  logic        i_hold,
     output logic        o_hold,
 
@@ -63,7 +63,7 @@ module penumbra4_mem_resolve
 
     assign y         = i_pair.y;
     assign is_access = y.valid && (y.op.op_class == OPC_MEM) && !y.op.fault.valid;
-    assign leaving   = y.valid && !i_hold && !i_kill;
+    assign leaving   = y.valid && !i_hold && !i_flush;
 
     byte_ext u_extract_hit (
         .i_data     (i_word),
@@ -125,7 +125,7 @@ module penumbra4_mem_resolve
 
     always_comb begin
         pair_d = pair_q;
-        if (i_kill) begin
+        if (i_flush) begin
             pair_d = '0;
         end else if (!i_hold) begin
             pair_d   = i_pair;
@@ -152,7 +152,7 @@ module penumbra4_mem_resolve
     always_ff @(posedge i_clk) begin
         if (!i_rst && o_access_req) begin
             assert (!(y.op.store && i_cacheable))
-                else $fatal(1, "penumbra4_mem_resolve: a cacheable store at 0x%08x, which the store side carries",
+                else $fatal(1, "penumbra4_stage_mem2: a cacheable store at 0x%08x, which the store side carries",
                             y.op.pc);
         end
     end

@@ -15,18 +15,19 @@ problem with it.
 
 ## Rules
 
-- **A module is a part of the machine, with one purpose.** It is named
-  for what it is: the fetch unit, the predictor, the fetch queue. A
-  behaviour that crosses parts, such as a miss or the entry to an
-  exception, is a contract between the parts it crosses, each carrying
-  its share ([behaviours](#behaviours-and-the-parts-that-carry-them)),
-  never a module of its own. A module that cannot name the part of the
+- **A module is a part of the machine, with one purpose.** A stage is
+  named for its place in the pipeline (`penumbra4_stage_ex`), any other
+  part for what it is: the predictor, the fetch queue. A behaviour that
+  crosses parts, such as a miss or the entry to an exception, is a
+  contract between the parts it crosses, each carrying its share
+  ([behaviours](#behaviours-and-the-parts-that-carry-them)), never a
+  module of its own. A module that cannot name the part of the
   machine it is, is a behaviour, and belongs to the parts it touches.
 - **A module owns its state, and its clients see a contract:** a
   request, busy and done; a verdict; a payload. Its arrays, its policy
   and which cycle it does its work in stay inside.
 - **A part that only predicts never steers.** The predictor says where
-  the line goes; the fetch unit chooses the address. A predictor that
+  the line goes; IF1 chooses the address. A predictor that
   also steered would have two purposes, and every change to one would
   reach the other.
 - **Every output has a timing class**, stated in its contract
@@ -37,11 +38,11 @@ problem with it.
   copy of what an op in flight will write.
 - **Each operand has one stage that captures it,** named in that
   stage's contract.
-- **Issue chooses each operand's source.** It compares every register
+- **ID chooses each operand's source.** It compares every register
   an op reads against the writers in flight for its hazards anyway, so
   it registers with the pair which input each operand takes: the file,
-  a result in either slot of a pipeline register, or commit's write.
-  Execute's operand mux then has registered selects, and an operand
+  a result in either slot of a pipeline register, or WB's write.
+  EX's operand mux then has registered selects, and an operand
   whose pair holds in EX takes its value as it arrives.
 - **The core module only connects.** It instantiates the stages and
   units and wires them; every decision belongs to one of them.
@@ -124,7 +125,7 @@ graph LR
     ID --> EX["EX<br/>execute, X and Y"]
     EX --> MEM1["MEM1<br/>launch"]
     MEM1 --> MEM2["MEM2<br/>resolve"]
-    MEM2 --> WB["WB<br/>commit"]
+    MEM2 --> WB["WB<br/>writeback"]
     PR["predictor"] -.->|"prediction"| IF1
     EX -.->|"training"| PR
     EX -.->|"misprediction"| IF1
@@ -137,14 +138,14 @@ graph LR
 
 | Stage | Module | Purpose |
 |---|---|---|
-| IF1 | `penumbra4_fetch` | chooses the address fetch reads next and launches its lookup |
-| IF2 | `penumbra4_line` | turns the line the L1-I returns into instructions for the queue |
-| — | `penumbra4_fetch_queue` | holds fetched instructions until issue takes them |
-| ID | `penumbra4_issue` | decides which ops issue and in which slots, and reads their registers |
-| EX | `penumbra4_execute` | computes both ops' results and the access's address, and resolves the transfer |
-| MEM1 | `penumbra4_mem_launch` | launches the access's translation and lookup |
-| MEM2 | `penumbra4_mem_resolve` | takes the access's verdicts and finishes the access or hands it to the L1-D |
-| WB | `penumbra4_commit` | makes the pair's effects architectural, or takes its trap |
+| IF1 | `penumbra4_stage_if1` | chooses the address fetch reads next and launches its lookup |
+| IF2 | `penumbra4_stage_if2` | turns the line the L1-I returns into instructions for the queue |
+| — | `penumbra4_fetch_queue` | holds fetched instructions until ID takes them |
+| ID | `penumbra4_stage_id` | decides which ops issue and in which slots, and reads their registers |
+| EX | `penumbra4_stage_ex` | computes both ops' results and the access's address, and resolves the transfer |
+| MEM1 | `penumbra4_stage_mem1` | launches the access's translation and lookup |
+| MEM2 | `penumbra4_stage_mem2` | takes the access's verdicts and finishes the access or hands it to the L1-D |
+| WB | `penumbra4_stage_wb` | makes the pair's effects architectural, or takes its trap |
 
 **Units** hold no state; a stage instantiates them.
 
@@ -154,7 +155,7 @@ graph LR
 | `penumbra4_decode` | an instruction's fields | IF2 or the queue's read side ([open](#open)) |
 | `penumbra4_fuser` | forms ops from adjacent instructions | IF2 or the queue's read side ([open](#open)) |
 | `penumbra4_alu` | one op's result and flags | EX, one a slot |
-| `penumbra4_operands` | each of the four operands and the flags, from the register file or a result in flight, by the sources issue chose | EX |
+| `penumbra4_operands` | each of the four operands and the flags, from the register file or a result in flight, by the sources ID chose | EX |
 | `penumbra4_resolve` | whether a transfer went where fetch predicted, and where it goes | EX, slot Y |
 | `cond_eval` | whether a condition holds for the flags | EX, in resolve |
 | `byte_ext`, `byte_rep` | a loaded sub-word extended, a stored one placed in its lanes | MEM2, MEM1 |
@@ -176,57 +177,57 @@ they are to start.
 
 | Behaviour | Carried by | Between them |
 |---|---|---|
-| A fetch the L1-I has no word for | the L1-I takes the access; the fetch unit launches the address again when it is done | busy, done |
-| A prediction | the predictor predicts the line's exit; the fetch unit steers by it | the predicted exit word and target |
-| A misprediction | execute's resolve finds it; the fetch unit steers; each younger stage clears | redirect, kill |
-| A load the L1-D has no word for | MEM2 hands the access to the L1-D as the pair leaves; the pair waits at commit until the L1-D is done, and retires whole with the word | busy, done, word, fault |
-| Entry to an exception | commit decides it and saves the state; the fetch unit reads the vector and fetches from it | the commit redirect and its vector |
-| `ERET`, and a resync after a system write | commit redirects | the commit redirect |
-| An interrupt | issue injects an op in place of the queue's head; commit takes it as a trap | SR.I, the lines, the injected op |
-| A cacheable store's bus fault | the uncore holds it until its trap; issue injects an op that carries it; commit takes it as a deferred bus fault | fault and address |
-| A system write with a lasting effect | the device raises busy; the fetch unit launches nothing while it is up | busy |
+| A fetch the L1-I has no word for | the L1-I takes the access; IF1 launches the address again when it is done | busy, done |
+| A prediction | the predictor predicts the line's exit; IF1 steers by it | the predicted exit word and target |
+| A misprediction | EX's resolve finds it; IF1 steers; each younger stage clears | redirect, flush |
+| A load the L1-D has no word for | MEM2 hands the access to the L1-D as the pair leaves; the pair waits at WB until the L1-D is done, and retires whole with the word | busy, done, word, fault |
+| Entry to an exception | WB decides it and saves the state; IF1 reads the vector and fetches from it | WB's redirect and its vector |
+| `ERET`, and a resync after a system write | WB redirects | WB's redirect |
+| An interrupt | ID injects an op in place of the queue's head; WB takes it as a trap | SR.I, the lines, the injected op |
+| A cacheable store's bus fault | the uncore holds it until its trap; ID injects an op that carries it; WB takes it as a deferred bus fault | fault and address |
+| A system write with a lasting effect | the device raises busy; IF1 launches nothing while it is up | busy |
 
-The fetch unit is the one place that steers. Its sources, in priority:
-commit's redirect, MEM1's for a fused branch resolved there
-([open](#open)), execute's, the vector read, a relaunch after a miss,
-the prediction for the line in IF2, and the next line.
+IF1 is the one place that steers. Its sources, in priority: WB's
+redirect, MEM1's for a fused branch resolved there ([open](#open)),
+EX's, the vector read, a relaunch after a miss, the prediction for the
+line in IF2, and the next line.
 
-**A missed load holds its pair at commit.** The pair is the oldest in
+**A missed load holds its pair at WB.** The pair is the oldest in
 flight, so nothing older is left to drain around it. Its hold reaches
-MEM2, MEM1, EX and issue in the same cycle, as any hold does, and
-fetch goes on filling the queue. The L1-D's word enters the load's
-slot in the waiting commit register, so a dependent takes it as it
-takes a hit's value, and the pair retires as a unit through its own
-write ports: a pair writes at most two registers, since a fused op
-that writes two pairs only with one that writes none. Retiring the
-pair before its load completes, so that only a use waits, is
+MEM2, MEM1, EX and ID in the same cycle, as any hold does, and fetch
+goes on filling the queue. The L1-D's word enters the load's slot in
+the register WB decides from, so a dependent takes it as it takes a
+hit's value, and the pair retires as a unit through its own write
+ports: a pair writes at most two registers, since a fused op that
+writes two pairs only with one that writes none. Retiring the pair
+before its load completes, so that only a use waits, is
 [ruled out](./load-use.md#ruled-out) for gen4.
 
-**A trap holds the pair behind it.** Commit's kill lands a cycle after
-commit decides it, and in that cycle the pair behind the trap could
-leave MEM2 and hand the L1-D an access, which nothing can recall. So
-commit holds while it decides a kill: the pair behind stays in MEM1's
-register, makes no access, and the kill clears it with the rest.
+**A trap holds the pair behind it.** WB's flush lands a cycle after
+WB decides it, and in that cycle the pair behind the trap could leave
+MEM2 and hand the L1-D an access, which nothing can recall. So WB
+holds while it decides a flush: the pair behind stays in MEM1's
+register, makes no access, and the flush clears it with the rest.
 
 **An interrupt is an op.** When an interrupt is pending and SR.I lets
-it in, issue puts an op of its own in place of the queue's head. The
+it in, ID puts an op of its own in place of the queue's head. The
 op carries the head's PC, makes no access and writes no register, and
-issues alone and serializes, as a system instruction does; commit
-takes it as a trap and saves that PC, so the head runs after `ERET`.
+issues alone and serializes, as a system instruction does; WB takes
+it as a trap and saves that PC, so the head runs after `ERET`.
 It reuses the trap path whole:
 
-- **The saved PC is real.** An older trap or misprediction kills the
-  op as it kills any younger one, so by commit every op older than it
+- **The saved PC is real.** An older trap or misprediction flushes the
+  op as it flushes any younger one, so by WB every op older than it
   has resolved, and none younger has reached MEM.
 - **SR.I is read as committed.** Only instructions that serialize
-  change it, so issue never sees a write to it in flight. The op that
+  change it, so ID never sees a write to it in flight. The op that
   issues right after `EI` is never replaced, which keeps `EI`'s
   one-instruction delay
   ([`EI`](../../system/architecture.md#ei--enable-interrupts)); a
   fused op or a pair there runs masked whole, which the delay allows.
 - **It waits for a head,** so it has a PC to carry; an empty queue
   delays it a cycle or two.
-- **Commit takes it whatever the line does meanwhile.** A device holds
+- **WB takes it whatever the line does meanwhile.** A device holds
   its request until software clears it, and either outcome of a
   request withdrawn in flight is within the ISA.
 
@@ -249,11 +250,11 @@ ahead of any interrupt and whatever SR.I and `EI`'s delay say
   stage behind the source holds in the same cycle, and the hold is one
   OR of early terms wherever they are added. No module computes
   another's hold.
-- **Issue adds no hold of its own.** An op it cannot issue leaves a
+- **ID adds no hold of its own.** An op it cannot issue leaves a
   bubble in its register, and the queue's room is registered, so
   neither the hazard check nor the pairing reaches another stage or
   fetch in the same cycle.
-- **A kill clears the stages younger than its redirect** and never
+- **A flush clears the stages younger than its redirect** and never
   waits on a hold.
 - **One term says the pair leaves the stage,** and every effect the
   stage has, a write, a request or a count, is gated by it.
@@ -278,31 +279,31 @@ another stage's operand mux would.
 | predictor → fetch | the line's predicted exit, its word and target | L, ending in the fetch address |
 | IF2 → queue | up to four instructions and their count | L, ending in the queue |
 | queue → IF2 | room for a line | R |
-| queue → issue | the three instructions at the head, with their fuse and pair bits | E |
-| issue → queue | the instructions taken | E |
-| issue ↔ register file | four read indices, four values | E |
-| stage registers → issue | the writers in flight and when each result can be forwarded | R |
-| issue → execute | the pair, and each operand's source | R |
-| execute → fetch, queue, issue | a misprediction's redirect and kill | L ([open](#open)) |
-| MEM1 → fetch, queue, issue, execute | a fused branch's redirect and kill, when it resolves there | E |
-| execute → predictor | the transfer's PC, outcome and target, for training | R |
-| execute → MEM1 | the pair and the access's address | R |
+| queue → ID | the three instructions at the head, with their fuse and pair bits | E |
+| ID → queue | the instructions taken | E |
+| ID ↔ register file | four read indices, four values | E |
+| stage registers → ID | the writers in flight and when each result can be forwarded | R |
+| ID → EX | the pair, and each operand's source | R |
+| EX → IF1, queue, ID | a misprediction's redirect and flush | L ([open](#open)) |
+| MEM1 → IF1, queue, ID, EX | a fused branch's redirect and flush, when it resolves there | E |
+| EX → predictor | the transfer's PC, outcome and target, for training | R |
+| EX → MEM1 | the pair and the access's address | R |
 | MEM1 → MMU, L1-D | the access's launch | R |
 | MMU, L1-D → MEM2 | the translation verdict, the hit and the word | L |
 | MEM2 → L1-D, uncore | a store's write, on the L1-D and the store side; an access | L, ending in the receivers' registers |
 | uncore → MEM2 | the store buffer is full | R |
-| MEM2 → commit | the pair, its results and faults, whether it waits on an access | R |
-| L1-D → commit | busy, done, the access's word and fault | R |
-| commit → register file, status | two register writes, the flags, the save state | R |
-| commit → fetch, every stage | a trap's, `ERET`'s or a resync's redirect, and its kill | R |
+| MEM2 → WB | the pair, its results and faults, whether it waits on an access | R |
+| L1-D → WB | busy, done, the access's word and fault | R |
+| WB → register file, status | two register writes, the flags, the save state | R |
+| WB → IF1, every stage | a trap's, `ERET`'s or a resync's redirect, and its flush | R |
 | a stage → every stage behind it | its hold | E |
-| commit → MMU | the fault that carries an address, for the fault registers | R |
-| uncore → issue | a store's bus fault and its address, held until its trap | R |
-| status → issue | SR.I | R |
-| interrupt lines → issue | the requests, registered at the machine | R |
+| WB → MMU | the fault that carries an address, for the fault registers | R |
+| uncore → ID | a store's bus fault and its address, held until its trap | R |
+| status → ID | SR.I | R |
+| interrupt lines → ID | the requests, registered at the machine | R |
 | L1s ↔ uncore | the [core-to-uncore port](../penumbra3/uncore-port.md) | R |
 | MEM1 → sysreg device → MEM2 | an `RDSYS`'s read, and its data a cycle later | R |
-| execute ↔ `divmul` | start; busy, done and the results | R |
+| EX ↔ `divmul` | start; busy, done and the results | R |
 
 ## Payloads
 
@@ -311,7 +312,7 @@ The package holds one type for each thing that crosses a stage:
 - **An instruction** in the queue: the word or its decoded fields, its
   PC, what fetch did after it (went on, or took a predicted target),
   and its fetch fault.
-- **An op:** one instruction or two fused, or the op issue injects
+- **An op:** one instruction or two fused, or the op ID injects
   for an interrupt or a deferred bus fault. Its class, up to two
   registers read and two written, its flag reads and writes, its
   immediate, its first PC, its prediction and its fault.
@@ -339,10 +340,10 @@ queue.
 | L1-D | no arrays: every load is an access, every store is written through | the cache |
 | fetch queue | one line | sixteen entries |
 | fuser | fuses nothing | the four fusions, `addmem`, `addwb` |
-| issue | one op a cycle, in Y, once nothing in flight writes its sources | pairs, and issues through the forwards |
+| ID | one op a cycle, in Y, once nothing in flight writes its sources | pairs, and issues through the forwards |
 | operands | the register file's values | forwards from both pipelines |
 | register file | flops | [XOR banks over distributed RAM](./regfile.md#design) |
-| execute, slot X | nothing: issue never fills it | simple ALU ops, shifts and moves |
+| EX, slot X | nothing: ID never fills it | simple ALU ops, shifts and moves |
 | MMU | the full sysreg interface over a small TLB | the board's geometry |
 | store buffer | one entry, held until memory has it | the buffer |
 | uncore | the select, the store buffer and the bus master | with the L2, the stream buffers and the native port |
@@ -366,7 +367,7 @@ layer.
    board at a speed worth working at.
 3. **The cones dual issue rests on.** Each is a module's full form on
    the running machine, read on the full top of both parts: the
-   register file with the forwards, issue with X filled, the fused
+   register file with the forwards, ID with X filled, the fused
    compare-and-branch's resolve, the address adder, and the line
    through IF2 with decode and the fuser. A full form that misses the
    clock changes its contract here, before the modules around it take
@@ -436,22 +437,21 @@ it costs no fmax:
   a cycle on each mispredicted fused branch, at most the 11 / 6 EX
   redirects per 1000 instructions gen3's predictor leaves on
   `pbench kernel` / Doom, since 86–88 % of conditional branches are
-  fused. The fetch unit has a redirect input from MEM1 for it from the
-  start. Registering every EX redirect instead is ruled out: it costs
+  fused. IF1 has a redirect input from MEM1 for it from the start. Registering every EX redirect instead is ruled out: it costs
   about as much and slows the branches that never needed it. A
   shift's Z comes after the shifter, so the measured `opbr` fuses no
   shift with its `Bcc`.
 - **Another stage between IF1 and EX,** an ID1 for decode and the
   fuser, or a later resolve. Either adds a cycle to each redirect from
-  EX or commit, and none to a predicted taken branch, which IF2
+  EX or WB, and none to a predicted taken branch, which IF2
   redirects ahead of the queue. With gen3's predictor that is about
   11 / 6 cycles per 1000 instructions on `pbench kernel` / Doom, plus
   trap entries and `ERET`s: in gen3's
   [redirect counts](../penumbra3/branch-prediction.md#the-target-buffer-depends-on-the-if2-redirect),
   registering the IF2 redirect adds one cycle for each IF2 redirect,
   and what is left of each row is the EX redirects at four cycles
-  each. A stage ahead of issue holds no op in flight, so adding one
-  changes only which stages a kill clears.
+  each. A stage ahead of ID holds no op in flight, so adding one
+  changes only which stages a flush clears.
 - **The native port's contract,** which has to move a word a cycle or
   a wider transfer ([targets](./overview.md#targets)). Two shapes:
     - **Two requests outstanding,** on channels with a valid and a
@@ -472,8 +472,8 @@ it costs no fmax:
 - **How `MUL` and `DIV` retire,** whichever is simplest in RTL: they
   are 2–3 per 1000 instructions on the measured workloads, so every
   option costs at most a cycle or two each. A pair waits for `divmul`
-  in EX or at commit beside a missed load, and either:
-    - **the op issues alone,** and commit writes `Rd` and `Rdh` through
+  in EX or at WB beside a missed load, and either:
+    - **the op issues alone,** and WB writes `Rd` and `Rdh` through
       both pipelines' write ports; or
-    - **it pairs,** and commit takes a cycle more for `Rdh` when the
+    - **it pairs,** and WB takes a cycle more for `Rdh` when the
       pair has more than two registers to write.

@@ -155,33 +155,33 @@ order `doc/internals/penumbra4/structure.md` ("Bring-up") gives.
 - `penumbra4_pkg.sv` — the payloads that cross gen4's stages: `op_t`,
   `slot_t`, `pair_t`, and the register reference, ALU function, op class,
   prediction and fault inside them; the line, the core-to-uncore request,
-  redirects, register writes and commit's status writes. The ISA's typed
+  redirects, register writes and WB's status writes. The ISA's typed
   views (`insn_t`, `sr_t`, address and register types) are
   `penumbra_pkg`'s.
 - `penumbra4_core.sv` — only connects: the stages, their units, the
   register file and the status.
-- `penumbra4_fetch.sv` — IF1, the one place that steers: commit's
-  redirect, the vector read, execute's, IF2's relaunch, the next line.
-- `penumbra4_line.sv` — IF2: the L1-I's line (or its last access's) into
-  ops for the queue through four `penumbra4_decode.sv` units; a fetch
-  with no word requests the access and relaunches.
-- `penumbra4_fetch_queue.sv` — ops between IF2 and issue; the entry type
-  is a parameter.
-- `penumbra4_issue.sv` — ID: one op into Y, its hazards read from the
+- `penumbra4_stage_if1.sv` — IF1, the one place that steers: WB's
+  redirect, the vector read, EX's, IF2's relaunch, the next line.
+- `penumbra4_stage_if2.sv` — IF2: the L1-I's line (or its last
+  access's) into ops for the queue through four `penumbra4_decode.sv`
+  units; a fetch with no word requests the access and relaunches.
+- `penumbra4_fetch_queue.sv` — ops between IF2 and ID; the entry type is
+  a parameter.
+- `penumbra4_stage_id.sv` — ID: one op into Y, its hazards read from the
   stage registers, its operands captured.
-- `penumbra4_execute.sv` — EX: `penumbra4_alu.sv` and
+- `penumbra4_stage_ex.sv` — EX: `penumbra4_alu.sv` and
   `penumbra4_resolve.sv` (over `cond_eval`) for slot Y, the
   misprediction redirect.
-- `penumbra4_mem_launch.sv` — MEM1: an access's alignment fault, byte
+- `penumbra4_stage_mem1.sv` — MEM1: an access's alignment fault, byte
   lanes and store data in them, and its translation and L1-D lookup
   launched as the pair leaves; a sysreg op stops the sim.
-- `penumbra4_mem_resolve.sv` — MEM2: the verdicts; a load the L1-D had no
+- `penumbra4_stage_mem2.sv` — MEM2: the verdicts; a load the L1-D had no
   word for, or an uncacheable store, handed to the L1-D, its word or bus
   fault taken into the waiting slot at the L1-D's done.
-- `penumbra4_commit.sv` — WB: registers every effect (register writes,
-  status writes, the redirect and kill, program end) a cycle ahead of
+- `penumbra4_stage_wb.sv` — WB: registers every effect (register writes,
+  status writes, the redirect and flush, program end) a cycle ahead of
   where it lands; holds while its pair's access is pending or while it
-  decides a kill.
+  decides a flush.
 - `penumbra4_regfile.sv` (4R/2W, flops), `penumbra4_status.sv` (SR, EPC,
   ESR, SCR0..3).
 - `penumbra4_icache.sv` — the L1-I with no arrays: every lookup misses,

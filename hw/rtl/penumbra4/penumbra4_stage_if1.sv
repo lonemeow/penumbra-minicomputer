@@ -1,9 +1,9 @@
-// penumbra4_fetch — IF1: chooses the address fetch reads next and launches
-// its lookup.
+// penumbra4_stage_if1 — IF1: chooses the address fetch reads next and
+// launches its lookup.
 //
 // The one place that steers (doc/internals/penumbra4/structure.md,
 // "Behaviours and the parts that carry them"). Its sources, highest first:
-// commit's redirect, the vector read a trap's redirect starts, execute's
+// WB's redirect, the vector read a trap's redirect starts, EX's
 // misprediction, IF2's relaunch, and the next line. A redirect or a
 // relaunch takes the cycle, launching nothing, and clears the fetch it
 // launched a cycle before, which IF2 holds.
@@ -15,7 +15,7 @@
 //
 // The output register is the fetch IF2 holds.
 
-module penumbra4_fetch
+module penumbra4_stage_if1
     import penumbra_pkg::*;
     import penumbra4_pkg::*;
 #(
@@ -24,8 +24,8 @@ module penumbra4_fetch
     input  logic             i_clk,
     input  logic             i_rst,
 
-    input  commit_redirect_t i_commit_redirect,
-    input  redirect_t        i_execute_redirect,
+    input  wb_redirect_t     i_wb_redirect,
+    input  redirect_t        i_ex_redirect,
     input  relaunch_t        i_relaunch,
     input  logic             i_queue_room,
 
@@ -61,14 +61,14 @@ module penumbra4_fetch
         o_launch      = 1'b0;
         o_vector_req  = 1'b0;
 
-        if (i_commit_redirect.valid) begin
+        if (i_wb_redirect.valid) begin
             from_access_d = 1'b0;
-            if (i_commit_redirect.to_vector) begin
+            if (i_wb_redirect.to_vector) begin
                 state_d  = VECTOR_REQUEST;
-                vector_d = i_commit_redirect.vector;
+                vector_d = i_wb_redirect.vector;
             end else begin
                 state_d  = FETCHING;
-                pc_d     = i_commit_redirect.target;
+                pc_d     = i_wb_redirect.target;
             end
         end else if (state_q == VECTOR_REQUEST) begin
             if (!i_icache_busy) begin
@@ -80,8 +80,8 @@ module penumbra4_fetch
                 state_d = FETCHING;
                 pc_d    = vaddr_t'(i_icache_word);
             end
-        end else if (i_execute_redirect.valid) begin
-            pc_d          = i_execute_redirect.target;
+        end else if (i_ex_redirect.valid) begin
+            pc_d          = i_ex_redirect.target;
             from_access_d = 1'b0;
         end else if (i_relaunch.valid) begin
             pc_d          = i_relaunch.pc;

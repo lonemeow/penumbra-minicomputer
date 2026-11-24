@@ -1,17 +1,17 @@
-// penumbra4_execute — EX: computes the ops' results and the access's
+// penumbra4_stage_ex — EX: computes the ops' results and the access's
 // address, and resolves the transfer.
 //
-// Slot Y alone: issue fills no other. A result is the ALU's, the link a
+// Slot Y alone: ID fills no other. A result is the ALU's, the link a
 // transfer writes, or the value RDSPR or WRSPR moves; an access's address
 // is src_a's value plus its offset. A misprediction redirects fetch as the
-// pair leaves, and the redirect's kill clears what issued behind it.
+// pair leaves, and the redirect's flush clears what issued behind it.
 //
-// Execute carries neither MUL nor DIV: one that reaches it stops the
+// EX carries neither MUL nor DIV: one that reaches it stops the
 // simulation.
 //
 // The output register is the pair MEM1 launches.
 
-module penumbra4_execute
+module penumbra4_stage_ex
     import penumbra_pkg::*;
     import penumbra4_pkg::*;
 (
@@ -19,7 +19,7 @@ module penumbra4_execute
     input  logic      i_rst,
 
     input  pair_t     i_pair,
-    input  logic      i_kill,
+    input  logic      i_flush,
     input  logic      i_hold,
     output logic      o_hold,
 
@@ -80,7 +80,7 @@ module penumbra4_execute
         endcase
     end
 
-    assign leaving = y.valid && !i_hold && !i_kill;
+    assign leaving = y.valid && !i_hold && !i_flush;
 
     assign o_redirect.valid  = leaving && mispredict;
     assign o_redirect.target = next_pc;
@@ -90,7 +90,7 @@ module penumbra4_execute
 
     always_comb begin
         pair_d = pair_q;
-        if (i_kill) begin
+        if (i_flush) begin
             pair_d = '0;
         end else if (!i_hold) begin
             pair_d   = i_pair;
@@ -112,9 +112,9 @@ module penumbra4_execute
     always_ff @(posedge i_clk) begin
         if (!i_rst && y.valid) begin
             assert (y.op.op_class != OPC_FUNIT)
-                else $fatal(1, "penumbra4_execute: MUL or DIV at 0x%08x, which execute does not carry", y.op.pc);
+                else $fatal(1, "penumbra4_stage_ex: MUL or DIV at 0x%08x, which EX does not carry", y.op.pc);
             assert (!i_pair.x.valid)
-                else $fatal(1, "penumbra4_execute: an op in slot X, which execute does not carry");
+                else $fatal(1, "penumbra4_stage_ex: an op in slot X, which EX does not carry");
         end
     end
 

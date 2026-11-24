@@ -1,23 +1,23 @@
-// penumbra4_commit — WB: makes the pair's effects architectural, or takes
-// its trap.
+// penumbra4_stage_wb — WB: makes the pair's effects architectural, or
+// takes its trap.
 //
-// Commit decides from the pair MEM2 holds and registers every effect, so
-// the register writes, the status writes, the redirect and the kill all
-// leave flops and land a cycle later. A kill clears every stage, MEM2's
+// WB decides from the pair MEM2 holds and registers every effect, so the
+// register writes, the status writes, the redirect and the flush all leave
+// flops and land a cycle later. A flush clears every stage, MEM2's
 // register among them, so the pair that reached MEM2's register behind a
 // trap or an ERET is never committed.
 //
-// A pair whose access the L1-D still carries waits here: commit decides
+// A pair whose access the L1-D still carries waits here: WB decides
 // nothing from it and holds it, and MEM2 puts the access's word or fault
 // into it at the L1-D's done (doc/internals/penumbra4/structure.md, "A
-// missed load holds its pair at commit").
+// missed load holds its pair at WB").
 //
 // A fault takes its trap: the status saves the op's PC and SR, and fetch
 // reads the vector. ERET takes ESR's image for the SR and redirects to EPC.
 // A BREAK's trap pulses program end
 // (doc/internals/build-system.md, "The machine layer").
 
-module penumbra4_commit
+module penumbra4_stage_wb
     import penumbra_pkg::*;
     import penumbra4_pkg::*;
 (
@@ -32,8 +32,8 @@ module penumbra4_commit
     output pair_t             o_landing,      // the pair whose effects land this cycle
     output reg_write_t [1:0]  o_reg_write,
     output status_write_t     o_status_write,
-    output commit_redirect_t  o_redirect,
-    output logic              o_kill,
+    output wb_redirect_t      o_redirect,
+    output logic              o_flush,
     output logic [1:0]        o_retire_count,
     output logic              o_prog_end
 );
@@ -42,8 +42,8 @@ module penumbra4_commit
         pair_t             landing;
         reg_write_t [1:0]  reg_write;
         status_write_t     status_write;
-        commit_redirect_t  redirect;
-        logic              kill;
+        wb_redirect_t      redirect;
+        logic              flush;
         logic [1:0]        retire_count;
         logic              prog_end;
     } effects_t;
@@ -58,7 +58,7 @@ module penumbra4_commit
         return write;
     endfunction
 
-    // A slot carries more than commit reads of it.
+    // A slot carries more than WB reads of it.
     /* verilator lint_off UNUSEDSIGNAL */
     slot_t y;
     /* verilator lint_on UNUSEDSIGNAL */
@@ -68,7 +68,7 @@ module penumbra4_commit
     always_comb begin
         effects_d = '0;
 
-        if (y.valid && !y.access_pending && !effects_q.kill) begin
+        if (y.valid && !y.access_pending && !effects_q.flush) begin
             effects_d.landing = i_pair;
 
             if (y.op.fault.valid) begin
@@ -77,7 +77,7 @@ module penumbra4_commit
                 effects_d.redirect.valid     = 1'b1;
                 effects_d.redirect.to_vector = 1'b1;
                 effects_d.redirect.vector    = y.op.fault.vector;
-                effects_d.kill               = 1'b1;
+                effects_d.flush              = 1'b1;
                 effects_d.prog_end           = (y.op.fault.vector == VEC_BREAK);
             end else begin
                 effects_d.retire_count = 2'd1;
@@ -107,7 +107,7 @@ module penumbra4_commit
                         effects_d.status_write.eret = 1'b1;
                         effects_d.redirect.valid    = 1'b1;
                         effects_d.redirect.target   = vaddr_t'(i_epc);
-                        effects_d.kill              = 1'b1;
+                        effects_d.flush             = 1'b1;
                     end
                     default: begin
                     end
@@ -129,18 +129,18 @@ module penumbra4_commit
         end
     end
 
-    // A kill lands a cycle after commit decides it, and in that cycle the
-    // pair behind could leave MEM2 and hand the L1-D an access nothing can
-    // recall. Holding while deciding keeps it in MEM1's register for the kill
-    // to clear (doc/internals/penumbra4/structure.md, "A trap holds the pair
-    // behind it"). The decision reads only MEM2's register, so the hold stays
-    // early.
-    assign o_hold         = (y.valid && y.access_pending) || effects_d.kill;
+    // A flush lands a cycle after WB decides it, and in that cycle the pair
+    // behind could leave MEM2 and hand the L1-D an access nothing can
+    // recall. Holding while deciding keeps it in MEM1's register for the
+    // flush to clear (doc/internals/penumbra4/structure.md, "A trap holds
+    // the pair behind it"). The decision reads only MEM2's register, so the
+    // hold stays early.
+    assign o_hold         = (y.valid && y.access_pending) || effects_d.flush;
     assign o_landing      = effects_q.landing;
     assign o_reg_write    = effects_q.reg_write;
     assign o_status_write = effects_q.status_write;
     assign o_redirect     = effects_q.redirect;
-    assign o_kill         = effects_q.kill;
+    assign o_flush        = effects_q.flush;
     assign o_retire_count = effects_q.retire_count;
     assign o_prog_end     = effects_q.prog_end;
 
@@ -148,7 +148,7 @@ module penumbra4_commit
     always_ff @(posedge i_clk) begin
         if (!i_rst && i_pair.x.valid) begin
             assert (1'b0)
-                else $fatal(1, "penumbra4_commit: an op in slot X, which commit does not carry");
+                else $fatal(1, "penumbra4_stage_wb: an op in slot X, which WB does not carry");
         end
     end
 

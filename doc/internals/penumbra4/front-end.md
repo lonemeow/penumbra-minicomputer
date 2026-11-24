@@ -220,8 +220,8 @@ a fused op pairs with any op.
   transfers predicted at fetch.
 
 If decode and the fuser cost the clock where they sit, a stage of
-their own ahead of issue comes first. It costs a cycle on each
-redirect from EX or commit, about 11 / 6 per 1000 instructions
+their own ahead of ID comes first. It costs a cycle on each redirect
+from EX or WB, about 11 / 6 per 1000 instructions
 ([structure](./structure.md#open)), where an aligned fuser gives up
 56–81. The aligned fuser is the last resort, and the same-cycle
 forwards would then earn the place

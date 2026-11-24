@@ -3,7 +3,7 @@
 //
 // Reads are combinational; a write lands at the clock edge, so a read sees
 // it from the next cycle. The two writes of a cycle never name one
-// register, as commit drops the older of two writes to one register.
+// register, as WB drops the older of two writes to one register.
 //
 // Flops, the smallest form; the full form is XOR banks over distributed RAM
 // behind the same ports (doc/internals/penumbra4/regfile.md).

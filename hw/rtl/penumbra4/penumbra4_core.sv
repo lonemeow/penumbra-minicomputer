@@ -5,8 +5,8 @@
 // machine's; the core reaches them through the fetch side's ports and the
 // data side's.
 //
-// A redirect's kill: execute's clears what is behind the transfer, the
-// queue, IF2 and the op issuing; commit's clears every stage.
+// A redirect's flush: EX's clears what is behind the transfer, the queue,
+// IF2 and the op issuing; WB's clears every stage.
 
 module penumbra4_core
     import penumbra_pkg::*;
@@ -64,12 +64,12 @@ module penumbra4_core
     localparam int HEAD_WIDTH  = 3;
 
     // ── Between the stages ───────────────────────────────────────
-    commit_redirect_t commit_redirect;
-    logic             commit_kill;
-    redirect_t        execute_redirect;
+    wb_redirect_t     wb_redirect;
+    logic             wb_flush;
+    redirect_t        ex_redirect;
     relaunch_t        relaunch;
     fetch_slot_t      if2_slot;
-    logic             front_kill;
+    logic             front_flush;
 
     logic                                queue_room;
     logic                                queue_enq;
@@ -79,9 +79,9 @@ module penumbra4_core
     logic        [HEAD_WIDTH-1:0]        queue_head_valid;
     logic [$clog2(HEAD_WIDTH+1)-1:0]     queue_taken;
 
-    pair_t            issue_pair, execute_pair, launch_pair, resolve_pair, landing_pair;
-    logic             execute_hold, launch_hold, resolve_hold, commit_hold;
-    logic             back_kill;
+    pair_t            id_pair, ex_pair, mem1_pair, mem2_pair, wb_pair;
+    logic             ex_hold, mem1_hold, mem2_hold, wb_hold;
+    logic             back_flush;
 
     phys_reg_t [3:0]  read_phys;
     word_t     [3:0]  read_value;
@@ -91,17 +91,17 @@ module penumbra4_core
     word_t            epc, esr;
     word_t [3:0]      scratch;
 
-    assign front_kill = commit_kill || execute_redirect.valid;
-    assign back_kill  = commit_kill;
+    assign front_flush = wb_flush || ex_redirect.valid;
+    assign back_flush  = wb_flush;
 
     // ── Front end ────────────────────────────────────────────────
-    penumbra4_fetch #(
+    penumbra4_stage_if1 #(
         .RESET_PC (RESET_PC)
-    ) u_fetch (
+    ) u_if1 (
         .i_clk              (i_clk),
         .i_rst              (i_rst),
-        .i_commit_redirect  (commit_redirect),
-        .i_execute_redirect (execute_redirect),
+        .i_wb_redirect      (wb_redirect),
+        .i_ex_redirect      (ex_redirect),
         .i_relaunch         (relaunch),
         .i_queue_room       (queue_room),
         .i_icache_busy      (i_icache_busy),
@@ -114,9 +114,9 @@ module penumbra4_core
         .o_if2              (if2_slot)
     );
 
-    penumbra4_line u_line (
+    penumbra4_stage_if2 u_if2 (
         .i_slot           (if2_slot),
-        .i_kill           (front_kill),
+        .i_flush          (front_flush),
         .i_hit            (i_icache_hit),
         .i_line           (i_icache_line),
         .i_access_line    (i_icache_access_line),
@@ -142,7 +142,7 @@ module penumbra4_core
     ) u_queue (
         .i_clk        (i_clk),
         .i_rst        (i_rst),
-        .i_flush      (front_kill),
+        .i_flush      (front_flush),
         .i_enq        (queue_enq),
         .i_entries    (queue_entries),
         .i_enq_count  (queue_enq_count),
@@ -153,57 +153,57 @@ module penumbra4_core
     );
 
     // ── Back end ─────────────────────────────────────────────────
-    penumbra4_issue #(
+    penumbra4_stage_id #(
         .HEAD_WIDTH (HEAD_WIDTH),
         .LATER      (4)
-    ) u_issue (
+    ) u_id (
         .i_clk           (i_clk),
         .i_rst           (i_rst),
         .i_head          (queue_head),
         .i_head_valid    (queue_head_valid),
         .o_taken         (queue_taken),
-        .i_kill          (front_kill),
-        .i_hold          (execute_hold),
-        .i_in_flight     ({landing_pair, resolve_pair, launch_pair, execute_pair}),
+        .i_flush         (front_flush),
+        .i_hold          (ex_hold),
+        .i_in_flight     ({wb_pair, mem2_pair, mem1_pair, ex_pair}),
         .i_sr            (sr),
         .i_epc           (epc),
         .i_esr           (esr),
         .i_scratch       (scratch),
         .o_read_phys     (read_phys),
         .i_read_value    (read_value),
-        .o_pair          (issue_pair)
+        .o_pair          (id_pair)
     );
 
-    penumbra4_execute u_execute (
+    penumbra4_stage_ex u_ex (
         .i_clk      (i_clk),
         .i_rst      (i_rst),
-        .i_pair     (issue_pair),
-        .i_kill     (back_kill),
-        .i_hold     (launch_hold),
-        .o_hold     (execute_hold),
-        .o_redirect (execute_redirect),
-        .o_pair     (execute_pair)
+        .i_pair     (id_pair),
+        .i_flush    (back_flush),
+        .i_hold     (mem1_hold),
+        .o_hold     (ex_hold),
+        .o_redirect (ex_redirect),
+        .o_pair     (ex_pair)
     );
 
-    penumbra4_mem_launch u_mem_launch (
+    penumbra4_stage_mem1 u_mem1 (
         .i_clk          (i_clk),
         .i_rst          (i_rst),
-        .i_pair         (execute_pair),
-        .i_kill         (back_kill),
-        .i_hold         (resolve_hold),
-        .o_hold         (launch_hold),
+        .i_pair         (ex_pair),
+        .i_flush        (back_flush),
+        .i_hold         (mem2_hold),
+        .o_hold         (mem1_hold),
         .o_launch       (o_data_launch),
         .o_launch_vaddr (o_data_vaddr),
-        .o_pair         (launch_pair)
+        .o_pair         (mem1_pair)
     );
 
-    penumbra4_mem_resolve u_mem_resolve (
+    penumbra4_stage_mem2 u_mem2 (
         .i_clk          (i_clk),
         .i_rst          (i_rst),
-        .i_pair         (launch_pair),
-        .i_kill         (back_kill),
-        .i_hold         (commit_hold),
-        .o_hold         (resolve_hold),
+        .i_pair         (mem1_pair),
+        .i_flush        (back_flush),
+        .i_hold         (wb_hold),
+        .o_hold         (mem2_hold),
         .i_paddr        (i_data_paddr),
         .i_cacheable    (i_data_cacheable),
         .i_fault        (i_data_fault),
@@ -214,21 +214,21 @@ module penumbra4_core
         .i_access_done  (i_dcache_done),
         .i_access_word  (i_dcache_access_word),
         .i_access_fault (i_dcache_access_fault),
-        .o_pair         (resolve_pair)
+        .o_pair         (mem2_pair)
     );
 
-    penumbra4_commit u_commit (
+    penumbra4_stage_wb u_wb (
         .i_clk          (i_clk),
         .i_rst          (i_rst),
-        .i_pair         (resolve_pair),
+        .i_pair         (mem2_pair),
         .i_supervisor   (sr.s),
         .i_epc          (epc),
-        .o_hold         (commit_hold),
-        .o_landing      (landing_pair),
+        .o_hold         (wb_hold),
+        .o_landing      (wb_pair),
         .o_reg_write    (reg_write),
         .o_status_write (status_write),
-        .o_redirect     (commit_redirect),
-        .o_kill         (commit_kill),
+        .o_redirect     (wb_redirect),
+        .o_flush        (wb_flush),
         .o_retire_count (o_retire_count),
         .o_prog_end     (o_prog_end)
     );

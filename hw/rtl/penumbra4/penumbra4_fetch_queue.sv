@@ -1,13 +1,13 @@
-// penumbra4_fetch_queue — holds fetched ops until issue takes them.
+// penumbra4_fetch_queue — holds fetched ops until ID takes them.
 //
 // Up to ENQ_WIDTH entries enter in a cycle, in order, and the oldest
-// HEAD_WIDTH are presented to issue, which takes some number of them from
+// HEAD_WIDTH are presented to ID, which takes some number of them from
 // the head. The entries are an opaque payload, so where decode and the fuser
 // sit changes what enters, not the queue.
 //
 // o_room says ENQ_WIDTH entries fit now, from a register: IF2 enqueues by
-// it, and the fetch unit launches by it. A flush empties the queue whatever
-// else the cycle does.
+// it, and IF1 launches by it. A flush empties the queue whatever else the
+// cycle does.
 
 module penumbra4_fetch_queue #(
     parameter type entry_t    = logic,

@@ -1,7 +1,7 @@
 // penumbra4_status — the status and save state: SR, EPC, ESR and the
 // scratch registers.
 //
-// Commit writes them, one op's effects at a time; every read is of what has
+// WB writes them, one op's effects at a time; every read is of what has
 // committed. SR resets to supervisor mode with interrupts disabled. A trap's
 // entry saves the PC and SR (doc/system/architecture.md, "Entry Sequence");
 // ERET's SR is ESR's image, its reserved bits read as zero.

@@ -1,4 +1,4 @@
-// penumbra4_mem_launch — MEM1: launches the access's translation and
+// penumbra4_stage_mem1 — MEM1: launches the access's translation and
 // lookup.
 //
 // An access launches its translation and its L1-D lookup as its pair
@@ -13,7 +13,7 @@
 //
 // The output register is the pair MEM2 resolves.
 
-module penumbra4_mem_launch
+module penumbra4_stage_mem1
     import penumbra_pkg::*;
     import penumbra4_pkg::*;
 (
@@ -21,7 +21,7 @@ module penumbra4_mem_launch
     input  logic   i_rst,
 
     input  pair_t  i_pair,
-    input  logic   i_kill,
+    input  logic   i_flush,
     input  logic   i_hold,
     output logic   o_hold,
 
@@ -62,7 +62,7 @@ module penumbra4_mem_launch
 
     assign y         = i_pair.y;
     assign is_access = y.valid && (y.op.op_class == OPC_MEM);
-    assign leaving   = y.valid && !i_hold && !i_kill;
+    assign leaving   = y.valid && !i_hold && !i_flush;
 
     byte_rep u_byte_rep (
         .i_data (y.b),
@@ -97,7 +97,7 @@ module penumbra4_mem_launch
 
     always_comb begin
         pair_d = pair_q;
-        if (i_kill) begin
+        if (i_flush) begin
             pair_d = '0;
         end else if (!i_hold) begin
             pair_d   = i_pair;
@@ -120,7 +120,7 @@ module penumbra4_mem_launch
     always_ff @(posedge i_clk) begin
         if (!i_rst && i_pair.y.valid) begin
             assert (!(i_pair.y.op.op_class inside {OPC_RDSYS, OPC_WRSYS}))
-                else $fatal(1, "penumbra4_mem_launch: a sysreg op at 0x%08x, which MEM1 does not launch",
+                else $fatal(1, "penumbra4_stage_mem1: a sysreg op at 0x%08x, which MEM1 does not launch",
                             i_pair.y.op.pc);
         end
     end

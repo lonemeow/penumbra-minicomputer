@@ -21,8 +21,8 @@ package penumbra4_pkg;
     // operand is captured.
     //
     // Which physical register R14 names is SR.S as the status holds it,
-    // which only commit writes. Every op in flight was issued under that
-    // bit: only a trap's entry and ERET change it, and the kill that clears
+    // which only WB writes. Every op in flight was issued under that bit:
+    // only a trap's entry and ERET change it, and the flush that clears
     // every op behind them takes effect at the same edge as their SR. So a
     // reference maps to its physical register by the one bit wherever it is
     // read or written.
@@ -68,7 +68,7 @@ package penumbra4_pkg;
     } alu_fn_e;
 
     // ── An op's class ───────────────────────────────────────────
-    // A class groups the ops issue pairs alike and the stages route
+    // A class groups the ops ID pairs alike and the stages route
     // alike. What only one stage tells apart within a class, a load from
     // a store or a direct transfer from an indirect one, is a field of
     // the op.
@@ -88,15 +88,15 @@ package penumbra4_pkg;
 
     // ── A prediction ────────────────────────────────────────────
     // What fetch did after an instruction: went on to the next word, or
-    // to a predicted target. Execute's resolve checks it against where the
-    // op goes.
+    // to a predicted target. EX's resolve checks it against where the op
+    // goes.
     typedef struct packed {
         logic   taken;
         vaddr_t target;       // where fetch went, when taken
     } prediction_t;
 
     // ── A fault ─────────────────────────────────────────────────
-    // A fault or trap an op takes at commit. The stage that finds one sets
+    // A fault or trap an op takes at WB. The stage that finds one sets
     // it only while none is set: one an earlier stage found belongs to an
     // earlier part of the op, or keeps it from running at all.
     typedef struct packed {
@@ -107,8 +107,8 @@ package penumbra4_pkg;
     } fault_t;
 
     // ── An op ───────────────────────────────────────────────────
-    // What issue puts in a slot: one instruction, two the fuser joined, or
-    // the op issue makes for an interrupt or a deferred bus fault. pc is
+    // What ID puts in a slot: one instruction, two the fuser joined, or
+    // the op ID makes for an interrupt or a deferred bus fault. pc is
     // its first instruction's.
     typedef struct packed {
         op_class_e     op_class;
@@ -132,7 +132,7 @@ package penumbra4_pkg;
         sysreg_index_t sysreg;
         spr_index_t    spr;
         logic          irq_enable;   // OPC_IRQ_MASK's: EI, else DI
-        logic          privileged;   // issue faults it in user mode
+        logic          privileged;   // ID faults it in user mode
         vaddr_t        pc;
         prediction_t   prediction;
         fault_t        fault;
@@ -141,7 +141,7 @@ package penumbra4_pkg;
     // ── A slot ──────────────────────────────────────────────────
     // An op in a stage and what the stages so far have computed for it.
     // Every stage register holds this one type, so a field means one thing
-    // from issue to commit; a field no stage has reached yet is zero, and
+    // from ID to WB; a field no stage has reached yet is zero, and
     // synthesis drops the flops nothing reads.
     typedef struct packed {
         logic       valid;
@@ -151,10 +151,10 @@ package penumbra4_pkg;
         word_t      result;         // what dst takes: an ALU result, a link, a loaded word, a system read
         word_t      result2;        // what dst2 takes
         flags_t     flags;
-        vaddr_t     addr;           // the access's address, from execute
+        vaddr_t     addr;           // the access's address, from EX
         logic [3:0] byte_en;        // the access's byte lanes, from MEM1
         word_t      wdata;          // a store's data, each byte in its lane, from MEM1
-        logic       access_pending; // MEM2 handed the access to the L1-D; commit waits for its done
+        logic       access_pending; // MEM2 handed the access to the L1-D; WB waits for its done
     } slot_t;
 
     // ── A pair ──────────────────────────────────────────────────
@@ -173,7 +173,7 @@ package penumbra4_pkg;
     } pair_t;
 
     // ── A register write ────────────────────────────────────────
-    // What commit gives the register file through each write port.
+    // What WB gives the register file through each write port.
     typedef struct packed {
         logic      en;
         phys_reg_t phys;
@@ -186,14 +186,14 @@ package penumbra4_pkg;
         vaddr_t target;
     } redirect_t;
 
-    // Commit's redirect: to a target, or to the handler whose vector it
-    // names, which the fetch unit reads before it fetches.
+    // WB's redirect: to a target, or to the handler whose vector it names,
+    // which IF1 reads before it fetches.
     typedef struct packed {
         logic    valid;
         logic    to_vector;
         vector_t vector;
         vaddr_t  target;
-    } commit_redirect_t;
+    } wb_redirect_t;
 
     // ── Lines ───────────────────────────────────────────────────
     // 16 bytes at a 16-byte-aligned address, the unit every cache level
@@ -220,16 +220,16 @@ package penumbra4_pkg;
         logic   from_access;
     } fetch_slot_t;
 
-    // IF2 asking the fetch unit to fetch pc again: the fetch it had no
-    // word for, once the access it requested is done, or the rest of a
-    // line a word read left.
+    // IF2 asking IF1 to fetch pc again: the fetch it had no word for,
+    // once the access it requested is done, or the rest of a line a word
+    // read left.
     typedef struct packed {
         logic   valid;
         vaddr_t pc;
         logic   from_access;
     } relaunch_t;
 
-    // ── Commit's effects on the status ──────────────────────────
+    // ── WB's effects on the status ──────────────────────────────
     typedef struct packed {
         logic       flags_en;
         flags_t     flags;

@@ -1,22 +1,21 @@
-// penumbra4_line — IF2: turns the line the L1-I returns into ops for the
-// fetch queue.
+// penumbra4_stage_if2 — IF2: turns the line the L1-I returns into ops for
+// the fetch queue.
 //
 // A fetch gives the words from its address to the end of its line: those
 // its lookup hit, or, for a fetch the L1-I's last access answers, that
 // access's line, or the one word of a word read. A fetch with no word asks
-// the L1-I for the access and the fetch unit to relaunch it once the access
-// is done; a word read's fetch, and one the queue has no room for, relaunch
-// at the first word they leave. A faulted fetch gives one op, carrying its
-// fault.
+// the L1-I for the access and IF1 to relaunch it once the access is done;
+// a word read's fetch, and one the queue has no room for, relaunch at the
+// first word they leave. A faulted fetch gives one op, carrying its fault.
 //
 // Combinational: the queue's storage is this stage's output register.
 
-module penumbra4_line
+module penumbra4_stage_if2
     import penumbra_pkg::*;
     import penumbra4_pkg::*;
 (
     input  fetch_slot_t                i_slot,
-    input  logic                       i_kill,
+    input  logic                       i_flush,
 
     // ── The L1-I's lookup verdict and last access ────────────────
     input  logic                       i_hit,
@@ -99,7 +98,7 @@ module penumbra4_line
         o_miss_cacheable = i_cacheable;
         o_relaunch       = '0;
 
-        if (i_slot.valid && !i_kill) begin
+        if (i_slot.valid && !i_flush) begin
             if (!i_queue_room) begin
                 o_relaunch.valid       = 1'b1;
                 o_relaunch.pc          = i_slot.pc;

@@ -1,5 +1,5 @@
-// penumbra4_issue — ID: decides which ops issue and in which slots, and
-// reads their registers.
+// penumbra4_stage_id — ID: decides which ops issue and in which slots,
+// and reads their registers.
 //
 // One op a cycle, from the queue's head into Y. An op issues once nothing
 // in flight writes what it reads, since no result is forwarded: every value
@@ -9,13 +9,13 @@
 // carrying VEC_PRIV.
 //
 // The ops in flight are read from the stage registers: this stage's own,
-// and the later ones the core hands in, commit's landing effects last.
+// and the later ones the core hands in, WB's landing effects last.
 // Operands are captured here: a source of R15 takes the op's PC, RDSPR
 // takes its register's value, and the flags are the committed ones.
 //
-// The output register is the pair execute works on.
+// The output register is the pair EX works on.
 
-module penumbra4_issue
+module penumbra4_stage_id
     import penumbra_pkg::*;
     import penumbra4_pkg::*;
 #(
@@ -29,7 +29,7 @@ module penumbra4_issue
     input  logic   [HEAD_WIDTH-1:0]           i_head_valid,
     output logic   [$clog2(HEAD_WIDTH+1)-1:0] o_taken,
 
-    input  logic                              i_kill,
+    input  logic                              i_flush,
     input  logic                              i_hold,
     input  pair_t  [LATER-1:0]                i_in_flight,
 
@@ -124,7 +124,7 @@ module penumbra4_issue
         end
     end
 
-    assign issue = i_head_valid[0] && !i_kill && !i_hold
+    assign issue = i_head_valid[0] && !i_flush && !i_hold
                 && !serializer_in_flight
                 && !(serializes(op.op_class) && anything_in_flight)
                 && !source_hazard;
@@ -174,7 +174,7 @@ module penumbra4_issue
 
     always_comb begin
         pair_d = pair_q;
-        if (i_kill) begin
+        if (i_flush) begin
             pair_d = '0;
         end else if (!i_hold) begin
             pair_d = '0;
