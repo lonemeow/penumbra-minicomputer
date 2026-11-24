@@ -6,8 +6,9 @@
 // is src_a's value plus its offset. A misprediction redirects fetch as the
 // pair leaves, and the redirect's flush clears what issued behind it.
 //
-// EX carries neither MUL nor DIV: one that reaches it stops the
-// simulation.
+// EX carries neither MUL nor DIV. One that reaches it stops the simulation,
+// and on a board takes the illegal-instruction trap, so the machine never
+// runs on with a result EX did not compute.
 //
 // The output register is the pair MEM1 launches.
 
@@ -75,6 +76,13 @@ module penumbra4_stage_ex
             OPC_MEM:    y_out.addr   = vaddr_t'(alu_result);
             OPC_RDSPR:  y_out.result = y.a;
             OPC_WRSPR:  y_out.result = y.b;
+            OPC_FUNIT: begin
+                if (!y.op.fault.valid) begin
+                    y_out.op.fault.valid    = 1'b1;
+                    y_out.op.fault.vector   = VEC_ILLEGAL;
+                    y_out.op.fault.mmu_type = FAULT_NONE;
+                end
+            end
             default: begin
             end
         endcase

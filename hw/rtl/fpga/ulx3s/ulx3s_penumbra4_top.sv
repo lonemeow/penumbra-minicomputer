@@ -1,0 +1,996 @@
+// ULX3S Board Top (Penumbra/4) — gen4 CPU system on ECP5-85F
+//
+// A fork of ulx3s_penumbra3_top that differs only in the machine: the gen4
+// machine keeps the gen2 one's port list, so the board attaches to it the
+// same way. Wires machine_penumbra4 (core + MMU + split L1s + the uncore)
+// to the board: 32 MB SDRAM via the v2 controller stack, a 64 KB boot ROM,
+// an NS16550A-compatible UART on the FTDI serial port, and an SPI/SD card,
+// a USB host port, a GPDI display adapter and the audio device behind the
+// autoconfig daisy chain. The CPU runs at CPU_HZ off the system PLL; the
+// SDRAM runs decoupled at 100 MHz across the CDC.
+//
+// The machine owns the programmable timer and the bus controller
+// internally, so the board attaches only the memory/peripheral devices on
+// the external Penumbra Bus and routes the autoconfig chain off the
+// machine's BUSCTL outputs (o_bus_rst / o_bus_cfg_en). Device-side address
+// decode and the response fabric, with its no-device watchdog, are
+// assembled here — the same bus shape machine_penumbra4_sim presents, so
+// what simulates is what synthesizes.
+
+// ── SDRAM clock-out phase shift (CLKOS2) ──────────────────────────
+// The SDRAM-clock pin is forwarded via ODDRX1F clocked from CLKOS2, which
+// is phase-shifted relative to the controller clock so the SDRAM samples
+// our drives near the centre of the data window. The phase value is
+// empirical — different ULX3S boards / SDRAM variants see slightly
+// different working windows. The build-time sweep procedure
+// (`make fpga PHASE_DEG=N BOARD=ulx3s CORE=penumbra4` for each N in
+// 0,45,90,…,315) finds the contiguous arc that boots and passes the ROM
+// RAM check; pick its centre. See doc/internals/sdram-controller.md.
+`ifndef SDRAM_PHASE_DEG
+`define SDRAM_PHASE_DEG 180
+`endif
+
+// Channels the audio device is built with. A build-time knob because
+// the cost that matters is in the register domain and only shows up
+// against the rest of the machine: sweep the same top at one and at
+// four to see it (doc/TODO/hw-core.md).
+`ifndef AUDIO_CHANNELS
+`define AUDIO_CHANNELS 1
+`endif
+
+module ulx3s_penumbra4_top (
+    input  logic       clk_25mhz,
+    output logic [7:0] led,
+    // Only btn[1] (FIRE1 = manual reset) is used; other bits are
+    // physical inputs the design doesn't consume.
+    /* verilator lint_off UNUSEDSIGNAL */
+    input  logic [6:0] btn,
+    /* verilator lint_on UNUSEDSIGNAL */
+    output logic       ftdi_rxd,    // FPGA TX → FTDI RX → host
+    input  logic       ftdi_txd,    // host → FTDI TX → FPGA RX
+    output logic       wifi_en,     // LOW = hold ESP32 in reset
+
+    // ── SD card (SPI mode) ─────────────────────────────────
+    // Uses sd_clk, sd_cmd, sd_d[0] (MISO), sd_d[3] (CS).
+    // sd_d[1:2] driven high per SD SPI spec.
+    output logic       sd_clk,      // SPI SCK
+    output logic       sd_cmd,      // SPI MOSI
+    inout  wire  [3:0] sd_d,        // [0]=MISO in, [3]=CS out, [2:1]=high
+
+    // ── USB host (US2 socket, D+/D- direct to FPGA) ────────
+    // The bd pair is the bidirectional single-ended view of D+/D-:
+    // sensed while the PHY listens (both levels are needed to tell
+    // SE0 from J/K) and driven while it owns the bus.  The pu pair
+    // works the board's pull network — driven low for the host's
+    // D+/D- pull-downs, released otherwise.  (The board's separate
+    // differential-input pair on the same copper stays unused.)
+    inout  wire        usb_fpga_bd_dp,
+    inout  wire        usb_fpga_bd_dn,
+    inout  wire        usb_fpga_pu_dp,
+    inout  wire        usb_fpga_pu_dn,
+
+    // ── SDRAM ──────────────────────────────────────────────
+    output logic        sdram_clk,
+    output logic        sdram_cke,
+    output logic        sdram_csn,
+    output logic        sdram_wen,
+    output logic        sdram_rasn,
+    output logic        sdram_casn,
+    output logic [12:0] sdram_a,
+    output logic [1:0]  sdram_ba,
+    inout  wire  [15:0] sdram_d,
+    output logic [1:0]  sdram_dqm,
+
+    // ── Audio: 4-bit resistor ladder per channel to the jack ──
+    output logic [3:0]  audio_l,
+    output logic [3:0]  audio_r,
+
+    // ── GPDI display output ────────────────────────────────
+    // Four TMDS lanes (blue, green, red, clock) as LVCMOS33D
+    // pseudo-differential pairs; the board LPF names only the
+    // positive pin of each pair, the complement is implied.
+    output logic [3:0]  gpdi_dp
+);
+    import penumbra_pkg::*;
+    import sdram_pkg::*;
+    import ecp5_pll_pkg::*;
+
+    // ── Clock targets → PLL config (computed, not hand-picked) ────
+    // Change CPU_HZ to retarget the CPU/system clock; ecp5_pll_compute derives
+    // the EHXPLLL dividers and CLK_FREQ together off the same struct, so they
+    // cannot drift. The SDRAM stays at 100 MHz — the W9825_100 preset and the
+    // CLKOS2 phase table below assume CLKOS_DIV==6, asserted after the PLL.
+    localparam longint CPU_HZ   = 37_500_000;
+    localparam longint SDRAM_HZ = 100_000_000;
+    localparam ecp5_pll_cfg_t PLL = ecp5_pll_compute(25_000_000, CPU_HZ, SDRAM_HZ);
+    localparam int CLK_FREQ = int'(PLL.clk_hz);   // derived from the PLL config
+
+    // ── SDRAM chip preset (one-line preset swap) ─────────────────
+    localparam sdram_params_t SDP = W9825_100;
+
+    // ── ESP32 disable ──────────────────────────────────────────
+    assign wifi_en = 1'b0;
+
+    // ── PLL: 25 MHz crystal → CPU_HZ (CLKOP) + 2× SDRAM_HZ ───────
+    // fCLKOP  = CPU_HZ            — CPU / system bus
+    // fCLKOS  = SDRAM_HZ, 0°               — SDRAM controller fabric
+    // fCLKOS2 = SDRAM_HZ, SDRAM_PHASE_DEG° — SDRAM pin clock (ODDR forward)
+    // Phase convention and per-board sweep results live in
+    // doc/internals/sdram-controller.md.
+    localparam int CLKOS2_PHASE_DEG = `SDRAM_PHASE_DEG;
+    localparam int CLKOS2_CPHASE_VAL =
+        (CLKOS2_PHASE_DEG ==   0) ? 5 :
+        (CLKOS2_PHASE_DEG ==  45) ? 4 :
+        (CLKOS2_PHASE_DEG ==  90) ? 3 :
+        (CLKOS2_PHASE_DEG == 135) ? 2 :
+        (CLKOS2_PHASE_DEG == 180) ? 2 :
+        (CLKOS2_PHASE_DEG == 225) ? 1 :
+        (CLKOS2_PHASE_DEG == 270) ? 0 :
+        (CLKOS2_PHASE_DEG == 315) ? 5 : 0;
+    localparam int CLKOS2_FPHASE_VAL =
+        (CLKOS2_PHASE_DEG ==   0) ? 0 :
+        (CLKOS2_PHASE_DEG ==  45) ? 2 :
+        (CLKOS2_PHASE_DEG ==  90) ? 4 :
+        (CLKOS2_PHASE_DEG == 135) ? 6 :
+        (CLKOS2_PHASE_DEG == 180) ? 0 :
+        (CLKOS2_PHASE_DEG == 225) ? 2 :
+        (CLKOS2_PHASE_DEG == 270) ? 4 :
+        (CLKOS2_PHASE_DEG == 315) ? 6 : 0;
+
+    // ── USB clock (CLKOS3) ─────────────────────────────────────────
+    // 60 MHz is what the USB host tier needs (usb_pkg's 5×/40×
+    // oversample base); the audio output stage runs on the same net
+    // because a clock at that rate happens to exist, not because the
+    // two are related.  The name is the rate for that reason — a
+    // consumer joining it is agreeing to 60 MHz and nothing else.
+    // Served off the shared VCO like every other output, exact only:
+    // a CPU/SDRAM retarget that moves the VCO off a 60 MHz multiple
+    // must fail the build here rather than detune USB.
+    localparam longint CLK60_HZ = 60_000_000;
+    localparam int CLKOS3_DIV_VAL = ecp5_pll_aux_div(PLL.vco_hz, CLK60_HZ);
+
+    logic clk;            // CLKOP — CPU_HZ system clock
+    logic clk_sdram;      // CLKOS — SDRAM_HZ fabric clock
+    logic clk_sdram_pin;  // CLKOS2 — SDRAM_HZ, phase-shifted, to ODDR
+    logic clk_60mhz;        // CLKOS3 — 60 MHz, USB host + audio
+    logic pll_lock;
+
+    (* keep *) EHXPLLL #(
+        .CLKI_DIV      (PLL.clki_div),
+        .CLKFB_DIV     (PLL.clkfb_div),
+        .CLKOP_DIV     (PLL.clkop_div),
+        .CLKOP_ENABLE  ("ENABLED"),
+        .CLKOP_CPHASE  (PLL.clkop_cphase),
+        .CLKOP_FPHASE  (0),
+        .CLKOS_DIV     (PLL.clkos_div),
+        .CLKOS_ENABLE  ("ENABLED"),
+        .CLKOS_CPHASE  (PLL.clkos_cphase),   // 0° phase
+        .CLKOS_FPHASE  (0),
+        .CLKOS2_DIV    (PLL.clkos_div),      // same freq as CLKOS
+        .CLKOS2_ENABLE ("ENABLED"),
+        .CLKOS2_CPHASE (CLKOS2_CPHASE_VAL),  // SDRAM_PHASE_DEG° phase
+        .CLKOS2_FPHASE (CLKOS2_FPHASE_VAL),
+        .CLKOS3_DIV    (CLKOS3_DIV_VAL),
+        .CLKOS3_ENABLE ("ENABLED"),
+        .CLKOS3_CPHASE (CLKOS3_DIV_VAL - 1), // 0° phase
+        .CLKOS3_FPHASE (0),
+        .FEEDBK_PATH   ("CLKOP")
+    ) u_pll (
+        .CLKI         (clk_25mhz),
+        .CLKFB        (clk),
+        .CLKOP        (clk),
+        .CLKOS        (clk_sdram),
+        .CLKOS2       (clk_sdram_pin),
+        .CLKOS3       (clk_60mhz),
+        .LOCK         (pll_lock),
+        .RST          (1'b0),
+        .STDBY        (1'b0),
+        .PHASESEL0    (1'b0),
+        .PHASESEL1    (1'b0),
+        .PHASEDIR     (1'b0),
+        .PHASESTEP    (1'b0),
+        .PHASELOADREG (1'b0),
+        .PLLWAKESYNC  (1'b0),
+        .ENCLKOP      (1'b1),
+        .ENCLKOS      (1'b1),
+        .ENCLKOS2     (1'b1),
+        .ENCLKOS3     (1'b1)
+    );
+
+    // The CLKOS2 phase table above is calibrated for CLKOS_DIV==6 (the SDRAM
+    // at fVCO/6). ecp5_pll_compute is free to pick a different SDRAM divider
+    // for some target; if it does, those phase constants no longer apply, so
+    // refuse to build rather than forward a wrong SDRAM pin clock.
+    build_check #(
+        .COND (PLL.valid),
+        .MSG  ("ecp5_pll: no legal PLL config for CPU_HZ")
+    ) u_check_pll_valid ();
+
+    build_check #(
+        .COND (PLL.clkos_div == 6),
+        .MSG  ("ecp5_pll: CLKOS_DIV != 6; SDRAM phase table invalid")
+    ) u_check_sdram_div ();
+
+    build_check #(
+        .COND (CLKOS3_DIV_VAL != 0),
+        .MSG  ("ecp5_pll: VCO cannot serve the 60 MHz USB clock")
+    ) u_check_usb_div ();
+
+    // ── Reset: PLL lock + btn[1] (FIRE1) manual reset ──────────
+    // Hold reset until PLL locks, then count 2^19 CPU clocks, which
+    // covers the bus's 10 ms reset minimum for any CPU_HZ up to 52 MHz.
+    // Pressing btn[1] reasserts reset (input synchronizer).
+    logic btn1_sync1, btn1_sync2;
+    always_ff @(posedge clk) begin
+        btn1_sync1 <= btn[1];
+        btn1_sync2 <= btn1_sync1;
+    end
+
+    /* verilator lint_off PROCASSINIT */
+    logic [18:0] rst_cnt = '0;
+    /* verilator lint_on PROCASSINIT */
+    logic        rst_raw;
+    logic        rst;
+
+    always_ff @(posedge clk) begin
+        if (!pll_lock || btn1_sync2)
+            rst_cnt <= '0;
+        else if (!rst_cnt[18])
+            rst_cnt <= rst_cnt + 1;
+    end
+    assign rst_raw = !rst_cnt[18];
+
+    // Promote rst onto a global net via DCCA: its high fanout makes it a
+    // dominant routing-congestion source through general fabric. CE=1
+    // keeps the buffer always-on; (* keep *) stops yosys folding it away
+    // on the grounds that CLKO == CLKI — the DCCA is what makes PnR route
+    // the output via global net rather than the input.
+    (* keep *) DCCA rst_dcca (
+        .CLKI (rst_raw),
+        .CE   (1'b1),
+        .CLKO (rst)
+    );
+
+    // ── SDRAM-domain reset: 2-FF synchronizer of `rst` into clk_sdram ──
+    // Asynchronous-assert / synchronous-deassert across the boundary so
+    // sdram_ctrl / sdram_phy_ecp5 / sdram_cdc(sdram side) leave reset
+    // together on a clean SDRAM-clock edge.
+    logic rst_sd_sync1, rst_sd_sync2;
+    always_ff @(posedge clk_sdram) begin
+        rst_sd_sync1 <= rst;
+        rst_sd_sync2 <= rst_sd_sync1;
+    end
+    wire rst_sd = rst_sd_sync2;
+
+    // ── 60 MHz domain reset: the same 2-FF pattern, then onto a global
+    // net like rst.  Almost all of its sinks are flip-flop reset pins,
+    // spread across the USB logic by its pins and the audio mixer, so on
+    // general routing it is a wide, high-fanout net competing for fabric
+    // the design is congested on — while the global network reaches reset
+    // pins directly.  (* keep *) as for rst_dcca.
+    logic rst_60mhz_sync1, rst_60mhz_sync2;
+    logic rst_60mhz;
+    always_ff @(posedge clk_60mhz) begin
+        rst_60mhz_sync1 <= rst;
+        rst_60mhz_sync2 <= rst_60mhz_sync1;
+    end
+
+    (* keep *) DCCA rst_60mhz_dcca (
+        .CLKI (rst_60mhz_sync2),
+        .CE   (1'b1),
+        .CLKO (rst_60mhz)
+    );
+
+    // ── Video PLL: second EHXPLLL, 25 MHz crystal → TMDS clocks ──
+    // The display's serial/pixel clocks come from a dedicated PLL —
+    // the system PLL's four outputs are all taken, and the video
+    // rates are unrelated to the CPU/SDRAM ones. CLKOP (feedback)
+    // carries the 125 MHz TMDS serial clock, CLKOS the 25 MHz pixel
+    // clock; exact-only, resolving to {CLKI 1, CLKFB 5, CLKOP 5,
+    // CLKOS 25} on a 625 MHz VCO.
+    localparam longint VIDEO_SERIAL_HZ = 125_000_000;
+    localparam longint VIDEO_PIXEL_HZ  =  25_000_000;
+    localparam ecp5_pll_cfg_t VPLL =
+        ecp5_pll_compute(25_000_000, VIDEO_SERIAL_HZ, VIDEO_PIXEL_HZ);
+
+    logic clk_video_serial;
+    logic clk_video_pixel;
+    logic video_pll_lock;
+
+    (* keep *) EHXPLLL #(
+        .CLKI_DIV      (VPLL.clki_div),
+        .CLKFB_DIV     (VPLL.clkfb_div),
+        .CLKOP_DIV     (VPLL.clkop_div),
+        .CLKOP_ENABLE  ("ENABLED"),
+        .CLKOP_CPHASE  (VPLL.clkop_cphase),   // 0° phase
+        .CLKOP_FPHASE  (0),
+        .CLKOS_DIV     (VPLL.clkos_div),
+        .CLKOS_ENABLE  ("ENABLED"),
+        .CLKOS_CPHASE  (VPLL.clkos_cphase),   // 0° phase
+        .CLKOS_FPHASE  (0),
+        .FEEDBK_PATH   ("CLKOP")
+    ) u_video_pll (
+        .CLKI         (clk_25mhz),
+        .CLKFB        (clk_video_serial),
+        .CLKOP        (clk_video_serial),
+        .CLKOS        (clk_video_pixel),
+        .CLKOS2       (),
+        .CLKOS3       (),
+        .LOCK         (video_pll_lock),
+        .RST          (1'b0),
+        .STDBY        (1'b0),
+        .PHASESEL0    (1'b0),
+        .PHASESEL1    (1'b0),
+        .PHASEDIR     (1'b0),
+        .PHASESTEP    (1'b0),
+        .PHASELOADREG (1'b0),
+        .PLLWAKESYNC  (1'b0),
+        .ENCLKOP      (1'b1),
+        .ENCLKOS      (1'b1),
+        .ENCLKOS2     (1'b0),
+        .ENCLKOS3     (1'b0)
+    );
+
+    build_check #(
+        .COND (VPLL.valid),
+        .MSG  ("ecp5_pll: no legal video PLL config")
+    ) u_check_video_pll_valid ();
+
+    build_check #(
+        .COND (VPLL.clkos_div == 5 * VPLL.clkop_div),
+        .MSG  ("ecp5_pll: video serial:pixel ratio is not 5x")
+    ) u_check_video_ratio ();
+
+    // ── Video-domain reset: main reset OR video-PLL unlock ─────
+    // Clocked on the crystal, which runs regardless of either PLL's
+    // state, so the reset authority never depends on the clocks it
+    // gates. The display chain absorbs release-order skew across its
+    // domains by design (see video_serializer).
+    logic rst_video_q;
+    always_ff @(posedge clk_25mhz)
+        rst_video_q <= rst || !video_pll_lock;
+
+    // ── Heartbeat / debug LEDs ─────────────────────────────────
+    logic [24:0] hb_cnt;
+    always_ff @(posedge clk) begin
+        if (rst) hb_cnt <= '0;
+        else     hb_cnt <= hb_cnt + 1;
+    end
+
+    assign led[0]   = hb_cnt[24]; // heartbeat: a 2^25-cycle period
+    assign led[1]   = pll_lock;   // PLL locked
+    assign led[7:2] = '0;         // unused
+
+    // ══════════════════════════════════════════════════════════
+    // External Penumbra Bus — driven by the machine, decoded here
+    //
+    // machine_penumbra4 exposes a single master port. The board
+    // attaches the SDRAM, boot ROM, UART, and the autoconfig SD device on
+    // this bus, then drives the response (rdata/ack/fault) back in.
+    // ══════════════════════════════════════════════════════════
+    logic [31:0] mem_addr, mem_wdata, mem_rdata;
+    logic [3:0]  mem_byte_en;
+    logic        mem_we, mem_re;
+    logic        mem_ack;
+    logic        bus_fault;
+
+    // ── IRQ aggregation ─────────────────────────────────────
+    // The machine's timer is internal; the board contributes the device
+    // interrupts. i_timer_irq is the direct-injection path, left idle.
+    logic uart_irq;
+    logic spi_irq;
+
+    // ── Autoconfig control from the machine's bus controller ──
+    logic busctl_bus_rst;
+    logic busctl_cfg_en;
+
+    // ══════════════════════════════════════════════════════════
+    // The machine: core + MMU + L1s + the uncore
+    // ══════════════════════════════════════════════════════════
+    machine_penumbra4 u_machine (
+        .i_clk         (clk),
+        .i_rst         (rst),
+
+        .i_irq         (uart_irq | spi_irq | usb_irq | audio_irq),
+        .i_timer_irq   (1'b0),        // internal timer is the source
+
+        .o_bus_addr    (mem_addr),
+        .o_bus_wdata   (mem_wdata),
+        .o_bus_byte_en (mem_byte_en),
+        .o_bus_re      (mem_re),
+        .o_bus_we      (mem_we),
+        .i_bus_rdata   (mem_rdata),
+        .i_bus_ack     (mem_ack),
+        .i_bus_fault   (bus_fault),
+
+        .o_bus_rst     (busctl_bus_rst),
+        .o_bus_cfg_en  (busctl_cfg_en),
+
+        // Commit observability — unused on the board (the design is kept
+        // live by the real bus + UART + SDRAM pins).
+        /* verilator lint_off PINCONNECTEMPTY */
+        .o_commit_we    (),
+        .o_commit_phys  (),
+        .o_commit_data  (),
+        .o_retire_count (),
+        .o_prog_end     ()
+        /* verilator lint_on PINCONNECTEMPTY */
+    );
+
+    // ══════════════════════════════════════════════════════════
+    // Memory bus — device-side address decode (OR-combine)
+    // ══════════════════════════════════════════════════════════
+    localparam int SDRAM_BYTES = 32 * 1024 * 1024;   // 32 MB
+    localparam int ROM_WORDS   = 16384;               // 64 KB boot ROM
+
+    // ── SDRAM (system RAM) ──────────────────────────────────
+    logic        ram_sel;
+    logic [31:0] ram_rdata_raw;
+    logic        ram_ack;
+
+    bus_devsel #(.BASE(RAM_BASE), .SIZE(SDRAM_BYTES))
+        u_ram_sel (.i_addr(mem_addr), .o_sel(ram_sel));
+
+    // ── SDRAM: stack (adapter → CDC → controller) → ECP5 PHY → pins ─
+    // The stack's bus side runs on the system clock and its controller
+    // on clk_sdram; the PHY forwards the pin clock separately.  The ECP5
+    // PHY registers every pin in an IOB flop, one cycle each way, which
+    // the controller absorbs through PHY_OUT/IN_LATENCY.
+    logic [3:0]                  sdram_phy_cmd;
+    logic                        sdram_phy_cke;
+    logic [SDP.ROW_BITS-1:0]     sdram_phy_a;
+    logic [SDP.BA_BITS-1:0]      sdram_phy_ba;
+    logic [SDP.DQ_BITS/8-1:0]    sdram_phy_dqm;
+    logic [SDP.DQ_BITS-1:0]      sdram_phy_dq_out;
+    logic                        sdram_phy_dq_oe;
+    logic [SDP.DQ_BITS-1:0]      sdram_phy_dq_in;
+
+    sdram_stack #(
+        .SDP             (SDP),
+        .PHY_OUT_LATENCY (1),
+        .PHY_IN_LATENCY  (1)
+    ) u_sdram (
+        .i_sys_clk       (clk),
+        .i_sys_rst       (rst),
+        .i_sd_clk        (clk_sdram),
+        .i_sd_rst        (rst_sd),
+        .i_addr          (mem_addr),
+        .i_wdata         (mem_wdata),
+        .i_byte_en       (mem_byte_en),
+        .i_we            (mem_we & ram_sel),
+        .i_re            (mem_re & ram_sel),
+        .o_rdata         (ram_rdata_raw),
+        .o_ack           (ram_ack),
+        .o_phy_cmd       (sdram_phy_cmd),
+        .o_phy_cke       (sdram_phy_cke),
+        .o_phy_a         (sdram_phy_a),
+        .o_phy_ba        (sdram_phy_ba),
+        .o_phy_dqm       (sdram_phy_dqm),
+        .o_phy_dq_out    (sdram_phy_dq_out),
+        .o_phy_dq_oe     (sdram_phy_dq_oe),
+        .i_phy_dq_in     (sdram_phy_dq_in),
+        .o_dbg_init_done ()
+    );
+
+    sdram_phy_ecp5 #(
+        .ROW_BITS (SDP.ROW_BITS),
+        .BA_BITS  (SDP.BA_BITS),
+        .DQ_BITS  (SDP.DQ_BITS)
+    ) u_sdram_phy (
+        .i_clk        (clk_sdram),       // CLKOS — 100 MHz, 0°, IOB flops
+        .i_clk_sdram  (clk_sdram_pin),   // CLKOS2 — 100 MHz, phase, ODDR
+        .i_rst        (rst_sd),
+        .i_phy_cmd    (sdram_phy_cmd),
+        .i_phy_cke    (sdram_phy_cke),
+        .i_phy_a      (sdram_phy_a),
+        .i_phy_ba     (sdram_phy_ba),
+        .i_phy_dqm    (sdram_phy_dqm),
+        .i_phy_dq_out (sdram_phy_dq_out),
+        .i_phy_dq_oe  (sdram_phy_dq_oe),
+        .o_phy_dq_in  (sdram_phy_dq_in),
+        .o_sdram_clk  (sdram_clk),
+        .o_sdram_cke  (sdram_cke),
+        .o_sdram_csn  (sdram_csn),
+        .o_sdram_rasn (sdram_rasn),
+        .o_sdram_casn (sdram_casn),
+        .o_sdram_wen  (sdram_wen),
+        .o_sdram_a    (sdram_a),
+        .o_sdram_ba   (sdram_ba),
+        .o_sdram_dqm  (sdram_dqm),
+        .io_sdram_d   (sdram_d)
+    );
+
+    // ── Boot ROM ────────────────────────────────────────────
+    logic        rom_sel;
+    logic [31:0] rom_rdata_raw;
+    logic        rom_ack;
+
+    bus_devsel #(.BASE(ROM_BASE), .SIZE(32'(ROM_WORDS * 4)))
+        u_rom_sel (.i_addr(mem_addr), .o_sel(rom_sel));
+
+    boot_rom #(.ROM_WORDS(ROM_WORDS)) u_rom (
+        .i_clk     (clk),
+        .i_rst     (rst),
+        .i_addr    (mem_addr),
+        .i_re      (mem_re & rom_sel),
+        .i_we      (mem_we & rom_sel),
+        .o_rdata   (rom_rdata_raw),
+        .o_ack     (rom_ack)
+    );
+
+    // ── UART ────────────────────────────────────────────────
+    logic        uart_sel;
+    logic [31:0] uart_rdata_raw;
+    logic        uart_ack;
+
+    bus_devsel #(.BASE(UART_BASE), .SIZE(32'd4096))
+        u_uart_sel (.i_addr(mem_addr), .o_sel(uart_sel));
+
+    uart #(
+        .CLK_FREQ  (CLK_FREQ)
+    ) u_uart (
+        .i_clk   (clk),
+        .i_rst   (rst),
+        .i_addr  (mem_addr),
+        .i_wdata (mem_wdata),
+        .i_we    (mem_we & uart_sel),
+        .i_re    (mem_re & uart_sel),
+        .o_rdata (uart_rdata_raw),
+        .o_ack   (uart_ack),
+        .o_tx    (ftdi_rxd),
+        .i_rx    (ftdi_txd),
+        .o_irq   (uart_irq)
+    );
+
+    // ══════════════════════════════════════════════════════════
+    // Autoconfig device chain
+    //
+    // busctl_cfg_en (from the machine) starts the daisy chain; each
+    // device's cfg_out feeds the next cfg_in. A bus fault at chain end
+    // signals "no more devices" to the ROM autoconfig loop.
+    // ══════════════════════════════════════════════════════════
+    logic [31:0] spi_dev_addr, spi_dev_wdata;
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic [3:0]  spi_dev_byte_en;
+    /* verilator lint_on UNUSEDSIGNAL */
+    logic        spi_dev_we, spi_dev_re;
+    logic [31:0] spi_dev_rdata;
+    logic        spi_dev_ack;
+
+    logic [31:0] ac_spi_rdata;
+    logic        ac_spi_ack, ac_spi_sel;
+    // cfg_out is the daisy-chain to the next autoconfig device (USB).
+    logic        ac_spi_cfg_out;
+
+    autoconfig_dev #(
+        .DEV_CLASS (ACFG_CLASS_SD),
+        .DEV_SIZE  (32'd4096),
+        .DEV_ID    (32'd0),
+        .DEV_NAME0 (32'h00004453)    // "SD\0\0" packed LE
+    ) u_ac_spi (
+        .i_clk       (clk),
+        .i_rst       (rst),
+        .i_bus_rst   (busctl_bus_rst),
+        .i_cfg_en    (busctl_cfg_en),
+        .i_cfg_in    (busctl_cfg_en),      // first in chain
+        .o_cfg_out   (ac_spi_cfg_out),
+        .i_addr      (mem_addr),
+        .i_wdata     (mem_wdata),
+        .i_byte_en   (mem_byte_en),
+        .i_we        (mem_we),
+        .i_re        (mem_re),
+        .o_rdata     (ac_spi_rdata),
+        .o_ack       (ac_spi_ack),
+        .o_sel       (ac_spi_sel),
+        .o_dev_addr  (spi_dev_addr),
+        .o_dev_wdata (spi_dev_wdata),
+        .o_dev_byte_en(spi_dev_byte_en),
+        .o_dev_we    (spi_dev_we),
+        .o_dev_re    (spi_dev_re),
+        .i_dev_rdata (spi_dev_rdata),
+        .i_dev_ack   (spi_dev_ack)
+    );
+
+    logic spi_cs0;
+
+    spi #(
+        .CLK_FREQ   (CLK_FREQ),
+        .FIFO_DEPTH (512)
+    ) u_spi (
+        .i_clk   (clk),
+        .i_rst   (rst),
+        .i_addr  (spi_dev_addr),
+        .i_wdata (spi_dev_wdata),
+        .i_we    (spi_dev_we),
+        .i_re    (spi_dev_re),
+        .o_rdata (spi_dev_rdata),
+        .o_ack   (spi_dev_ack),
+        .o_sclk  (sd_clk),
+        .o_mosi  (sd_cmd),
+        .i_miso  (sd_d[0]),
+        .o_cs0   (spi_cs0),
+        .o_cs1   (),
+        .o_irq   (spi_irq)
+    );
+
+    // SD card SPI mode pin mapping
+    assign sd_d[3] = spi_cs0;     // CS (active low, from SPI control)
+    assign sd_d[2] = 1'b1;        // Unused in SPI mode, pull high
+    assign sd_d[1] = 1'b1;        // Unused in SPI mode, pull high
+
+    // ── USB host controller (second device in chain) ─────────
+    // Same block as machine_sim's, with usb_phy_ecp5 on the seam in
+    // place of the sim PHY — the swap the PHY tier split exists for.
+    logic [31:0] usb_dev_addr, usb_dev_wdata;
+    // Word-strided device: byte enables carry no information here.
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic [3:0]  usb_dev_byte_en;
+    /* verilator lint_on UNUSEDSIGNAL */
+    logic        usb_dev_we, usb_dev_re;
+    logic [31:0] usb_dev_rdata;
+    logic        usb_dev_ack;
+
+    logic [31:0] ac_usb_rdata;
+    logic        ac_usb_ack, ac_usb_sel;
+    // cfg_out is the daisy-chain to the next autoconfig device (display).
+    logic        ac_usb_cfg_out;
+    logic        usb_irq;
+
+    autoconfig_dev #(
+        .DEV_CLASS (ACFG_CLASS_USBHC),
+        .DEV_SIZE  (32'd4096),
+        .DEV_ID    (32'd0),
+        .DEV_NAME0 (32'h00425355)     // "USB\0" packed LE
+    ) u_ac_usb (
+        .i_clk       (clk),
+        .i_rst       (rst),
+        .i_bus_rst   (busctl_bus_rst),
+        .i_cfg_en    (busctl_cfg_en),
+        .i_cfg_in    (ac_spi_cfg_out),
+        .o_cfg_out   (ac_usb_cfg_out),
+        .i_addr      (mem_addr),
+        .i_wdata     (mem_wdata),
+        .i_byte_en   (mem_byte_en),
+        .i_we        (mem_we),
+        .i_re        (mem_re),
+        .o_rdata     (ac_usb_rdata),
+        .o_ack       (ac_usb_ack),
+        .o_sel       (ac_usb_sel),
+        .o_dev_addr  (usb_dev_addr),
+        .o_dev_wdata (usb_dev_wdata),
+        .o_dev_byte_en(usb_dev_byte_en),
+        .o_dev_we    (usb_dev_we),
+        .o_dev_re    (usb_dev_re),
+        .i_dev_rdata (usb_dev_rdata),
+        .i_dev_ack   (usb_dev_ack)
+    );
+
+    // The MAC-PHY seam between the controller and the board PHY.
+    logic [7:0] usb_tx_data;
+    logic       usb_tx_valid, usb_tx_ready;
+    logic [7:0] usb_rx_data;
+    logic       usb_rx_valid, usb_rx_active, usb_rx_error;
+    logic [1:0] usb_opmode, usb_xcvr_sel;
+    logic       usb_term_sel;
+    logic [1:0] usb_line_state;
+    logic [2:0] usb_caps;
+    logic       usb_tx_dp, usb_tx_dn, usb_tx_oe;
+    logic       usb_pull_dp, usb_pull_dn;
+    // The PHY forwards its clock for integrations that want it; this
+    // top clocks the controller from the PLL output directly.
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic       usb_phy_clk;
+    /* verilator lint_on UNUSEDSIGNAL */
+
+    usbhc #(
+        .USB_CLK_HZ (32'(CLK60_HZ))
+    ) u_usbhc (
+        .i_clk        (clk),
+        .i_rst        (rst),
+        .i_addr       (usb_dev_addr),
+        .i_wdata      (usb_dev_wdata),
+        .i_we         (usb_dev_we),
+        .i_re         (usb_dev_re),
+        .o_rdata      (usb_dev_rdata),
+        .o_ack        (usb_dev_ack),
+        .o_irq        (usb_irq),
+        .i_usb_clk    (clk_60mhz),
+        .i_usb_rst    (rst_60mhz),
+        .o_tx_data    (usb_tx_data),
+        .o_tx_valid   (usb_tx_valid),
+        .i_tx_ready   (usb_tx_ready),
+        .i_rx_data    (usb_rx_data),
+        .i_rx_valid   (usb_rx_valid),
+        .i_rx_active  (usb_rx_active),
+        .i_rx_error   (usb_rx_error),
+        .i_line_state (usb_line_state),
+        .i_caps       (usb_caps),
+        .o_xcvr_sel   (usb_xcvr_sel),
+        .o_term_sel   (usb_term_sel),
+        .o_opmode     (usb_opmode),
+        /* verilator lint_off PINCONNECTEMPTY */
+        .o_port_power ()
+        /* verilator lint_on PINCONNECTEMPTY */
+    );
+
+    usb_phy_ecp5 u_usb_phy (
+        .i_clk        (clk_60mhz),
+        .i_rst        (rst_60mhz),
+        .o_clk        (usb_phy_clk),
+        .i_tx_data    (usb_tx_data),
+        .i_tx_valid   (usb_tx_valid),
+        .o_tx_ready   (usb_tx_ready),
+        .o_rx_data    (usb_rx_data),
+        .o_rx_valid   (usb_rx_valid),
+        .o_rx_active  (usb_rx_active),
+        .o_rx_error   (usb_rx_error),
+        .i_opmode     (usb_opmode),
+        .i_xcvr_sel   (usb_xcvr_sel),
+        .i_term_sel   (usb_term_sel),
+        .o_line_state (usb_line_state),
+        .o_caps       (usb_caps),
+        .i_dp         (usb_fpga_bd_dp),
+        .i_dn         (usb_fpga_bd_dn),
+        .o_tx_dp      (usb_tx_dp),
+        .o_tx_dn      (usb_tx_dn),
+        .o_tx_oe      (usb_tx_oe),
+        .o_pull_dp    (usb_pull_dp),
+        .o_pull_dn    (usb_pull_dn)
+    );
+
+    // Pin mapping: transmit drives the bidirectional pads only while
+    // the PHY owns the bus; the pull pads work the board's resistor
+    // network — driven low for the host's D+/D- pull-downs, released
+    // to high-Z otherwise.
+    assign usb_fpga_bd_dp = usb_tx_oe ? usb_tx_dp : 1'bz;
+    assign usb_fpga_bd_dn = usb_tx_oe ? usb_tx_dn : 1'bz;
+    assign usb_fpga_pu_dp = usb_pull_dp ? 1'b0 : 1'bz;
+    assign usb_fpga_pu_dn = usb_pull_dn ? 1'b0 : 1'bz;
+
+    // ══════════════════════════════════════════════════════════
+    // Display adapter (autoconfig device, CLASS_DISPLAY)
+    // ══════════════════════════════════════════════════════════
+    // The character console on the GPDI connector: video_display
+    // behind the autoconfig wrapper, running its output chain on the
+    // dedicated video PLL. No cell preload and CTRL.ENABLE resets
+    // clear, so the screen stays black until the boot ROM draws it —
+    // a reset never shows stale cell memory.
+    logic [31:0] disp_dev_addr, disp_dev_wdata;
+    // The pixel aperture commits individual lanes, so the display is
+    // the one autoconfig device here that consumes byte enables.
+    logic [3:0]  disp_dev_byte_en;
+    logic        disp_dev_we, disp_dev_re;
+    logic [31:0] disp_dev_rdata;
+    logic        disp_dev_ack;
+
+    logic [31:0] ac_disp_rdata;
+    logic        ac_disp_ack, ac_disp_sel;
+    // cfg_out is the daisy-chain to the next autoconfig device (audio).
+    logic        ac_disp_cfg_out;
+
+    autoconfig_dev #(
+        .DEV_CLASS (ACFG_CLASS_DISPLAY),
+        .DEV_SIZE  (32'd262144),
+        .DEV_ID    (32'd0),
+        .DEV_NAME0 (32'h50534944),    // "DISP" packed LE
+        .DEV_NAME1 (32'h0059414C)     // "LAY\0"
+    ) u_ac_disp (
+        .i_clk       (clk),
+        .i_rst       (rst),
+        .i_bus_rst   (busctl_bus_rst),
+        .i_cfg_en    (busctl_cfg_en),
+        .i_cfg_in    (ac_usb_cfg_out),
+        .o_cfg_out   (ac_disp_cfg_out),
+        .i_addr      (mem_addr),
+        .i_wdata     (mem_wdata),
+        .i_byte_en   (mem_byte_en),
+        .i_we        (mem_we),
+        .i_re        (mem_re),
+        .o_rdata     (ac_disp_rdata),
+        .o_ack       (ac_disp_ack),
+        .o_sel       (ac_disp_sel),
+        .o_dev_addr  (disp_dev_addr),
+        .o_dev_wdata (disp_dev_wdata),
+        .o_dev_byte_en (disp_dev_byte_en),
+        .o_dev_we    (disp_dev_we),
+        .o_dev_re    (disp_dev_re),
+        .i_dev_rdata (disp_dev_rdata),
+        .i_dev_ack   (disp_dev_ack)
+    );
+
+    // ── Audio ───────────────────────────────────────────────
+    // Clocked from the USB tier's 60 MHz on the output side: the sample
+    // rate must not follow a system clock that is retuned per timing
+    // closure, and that output already carries an exactly-divisible
+    // chain this device needs no second PLL to reach.
+    logic [31:0] audio_dev_addr, audio_dev_wdata, audio_dev_rdata;
+    logic        audio_dev_we, audio_dev_re, audio_dev_ack;
+    logic [31:0] ac_audio_rdata;
+    logic        ac_audio_ack, ac_audio_sel;
+    // Last device in the chain: the dangling cfg_out is the
+    // "no more devices" end the ROM's autoconfig loop probes.
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic        ac_audio_cfg_out;
+    /* verilator lint_on UNUSEDSIGNAL */
+    logic        audio_irq;
+
+    autoconfig_dev #(
+        .DEV_CLASS (ACFG_CLASS_AUDIO),
+        .DEV_SIZE  (32'd4096),
+        .DEV_ID    (32'd0),
+        .DEV_NAME0 (32'h4F445541)     // "AUDO" packed LE
+    ) u_ac_audio (
+        .i_clk       (clk),
+        .i_rst       (rst),
+        .i_bus_rst   (busctl_bus_rst),
+        .i_cfg_en    (busctl_cfg_en),
+        .i_cfg_in    (ac_disp_cfg_out),
+        .o_cfg_out   (ac_audio_cfg_out),
+        .i_addr      (mem_addr),
+        .i_wdata     (mem_wdata),
+        .i_byte_en   (mem_byte_en),
+        .i_we        (mem_we),
+        .i_re        (mem_re),
+        .o_rdata     (ac_audio_rdata),
+        .o_ack       (ac_audio_ack),
+        .o_sel       (ac_audio_sel),
+        .o_dev_addr  (audio_dev_addr),
+        .o_dev_wdata (audio_dev_wdata),
+        .o_dev_byte_en(),
+        .o_dev_we    (audio_dev_we),
+        .o_dev_re    (audio_dev_re),
+        .i_dev_rdata (audio_dev_rdata),
+        .i_dev_ack   (audio_dev_ack)
+    );
+
+    logic signed [15:0] audio_frame_l, audio_frame_r;
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic               audio_frame_en;
+    /* verilator lint_on UNUSEDSIGNAL */
+
+    localparam int AUDIO_SAMPLE_HZ = 48_000;
+
+    logic audio_frame_req;
+
+    audio_rate_divider #(
+        .CLK_HZ    (int'(CLK60_HZ)),
+        .SAMPLE_HZ (AUDIO_SAMPLE_HZ)
+    ) u_audio_rate (
+        .i_clk       (clk_60mhz),
+        .i_rst       (rst_60mhz),
+        .o_frame_req (audio_frame_req)
+    );
+
+    audio #(
+        .CHANNELS  (`AUDIO_CHANNELS),
+        .DEPTH     (1024),
+        .SAMPLE_HZ (AUDIO_SAMPLE_HZ)
+    ) u_audio (
+        .i_clk      (clk),
+        .i_rst      (rst),
+        .i_addr     (audio_dev_addr),
+        .i_wdata    (audio_dev_wdata),
+        .i_we       (audio_dev_we),
+        .i_re       (audio_dev_re),
+        .o_rdata    (audio_dev_rdata),
+        .o_ack      (audio_dev_ack),
+        .o_irq      (audio_irq),
+        .i_out_busy (1'b0),         // the ladder has nothing to bring up
+        .i_out_fault(1'b0),
+        .i_out_fault_code(8'd0),
+        .i_aclk     (clk_60mhz),
+        .i_arst     (rst_60mhz),
+        .i_frame_req(audio_frame_req),
+        .o_frame_l  (audio_frame_l),
+        .o_frame_r  (audio_frame_r),
+        .o_frame_en (audio_frame_en)
+    );
+
+    // Two bits on the 549 and 1.1k legs: measured some 47 dB cleaner
+    // than driving all four, because in-band noise tracks the current
+    // the driven legs switch (doc/TODO/hw-devices.md).
+    audio_ladder_out #(
+        .LEGS    (4),
+        .OUT_W   (2),
+        .LEG_LSB (0)
+    ) u_audio_out (
+        .i_clk     (clk_60mhz),
+        .i_rst     (rst_60mhz),
+        .i_frame_l (audio_frame_l),
+        .i_frame_r (audio_frame_r),
+        .o_left    (audio_l),
+        .o_right   (audio_r)
+    );
+
+    logic [3:0] gpdi_lane_d0, gpdi_lane_d1;
+
+    video_display u_display (
+        .i_clk     (clk),
+        .i_rst     (rst),
+        .i_addr    (disp_dev_addr),
+        .i_wdata   (disp_dev_wdata),
+        .i_byte_en (disp_dev_byte_en),
+        .i_we      (disp_dev_we),
+        .i_re      (disp_dev_re),
+        .o_rdata   (disp_dev_rdata),
+        .o_ack     (disp_dev_ack),
+        .i_pclk    (clk_video_pixel),
+        .i_sclk    (clk_video_serial),
+        .i_vrst    (rst_video_q),
+        .o_d0      (gpdi_lane_d0),
+        .o_d1      (gpdi_lane_d1)
+    );
+
+    // GPDI pads: one ODDRX1F per lane, the toggling register in the
+    // I/O cell — deterministic pad delay, no fabric routing on the
+    // bit stream.
+    for (genvar gi = 0; gi < 4; gi++) begin : g_gpdi
+        (* keep *) ODDRX1F u_gpdi_oddr (
+            .D0   (gpdi_lane_d0[gi]),
+            .D1   (gpdi_lane_d1[gi]),
+            .SCLK (clk_video_serial),
+            .RST  (1'b0),
+            .Q    (gpdi_dp[gi])
+        );
+    end
+
+    // ── Bus response fabric ─────────────────────────────────
+    // One slot per slave: its select (its own decode), its ack and
+    // its read data.
+    localparam int SLV_RAM   = 0;
+    localparam int SLV_ROM   = 1;
+    localparam int SLV_UART  = 2;
+    localparam int SLV_SPI   = 3;
+    localparam int SLV_USB   = 4;
+    localparam int SLV_DISP  = 5;
+    localparam int SLV_AUDIO = 6;
+    localparam int NUM_SLV   = 7;
+
+    logic [NUM_SLV-1:0]       slv_sel;
+    logic [NUM_SLV-1:0]       slv_ack;
+    logic [NUM_SLV-1:0][31:0] slv_rdata;
+
+    assign slv_sel[SLV_RAM]     = ram_sel;
+    assign slv_ack[SLV_RAM]     = ram_ack;
+    assign slv_rdata[SLV_RAM]   = ram_rdata_raw;
+
+    assign slv_sel[SLV_ROM]     = rom_sel;
+    assign slv_ack[SLV_ROM]     = rom_ack;
+    assign slv_rdata[SLV_ROM]   = rom_rdata_raw;
+
+    assign slv_sel[SLV_UART]    = uart_sel;
+    assign slv_ack[SLV_UART]    = uart_ack;
+    assign slv_rdata[SLV_UART]  = uart_rdata_raw;
+
+    assign slv_sel[SLV_SPI]     = ac_spi_sel;
+    assign slv_ack[SLV_SPI]     = ac_spi_ack;
+    assign slv_rdata[SLV_SPI]   = ac_spi_rdata;
+
+    assign slv_sel[SLV_USB]     = ac_usb_sel;
+    assign slv_ack[SLV_USB]     = ac_usb_ack;
+    assign slv_rdata[SLV_USB]   = ac_usb_rdata;
+
+    assign slv_sel[SLV_DISP]    = ac_disp_sel;
+    assign slv_ack[SLV_DISP]    = ac_disp_ack;
+    assign slv_rdata[SLV_DISP]  = ac_disp_rdata;
+
+    assign slv_sel[SLV_AUDIO]   = ac_audio_sel;
+    assign slv_ack[SLV_AUDIO]   = ac_audio_ack;
+    assign slv_rdata[SLV_AUDIO] = ac_audio_rdata;
+
+    bus_response_fabric #(
+        .NUM_SLAVES (NUM_SLV)
+    ) u_bus_fabric (
+        .i_clk   (clk),
+        .i_rst   (rst),
+        .i_re    (mem_re),
+        .i_we    (mem_we),
+        .i_sel   (slv_sel),
+        .i_ack   (slv_ack),
+        .i_rdata (slv_rdata),
+        .o_ack   (mem_ack),
+        .o_rdata (mem_rdata),
+        .o_fault (bus_fault)
+    );
+
+endmodule

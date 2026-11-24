@@ -8,8 +8,9 @@
 // (doc/system/architecture.md): a halfword at an odd address, a word at one
 // not a multiple of four.
 //
-// RDSYS and WRSYS are not launched: one that reaches MEM1 stops the
-// simulation.
+// RDSYS and WRSYS are not launched. One that reaches MEM1 stops the
+// simulation, and on a board takes the illegal-instruction trap, so the
+// machine never runs on with a read MEM1 did not make.
 //
 // The output register is the pair MEM2 resolves.
 
@@ -57,11 +58,13 @@ module penumbra4_stage_mem1
     slot_t y;
     slot_t y_out;
     logic  is_access;
+    logic  is_sysreg;
     logic  leaving;
     word_t lanes;
 
     assign y         = i_pair.y;
     assign is_access = y.valid && (y.op.op_class == OPC_MEM);
+    assign is_sysreg = y.valid && (y.op.op_class inside {OPC_RDSYS, OPC_WRSYS});
     assign leaving   = y.valid && !i_hold && !i_flush;
 
     byte_rep u_byte_rep (
@@ -87,6 +90,11 @@ module penumbra4_stage_mem1
                     y_out.op.fault.access = ACC_READ;
                 end
             end
+        end
+        if (is_sysreg && !y.op.fault.valid) begin
+            y_out.op.fault.valid    = 1'b1;
+            y_out.op.fault.vector   = VEC_ILLEGAL;
+            y_out.op.fault.mmu_type = FAULT_NONE;
         end
     end
 

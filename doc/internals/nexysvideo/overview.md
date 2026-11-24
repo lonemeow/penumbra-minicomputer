@@ -34,17 +34,18 @@ The board's larger subsystems have documents of their own:
 |-----|-------|------------|
 | `nexysvideo_penumbra2_top` | `make fpga BOARD=nexysvideo CORE=penumbra2_5` (or `penumbra2`) | the gen2 machine |
 | `nexysvideo_penumbra3_top` | `make fpga BOARD=nexysvideo CORE=penumbra3` | the gen3 machine, the default, its L1s the ULX3S's and its L2 four times the size |
+| `nexysvideo_penumbra4_top` | `make fpga BOARD=nexysvideo CORE=penumbra4` | the gen4 machine, coming up ([bring-up](../penumbra4/structure.md#bring-up)) |
 | `nexysvideo_uart_test_top` | `make fpga TOP=nexysvideo_uart_test_top` | the console alone: a banner, an echo, and LEDs for lock, reset, a heartbeat, RX activity and framing errors |
 | `nexysvideo_ddr3_test_top` | `make fpga TOP=nexysvideo_ddr3_test_top` | the DDR3 controller and its whole-chip self-test, no CPU |
 
-The two machine tops differ only in the machine; the board around it,
+The machine tops differ only in the machine; the board around it,
 which the rest of this document and the subsystem documents describe,
 is the same. Each carries a 64 KiB boot ROM, the UART and system RAM in
-DDR3, and names itself "Nexys Video". Behind autoconfig it carries
-the microSD slot over SPI, the display adapter on the HDMI output, the
-audio device in front of the codec ([audio.md](audio.md)), the
-Ethernet adapter on the board's PHY ([ethernet.md](ethernet.md)) and
-the PS/2 port on the keyboard bridge. It assembles the external bus
+DDR3; a machine with the identity device names itself "Nexys Video".
+Behind autoconfig it carries the microSD slot over SPI, the display
+adapter on the HDMI output, the audio device in front of the codec
+([audio.md](audio.md)), the Ethernet adapter on the board's PHY
+([ethernet.md](ethernet.md)) and the PS/2 port on the keyboard bridge. It assembles the external bus
 around the machine as the ULX3S top does: the device decode, and the
 response fabric with its 256-cycle watchdog.
 

@@ -174,7 +174,8 @@ order `doc/internals/penumbra4/structure.md` ("Bring-up") gives.
   misprediction redirect.
 - `penumbra4_stage_mem1.sv` — MEM1: an access's alignment fault, byte
   lanes and store data in them, and its translation and L1-D lookup
-  launched as the pair leaves; a sysreg op stops the sim.
+  launched as the pair leaves; a sysreg op stops the sim, and on a board
+  takes the illegal-instruction trap, as MUL and DIV do in EX.
 - `penumbra4_stage_mem2.sv` — MEM2: the verdicts; a load the L1-D had no
   word for, or an uncacheable store, handed to the L1-D, its word or bus
   fault taken into the waiting slot at the L1-D's done.
@@ -578,6 +579,9 @@ the shared module.
   stack, and the cache geometry as the machine's parameters (two-way
   L1s, a 1024-set four-way L2). No floorplan: gen2's regions were
   measured against its own core's placement.
+- `ulx3s/ulx3s_penumbra4_top.sv` — gen4 system on the ULX3S: a fork of
+  the gen3 top with `machine_penumbra4` in its place, the same devices,
+  clocks and SDRAM stack.
 - `ulx3s/ulx3s_penumbra2_probe_top.sv` — gen2 machine timing probe
   (`VARIANT=probe`): `machine_penumbra2` + a BRAM bus memory at
   25 MHz, terminal outputs folded onto the LEDs so synthesis keeps the
@@ -628,6 +632,10 @@ the shared module.
   the RGMII transmit pins and back in at the receive pins, with an
   EEPROM model on the I2C pins and a PHY model on the management pins,
   and exchanges bytes with a keyboard model on the PS/2 pins.
+- `nexysvideo/nexysvideo_penumbra4_top.sv` — gen4 machine on the same
+  board system (`BOARD=nexysvideo CORE=penumbra4`): a fork of the gen3
+  top with `machine_penumbra4` in its place. It has no boot testbench
+  yet: the ROM stops at its first sysreg read.
 - `nexysvideo/nexysvideo_penumbra2_top.sv` — gen2 machine on the same
   board system (`BOARD=nexysvideo CORE=penumbra2[_5]`); the gen3 top is
   a fork of it with `machine_penumbra3` in its place.
@@ -720,8 +728,9 @@ generation supplies a thin shim that owns the DUT: `tb_penumbra1_interactive.cpp
 (`Vmachine_sim`, 4:1 SDRAM clock, full `o_trace_*` + `o_dbg_reg`
 instruction trace), `tb_penumbra2_interactive.cpp`
 (`Vmachine_penumbra2_sim`, BREAK via `o_prog_end`, a trace rebuilt from
-the commit/retire ports) and `tb_penumbra3_interactive.cpp`, its fork
-over `Vmachine_penumbra3_sim`. Each is built by
+the commit/retire ports), `tb_penumbra3_interactive.cpp`, its fork
+over `Vmachine_penumbra3_sim`, and `tb_penumbra4_interactive.cpp` over
+`Vmachine_penumbra4_sim`, with no trace. Each is built by
 `make simulate-rtl [CORE=…]`, which refuses a generation with no shim. Plusargs: `+sdcard=disk.img` (SDCARD),
 `+trace=file.log` (TRACE), `+trace_window=N`, `+halt_on=str` (with
 `+halt_delay=N`, the cycles to run on past the match), `+stdin_file=path`.
