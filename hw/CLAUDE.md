@@ -171,8 +171,8 @@ order `doc/internals/penumbra4/structure.md` ("Bring-up") gives.
   stage registers, its operands captured.
 - `penumbra4_stage_ex.sv` — EX: `penumbra4_alu.sv` and
   `penumbra4_resolve.sv` (over `cond_eval`) for slot Y, the
-  misprediction redirect; MUL and DIV stop the sim, and on a board take
-  the illegal-instruction trap.
+  misprediction redirect; MUL and DIV on the shared `divmul`, holding
+  the op until it is done.
 - `penumbra4_stage_mem1.sv` — MEM1: an access's alignment fault, byte
   lanes and store data in them, and its translation and L1-D lookup
   launched as the pair leaves; an `RDSYS` or `WRSYS` asks the machine's
