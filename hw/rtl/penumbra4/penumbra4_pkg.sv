@@ -144,14 +144,17 @@ package penumbra4_pkg;
     // from issue to commit; a field no stage has reached yet is zero, and
     // synthesis drops the flops nothing reads.
     typedef struct packed {
-        logic   valid;
-        op_t    op;
-        word_t  a;            // src_a's value, or the PC for R15
-        word_t  b;            // src_b's value
-        word_t  result;       // what dst takes: an ALU result, a link, a loaded word, a system read
-        word_t  result2;      // what dst2 takes
-        flags_t flags;
-        vaddr_t addr;         // the access's address, from execute
+        logic       valid;
+        op_t        op;
+        word_t      a;              // src_a's value, or the PC for R15
+        word_t      b;              // src_b's value
+        word_t      result;         // what dst takes: an ALU result, a link, a loaded word, a system read
+        word_t      result2;        // what dst2 takes
+        flags_t     flags;
+        vaddr_t     addr;           // the access's address, from execute
+        logic [3:0] byte_en;        // the access's byte lanes, from MEM1
+        word_t      wdata;          // a store's data, each byte in its lane, from MEM1
+        logic       access_pending; // MEM2 handed the access to the L1-D; commit waits for its done
     } slot_t;
 
     // ── A pair ──────────────────────────────────────────────────

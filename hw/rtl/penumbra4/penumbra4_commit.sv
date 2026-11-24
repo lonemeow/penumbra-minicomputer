@@ -7,6 +7,11 @@
 // register among them, so the pair that reached MEM2's register behind a
 // trap or an ERET is never committed.
 //
+// A pair whose access the L1-D still carries waits here: commit decides
+// nothing from it and holds it, and MEM2 puts the access's word or fault
+// into it at the L1-D's done (doc/internals/penumbra4/structure.md, "A
+// missed load holds its pair at commit").
+//
 // A fault takes its trap: the status saves the op's PC and SR, and fetch
 // reads the vector. ERET takes ESR's image for the SR and redirects to EPC.
 // A BREAK's trap pulses program end
@@ -63,7 +68,7 @@ module penumbra4_commit
     always_comb begin
         effects_d = '0;
 
-        if (y.valid && !effects_q.kill) begin
+        if (y.valid && !y.access_pending && !effects_q.kill) begin
             effects_d.landing = i_pair;
 
             if (y.op.fault.valid) begin
@@ -78,7 +83,7 @@ module penumbra4_commit
                 effects_d.retire_count = 2'd1;
 
                 case (y.op.op_class)
-                    OPC_ALU, OPC_BRANCH, OPC_RDSPR, OPC_RDSYS: begin
+                    OPC_ALU, OPC_BRANCH, OPC_MEM, OPC_RDSPR, OPC_RDSYS: begin
                         effects_d.reg_write[0] = reg_write(y.op.dst, y.result, i_supervisor);
                     end
                     OPC_FUNIT: begin
@@ -124,7 +129,13 @@ module penumbra4_commit
         end
     end
 
-    assign o_hold         = 1'b0;
+    // A kill lands a cycle after commit decides it, and in that cycle the
+    // pair behind could leave MEM2 and hand the L1-D an access nothing can
+    // recall. Holding while deciding keeps it in MEM1's register for the kill
+    // to clear (doc/internals/penumbra4/structure.md, "A trap holds the pair
+    // behind it"). The decision reads only MEM2's register, so the hold stays
+    // early.
+    assign o_hold         = (y.valid && y.access_pending) || effects_d.kill;
     assign o_landing      = effects_q.landing;
     assign o_reg_write    = effects_q.reg_write;
     assign o_status_write = effects_q.status_write;

@@ -3,7 +3,11 @@
 // The uncore end of the core-to-uncore port
 // (doc/internals/penumbra3/uncore-port.md): a requester holds its request
 // until a one-cycle done, and done, fault and line come from registers.
-// It serves the fetch side, through the bus master.
+// The select starts one side's request on the bus master while it is idle,
+// the data side's first when both wait, since its access is older than any
+// instruction the fetch side is fetching. A side's done is the bus master's
+// for the side it serves; fault and line are the bus master's, which that
+// side owns in its done cycle.
 
 module penumbra4_uncore
     import penumbra_pkg::*;
@@ -16,7 +20,14 @@ module penumbra4_uncore
     input  logic        i_fetch_valid,
     input  uncore_req_t i_fetch_req,
     output logic        o_fetch_done,
-    output logic        o_fault,        // valid with a done
+
+    // ── The data side ────────────────────────────────────────────
+    input  logic        i_data_valid,
+    input  uncore_req_t i_data_req,
+    output logic        o_data_done,
+
+    // ── The response both sides share ────────────────────────────
+    output logic        o_fault,        // valid with either done
     output line_t       o_line,         // valid with a read's done
 
     // ── External bus ─────────────────────────────────────────────
@@ -30,15 +41,51 @@ module penumbra4_uncore
     input  logic        i_bus_fault
 );
 
-    logic bus_idle;
+    typedef enum logic {
+        SIDE_FETCH,
+        SIDE_DATA
+    } side_e;
+
+    logic        bus_idle;
+    logic        bus_done;
+    logic        start;
+    side_e       side_q, side_d;
+    uncore_req_t req;
+
+    always_comb begin
+        side_d = side_q;
+        req    = i_fetch_req;
+        start  = 1'b0;
+        if (bus_idle) begin
+            if (i_data_valid) begin
+                start  = 1'b1;
+                side_d = SIDE_DATA;
+                req    = i_data_req;
+            end else if (i_fetch_valid) begin
+                start  = 1'b1;
+                side_d = SIDE_FETCH;
+            end
+        end
+    end
+
+    always_ff @(posedge i_clk) begin
+        if (i_rst) begin
+            side_q <= SIDE_FETCH;
+        end else begin
+            side_q <= side_d;
+        end
+    end
+
+    assign o_fetch_done = bus_done && (side_q == SIDE_FETCH);
+    assign o_data_done  = bus_done && (side_q == SIDE_DATA);
 
     penumbra4_bus_master u_bus_master (
         .i_clk         (i_clk),
         .i_rst         (i_rst),
-        .i_start       (i_fetch_valid && bus_idle),
-        .i_req         (i_fetch_req),
+        .i_start       (start),
+        .i_req         (req),
         .o_idle        (bus_idle),
-        .o_done        (o_fetch_done),
+        .o_done        (bus_done),
         .o_fault       (o_fault),
         .o_line        (o_line),
         .o_bus_addr    (o_bus_addr),

@@ -1,8 +1,9 @@
 // penumbra4_core — the gen4 core: its stages, their units and its storage.
 //
 // Only connects (doc/internals/penumbra4/structure.md, "The core"): every
-// decision belongs to a stage or a unit. The L1-I and the MMU are the
-// machine's; the core reaches them through the fetch side's ports.
+// decision belongs to a stage or a unit. The L1s and the MMU are the
+// machine's; the core reaches them through the fetch side's ports and the
+// data side's.
 //
 // A redirect's kill: execute's clears what is behind the transfer, the
 // queue, IF2 and the op issuing; commit's clears every stage.
@@ -36,6 +37,22 @@ module penumbra4_core
     input  paddr_t           i_fetch_paddr,
     input  logic             i_fetch_cacheable,
     input  fault_type_t      i_fetch_fault,
+
+    // ── The L1-D's lookups and accesses ──────────────────────────
+    output logic             o_data_launch,
+    output vaddr_t           o_data_vaddr,
+    input  logic             i_dcache_hit,
+    input  word_t            i_dcache_word,
+    output logic             o_dcache_req,
+    output uncore_req_t      o_dcache_access,
+    input  logic             i_dcache_done,
+    input  word_t            i_dcache_access_word,
+    input  logic             i_dcache_access_fault,
+
+    // ── The MMU's data verdict ───────────────────────────────────
+    input  paddr_t           i_data_paddr,
+    input  logic             i_data_cacheable,
+    input  fault_type_t      i_data_fault,
 
     // ── Observability ────────────────────────────────────────────
     output reg_write_t [1:0] o_reg_write,
@@ -169,23 +186,35 @@ module penumbra4_core
     );
 
     penumbra4_mem_launch u_mem_launch (
-        .i_clk  (i_clk),
-        .i_rst  (i_rst),
-        .i_pair (execute_pair),
-        .i_kill (back_kill),
-        .i_hold (resolve_hold),
-        .o_hold (launch_hold),
-        .o_pair (launch_pair)
+        .i_clk          (i_clk),
+        .i_rst          (i_rst),
+        .i_pair         (execute_pair),
+        .i_kill         (back_kill),
+        .i_hold         (resolve_hold),
+        .o_hold         (launch_hold),
+        .o_launch       (o_data_launch),
+        .o_launch_vaddr (o_data_vaddr),
+        .o_pair         (launch_pair)
     );
 
     penumbra4_mem_resolve u_mem_resolve (
-        .i_clk  (i_clk),
-        .i_rst  (i_rst),
-        .i_pair (launch_pair),
-        .i_kill (back_kill),
-        .i_hold (commit_hold),
-        .o_hold (resolve_hold),
-        .o_pair (resolve_pair)
+        .i_clk          (i_clk),
+        .i_rst          (i_rst),
+        .i_pair         (launch_pair),
+        .i_kill         (back_kill),
+        .i_hold         (commit_hold),
+        .o_hold         (resolve_hold),
+        .i_paddr        (i_data_paddr),
+        .i_cacheable    (i_data_cacheable),
+        .i_fault        (i_data_fault),
+        .i_hit          (i_dcache_hit),
+        .i_word         (i_dcache_word),
+        .o_access_req   (o_dcache_req),
+        .o_access       (o_dcache_access),
+        .i_access_done  (i_dcache_done),
+        .i_access_word  (i_dcache_access_word),
+        .i_access_fault (i_dcache_access_fault),
+        .o_pair         (resolve_pair)
     );
 
     penumbra4_commit u_commit (

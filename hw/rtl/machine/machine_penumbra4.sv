@@ -10,9 +10,8 @@
 // makes, up to two a cycle, the instructions it retires, and the
 // program-end pulse as a BREAK's trap commits.
 //
-// The machine has the fetch side alone: the L1-I, the MMU's fetch
-// translation and the uncore's fetch side. Nothing drives the bus
-// controller's outputs or takes an interrupt.
+// The machine has no sysreg devices: nothing drives the bus controller's
+// outputs or takes an interrupt.
 
 module machine_penumbra4
     import penumbra_pkg::*;
@@ -70,9 +69,25 @@ module machine_penumbra4
     logic        fetch_cacheable;
     fault_type_t fetch_fault;
 
+    logic        data_launch;
+    vaddr_t      data_vaddr;
+    logic        dcache_hit;
+    word_t       dcache_word;
+    logic        dcache_req;
+    uncore_req_t dcache_access;
+    logic        dcache_done;
+    word_t       dcache_access_word;
+    logic        dcache_access_fault;
+    paddr_t      data_paddr;
+    logic        data_cacheable;
+    fault_type_t data_fault;
+
     logic        uc_fetch_valid;
     uncore_req_t uc_fetch_req;
     logic        uc_fetch_done;
+    logic        uc_data_valid;
+    uncore_req_t uc_data_req;
+    logic        uc_data_done;
     logic        uc_fault;
     line_t       uc_line;
 
@@ -100,6 +115,18 @@ module machine_penumbra4
         .i_fetch_paddr           (fetch_paddr),
         .i_fetch_cacheable       (fetch_cacheable),
         .i_fetch_fault           (fetch_fault),
+        .o_data_launch           (data_launch),
+        .o_data_vaddr            (data_vaddr),
+        .i_dcache_hit            (dcache_hit),
+        .i_dcache_word           (dcache_word),
+        .o_dcache_req            (dcache_req),
+        .o_dcache_access         (dcache_access),
+        .i_dcache_done           (dcache_done),
+        .i_dcache_access_word    (dcache_access_word),
+        .i_dcache_access_fault   (dcache_access_fault),
+        .i_data_paddr            (data_paddr),
+        .i_data_cacheable        (data_cacheable),
+        .i_data_fault            (data_fault),
         .o_reg_write             (reg_write),
         .o_retire_count          (o_retire_count),
         .o_prog_end              (o_prog_end)
@@ -111,7 +138,12 @@ module machine_penumbra4
         .i_fetch_vaddr     (fetch_vaddr),
         .o_fetch_paddr     (fetch_paddr),
         .o_fetch_cacheable (fetch_cacheable),
-        .o_fetch_fault     (fetch_fault)
+        .o_fetch_fault     (fetch_fault),
+        .i_data_launch     (data_launch),
+        .i_data_vaddr      (data_vaddr),
+        .o_data_paddr      (data_paddr),
+        .o_data_cacheable  (data_cacheable),
+        .o_data_fault      (data_fault)
     );
 
     penumbra4_icache u_icache (
@@ -138,12 +170,34 @@ module machine_penumbra4
         .i_uc_line        (uc_line)
     );
 
+    penumbra4_dcache u_dcache (
+        .i_clk          (i_clk),
+        .i_rst          (i_rst),
+        .i_launch       (data_launch),
+        .i_launch_vaddr (data_vaddr),
+        .o_hit          (dcache_hit),
+        .o_word         (dcache_word),
+        .i_req          (dcache_req),
+        .i_access       (dcache_access),
+        .o_done         (dcache_done),
+        .o_access_word  (dcache_access_word),
+        .o_access_fault (dcache_access_fault),
+        .o_uc_valid     (uc_data_valid),
+        .o_uc_req       (uc_data_req),
+        .i_uc_done      (uc_data_done),
+        .i_uc_fault     (uc_fault),
+        .i_uc_line      (uc_line)
+    );
+
     penumbra4_uncore u_uncore (
         .i_clk         (i_clk),
         .i_rst         (i_rst),
         .i_fetch_valid (uc_fetch_valid),
         .i_fetch_req   (uc_fetch_req),
         .o_fetch_done  (uc_fetch_done),
+        .i_data_valid  (uc_data_valid),
+        .i_data_req    (uc_data_req),
+        .o_data_done   (uc_data_done),
         .o_fault       (uc_fault),
         .o_line        (uc_line),
         .o_bus_addr    (o_bus_addr),

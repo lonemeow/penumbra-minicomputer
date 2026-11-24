@@ -192,15 +192,21 @@ commit's redirect, MEM1's for a fused branch resolved there
 the prediction for the line in IF2, and the next line.
 
 **A missed load holds its pair at commit.** The pair is the oldest in
-flight, so nothing older is left to drain around it. Its hold travels
-back through MEM2, MEM1, EX and issue as any hold does, and fetch goes
-on filling the queue. The L1-D's word enters the load's slot in the
-waiting commit register, so a dependent takes it as it takes a hit's
-value, and the pair retires as a unit through its own write ports: a
-pair writes at most two registers, since a fused op that writes two
-pairs only with one that writes none. Retiring the pair before its
-load completes, so that only a use waits, is
+flight, so nothing older is left to drain around it. Its hold reaches
+MEM2, MEM1, EX and issue in the same cycle, as any hold does, and
+fetch goes on filling the queue. The L1-D's word enters the load's
+slot in the waiting commit register, so a dependent takes it as it
+takes a hit's value, and the pair retires as a unit through its own
+write ports: a pair writes at most two registers, since a fused op
+that writes two pairs only with one that writes none. Retiring the
+pair before its load completes, so that only a use waits, is
 [ruled out](./load-use.md#ruled-out) for gen4.
+
+**A trap holds the pair behind it.** Commit's kill lands a cycle after
+commit decides it, and in that cycle the pair behind the trap could
+leave MEM2 and hand the L1-D an access, which nothing can recall. So
+commit holds while it decides a kill: the pair behind stays in MEM1's
+register, makes no access, and the kill clears it with the rest.
 
 **An interrupt is an op.** When an interrupt is pending and SR.I lets
 it in, issue puts an op of its own in place of the queue's head. The
@@ -233,9 +239,20 @@ ahead of any interrupt and whatever SR.I and `EI`'s delay say
 - **A pair moves as one.** A stage's output register holds two slots
   and which of them is older. A stage takes or holds the pair, never
   one slot.
-- **Holds travel back one stage at a time.** A stage holds while its
-  successor holds or while it waits on something of its own, which is
-  a registered busy. No module computes another's hold.
+- **A hold is never late.** A stage holds while its successor holds or
+  while it waits on something of its own: a registered busy, or a
+  compare of a few fields of the register it decides from. A late
+  signal, such as a hit, a translation verdict or a result, never
+  joins a hold ([timing classes](#timing-classes)), as in
+  [gen3](../penumbra3/memory-completion.md#the-rule). A stage that
+  waits on nothing passes its successor's hold on unchanged, so every
+  stage behind the source holds in the same cycle, and the hold is one
+  OR of early terms wherever they are added. No module computes
+  another's hold.
+- **Issue adds no hold of its own.** An op it cannot issue leaves a
+  bubble in its register, and the queue's room is registered, so
+  neither the hazard check nor the pairing reaches another stage or
+  fetch in the same cycle.
 - **A kill clears the stages younger than its redirect** and never
   waits on a hold.
 - **One term says the pair leaves the stage,** and every effect the
@@ -278,6 +295,7 @@ another stage's operand mux would.
 | L1-D → commit | busy, done, the access's word and fault | R |
 | commit → register file, status | two register writes, the flags, the save state | R |
 | commit → fetch, every stage | a trap's, `ERET`'s or a resync's redirect, and its kill | R |
+| a stage → every stage behind it | its hold | E |
 | commit → MMU | the fault that carries an address, for the fault registers | R |
 | uncore → issue | a store's bus fault and its address, held until its trap | R |
 | status → issue | SR.I | R |

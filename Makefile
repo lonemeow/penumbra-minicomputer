@@ -242,7 +242,7 @@ RUNNER_PROVIDES_penumbra3 = mmu mmu-d mmu-i cache l2 wrspr machid perfctr timer 
 # a program that requires one it lacks is skipped, and the skip is listed.
 RUNNER_MOD_penumbra4      = machine_penumbra4_sim
 RUNNER_TBS_penumbra4      = tb_penumbra4_prog
-RUNNER_PROVIDES_penumbra4 =
+RUNNER_PROVIDES_penumbra4 = wrspr uart bus-fault
 
 # Runner config keys on the base generation, so a variant inherits the
 # DUT wrapper, testbenches, and capability set unchanged. A variant whose
