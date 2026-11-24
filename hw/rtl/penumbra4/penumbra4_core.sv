@@ -68,14 +68,14 @@ module penumbra4_core
     localparam int HEAD_WIDTH  = 3;
 
     // ── Between the stages ───────────────────────────────────────
-    wb_redirect_t     wb_redirect;
-    logic             wb_flush;
+    wb_redirect_t     wb_redirect_q;
+    logic             wb_flush_q;
     redirect_t        ex_redirect;
     relaunch_t        relaunch;
-    fetch_slot_t      if2_slot;
+    fetch_slot_t      if2_slot_q;
     logic             front_flush;
 
-    logic                                queue_room;
+    logic                                queue_room_q;
     logic                                queue_enq;
     op_t         [LINE_WORDS-1:0]        queue_entries;
     line_count_t                         queue_enq_count;
@@ -83,20 +83,18 @@ module penumbra4_core
     logic        [HEAD_WIDTH-1:0]        queue_head_valid;
     logic [$clog2(HEAD_WIDTH+1)-1:0]     queue_taken;
 
-    pair_t            id_pair, ex_pair, mem1_pair, mem2_pair, wb_pair;
+    pair_t            id_pair_q, ex_pair_q, mem1_pair_q, mem2_pair_q, wb_pair_q;
     logic             ex_hold, mem1_hold, mem2_hold, wb_hold;
-    logic             back_flush;
 
     phys_reg_t [3:0]  read_phys;
     word_t     [3:0]  read_value;
-    reg_write_t [1:0] reg_write;
-    status_write_t    status_write;
-    sr_t              sr;
-    word_t            epc, esr;
-    word_t [3:0]      scratch;
+    reg_write_t [1:0] reg_write_q;
+    status_write_t    status_write_q;
+    sr_t              sr_q;
+    word_t            epc_q, esr_q;
+    word_t [3:0]      scratch_q;
 
-    assign front_flush = wb_flush || ex_redirect.valid;
-    assign back_flush  = wb_flush;
+    assign front_flush = wb_flush_q || ex_redirect.valid;
 
     // ── Front end ────────────────────────────────────────────────
     penumbra4_stage_if1 #(
@@ -104,10 +102,10 @@ module penumbra4_core
     ) u_if1 (
         .i_clk              (i_clk),
         .i_rst              (i_rst),
-        .i_wb_redirect      (wb_redirect),
+        .i_wb_redirect      (wb_redirect_q),
         .i_ex_redirect      (ex_redirect),
         .i_relaunch         (relaunch),
-        .i_queue_room       (queue_room),
+        .i_queue_room       (queue_room_q),
         .i_icache_busy      (i_icache_busy),
         .i_icache_done      (i_icache_done),
         .i_icache_word      (i_icache_access_word),
@@ -115,11 +113,11 @@ module penumbra4_core
         .o_launch_vaddr     (o_fetch_vaddr),
         .o_vector_req       (o_icache_vector_req),
         .o_vector_addr      (o_icache_vector_addr),
-        .o_if2              (if2_slot)
+        .o_if2              (if2_slot_q)
     );
 
     penumbra4_stage_if2 u_if2 (
-        .i_slot           (if2_slot),
+        .i_slot           (if2_slot_q),
         .i_flush          (front_flush),
         .i_hit            (i_icache_hit),
         .i_line           (i_icache_line),
@@ -128,7 +126,7 @@ module penumbra4_core
         .i_paddr          (i_fetch_paddr),
         .i_cacheable      (i_fetch_cacheable),
         .i_fault          (i_fetch_fault),
-        .i_queue_room     (queue_room),
+        .i_queue_room     (queue_room_q),
         .o_enq            (queue_enq),
         .o_ops            (queue_entries),
         .o_count          (queue_enq_count),
@@ -150,7 +148,7 @@ module penumbra4_core
         .i_enq        (queue_enq),
         .i_entries    (queue_entries),
         .i_enq_count  (queue_enq_count),
-        .o_room       (queue_room),
+        .o_room       (queue_room_q),
         .o_head       (queue_head),
         .o_head_valid (queue_head_valid),
         .i_deq_count  (queue_taken)
@@ -168,45 +166,45 @@ module penumbra4_core
         .o_taken         (queue_taken),
         .i_flush         (front_flush),
         .i_hold          (ex_hold),
-        .i_in_flight     ({wb_pair, mem2_pair, mem1_pair, ex_pair}),
-        .i_sr            (sr),
-        .i_epc           (epc),
-        .i_esr           (esr),
-        .i_scratch       (scratch),
+        .i_in_flight     ({wb_pair_q, mem2_pair_q, mem1_pair_q, ex_pair_q}),
+        .i_sr            (sr_q),
+        .i_epc           (epc_q),
+        .i_esr           (esr_q),
+        .i_scratch       (scratch_q),
         .o_read_phys     (read_phys),
         .i_read_value    (read_value),
-        .o_pair          (id_pair)
+        .o_pair          (id_pair_q)
     );
 
     penumbra4_stage_ex u_ex (
         .i_clk      (i_clk),
         .i_rst      (i_rst),
-        .i_pair     (id_pair),
-        .i_flush    (back_flush),
+        .i_pair     (id_pair_q),
+        .i_flush    (wb_flush_q),
         .i_hold     (mem1_hold),
         .o_hold     (ex_hold),
         .o_redirect (ex_redirect),
-        .o_pair     (ex_pair)
+        .o_pair     (ex_pair_q)
     );
 
     penumbra4_stage_mem1 u_mem1 (
         .i_clk          (i_clk),
         .i_rst          (i_rst),
-        .i_pair         (ex_pair),
-        .i_flush        (back_flush),
+        .i_pair         (ex_pair_q),
+        .i_flush        (wb_flush_q),
         .i_hold         (mem2_hold),
         .o_hold         (mem1_hold),
         .o_launch       (o_data_launch),
         .o_launch_vaddr (o_data_vaddr),
         .o_sysreg       (o_sysreg),
-        .o_pair         (mem1_pair)
+        .o_pair         (mem1_pair_q)
     );
 
     penumbra4_stage_mem2 u_mem2 (
         .i_clk          (i_clk),
         .i_rst          (i_rst),
-        .i_pair         (mem1_pair),
-        .i_flush        (back_flush),
+        .i_pair         (mem1_pair_q),
+        .i_flush        (wb_flush_q),
         .i_hold         (wb_hold),
         .o_hold         (mem2_hold),
         .i_paddr        (i_data_paddr),
@@ -220,21 +218,21 @@ module penumbra4_core
         .i_access_word  (i_dcache_access_word),
         .i_access_fault (i_dcache_access_fault),
         .i_sysreg       (i_sysreg),
-        .o_pair         (mem2_pair)
+        .o_pair         (mem2_pair_q)
     );
 
     penumbra4_stage_wb u_wb (
         .i_clk          (i_clk),
         .i_rst          (i_rst),
-        .i_pair         (mem2_pair),
-        .i_supervisor   (sr.s),
-        .i_epc          (epc),
+        .i_pair         (mem2_pair_q),
+        .i_supervisor   (sr_q.s),
+        .i_epc          (epc_q),
         .o_hold         (wb_hold),
-        .o_landing      (wb_pair),
-        .o_reg_write    (reg_write),
-        .o_status_write (status_write),
-        .o_redirect     (wb_redirect),
-        .o_flush        (wb_flush),
+        .o_landing      (wb_pair_q),
+        .o_reg_write    (reg_write_q),
+        .o_status_write (status_write_q),
+        .o_redirect     (wb_redirect_q),
+        .o_flush        (wb_flush_q),
         .o_retire_count (o_retire_count),
         .o_prog_end     (o_prog_end)
     );
@@ -245,19 +243,19 @@ module penumbra4_core
         .i_rst        (i_rst),
         .i_read_phys  (read_phys),
         .o_read_value (read_value),
-        .i_write      (reg_write)
+        .i_write      (reg_write_q)
     );
 
     penumbra4_status u_status (
         .i_clk     (i_clk),
         .i_rst     (i_rst),
-        .i_write   (status_write),
-        .o_sr      (sr),
-        .o_epc     (epc),
-        .o_esr     (esr),
-        .o_scratch (scratch)
+        .i_write   (status_write_q),
+        .o_sr      (sr_q),
+        .o_epc     (epc_q),
+        .o_esr     (esr_q),
+        .o_scratch (scratch_q)
     );
 
-    assign o_reg_write = reg_write;
+    assign o_reg_write = reg_write_q;
 
 endmodule

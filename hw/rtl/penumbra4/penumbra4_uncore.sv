@@ -47,7 +47,7 @@ module penumbra4_uncore
     } side_e;
 
     logic        bus_idle;
-    logic        bus_done;
+    logic        bus_done_q;
     logic        start;
     side_e       side_q, side_d;
     uncore_req_t req;
@@ -76,8 +76,8 @@ module penumbra4_uncore
         end
     end
 
-    assign o_fetch_done = bus_done && (side_q == SIDE_FETCH);
-    assign o_data_done  = bus_done && (side_q == SIDE_DATA);
+    assign o_fetch_done = bus_done_q && (side_q == SIDE_FETCH);
+    assign o_data_done  = bus_done_q && (side_q == SIDE_DATA);
 
     penumbra4_bus_master u_bus_master (
         .i_clk         (i_clk),
@@ -85,7 +85,7 @@ module penumbra4_uncore
         .i_start       (start),
         .i_req         (req),
         .o_idle        (bus_idle),
-        .o_done        (bus_done),
+        .o_done        (bus_done_q),
         .o_fault       (o_fault),
         .o_line        (o_line),
         .o_bus_addr    (o_bus_addr),
