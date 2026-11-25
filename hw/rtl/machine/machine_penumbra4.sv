@@ -346,10 +346,8 @@ module machine_penumbra4
         end
     end
 
-    /* verilator lint_off UNUSEDSIGNAL */
     logic unused_inputs;
     assign unused_inputs = ^{i_irq, i_timer_irq};
-    /* verilator lint_on UNUSEDSIGNAL */
 
     // ── Contract ─────────────────────────────────────────────────
     always_ff @(posedge i_clk) begin

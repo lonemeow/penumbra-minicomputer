@@ -200,10 +200,8 @@ module penumbra4_stage_id
 
     assign o_pair = pair_q;
 
-    /* verilator lint_off UNUSEDSIGNAL */
     logic unused_head;
     assign unused_head = ^{i_head[HEAD_WIDTH-1:1], i_head_valid[HEAD_WIDTH-1:1], i_read_value[1:0]};
-    /* verilator lint_on UNUSEDSIGNAL */
 
     // ── Contract ─────────────────────────────────────────────────
     // The stage contract (doc/internals/penumbra4/structure.md): a held

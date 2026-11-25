@@ -101,10 +101,8 @@ module penumbra4_dcache
     assign o_uc_valid     = valid_q;
     assign o_uc_req       = req_q;
 
-    /* verilator lint_off UNUSEDSIGNAL */
     logic unused_lookup;
     assign unused_lookup = ^{i_launch, i_launch_vaddr};
-    /* verilator lint_on UNUSEDSIGNAL */
 
     // ── Contract ─────────────────────────────────────────────────
     always_ff @(posedge i_clk) begin
