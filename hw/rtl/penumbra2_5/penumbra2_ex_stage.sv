@@ -437,15 +437,18 @@ module penumbra2_ex_stage
     // divmuls — the level never falls between back-to-back divmuls, so the
     // second's edge is swallowed and it silently reuses the first's result.
     // So pulse start exactly on a divmul's first EX cycle: dm_started latches
-    // once we launch and holds until the instruction advances out of EX (the
-    // next divmul re-arms). Holding until advance — not until the unit goes
-    // idle — keeps a finished-but-back-pressured divmul from re-launching.
-    assign dm_start = divmul_in_ex & ~dm_started;
+    // once the unit is launched and holds until the instruction leaves EX, by
+    // advancing or by a fault flush dropping it. Holding until then — not
+    // until the unit goes idle — keeps a finished-but-back-pressured divmul
+    // from re-launching. A dropped divmul's operation runs on to its end, and
+    // the unit takes a start only while idle, so a divmul launches once
+    // o_done is high.
+    assign dm_start = divmul_in_ex & ~dm_started & dm_done;
 
     always_ff @(posedge i_clk) begin
-        if (i_rst)         dm_started <= 1'b0;
-        else if (advance)  dm_started <= 1'b0;   // left EX → re-arm for the next divmul
-        else if (dm_start) dm_started <= 1'b1;   // launched this divmul
+        if (i_rst)                   dm_started <= 1'b0;
+        else if (advance | i_bubble) dm_started <= 1'b0;   // left EX → re-arm for the next divmul
+        else if (dm_start)           dm_started <= 1'b1;   // launched this divmul
     end
 
     // FPGA-only core: no discrete chip budget to respect.
@@ -670,5 +673,11 @@ module penumbra2_ex_stage
         assert (!(dm_stall && advance))
             else $error("penumbra2_ex_stage: divmul advanced into EX/MEM while busy");
     end
+
+    // The launch flag belongs to the divmul in EX: one it outlived would let
+    // the next divmul leave with the unit's results for another op.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        !dm_started || (i_valid && is_divmul))
+        else $error("penumbra2_ex_stage: the divmul launch flag outlived its divmul");
 
 endmodule
