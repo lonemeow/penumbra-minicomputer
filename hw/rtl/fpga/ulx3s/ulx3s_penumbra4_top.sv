@@ -413,12 +413,12 @@ module ulx3s_penumbra4_top (
         // Commit observability — unused on the board (the design is kept
         // live by the real bus + UART + SDRAM pins).
         /* verilator lint_off PINCONNECTEMPTY */
-        .o_landing_valid    (),
-        .o_landing_pc       (),
-        .o_landing_op_class (),
-        .o_landing_trap     (),
-        .o_landing_vector   (),
-        .o_landing_older    (),
+        .o_commit_valid     (),
+        .o_commit_pc        (),
+        .o_commit_op_class  (),
+        .o_commit_trap      (),
+        .o_commit_vector    (),
+        .o_commit_older     (),
         .o_sr               (),
         .o_commit_we        (),
         .o_commit_phys      (),

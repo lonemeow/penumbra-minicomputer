@@ -10,8 +10,8 @@
 // The runner keys only on the program-end contract (build-system.md): clock,
 // reset, o_prog_end, R1 readback. o_prog_end pulses as a BREAK's trap
 // commits, and in-order commit guarantees the shadow file holds final state
-// then. A failing program also gets the ops that landed last and the traps
-// the run took, from the landing ports (penumbra4_landing.h).
+// then. A failing program also gets the ops that committed last and the
+// traps the run took, from the commit ports (penumbra4_commit.h).
 //
 // Run: make test-prog CORE=penumbra4 PROG=test_<name>
 
@@ -19,7 +19,7 @@
 #include <cstdint>
 #include <algorithm>
 #include "Vmachine_penumbra4_sim.h"
-#include "penumbra4_landing.h"
+#include "penumbra4_commit.h"
 
 static int errors = 0, tests = 0;
 
@@ -61,15 +61,15 @@ int main(int argc, char** argv) {
     // last ones what it was still doing at the end. The last ones are
     // those past the first, so no trap is listed twice.
     const long RECENT = 16, FIRST_TRAPS = 16, LAST_TRAPS = 16;
-    Landing recent[RECENT], first_traps[FIRST_TRAPS], last_traps[LAST_TRAPS];
-    long landed = 0, trap_count = 0;
+    Commit recent[RECENT], first_traps[FIRST_TRAPS], last_traps[LAST_TRAPS];
+    long committed = 0, trap_count = 0;
 
     for (long c = 0; c < CYCLE_CAP && !ended; c++) {
         dut->eval();
-        Landing now[2];
-        int n = read_landings(dut, c, now);
+        Commit now[2];
+        int n = read_commits(dut, c, now);
         for (int i = 0; i < n; i++) {
-            recent[landed++ % RECENT] = now[i];
+            recent[committed++ % RECENT] = now[i];
             if (now[i].trap) {
                 if (trap_count < FIRST_TRAPS)
                     first_traps[trap_count] = now[i];
@@ -101,10 +101,10 @@ int main(int argc, char** argv) {
     check("R1 (PASS flag)", shadow[1], 1);
 
     if (errors) {
-        long first = landed > RECENT ? landed - RECENT : 0;
-        printf("  last %ld ops landed:\n", landed - first);
-        for (long i = first; i < landed; i++)
-            printf("    %s\n", format_landing(recent[i % RECENT]).c_str());
+        long first = committed > RECENT ? committed - RECENT : 0;
+        printf("  last %ld ops committed:\n", committed - first);
+        for (long i = first; i < committed; i++)
+            printf("    %s\n", format_commit(recent[i % RECENT]).c_str());
         long firsts = std::min(trap_count, FIRST_TRAPS);
         long later  = trap_count - firsts;
         long lasts  = std::min(later, LAST_TRAPS);
@@ -112,14 +112,14 @@ int main(int argc, char** argv) {
         if (firsts) {
             printf("  first %ld traps:\n", firsts);
             for (long i = 0; i < firsts; i++)
-                printf("    %s\n", format_landing(first_traps[i]).c_str());
+                printf("    %s\n", format_commit(first_traps[i]).c_str());
         }
         if (later > lasts)
             printf("  ... %ld traps between ...\n", later - lasts);
         if (lasts) {
             printf("  last %ld traps:\n", lasts);
             for (long i = later - lasts; i < later; i++)
-                printf("    %s\n", format_landing(last_traps[i % LAST_TRAPS]).c_str());
+                printf("    %s\n", format_commit(last_traps[i % LAST_TRAPS]).c_str());
         }
         printf("  shadow registers at BREAK:\n");
         for (int i = 0; i < PHYS_USP; i++)

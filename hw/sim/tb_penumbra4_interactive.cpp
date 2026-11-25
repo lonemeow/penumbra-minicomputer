@@ -5,8 +5,9 @@
 // Vmachine_penumbra4_sim behind the SimCore interface the same way: a CPU clock plus a faster
 // i_sdram_clk for the full SDRAM model, and BREAK observed via o_prog_end,
 // which pulses as a BREAK's trap commits. The trace is a line for each op
-// the machine lands (penumbra4_landing.h), with the SR it landed on and the
-// register writes of its cycle; the halt PC is the last op landed. All
+// the machine commits (penumbra4_commit.h), with the SR it committed on and
+// the register writes of its cycle; the halt PC is the last op committed.
+// All
 // terminal / SD / stdin / exit logic lives in sim_console.cpp.
 //
 // Usage: make simulate-rtl CORE=penumbra4   (TRACE=trace.log for the trace)
@@ -14,12 +15,12 @@
 #include "verilated.h"
 #include "Vmachine_penumbra4_sim.h"
 #include "sim_console.h"
-#include "penumbra4_landing.h"
+#include "penumbra4_commit.h"
 
 struct Penumbra4Core : SimCore {
     Vmachine_penumbra4_sim* dut = new Vmachine_penumbra4_sim;
     bool rx_ack_latched = false;
-    uint32_t last_landed_pc = 0;
+    uint32_t last_committed_pc = 0;
 
     ~Penumbra4Core() override { delete dut; }
 
@@ -49,9 +50,9 @@ struct Penumbra4Core : SimCore {
         dut->i_clk = 1;
         dut->eval();
         for (int s = 0; s < 4; s++) { dut->i_sdram_clk = !dut->i_sdram_clk; dut->eval(); }
-        Landing now[2];
-        int n = read_landings(dut, 0, now);
-        if (n) last_landed_pc = now[n - 1].pc;
+        Commit now[2];
+        int n = read_commits(dut, 0, now);
+        if (n) last_committed_pc = now[n - 1].pc;
     }
 
     void uart_rx(bool v, uint8_t d) override { dut->i_uart_rx_valid = v; dut->i_uart_rx_data = d; }
@@ -68,21 +69,21 @@ struct Penumbra4Core : SimCore {
     void spi_resp(bool v, uint8_t d) override { dut->i_spi_resp_valid = v; dut->i_spi_resp_data = d; }
 
     bool     halted() const override { return dut->o_prog_end; }
-    uint32_t pc()     const override { return last_landed_pc; }
+    uint32_t pc()     const override { return last_committed_pc; }
 
     bool trace_supported() const override { return true; }
 
-    // The SR is the one the ops landed on, before their own writes to it.
+    // The SR is the one the ops committed on, before their own writes to it.
     // A cycle's register writes go on its last line: with one slot issuing,
     // they are that op's.
     void trace(std::vector<std::string>& out, uint64_t cycle) override {
-        Landing now[2];
-        int n = read_landings(dut, cycle, now);
+        Commit now[2];
+        int n = read_commits(dut, cycle, now);
         const uint32_t sr = dut->o_sr;
         for (int i = 0; i < n; i++) {
             char line[256];
             int off = snprintf(line, sizeof(line), "%s SR=%08x [%c%c%c%c %c%c]",
-                    format_landing(now[i]).c_str(), sr,
+                    format_commit(now[i]).c_str(), sr,
                     (sr & (1u <<  0)) ? 'N' : '-',
                     (sr & (1u <<  1)) ? 'Z' : '-',
                     (sr & (1u <<  2)) ? 'C' : '-',
@@ -92,7 +93,7 @@ struct Penumbra4Core : SimCore {
             for (int p = 0; i == n - 1 && p < 2; p++) {
                 if (!(dut->o_commit_we & (1u << p))) continue;
                 off += snprintf(line + off, sizeof(line) - off, " %s=%08x",
-                        landing_phys_reg_name(dut->o_commit_phys >> (4 * p)),
+                        commit_phys_reg_name(dut->o_commit_phys >> (4 * p)),
                         uint32_t(dut->o_commit_data >> (32 * p)));
             }
             out.push_back(std::string(line) + "\n");

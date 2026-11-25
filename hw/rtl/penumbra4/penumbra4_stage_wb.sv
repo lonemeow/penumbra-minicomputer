@@ -32,7 +32,7 @@ module penumbra4_stage_wb
     input  word_t             i_epc,
     output logic              o_hold,
 
-    output pair_t             o_landing,      // the pair whose effects land this cycle
+    output pair_t             o_committed,    // the pair that commits this cycle
     output reg_write_t [1:0]  o_reg_write,
     output status_write_t     o_status_write,
     output wb_redirect_t      o_redirect,
@@ -42,7 +42,7 @@ module penumbra4_stage_wb
 );
 
     typedef struct packed {
-        pair_t             landing;
+        pair_t             committed;
         reg_write_t [1:0]  reg_write;
         status_write_t     status_write;
         wb_redirect_t      redirect;
@@ -72,7 +72,7 @@ module penumbra4_stage_wb
         effects_d = '0;
 
         if (y.valid && !y.access_pending && !effects_q.flush) begin
-            effects_d.landing = i_pair;
+            effects_d.committed = i_pair;
 
             if (y.op.fault.valid) begin
                 effects_d.status_write.trap = 1'b1;
@@ -144,7 +144,7 @@ module penumbra4_stage_wb
     // the pair behind it"). The decision reads only MEM2's register, so the
     // hold stays early.
     assign o_hold         = (y.valid && y.access_pending) || effects_d.flush;
-    assign o_landing      = effects_q.landing;
+    assign o_committed    = effects_q.committed;
     assign o_reg_write    = effects_q.reg_write;
     assign o_status_write = effects_q.status_write;
     assign o_redirect     = effects_q.redirect;

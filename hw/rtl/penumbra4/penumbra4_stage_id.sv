@@ -9,7 +9,7 @@
 // carrying VEC_PRIV.
 //
 // The ops in flight are read from the stage registers: this stage's own,
-// and the later ones the core hands in, WB's landing effects last.
+// and the later ones the core hands in, the pair WB commits last.
 // Operands are captured here: a source of R15 takes the op's PC, RDSPR
 // takes its register's value, and the flags are the committed ones.
 //
