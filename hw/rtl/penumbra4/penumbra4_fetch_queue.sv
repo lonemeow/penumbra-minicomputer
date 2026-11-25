@@ -79,9 +79,14 @@ module penumbra4_fetch_queue #(
         end
     end
 
+    // An entry is one only within the count, so the entries take an
+    // enqueue whether or not the cycle flushes: the flush, EX's late
+    // misprediction among them, empties the queue through the pointers
+    // and the count alone and never reaches the entries' enables
+    // (doc/internals/penumbra4/structure.md, "The stage contract").
     always_ff @(posedge i_clk) begin
         for (int k = 0; k < ENQ_WIDTH; k++) begin
-            if (i_enq && !i_flush && count_t'(k) < count_t'(i_enq_count)) begin
+            if (i_enq && count_t'(k) < count_t'(i_enq_count)) begin
                 entries_q[tail_q + ptr_t'(k)] <= i_entries[k];
             end
         end

@@ -98,7 +98,7 @@ module penumbra4_stage_if2
         o_miss_cacheable = i_cacheable;
         o_relaunch       = '0;
 
-        if (i_slot.valid && !i_flush) begin
+        if (i_slot.valid) begin
             if (!i_queue_room) begin
                 o_relaunch.valid       = 1'b1;
                 o_relaunch.pc          = i_slot.pc;
@@ -124,6 +124,12 @@ module penumbra4_stage_if2
                 o_relaunch.pc          = i_slot.pc;
                 o_relaunch.from_access = 1'b1;
             end
+        end
+        // A flush stops what acts outside the queue, the L1-I's access and
+        // IF1's relaunch; the queue drops an enqueue itself.
+        if (i_flush) begin
+            o_miss_req = 1'b0;
+            o_relaunch = '0;
         end
     end
 
