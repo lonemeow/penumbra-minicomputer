@@ -456,17 +456,19 @@ module penumbra3_ex_stage
         endcase
     end
 
-    // Pulse start on a divmul's first EX cycle: dm_started latches once we
-    // launch and holds until the instruction advances out of EX (the next
-    // divmul re-arms). Holding until advance -- not until the unit goes idle --
-    // keeps a finished-but-back-pressured divmul from re-launching. An
-    // awaiting divmul launches once it stops awaiting.
-    assign dm_start = divmul_in_ex & ~dm_started & ~awaits_cpl;
+    // Pulse start on a divmul's first EX cycle: dm_started latches once the
+    // unit is launched and holds until the instruction leaves EX, by
+    // advancing or by a fault flush dropping it. Holding until then -- not
+    // until the unit goes idle -- keeps a finished-but-back-pressured divmul
+    // from re-launching. A dropped divmul's operation runs on to its end, and
+    // the unit takes a start only while idle, so a divmul launches once
+    // o_done is high. An awaiting divmul launches once it stops awaiting.
+    assign dm_start = divmul_in_ex & ~dm_started & ~awaits_cpl & dm_done;
 
     always_ff @(posedge i_clk) begin
-        if (i_rst)         dm_started <= 1'b0;
-        else if (advance)  dm_started <= 1'b0;   // left EX -> re-arm
-        else if (dm_start) dm_started <= 1'b1;   // launched this divmul
+        if (i_rst)                   dm_started <= 1'b0;
+        else if (advance | i_bubble) dm_started <= 1'b0;   // left EX -> re-arm
+        else if (dm_start)           dm_started <= 1'b1;   // launched this divmul
     end
 
     // FPGA-only core: no discrete chip budget to respect.
@@ -697,6 +699,12 @@ module penumbra3_ex_stage
     always_comb
         assert (!(dm_stall && advance))
             else $error("penumbra3_ex_stage: divmul advanced into EX/MEM1 while busy");
+
+    // The launch flag belongs to the divmul in EX: one it outlived would let
+    // the next divmul leave with the unit's results for another op.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        !dm_started || (i_valid && is_divmul))
+        else $error("penumbra3_ex_stage: the divmul launch flag outlived its divmul");
 
     // A slot awaiting a source never advances (i_cpl_awaited's contract),
     // so nothing EX latches as it advances takes a stale operand.

@@ -487,8 +487,8 @@ int main(int argc, char** argv) {
     }
     check("await_mul_done", done, 1);
     check("await_mul_lo",   dut->o_mem1_result, 42);
+    dut->i_valid = 0; dut->eval();             // the MUL has left EX
     tick(dut);
-    dut->i_valid = 0; dut->eval();
     tick(dut);
 
     // WRSYS R5 behind LDW R5, a miss: it arrives awaiting, takes the value
