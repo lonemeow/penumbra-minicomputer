@@ -108,21 +108,28 @@ module penumbra4_stage_mem1
 
     pair_t pair_q, pair_d;
 
+    // An empty slot is a clear valid bit (doc/internals/penumbra4/
+    // structure.md, "The stage contract"): the fields load whenever MEM1 is
+    // not held, and only the valid bits take the leave decision and the
+    // flush.
     always_comb begin
         pair_d = pair_q;
+        if (!i_hold) begin
+            pair_d         = i_pair;
+            pair_d.y       = y_out;
+            pair_d.y.valid = leaving;
+        end
         if (i_flush) begin
-            pair_d = '0;
-        end else if (!i_hold) begin
-            pair_d   = i_pair;
-            pair_d.y = y_out;
+            pair_d.x.valid = 1'b0;
+            pair_d.y.valid = 1'b0;
         end
     end
 
     always_ff @(posedge i_clk) begin
+        pair_q <= pair_d;
         if (i_rst) begin
-            pair_q <= '0;
-        end else begin
-            pair_q <= pair_d;
+            pair_q.x.valid <= 1'b0;
+            pair_q.y.valid <= 1'b0;
         end
     end
 

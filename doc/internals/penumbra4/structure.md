@@ -256,6 +256,13 @@ ahead of any interrupt and whatever SR.I and `EI`'s delay say
   fetch in the same cycle.
 - **A flush clears the stages younger than its redirect** and never
   waits on a hold.
+- **An empty slot is a clear valid bit.** A stage loads its slots'
+  fields whenever it is not held, and only the valid bits take its
+  decisions: whether the pair leaves, whether ID issues, a flush and the
+  reset. A decision then drives one flop a slot, never the enable or
+  reset of every flop in the register. An empty slot's fields are
+  whatever the stage last loaded, so whatever reads a slot reads its
+  valid bit first.
 - **One term says the pair leaves the stage,** and every effect the
   stage has, a write, a request or a count, is gated by it.
 

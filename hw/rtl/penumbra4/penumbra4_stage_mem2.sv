@@ -121,6 +121,9 @@ module penumbra4_stage_mem2
     // ── The access's result, into the waiting slot ───────────────
     slot_t waiting;
     word_t access_value;
+    logic  waits_on_access;
+
+    assign waits_on_access = pair_q.y.valid && pair_q.y.access_pending;
 
     byte_ext u_extract_access (
         .i_data     (i_access_word),
@@ -143,23 +146,30 @@ module penumbra4_stage_mem2
         end
     end
 
+    // An empty slot is a clear valid bit (doc/internals/penumbra4/
+    // structure.md, "The stage contract"): the fields load whenever MEM2 is
+    // not held, and only the valid bits take the leave decision and the
+    // flush.
     always_comb begin
         pair_d = pair_q;
-        if (i_flush) begin
-            pair_d = '0;
-        end else if (!i_hold) begin
-            pair_d   = i_pair;
-            pair_d.y = y_out;
-        end else if (pair_q.y.access_pending && i_access_done) begin
+        if (!i_hold) begin
+            pair_d         = i_pair;
+            pair_d.y       = y_out;
+            pair_d.y.valid = leaving;
+        end else if (waits_on_access && i_access_done) begin
             pair_d.y = waiting;
+        end
+        if (i_flush) begin
+            pair_d.x.valid = 1'b0;
+            pair_d.y.valid = 1'b0;
         end
     end
 
     always_ff @(posedge i_clk) begin
+        pair_q <= pair_d;
         if (i_rst) begin
-            pair_q <= '0;
-        end else begin
-            pair_q <= pair_d;
+            pair_q.x.valid <= 1'b0;
+            pair_q.y.valid <= 1'b0;
         end
     end
 
@@ -170,10 +180,6 @@ module penumbra4_stage_mem2
     // The stage contract (doc/internals/penumbra4/structure.md): a held
     // stage keeps its pair, but for the word or fault its access puts into
     // it, and a flush empties it.
-    logic waits_on_access;
-
-    assign waits_on_access = pair_q.y.valid && pair_q.y.access_pending;
-
     assert property (@(posedge i_clk) disable iff (i_rst)
         (i_hold && !i_flush && !(waits_on_access && i_access_done)) |=> $stable(pair_q))
         else $fatal(1, "penumbra4_stage_mem2: the pair changed while WB held it");

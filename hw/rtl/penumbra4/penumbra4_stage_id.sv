@@ -174,22 +174,21 @@ module penumbra4_stage_id
 
     always_comb begin
         pair_d = pair_q;
+        if (!i_hold) begin
+            pair_d.y       = slot;
+            pair_d.y.valid = issue;
+            pair_d.older   = SLOT_Y;
+        end
         if (i_flush) begin
-            pair_d = '0;
-        end else if (!i_hold) begin
-            pair_d = '0;
-            if (issue) begin
-                pair_d.y     = slot;
-                pair_d.older = SLOT_Y;
-            end
+            pair_d.y.valid = 1'b0;
         end
     end
 
     always_ff @(posedge i_clk) begin
+        pair_q <= pair_d;
         if (i_rst) begin
-            pair_q <= '0;
-        end else begin
-            pair_q <= pair_d;
+            pair_q.x.valid <= 1'b0;
+            pair_q.y.valid <= 1'b0;
         end
     end
 
