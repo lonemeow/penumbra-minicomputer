@@ -280,11 +280,18 @@ module nexysvideo_penumbra4_top (
 
         // Commit observability, unused on the board.
         /* verilator lint_off PINCONNECTEMPTY */
-        .o_commit_we    (),
-        .o_commit_phys  (),
-        .o_commit_data  (),
-        .o_retire_count (),
-        .o_prog_end     ()
+        .o_landing_valid    (),
+        .o_landing_pc       (),
+        .o_landing_op_class (),
+        .o_landing_trap     (),
+        .o_landing_vector   (),
+        .o_landing_older    (),
+        .o_sr               (),
+        .o_commit_we        (),
+        .o_commit_phys      (),
+        .o_commit_data      (),
+        .o_retire_count     (),
+        .o_prog_end         ()
         /* verilator lint_on PINCONNECTEMPTY */
     );
 

@@ -478,8 +478,11 @@ exposed external bus.
 - `machine_penumbra3_sim.sv` — fork of the gen2 wrapper with
   `machine_penumbra3` in its place (`make test CORE=penumbra3`).
 - `machine_penumbra4_sim.sv` — fork of the gen3 wrapper with
-  `machine_penumbra4` and its commit ports in its place
-  (`make test CORE=penumbra4`, runner `hw/sim/tb_penumbra4_prog.cpp`).
+  `machine_penumbra4` and its commit and landing ports in its place
+  (`make test CORE=penumbra4`, runner `hw/sim/tb_penumbra4_prog.cpp`,
+  which reports a failing program's last landed ops and its traps;
+  `hw/sim/penumbra4_landing.h` reads and names the landing ports for it
+  and the console shim).
 - `unified_bus_mem.sv` — bus-shaped unified ROM/RAM device (region-
   compressed map, simple bus device, `+rom_hex=`).
 - `unified_mem.sv` — dual-port flat stand-in for core-level bring-up
@@ -737,7 +740,7 @@ instruction trace), `tb_penumbra2_interactive.cpp`
 (`Vmachine_penumbra2_sim`, BREAK via `o_prog_end`, a trace rebuilt from
 the commit/retire ports), `tb_penumbra3_interactive.cpp`, its fork
 over `Vmachine_penumbra3_sim`, and `tb_penumbra4_interactive.cpp` over
-`Vmachine_penumbra4_sim`, with no trace. Each is built by
+`Vmachine_penumbra4_sim`, a trace line per landed op. Each is built by
 `make simulate-rtl [CORE=…]`, which refuses a generation with no shim. Plusargs: `+sdcard=disk.img` (SDCARD),
 `+trace=file.log` (TRACE), `+trace_window=N`, `+halt_on=str` (with
 `+halt_delay=N`, the cycles to run on past the match), `+stdin_file=path`.

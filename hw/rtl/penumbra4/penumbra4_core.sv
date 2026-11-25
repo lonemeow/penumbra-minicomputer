@@ -59,6 +59,8 @@ module penumbra4_core
     input  sysreg_rsp_t      i_sysreg,
 
     // ── Observability ────────────────────────────────────────────
+    output pair_t            o_landing,
+    output sr_t              o_sr,
     output reg_write_t [1:0] o_reg_write,
     output logic [1:0]       o_retire_count,
     output logic             o_prog_end
@@ -256,6 +258,8 @@ module penumbra4_core
         .o_scratch (scratch_q)
     );
 
+    assign o_landing   = wb_pair_q;
+    assign o_sr        = sr_q;
     assign o_reg_write = reg_write_q;
 
 endmodule

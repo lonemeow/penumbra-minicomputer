@@ -16,7 +16,9 @@
 // interrupt line. The UART and SPI byte streams are brought to the top so an
 // interactive testbench can bridge them to a host terminal and an SD-card
 // emulator; the program runner leaves those idle and keys only on the
-// program-end pulse and the commit ports.
+// program-end pulse and the commit ports. The landing ports name the ops
+// as they retire or trap, for a runner's failure report and the console's
+// trace.
 
 module machine_penumbra4_sim
     import penumbra_pkg::*;
@@ -48,6 +50,13 @@ module machine_penumbra4_sim
     input  logic [7:0]           i_spi_resp_data,
     output logic                 o_spi_cs0,
 
+    output logic       [1:0]     o_landing_valid,
+    output vaddr_t     [1:0]     o_landing_pc,
+    output op_class_e  [1:0]     o_landing_op_class,
+    output logic       [1:0]     o_landing_trap,
+    output vector_t    [1:0]     o_landing_vector,
+    output slot_e                o_landing_older,
+    output sr_t                  o_sr,
     output logic       [1:0]     o_commit_we,
     output phys_reg_t  [1:0]     o_commit_phys,
     output word_t      [1:0]     o_commit_data,
@@ -98,11 +107,19 @@ module machine_penumbra4_sim
         .i_bus_fault    (bus_fault),
         .o_bus_rst      (bus_rst),
         .o_bus_cfg_en   (bus_cfg_en),
-        .o_commit_we    (o_commit_we),
-        .o_commit_phys  (o_commit_phys),
-        .o_commit_data  (o_commit_data),
-        .o_retire_count (o_retire_count),
-        .o_prog_end     (o_prog_end)
+
+        .o_landing_valid    (o_landing_valid),
+        .o_landing_pc       (o_landing_pc),
+        .o_landing_op_class (o_landing_op_class),
+        .o_landing_trap     (o_landing_trap),
+        .o_landing_vector   (o_landing_vector),
+        .o_landing_older    (o_landing_older),
+        .o_sr               (o_sr),
+        .o_commit_we        (o_commit_we),
+        .o_commit_phys      (o_commit_phys),
+        .o_commit_data      (o_commit_data),
+        .o_retire_count     (o_retire_count),
+        .o_prog_end         (o_prog_end)
     );
 
     // ── Bus fabric ───────────────────────────────────────────────

@@ -6,9 +6,10 @@
 // ports, so a board top or a sim wrapper attaches its devices to it as it
 // does to gen3's (doc/internals/penumbra4/structure.md, "The machine").
 //
-// The observability ports are gen4's own: the register writes a commit
-// makes, up to two a cycle, the instructions it retires, and the
-// program-end pulse as a BREAK's trap commits.
+// The observability ports are gen4's own: the ops whose effects land,
+// retired or trapping, the register writes they make, up to two a cycle,
+// the SR, the count retired, and the program-end pulse as a BREAK's trap
+// commits.
 //
 // The sysreg devices are the CPU's identity and counters, the board's
 // identity and the bus controller. The caches have no arrays and read as
@@ -54,6 +55,17 @@ module machine_penumbra4
     output logic                 o_bus_cfg_en,    // BUSCTL.CFG_EN
 
     // ── Observability ────────────────────────────────────────────
+    // The ops whose effects land this cycle, each at its slot's index
+    // (slot_e): one that retires, or one whose trap is taken. The older
+    // names the first in program order when both land. The SR is the one
+    // they landed on, before their own writes to it.
+    output logic       [1:0]     o_landing_valid,
+    output vaddr_t     [1:0]     o_landing_pc,
+    output op_class_e  [1:0]     o_landing_op_class,
+    output logic       [1:0]     o_landing_trap,
+    output vector_t    [1:0]     o_landing_vector,
+    output slot_e                o_landing_older,
+    output sr_t                  o_sr,
     // A commit's register writes never name one register twice, so they
     // apply in either order.
     output logic       [1:0]     o_commit_we,
@@ -107,6 +119,7 @@ module machine_penumbra4
     sysreg_req_t sysreg_req;
     sysreg_rsp_t sysreg_rsp_q;
 
+    pair_t            landing_q;
     reg_write_t [1:0] reg_write_q;
 
     penumbra4_core #(
@@ -145,6 +158,8 @@ module machine_penumbra4
         .i_data_fault            (data_fault),
         .o_sysreg                (sysreg_req),
         .i_sysreg                (sysreg_rsp_q),
+        .o_landing               (landing_q),
+        .o_sr                    (o_sr),
         .o_reg_write             (reg_write_q),
         .o_retire_count          (o_retire_count),
         .o_prog_end              (o_prog_end)
@@ -227,6 +242,22 @@ module machine_penumbra4
         .i_bus_ack     (i_bus_ack),
         .i_bus_fault   (i_bus_fault)
     );
+
+    slot_t [1:0] landed;
+
+    assign landed[SLOT_X]  = landing_q.x;
+    assign landed[SLOT_Y]  = landing_q.y;
+    assign o_landing_older = landing_q.older;
+
+    always_comb begin
+        for (int s = 0; s < 2; s++) begin
+            o_landing_valid[s]    = landed[s].valid;
+            o_landing_pc[s]       = landed[s].op.pc;
+            o_landing_op_class[s] = landed[s].op.op_class;
+            o_landing_trap[s]     = landed[s].op.fault.valid;
+            o_landing_vector[s]   = landed[s].op.fault.vector;
+        end
+    end
 
     always_comb begin
         for (int p = 0; p < 2; p++) begin
