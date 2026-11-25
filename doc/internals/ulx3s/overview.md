@@ -122,6 +122,20 @@ across all five clock domains in a `hw/tools/seed-sweep.sh` run. A
 seed belongs to one netlist and one set of clock targets; any change
 to either invalidates it.
 
+For the same reason, one build on each side of a change compares two
+placements, not two designs: a change of a few flops anywhere places
+the whole design anew, and a path whose logic it never touched can
+come out several nanoseconds longer. A seed sweep on each side
+attributes a change; one build on each side does not, and neither does
+where the worst path sits. What a path does show is its structure.
+`make timing DETAIL=rollup` lists the modules it crosses, and `make
+fanout` the nets that drive the most pins. A late signal that passes
+through one module's decision into a third module's
+([gen4's timing classes](../penumbra4/structure.md#timing-classes)),
+or a late decision on the enables or resets of a whole register
+([coding standards](../coding-standards.md#rules-for-new-modules)), is
+the RTL's to fix, whichever seed happens to close it.
+
 Constraints come in two kinds that never mix. The vendor board file
 (`hw/constraints/ulx3s_v20.lpf`) holds every pin and I/O standard and
 is never edited. A top may add design intent on top of it: an LPF

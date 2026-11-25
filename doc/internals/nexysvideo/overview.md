@@ -233,6 +233,21 @@ state: the top gives its period from the part's datasheet. Everything
 else, timing exceptions and crossing constraints included, is design
 intent and passes unchecked.
 
+## Timing
+
+A path from a register to the address of a block RAM across the die,
+with no logic between, is routing alone, and its slack moves with
+placement from build to build. On the gen4 machine top such paths,
+from the bus master's address register to the devices' block RAMs
+(the Ethernet adapter's slot memories, the display's framebuffer), are
+most often the CPU clock's worst, so that clock's worst slack does not
+measure a change to the core. The core's own paths in the build's
+summary do, with the fan-out reports beside them
+([build system](../build-system.md#device-families)). A met
+constraint is not the design's limit either: Vivado stops improving a
+path once it meets its constraint, so the limit is found by raising
+`CPU_HZ` until a build misses.
+
 ## Thermal guard
 
 The board has no fan. Every top on a 7-series part arms the XADC's

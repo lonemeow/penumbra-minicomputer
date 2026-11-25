@@ -357,3 +357,7 @@ Two reports beside it show where a signal fans out:
 `<top>_fanout.rpt` lists the widest nets by the pins they drive (clock
 enable, set/reset, data), and `<top>_control_sets.rpt` every
 combination of clock, enable and reset with the flops that share it.
+A wide net is a problem only when it is also late, which the fan-out
+report's worst-slack column tells: a stage's hold, from registers, can
+drive hundreds of enables with slack to spare, where a decision at the
+end of a long path, driving as many, is the clock's worst path.

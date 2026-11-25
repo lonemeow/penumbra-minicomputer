@@ -52,7 +52,7 @@ Prefix all module ports to distinguish them from internal signals:
 
 ### Rules for new modules
 
-A module written from scratch follows four more rules. A module that
+A module written from scratch follows five more rules. A module that
 already exists keeps its own style when it changes, until it is
 rewritten whole, and one that fits a new design unchanged, such as a
 device, is used as it is.
@@ -110,6 +110,54 @@ always_ff @(posedge i_clk) begin
 end
 
 assign o_busy = (state_q != IDLE);
+```
+
+- **A decision drives a valid bit, never a register's contents.** A
+  register that holds something or nothing, such as a pipeline slot or
+  a queue entry, says which by a valid bit or a count. Its contents
+  load on an enable that settles early, such as a hold from registers,
+  or on every cycle, and take no reset; a decision, such as whether an
+  op issues or leaves, sets the valid bit alone. A register cleared to
+  mean empty puts the decision on the reset or the enable of every
+  flop in it, and a decision that ends a long path then drives a few
+  hundred flops: the build's worst path, in a design every test
+  passes.
+    - **A flush applies last,** at the valid bits or the count it
+      clears, after every decision. It is no term of a decision whose
+      receiver applies the flush anyway: folded in, a late flush runs
+      through that decision into whatever takes it. A request or a
+      redirect, which acts beyond the register, still takes it.
+    - **A condition around a field's assignment is that field's
+      enable.** Where a decision and a load touch different bits, they
+      are separate `if`s rather than one `else if` chain, so the
+      decision stays off the fields.
+    - **Whatever reads a slot reads its valid bit first.** A scratch
+      build that fills every empty slot with random data each cycle
+      passes the tests exactly when nothing reads an empty slot's
+      contents, and a reader planted to ignore the valid bit shows the
+      random data reaches it.
+
+The hold loads the contents, the decision sets the valid bit, and the
+flush comes after both:
+
+```systemverilog
+always_comb begin
+    slot_d = slot_q;
+    if (!i_hold) begin
+        slot_d       = i_slot;
+        slot_d.valid = issue;
+    end
+    if (i_flush) begin
+        slot_d.valid = 1'b0;
+    end
+end
+
+always_ff @(posedge i_clk) begin
+    slot_q <= slot_d;
+    if (i_rst) begin
+        slot_q.valid <= 1'b0;
+    end
+end
 ```
 
 ## 4. Packages and Constants
