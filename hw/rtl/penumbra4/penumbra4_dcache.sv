@@ -116,4 +116,9 @@ module penumbra4_dcache
         end
     end
 
+    // The uncore's done answers the access this L1 has up.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        i_uc_done |-> valid_q)
+        else $error("penumbra4_dcache: a done with no access up");
+
 endmodule

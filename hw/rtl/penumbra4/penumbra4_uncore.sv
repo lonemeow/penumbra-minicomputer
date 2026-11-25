@@ -98,4 +98,28 @@ module penumbra4_uncore
         .i_bus_fault   (i_bus_fault)
     );
 
+    // ── Contract ─────────────────────────────────────────────────
+    // The port's handshake (doc/internals/penumbra3/uncore-port.md,
+    // "Handshake"): a requester holds its request unchanged through its
+    // done, a done answers a request up since an earlier cycle and lasts
+    // one, and the two sides' dones never coincide.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (i_fetch_valid && !o_fetch_done) |=> (i_fetch_valid && $stable(i_fetch_req)))
+        else $error("penumbra4_uncore: the fetch side changed or withdrew its request before its done");
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (i_data_valid && !o_data_done) |=> (i_data_valid && $stable(i_data_req)))
+        else $error("penumbra4_uncore: the data side changed or withdrew its request before its done");
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        o_fetch_done |-> (i_fetch_valid && $past(i_fetch_valid)))
+        else $error("penumbra4_uncore: a fetch-side done with no request up before it");
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        o_data_done |-> (i_data_valid && $past(i_data_valid)))
+        else $error("penumbra4_uncore: a data-side done with no request up before it");
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (o_fetch_done || o_data_done) |=> !(o_fetch_done || o_data_done))
+        else $error("penumbra4_uncore: a done longer than a cycle");
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        !(o_fetch_done && o_data_done))
+        else $error("penumbra4_uncore: both sides' dones in one cycle");
+
 endmodule

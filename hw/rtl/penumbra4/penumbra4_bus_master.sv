@@ -130,4 +130,20 @@ module penumbra4_bus_master
     assign o_bus_re      = (state_q == ACCESS) && !req_q.we;
     assign o_bus_we      = (state_q == ACCESS) && req_q.we;
 
+    // ── Contract ─────────────────────────────────────────────────
+    // A start only while idle. On the bus (doc/hardware/bus-protocol.md,
+    // the sync form): a strobe and its fields hold until the ack, and an
+    // ack answers a strobe.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        i_start |-> o_idle)
+        else $error("penumbra4_bus_master: a start while a transaction runs");
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        ((o_bus_re || o_bus_we) && !i_bus_ack) |=>
+            ($stable(o_bus_re) && $stable(o_bus_we) && $stable(o_bus_addr)
+             && $stable(o_bus_wdata) && $stable(o_bus_byte_en)))
+        else $error("penumbra4_bus_master: a strobe or its fields changed before the ack");
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        i_bus_ack |-> (o_bus_re || o_bus_we))
+        else $error("penumbra4_bus_master: an ack with no strobe up");
+
 endmodule

@@ -160,4 +160,77 @@ module penumbra4_stage_wb
         end
     end
 
+    // A trap is precise: the op that takes it changes nothing but the save
+    // state and fetch's path, and retires nothing.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        effects_d.status_write.trap |->
+            !(effects_d.reg_write[0].en || effects_d.reg_write[1].en
+              || effects_d.status_write.flags_en || effects_d.status_write.spr_en
+              || effects_d.status_write.irq_mask_en || effects_d.status_write.eret)
+            && effects_d.retire_count == 2'd0)
+        else $fatal(1, "penumbra4_stage_wb: the trap at 0x%08x also committed its op's effects",
+                    y.op.pc);
+
+    // A flush comes with the redirect fetch goes on from.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        effects_d.flush |-> effects_d.redirect.valid)
+        else $fatal(1, "penumbra4_stage_wb: a flush at 0x%08x with nowhere for fetch to go",
+                    y.op.pc);
+
+    // ── Order ────────────────────────────────────────────────────
+    // Each op commits where the one before it sent control, so an op from
+    // a path a flush should have cleared, or one a hold lost or doubled,
+    // stops the simulation as it commits. Where an op sends control is
+    // resolve's answer, the one EX steered by, or WB's own redirect.
+    //
+    // next_pc_q is where the next op must commit, and next_pc_known_q says
+    // whether WB knows it: not from reset, nor after a trap, whose
+    // handler's address only IF1 reads.
+    slot_t  committed;
+    vaddr_t committed_next_pc;
+    vaddr_t next_pc_q, next_pc_d;
+    logic   next_pc_known_q, next_pc_known_d;
+
+    assign committed = effects_q.committed.y;
+
+    /* verilator lint_off PINCONNECTEMPTY */
+    penumbra4_resolve u_committed_resolve (
+        .i_slot       (committed),
+        .o_next_pc    (committed_next_pc),
+        .o_mispredict ()
+    );
+    /* verilator lint_on PINCONNECTEMPTY */
+
+    always_comb begin
+        next_pc_d       = next_pc_q;
+        next_pc_known_d = next_pc_known_q;
+        if (committed.valid) begin
+            next_pc_known_d = 1'b1;
+            if (effects_q.redirect.to_vector) begin
+                next_pc_known_d = 1'b0;
+            end else if (effects_q.redirect.valid) begin
+                next_pc_d = effects_q.redirect.target;
+            end else begin
+                next_pc_d = committed_next_pc;
+            end
+        end
+    end
+
+    always_ff @(posedge i_clk) begin
+        if (i_rst) begin
+            next_pc_known_q <= 1'b0;
+        end else begin
+            next_pc_known_q <= next_pc_known_d;
+        end
+    end
+
+    always_ff @(posedge i_clk) begin
+        next_pc_q <= next_pc_d;
+    end
+
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (committed.valid && next_pc_known_q) |-> (committed.op.pc == next_pc_q))
+        else $fatal(1, "penumbra4_stage_wb: an op committed at 0x%08x where control went to 0x%08x",
+                    committed.op.pc, next_pc_q);
+
 endmodule

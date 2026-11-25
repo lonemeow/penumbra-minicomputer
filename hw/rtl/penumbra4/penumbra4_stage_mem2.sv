@@ -167,6 +167,39 @@ module penumbra4_stage_mem2
     assign o_pair = pair_q;
 
     // ── Contract ─────────────────────────────────────────────────
+    // The stage contract (doc/internals/penumbra4/structure.md): a held
+    // stage keeps its pair, but for the word or fault its access puts into
+    // it, and a flush empties it.
+    logic waits_on_access;
+
+    assign waits_on_access = pair_q.y.valid && pair_q.y.access_pending;
+
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (i_hold && !i_flush && !(waits_on_access && i_access_done)) |=> $stable(pair_q))
+        else $fatal(1, "penumbra4_stage_mem2: the pair changed while WB held it");
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        i_flush |=> !(pair_q.x.valid || pair_q.y.valid))
+        else $fatal(1, "penumbra4_stage_mem2: a flush left an op in the register");
+
+    // A waiting pair's access is the L1-D's only one: its done finds the
+    // pair here, WB holds the pair until then, and no flush reaches it,
+    // since nothing recalls the access and its done would fill a later
+    // pair.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        i_access_done |-> waits_on_access)
+        else $fatal(1, "penumbra4_stage_mem2: the L1-D finished an access no pair waits for");
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        waits_on_access |-> i_hold)
+        else $fatal(1, "penumbra4_stage_mem2: WB took a pair at 0x%08x whose access is not done",
+                    pair_q.y.op.pc);
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        waits_on_access |-> !i_flush)
+        else $fatal(1, "penumbra4_stage_mem2: a flush dropped a pair at 0x%08x whose access the L1-D carries",
+                    pair_q.y.op.pc);
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        o_access_req |-> !(i_hold || i_flush))
+        else $fatal(1, "penumbra4_stage_mem2: an access from a pair that did not leave");
+
     // The store side, which carries a cacheable store's write, is not built;
     // with translation off no store is cacheable.
     always_ff @(posedge i_clk) begin

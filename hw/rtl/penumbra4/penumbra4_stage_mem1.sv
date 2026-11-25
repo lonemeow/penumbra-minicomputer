@@ -129,4 +129,18 @@ module penumbra4_stage_mem1
     assign o_hold = i_hold;
     assign o_pair = pair_q;
 
+    // ── Contract ─────────────────────────────────────────────────
+    // The stage contract (doc/internals/penumbra4/structure.md): a held
+    // stage keeps its pair, and a flush empties it. A held pair makes no
+    // request, since nothing can recall one.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (i_hold && !i_flush) |=> $stable(pair_q))
+        else $fatal(1, "penumbra4_stage_mem1: the pair changed while MEM2 held it");
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        i_flush |=> !(pair_q.x.valid || pair_q.y.valid))
+        else $fatal(1, "penumbra4_stage_mem1: a flush left an op in the register");
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (o_launch || o_sysreg.valid) |-> !(i_hold || i_flush))
+        else $fatal(1, "penumbra4_stage_mem1: a request from a pair that did not leave");
+
 endmodule

@@ -205,4 +205,14 @@ module penumbra4_stage_id
     assign unused_head = ^{i_head[HEAD_WIDTH-1:1], i_head_valid[HEAD_WIDTH-1:1], i_read_value[1:0]};
     /* verilator lint_on UNUSEDSIGNAL */
 
+    // ── Contract ─────────────────────────────────────────────────
+    // The stage contract (doc/internals/penumbra4/structure.md): a held
+    // stage keeps its pair, and a flush empties it.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (i_hold && !i_flush) |=> $stable(pair_q))
+        else $fatal(1, "penumbra4_stage_id: the pair changed while EX held it");
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        i_flush |=> !(pair_q.x.valid || pair_q.y.valid))
+        else $fatal(1, "penumbra4_stage_id: a flush left an op in the register");
+
 endmodule

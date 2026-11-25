@@ -89,4 +89,27 @@ module penumbra4_status
     assign o_esr     = esr_q;
     assign o_scratch = scratch_q;
 
+    // ── Contract ─────────────────────────────────────────────────
+    // One op's effects at a time: a trap's entry and ERET never coincide,
+    // and neither comes with the op-local writes a retiring op makes.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        (i_write.trap || i_write.eret) |->
+            !((i_write.trap && i_write.eret) || i_write.flags_en
+              || i_write.irq_mask_en || i_write.spr_en))
+        else $error("penumbra4_status: a trap's entry or ERET with other writes");
+
+    // A trap's entry (doc/system/architecture.md, "Entry Sequence"): the PC
+    // and SR saved, the SR in supervisor mode with interrupts disabled, its
+    // flags kept.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        i_write.trap |=>
+            epc_q == word_t'($past(i_write.epc)) && esr_q == word_t'($past(sr_q))
+            && sr_q.s && !sr_q.i && sr_q.flags == $past(sr_q.flags))
+        else $error("penumbra4_status: a trap's entry did not save the PC and SR or enter supervisor mode");
+
+    // ERET restores the SR from ESR's image.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        i_write.eret |=> sr_q == sr_of($past(esr_q)))
+        else $error("penumbra4_status: ERET did not restore the SR from ESR");
+
 endmodule
