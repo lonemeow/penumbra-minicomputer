@@ -104,6 +104,13 @@ unconditionally, then hold while `!o_done`; on the first cycle
 `o_fault`.* A consumer never needs to know the iteration count, and
 the unit never needs to know how the consumer stalls.
 
+The unit takes a start only while `o_done` is high. A start during an
+operation loads no operands, and `o_done` then rises with the old
+operation's results, or, for a start on its final step, never rises.
+A consumer that abandons an operation, as a pipeline does when a flush
+drops the instruction, gives up its claim on that operation's results
+and launches the next only once `o_done` is high.
+
 Because the bundle is held rather than pulsed, a consumer must qualify
 `o_fault` with which instruction it is completing — the same
 qualification it applies to the result halves before committing them.

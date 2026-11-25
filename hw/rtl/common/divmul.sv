@@ -63,7 +63,7 @@ module divmul
     input  logic [31:0] i_a,        // multiplier / dividend
     input  logic [31:0] i_b,        // multiplicand / divisor
     input  logic [4:0]  i_op,       // OP_MUL / OP_MULU / OP_DIV / OP_DIVU (ALU field)
-    input  logic        i_start,    // 1-cycle pulse: latch operands, begin
+    input  logic        i_start,    // 1-cycle pulse while o_done: latch operands, begin
 
     // ── Status ───────────────────────────────────────────────────
     output logic        o_done,     // low while iterating; high from completion
@@ -287,5 +287,10 @@ module divmul
     assert property (@(posedge i_clk) disable iff (i_rst)
         start_accepted |=> !fault_q)
         else $error("divmul: o_fault survived a non-faulting start");
+
+    // A start is taken only while idle: one during an operation loads nothing.
+    assert property (@(posedge i_clk) disable iff (i_rst)
+        start_pulse |-> done_q)
+        else $error("divmul: i_start while not o_done");
 
 endmodule
