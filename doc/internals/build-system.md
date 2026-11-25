@@ -349,5 +349,11 @@ The coverage and crossing gates carry the weight: slack says nothing
 about a path Vivado was never asked to time. On failure the reports
 and routed checkpoint are still written and any older bitstream is
 deleted, so `make flash` has nothing stale to program. Pass or fail,
-the build prints each clock's worst slack and the frequency its worst
-path would allow.
+the build ends with a summary, which it also writes to
+`build/<top>_summary.txt`: each clock's worst slack and the frequency
+its worst path would allow, the ten worst paths inside the design with
+the widest fanout on each, the main resources' use, and the verdict.
+Two reports beside it show where a signal fans out:
+`<top>_fanout.rpt` lists the widest nets by the pins they drive (clock
+enable, set/reset, data), and `<top>_control_sets.rpt` every
+combination of clock, enable and reset with the flops that share it.

@@ -229,6 +229,59 @@ proc clock_fmax_lines {} {
     return $lines
 }
 
+# The n worst setup paths that start and end inside the design, each
+# to a different endpoint, a line each: its clock and slack, its logic
+# levels, the share of its delay spent in routing, the widest fanout
+# on it and its two ends. A wide fanout late on a path is a decision
+# driving the enables or resets of a whole register. A path through a
+# port is left out: its slack is the board interface's, set by the
+# XDC's I/O delays, and the timing gate already holds it to zero.
+proc worst_path_lines {n} {
+    set lines {}
+    foreach p [get_timing_paths -quiet -delay_type max -max_paths [expr {10 * $n}] \
+                   -sort_by slack] {
+        if {[llength $lines] == $n} {
+            break
+        }
+        set from [get_property STARTPOINT_PIN $p]
+        set to   [get_property ENDPOINT_PIN $p]
+        if {[get_property SLACK $p] eq ""
+                || [get_property CLASS $from] eq "port" || [get_property CLASS $to] eq "port"} {
+            continue
+        }
+        set delay   [get_property DATAPATH_DELAY $p]
+        set routing 0
+        if {$delay > 0} {
+            set routing [expr {100.0 * [get_property DATAPATH_NET_DELAY $p] / $delay}]
+        }
+        lappend lines [format "%s: slack %.3f ns, %s logic levels, %.0f%% routing, widest fanout %s: %s -> %s" \
+                           [get_property ENDPOINT_CLOCK $p] [get_property SLACK $p] \
+                           [get_property LOGIC_LEVELS $p] $routing \
+                           [get_property MAX_FANOUT $p] $from $to]
+    }
+    return $lines
+}
+
+# The device's main resources: used, available and the share, from the
+# first row naming each in report_utilization's tables (later tables
+# break the same resources down further).
+proc utilization_lines {} {
+    set found [dict create]
+    foreach line [split [report_utilization -return_string] "\n"] {
+        set cols [lmap c [split $line |] {string trim $c}]
+        if {[llength $cols] < 6} {
+            continue
+        }
+        set name [string trimright [lindex $cols 1] *]
+        if {$name in {{Slice LUTs} {Slice Registers} {Block RAM Tile} DSPs}
+                && ![dict exists $found $name]} {
+            dict set found $name [format "%s: %s of %s (%s%%)" $name [lindex $cols 2] \
+                                      [lindex $cols end-2] [lindex $cols end-1]]
+        }
+    }
+    return [dict values $found]
+}
+
 # The worst setup path between the given startpoints and endpoints, or
 # nothing when every such path is untimed: with no timed path to
 # offer, get_timing_paths can return an unconstrained one, which has

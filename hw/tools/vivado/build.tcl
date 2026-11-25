@@ -7,7 +7,13 @@
 # <out> is the artifact prefix (build/<top>), and <log> the file given
 # to vivado -log, which the critical-warning gate reads. Outputs:
 #   <out>.bit                   the bitstream, only when every gate passes
+#   <out>_summary.txt           the run's verdict, each clock's fmax, the
+#                               worst paths and the main resources' use,
+#                               also printed at the end of the run
 #   <out>_timing_summary.rpt    read by `make timing`
+#   <out>_fanout.rpt            the widest nets, by the pins they drive
+#   <out>_control_sets.rpt      every clock, enable and reset combination
+#                               and the flops sharing it
 #   <out>_utilization.rpt, <out>_drc.rpt, <out>_methodology.rpt,
 #   <out>_cdc.rpt
 #   <out>_routed.dcp            for interactive timing analysis
@@ -29,8 +35,9 @@ set srcdir  [pwd]
 file mkdir $out.vivado
 cd $out.vivado
 
-# A failed build must not leave an older bitstream behind to program.
-file delete -force $out.bit
+# A failed build must not leave an older bitstream behind to program,
+# nor an older run's summary to read as this one's.
+file delete -force $out.bit ${out}_summary.txt
 
 # Vivado resolves a $readmemh/$readmemb file name against its working
 # directory, the scratch directory above, and synthesizes a memory whose
@@ -67,25 +74,45 @@ phys_opt_design -directive Explore
 report_timing_summary -max_paths 10 -report_unconstrained \
     -file ${out}_timing_summary.rpt
 report_utilization -file ${out}_utilization.rpt
+report_high_fanout_nets -load_types -timing -max_nets 50 -file ${out}_fanout.rpt
+report_control_sets -verbose -file ${out}_control_sets.rpt
 report_drc -file ${out}_drc.rpt
 report_methodology -file ${out}_methodology.rpt
 report_cdc -details -file ${out}_cdc.rpt
 write_checkpoint -force ${out}_routed.dcp
 
+# The summary: what is worth reading after every run, kept apart from
+# Vivado's own output.
 set failures [gate_failures $log]
+set summary {}
 foreach line [clock_fmax_lines] {
-    puts "Timing: $line"
+    lappend summary "Timing: $line"
+}
+foreach line [worst_path_lines 10] {
+    lappend summary "Path: $line"
+}
+foreach line [utilization_lines] {
+    lappend summary "Utilization: $line"
 }
 foreach line [thermal_lines] {
-    puts "Thermal: $line"
+    lappend summary "Thermal: $line"
+}
+foreach f $failures {
+    lappend summary "GATE FAILED: $f"
 }
 if {[llength $failures] > 0} {
-    foreach f $failures {
-        puts "GATE FAILED: $f"
-    }
-    puts "Signoff: FAIL, no bitstream written"
+    lappend summary "Signoff: FAIL, no bitstream written"
+} else {
+    lappend summary "Signoff: PASS"
+}
+set f [open ${out}_summary.txt w]
+foreach line $summary {
+    puts $line
+    puts $f $line
+}
+close $f
+if {[llength $failures] > 0} {
     exit 1
 }
-puts "Signoff: PASS"
 
 write_bitstream -force ${out}.bit
