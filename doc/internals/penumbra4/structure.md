@@ -255,7 +255,12 @@ ahead of any interrupt and whatever SR.I and `EI`'s delay say
   neither the hazard check nor the pairing reaches another stage or
   fetch in the same cycle.
 - **A flush clears the stages younger than its redirect** and never
-  waits on a hold.
+  waits on a hold. It applies last, at the valid bits and the queue's
+  count it clears. A decision takes it as a term only where the
+  decision acts beyond its stage, as a request or a redirect does;
+  elsewhere the decision's receivers apply it, as ID's valid bit and
+  the queue's count do for the issue decision, so EX's misprediction
+  ends in those registers ([timing classes](#timing-classes)).
 - **An empty slot is a clear valid bit.** A stage loads its slots'
   fields whenever it is not held, and only the valid bits take its
   decisions: whether the pair leaves, whether ID issues, a flush and the

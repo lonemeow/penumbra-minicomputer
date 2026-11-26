@@ -124,7 +124,12 @@ module penumbra4_stage_id
         end
     end
 
-    assign issue = i_head_valid[0] && !i_flush && !i_hold
+    // The flush is no term of the decision: it clears ID's valid bit after
+    // it, and the queue empties on it whatever ID takes. EX's late
+    // misprediction then ends in those registers and never passes through
+    // the decision into the queue's count (doc/internals/penumbra4/
+    // structure.md, "Timing classes").
+    assign issue = i_head_valid[0] && !i_hold
                 && !serializer_in_flight
                 && !(serializes(op.op_class) && anything_in_flight)
                 && !source_hazard;
