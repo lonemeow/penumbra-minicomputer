@@ -52,14 +52,20 @@ module penumbra4_stage_if1
     vector_t     vector_q, vector_d;
     fetch_slot_t if2_q, if2_d;
 
+    // The fetch IF2 holds is a clear valid bit when IF1 launches nothing
+    // (doc/internals/penumbra4/structure.md, "The stage contract"): its
+    // address loads every cycle, so the launch, decided behind both
+    // redirects, drives the valid bit alone.
     always_comb begin
-        state_d       = state_q;
-        pc_d          = pc_q;
-        from_access_d = from_access_q;
-        vector_d      = vector_q;
-        if2_d         = '0;
-        o_launch      = 1'b0;
-        o_vector_req  = 1'b0;
+        state_d           = state_q;
+        pc_d              = pc_q;
+        from_access_d     = from_access_q;
+        vector_d          = vector_q;
+        if2_d.valid       = 1'b0;
+        if2_d.pc          = pc_q;
+        if2_d.from_access = from_access_q;
+        o_launch          = 1'b0;
+        o_vector_req      = 1'b0;
 
         if (i_wb_redirect.valid) begin
             from_access_d = 1'b0;
@@ -88,9 +94,7 @@ module penumbra4_stage_if1
             from_access_d = i_relaunch.from_access;
         end else if (!i_icache_busy && i_queue_room) begin
             o_launch      = 1'b1;
-            if2_d.valid       = 1'b1;
-            if2_d.pc          = pc_q;
-            if2_d.from_access = from_access_q;
+            if2_d.valid   = 1'b1;
             pc_d          = {pc_q[31:4] + 28'd1, 4'b0};
             from_access_d = 1'b0;
         end
@@ -101,17 +105,19 @@ module penumbra4_stage_if1
             state_q       <= FETCHING;
             pc_q          <= RESET_PC;
             from_access_q <= 1'b0;
-            if2_q         <= '0;
         end else begin
             state_q       <= state_d;
             pc_q          <= pc_d;
             from_access_q <= from_access_d;
-            if2_q         <= if2_d;
         end
     end
 
     always_ff @(posedge i_clk) begin
         vector_q <= vector_d;
+        if2_q    <= if2_d;
+        if (i_rst) begin
+            if2_q.valid <= 1'b0;
+        end
     end
 
     assign o_launch_vaddr = pc_q;

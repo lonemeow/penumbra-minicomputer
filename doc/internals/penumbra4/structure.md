@@ -291,7 +291,7 @@ another stage's operand mux would.
 | ID ↔ register file | four read indices, four values | E |
 | stage registers → ID | the writers in flight and when each result can be forwarded | R |
 | ID → EX | the pair, and each operand's source | R |
-| EX → IF1, queue, ID | a misprediction's redirect and flush | L ([open](#open)), ending in the fetch address, the queue's pointers and count, and ID's valid bit |
+| EX → IF1, queue, ID | a misprediction's redirect and flush | L ([open](#open)), ending in the fetch address and the fetch's valid bit, the queue's pointers and count, and ID's valid bit |
 | MEM1 → IF1, queue, ID, EX | a fused branch's redirect and flush, when it resolves there | E |
 | EX → predictor | the transfer's PC, outcome and target, for training | R |
 | EX → MEM1 | the pair and the access's address | R |
