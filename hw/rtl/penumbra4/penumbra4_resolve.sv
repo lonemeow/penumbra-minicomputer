@@ -23,7 +23,10 @@ module penumbra4_resolve
     logic   condition;
     logic   taken;
     vaddr_t fall_through;
+    vaddr_t taken_target;
     vaddr_t predicted;
+    logic   miss_if_taken;
+    logic   miss_if_not_taken;
 
     assign op           = i_slot.op;
     assign fall_through = op.pc + vaddr_t'(4);
@@ -40,12 +43,16 @@ module penumbra4_resolve
     assign taken = (op.op_class == OPC_BRANCH) && (op.indirect || condition);
 
     always_comb begin
-        if (!taken) begin
-            o_next_pc = fall_through;
-        end else if (op.indirect) begin
-            o_next_pc = vaddr_t'(i_slot.a);
+        if (op.indirect) begin
+            taken_target = vaddr_t'(i_slot.a);
         end else begin
-            o_next_pc = op.target;
+            taken_target = op.target;
+        end
+
+        if (taken) begin
+            o_next_pc = taken_target;
+        end else begin
+            o_next_pc = fall_through;
         end
 
         if (op.prediction.taken) begin
@@ -55,6 +62,20 @@ module penumbra4_resolve
         end
     end
 
-    assign o_mispredict = i_slot.valid && (o_next_pc != predicted);
+    // Each outcome is compared with the prediction beside the condition,
+    // not after it, and the condition picks between the two results: the
+    // misprediction runs into fetch's address and the front end's flush,
+    // and a 32-bit compare behind the condition would lengthen it by a
+    // carry chain (doc/internals/penumbra4/structure.md, "Open").
+    assign miss_if_taken     = (taken_target != predicted);
+    assign miss_if_not_taken = (fall_through != predicted);
+
+    always_comb begin
+        if (taken) begin
+            o_mispredict = i_slot.valid && miss_if_taken;
+        end else begin
+            o_mispredict = i_slot.valid && miss_if_not_taken;
+        end
+    end
 
 endmodule

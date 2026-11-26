@@ -430,10 +430,12 @@ it costs no fmax:
   queue presents three entries for now, so the choice stays inside
   issue; that width is itself provisional.
 - **The fused compare-and-branch's resolve.** The design resolves it
-  in EX. The path runs from the carry chain through the condition and
-  the misprediction to IF1's address select, ending in the L1-I's
-  block-RAM address, and the probe decides whether it fits. Before any
-  fallback, it can be made shorter:
+  in EX, the condition picking between the two outcomes' compares with
+  the prediction, which run beside it. The path runs from the carry
+  chain through the condition and the misprediction to IF1's address
+  select, ending in the L1-I's block-RAM address, and the probe
+  decides whether it fits. Before any fallback, it can be made
+  shorter:
     - **The condition from the operands, not the flags:** equality for
       `EQ`/`NE`, the subtract's carry-out and top bits for the
       less-than conditions. A compare's Z is the equality of its
@@ -441,7 +443,8 @@ it costs no fmax:
       carry propagation.
     - **`BEQ`/`BNE` in EX and the other conditions in MEM1.**
     - **Only the select late:** the redirect's targets, the predicted
-      path and the fall-through, are known early, so the late signal
+      path and the fall-through are known before EX, so the two
+      compares can be made in ID and registered, and the late signal
       picks between inputs settled a cycle before.
 
   The fallback resolves a fused branch in MEM1, the cycle it would
